@@ -1309,6 +1309,29 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
         claim: claim({}),
       }),
     ],
+    // The literal shape the Linux E6L box wedged in: a CLI killed at
+    // `restarting` has written no continuation, because the continuation is
+    // what a RESUME computes. Nothing may key the admission on
+    // `continuation: "activate"` alone, or the one record this exists to
+    // rescue is the one it refuses.
+    [
+      "restarting with no continuation (the field-observed wedge)",
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: null,
+        claim: claim({}),
+      }),
+    ],
+    [
+      "verifying with no continuation",
+      record({
+        phase: "verifying",
+        execution: "active",
+        continuation: null,
+        claim: claim({}),
+      }),
+    ],
   ] as const)(
     "admits a relaunch over an interrupted %s record: starting the host is that record's OWN next act",
     async (_label, current) => {
