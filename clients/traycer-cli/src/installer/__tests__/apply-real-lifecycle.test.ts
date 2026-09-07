@@ -473,6 +473,113 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     // `beforeSwap` instead of its own member, or move its await ahead of
     // the stop in `commitInstallFromSource`, and this flips to `true`.
   });
+
+  it("T6: beforeSwapCommit REJECTING after the stop still swaps and restarts, then surfaces the error", async () => {
+    // The hooks are durable bookkeeping writes, and `phaseWrite` rejects for
+    // more than exotic I/O: another actor bumping the generation between the
+    // claim and this write, a record gone unreadable, a durability error after
+    // the rename, the marker mirror throwing after the record committed - all
+    // arrive as `E_HOST_INSTALL_RECORD_INVALID`, and nothing above catches.
+    // The old behaviour threw here, which left the machine STOPPED on the OLD
+    // bytes because a write ABOUT the work was refused.
+    // Falsification (the ablation): rethrow at the `beforeSwapCommit` capture
+    // in `commitInstallFromSource` instead of holding the error, and the swap,
+    // the restart and the order assertion all redden together.
+    await writeInstall("1.0.0");
+    await writeStaged("2.0.0");
+    const harness = makeController(Promise.resolve());
+    mocks.controller = harness.controller;
+    const refusal = Object.assign(
+      new Error("host update: the attempt record refused a applying write"),
+      { code: "E_HOST_INSTALL_RECORD_INVALID" },
+    );
+    let afterSwapCalled = false;
+
+    await expect(
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+        expectedStagedVersion: null,
+        onWillCommitStaged: null,
+        onWillDisruptHost: null,
+        hooks: {
+          beforeSwapCommit: async () => {
+            harness.order.push("hooks.beforeSwapCommit");
+            throw refusal;
+          },
+          afterSwap: async () => {
+            harness.order.push("hooks.afterSwap");
+            afterSwapCalled = true;
+          },
+        },
+      }),
+      // Surfaced with its OWN code and message - never swallowed, never
+      // replaced by a summary of it.
+    ).rejects.toBe(refusal);
+
+    // The bytes are placed and the host was asked to come back: the whole
+    // point of holding the error rather than throwing it where it happened.
+    expect(installedBytes()).toBe(STAGED_BYTES);
+    expect(afterSwapCalled).toBe(true);
+    expect(harness.order).toEqual([
+      "controller.stop",
+      "hooks.beforeSwapCommit",
+      "hooks.afterSwap",
+      "controller.install",
+    ]);
+  });
+
+  it("T6: afterSwap REJECTING still runs the post-swap actuators, then surfaces the error", async () => {
+    // The caller's hook runs at the TOP of the lifecycle's own `afterSwap`, so
+    // a rejection propagating from there skipped every actuator below it - the
+    // machine ended up on NEW bytes with nothing registered and nothing
+    // started. The capture is inside the lifecycle for exactly that reason.
+    // Falsification (the ablation): delete the lifecycle-internal capture in
+    // `createServiceInstallLifecycle.afterSwap` and `controller.install`
+    // disappears from the order.
+    await writeInstall("1.0.0");
+    await writeStaged("2.0.0");
+    const harness = makeController(Promise.resolve());
+    mocks.controller = harness.controller;
+    const refusal = Object.assign(
+      new Error("host update: the attempt record refused a restarting write"),
+      { code: "E_HOST_INSTALL_RECORD_INVALID" },
+    );
+
+    await expect(
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+        expectedStagedVersion: null,
+        onWillCommitStaged: null,
+        onWillDisruptHost: null,
+        hooks: {
+          beforeSwapCommit: async () => {
+            harness.order.push("hooks.beforeSwapCommit");
+          },
+          afterSwap: async () => {
+            harness.order.push("hooks.afterSwap");
+            throw refusal;
+          },
+        },
+      }),
+    ).rejects.toBe(refusal);
+
+    expect(installedBytes()).toBe(STAGED_BYTES);
+    // `controller.install` is the actuator that used to be skipped.
+    expect(harness.order).toEqual([
+      "controller.stop",
+      "hooks.beforeSwapCommit",
+      "hooks.afterSwap",
+      "controller.install",
+    ]);
+  });
 });
 
 describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", () => {

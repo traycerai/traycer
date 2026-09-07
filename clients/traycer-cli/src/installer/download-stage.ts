@@ -1032,7 +1032,12 @@ export async function resolveUpdatePlan(
         identity,
       };
     }
-    const resolved = await resolvePlanAsset(opts, request.targetVersion);
+    const transferClient = await planRegistryClient(opts);
+    const resolved = await resolvePlanAsset(
+      transferClient,
+      opts,
+      request.targetVersion,
+    );
     return {
       kind: "resume",
       targetVersion: resolved.entry.version,
@@ -1115,7 +1120,7 @@ export async function resolveUpdatePlan(
   ) {
     return { kind: "already-staged", targetVersion, identity };
   }
-  const resolved = await resolvePlanAsset(opts, targetVersion);
+  const resolved = await resolvePlanAsset(client, opts, targetVersion);
   return {
     kind: "upgrade",
     targetVersion: resolved.entry.version,
@@ -1129,13 +1134,20 @@ export async function resolveUpdatePlan(
 // (`registry/client.ts`'s `resolveAsset`), so "manifest, asset, floor" is one
 // call, not three.
 async function resolvePlanAsset(
+  // Threaded rather than created here (CodeRabbit T5). A second client means a
+  // second trusted-key load and a second `versions.json` fetch for a plan that
+  // is already resolved - a second chance for a registry hiccup to fail a run
+  // whose target version is already decided. It is NOT an integrity fix: the
+  // manifest fetch above yields only a version STRING, and both the entry and
+  // its digest come from this call, so there is no earlier snapshot for a
+  // later one to disagree with.
+  client: RegistryClient,
   opts: ResolveUpdatePlanOptions,
   versionRequest: string,
 ): Promise<{
   readonly entry: HostVersionEntry;
   readonly asset: HostPlatformAsset;
 }> {
-  const client = await planRegistryClient(opts);
   const platformKey = currentHostPlatformKey();
   progressStage(
     opts.onProgress,

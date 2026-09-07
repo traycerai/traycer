@@ -754,6 +754,11 @@ export async function commitInstallFromSource(
     installId: record.installId,
   });
 
+  // A hook rejection AFTER the host has been stopped, held until the machine
+  // is whole again. See the capture below `beforeSwapCommit` for why it is not
+  // thrown where it happens.
+  let hookFailure: unknown = null;
+
   // Stop the OS service immediately before the swap, never earlier:
   // verify-before-replace means we must not disturb the running host if
   // staging or verification would have failed.
@@ -775,7 +780,32 @@ export async function commitInstallFromSource(
     // The stop RESOLVED - a busy host's denial threw above and never
     // reaches here, which is the whole point of the barrier sitting on this
     // side of the call. Nothing has moved yet: the swap is next.
-    await opts.lifecycle.beforeSwapCommit();
+    //
+    // CAPTURED, not thrown (CodeRabbit T6). The caller's hook is a durable
+    // BOOKKEEPING write - `writer.phaseWrite("applying")` for the update arms
+    // - and `commit` throws `E_HOST_INSTALL_RECORD_INVALID` for every
+    // non-`committed` outcome: another actor bumping the generation between
+    // the claim and this write, a record that has become unreadable, a
+    // durability error after the rename, or the marker mirror throwing after
+    // the record already committed. Nothing above this catches. Throwing here
+    // therefore left the machine STOPPED, on the OLD bytes, because a write
+    // about the work was refused - the placed bytes never even placed. Placed
+    // bytes must never leave the host down over bookkeeping, so the swap and
+    // the restart below run, and the error is surfaced afterwards with its
+    // own code and message.
+    //
+    // What the record then says is a DESIGNED consequence, not drift: this
+    // segment restarted the host having never written `applying`, so
+    // `canReachVerifying`'s `resume-apply` rule (a segment may claim a
+    // verification only for work it actually did) refuses the completion, and
+    // the run ends `superseded` / `failed` with the host RUNNING on the new
+    // bytes. The exit stays non-zero. The matrix rows observe those phases -
+    // this paragraph is why they read the way they do.
+    try {
+      await opts.lifecycle.beforeSwapCommit();
+    } catch (err) {
+      hookFailure = err;
+    }
   }
 
   opts.onProgress({
@@ -831,8 +861,23 @@ export async function commitInstallFromSource(
       environment: opts.environment,
       version: record.version,
     });
-    await opts.lifecycle.afterSwap();
+    // Captured for the same reason, and the lifecycle captures INSIDE itself
+    // too: it runs the caller's hook at the top of its own `afterSwap`, so a
+    // rejection propagating from there would skip the register / kickstart
+    // that brings the host back. `??=` because the FIRST failure is the one
+    // that explains the state - a record that refused `applying` usually
+    // refuses `restarting` seconds later, and reporting the second would name
+    // a consequence instead of a cause.
+    try {
+      await opts.lifecycle.afterSwap();
+    } catch (err) {
+      hookFailure ??= err;
+    }
   }
+
+  // Surfaced verbatim - never swallowed, never replaced by a summary of it.
+  // By here the bytes are committed and the host has been asked to come back.
+  if (hookFailure !== null) throw hookFailure;
 
   return { record, previous };
 }
