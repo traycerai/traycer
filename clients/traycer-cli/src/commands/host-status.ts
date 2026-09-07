@@ -6,11 +6,11 @@ import {
   type BootstrapPhase,
 } from "../host/bootstrap-log";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { bootstrapLogPath } from "../store/paths";
-import { isProcessAlive } from "../store/cli-lock";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
@@ -63,12 +63,16 @@ export const hostStatusCommand: CommandFn = async (
     BOOTSTRAP_LOG_TAIL_LINES,
   );
 
+  // `running` must reflect process liveness, not merely the presence of a
+  // pid.json - a stopped/crashed host can leave a stale record behind, and a
+  // recycled pid a live-looking one; `publishedHostProcessGone` reads the
+  // record's creation stamp for the second case. (service status reads the
+  // same predicate; this keeps host status consistent and makes `host stop`
+  // observable.)
+  const running =
+    pidMetadata !== null && !publishedHostProcessGone(pidMetadata);
   const output: HostStatusOutput = {
-    // `running` must reflect process liveness, not merely the presence of a
-    // pid.json - a stopped/crashed host can leave a stale record behind.
-    // (service status already checks isProcessAlive; this keeps host
-    // status consistent and makes `host stop` observable.)
-    running: pidMetadata !== null && isProcessAlive(pidMetadata.pid),
+    running,
     pidMetadata,
     bootstrapMarkers: markers,
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),
@@ -117,12 +121,16 @@ function renderHumanStatus(
     const rows: [string, string][] = [
       ["Log", tildePath(output.bootstrapLogPath)],
     ];
-    // A non-null pidMetadata with a dead pid means the host exited
-    // (e.g. after `host stop` or a crash) but its pid.json was left
-    // behind. Surface it as stale rather than silently reporting
-    // "running" off a dead record.
+    // A non-null pidMetadata in this branch means the host exited (e.g.
+    // after `host stop` or a crash) and left its pid.json behind, or the pid
+    // that record names is live and belongs to an unrelated process the OS
+    // handed the recycled number to. Surface it as stale rather than
+    // silently reporting "running" off a record that identifies no host.
     if (output.pidMetadata !== null) {
-      rows.push(["Stale pid", `${output.pidMetadata.pid} (not alive)`]);
+      rows.push([
+        "Stale pid",
+        `${output.pidMetadata.pid} (gone, or now another process)`,
+      ]);
     }
     if (last !== undefined) {
       rows.push(["Last phase", phaseLabel(last, c)]);

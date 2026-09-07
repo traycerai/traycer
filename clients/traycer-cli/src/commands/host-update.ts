@@ -1149,9 +1149,10 @@ interface ActivationDebt {
  * `activated` is the reason NOT to.
  *
  * - `no-install`: nothing to activate (the caller throws later anyway);
- * - `no-live-host`: no pid metadata, or a pid that is not alive. Before the
- *   lock this is left alone - a host that is DOWN is the service manager's
- *   problem, and `host start` re-resolves the install record on every spawn.
+ * - `no-live-host`: no pid metadata, or a record whose pid is gone - exited,
+ *   or recycled onto an unrelated process. Before the lock this is left
+ *   alone - a host that is DOWN is the service manager's problem, and
+ *   `host start` re-resolves the install record on every spawn.
  *   Under the lock, after a debt was seen, it means the host this command
  *   was about to replace is gone, which is not the same as replaced;
  * - `foreign-runtime`: a running version that is not a release version,

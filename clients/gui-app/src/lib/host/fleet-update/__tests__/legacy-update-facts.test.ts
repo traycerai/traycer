@@ -150,6 +150,26 @@ describe("deriveLegacyUpdateFacts — activationDebt, no runtimeVersion (catalog
     expect(facts.activationDebt).toBeNull();
   });
 
+  it("comparator-equal but a different string (another build of the release) - debt: identity is the string, as the CLI reads it", () => {
+    const facts = deriveLegacyUpdateFacts({
+      installation: managed({ version: "1.3.0+b", runtimeVersion: null }, null),
+      runningVersion: "1.3.0+a",
+      busy: false,
+      busySessionCount: null,
+    });
+    expect(facts.activationDebt).toEqual({ installedVersion: "1.3.0+b" });
+  });
+
+  it("the same string with build metadata - no debt (control for the other-build row)", () => {
+    const facts = deriveLegacyUpdateFacts({
+      installation: managed({ version: "1.3.0+a", runtimeVersion: null }, null),
+      runningVersion: "1.3.0+a",
+      busy: false,
+      busySessionCount: null,
+    });
+    expect(facts.activationDebt).toBeNull();
+  });
+
   it("incomparable (installed is a local-file pin) - no debt", () => {
     const facts = deriveLegacyUpdateFacts({
       installation: managed(
