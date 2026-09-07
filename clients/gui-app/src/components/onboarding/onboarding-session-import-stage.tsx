@@ -32,6 +32,7 @@ import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 export function OnboardingSessionImportStage(props: {
   readonly scan: SessionImportScanHandle;
   readonly hostPicker: OnboardingHostPicker;
+  readonly onBeforeTaskOpen: () => Promise<boolean>;
 }) {
   const { scan, hostPicker } = props;
   // Asked of the client the scan and the import would actually RUN on, not of
@@ -59,6 +60,8 @@ export function OnboardingSessionImportStage(props: {
           // "Start building" stays where it is - there is nothing for the page
           // to do when a run starts.
           onImportStarted={() => undefined}
+          onTaskOpened={() => undefined}
+          onBeforeTaskOpen={props.onBeforeTaskOpen}
           secondaryAction={null}
         />
       ) : (
