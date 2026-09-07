@@ -16,6 +16,7 @@ import {
   type UpdateContenderOutcome,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
+import { isValidUpdateDispatchAckReason } from "@traycer/protocol/config/host-update-ack";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { AttemptMutationIntent } from "@traycer-clients/shared/host-update/store";
 import {
@@ -93,9 +94,14 @@ export type ExecutorClaimSelection =
        * The attempt this decline NAMED, or `null` when it named none.
        *
        * Required rather than defaulted, so a new release site has to answer the
-       * question instead of inheriting an answer. Nothing consumes it yet; the
-       * executor's stale-attempt close does, and the reason it must be stated
-       * per-site lives there.
+       * question instead of inheriting an answer. It exists because a decline
+       * now has a side effect - it closes an interrupted attempt it finds
+       * (`releaseAfterClosingStaleAttempt`) - and that is only justified for a
+       * decline that named nothing: #1773's argument is that the record is
+       * unreferenced DEBRIS, which is a claim about a record nobody will ever
+       * name. A bound verb whose id missed named something specific; the record
+       * actually present is a bystander, and after Ticket 02's recovery fix it
+       * is precisely what a correct `--expect-attempt` resumes.
        */
       readonly boundAttemptId: string | null;
     };
@@ -561,7 +567,13 @@ async function claimUnderExecutorCapability(
   // that into an ACK.
   const selection = await options.request(current);
   if (selection.kind === "release") {
-    return { kind: "released", reason: selection.reason, outcome: null };
+    return releaseAfterClosingStaleAttempt(
+      capability,
+      options,
+      current,
+      selection.reason,
+      selection.boundAttemptId,
+    );
   }
   const request = claimRequestAtExecutor(selection.request, options.nowIso());
   const decision = decideAttemptClaim({
@@ -586,6 +598,195 @@ async function claimUnderExecutorCapability(
     );
   }
   return commitDecidedClaim(capability, options, request, decision);
+}
+
+/**
+ * A decline, plus the one thing a decline must not leave behind.
+ *
+ * ## The leak (Codex #1773, `update-run.ts`'s no-op arm)
+ *
+ * Recovery lives on the CLAIM path: `decideAttemptClaim` refuses an ACTIVE
+ * record with `requires-recovery` and only then is `recoverInterruptedAttempt`
+ * reached. A release returns above, before that decision is ever taken. So an
+ * INTERRUPTED attempt for target A, met by a run whose plan is a no-op for B,
+ * was released as `nothing-to-do` with A still active - and nothing would ever
+ * close it, because no later default run names A while every contender keeps
+ * refusing it as active. The selector's own comment promised "an interrupted
+ * record for the next `host update` naming THAT target"; there is no such run.
+ *
+ * ## What is closed, and what is deliberately not
+ *
+ * Only `execution === "active"` - an interrupted attempt whose holder is gone,
+ * since a live holder never reaches this executor (admission refuses it as
+ * `nonterminal-attempt`). A PARK is left exactly as it was: a park is waiting
+ * for its own continuation and is resumable by design (D-49), and closing one
+ * here would destroy work a later run is entitled to finish. A terminal record
+ * has nothing to close.
+ *
+ * ## Why nothing can be minted, and nothing can be STARTED
+ *
+ * Two different arms of `decideAttemptRecovery` create work, and each is shut
+ * by its own structural argument. Both are needed: closing only the first
+ * turns this decline into an executed claim (cold review, final round).
+ *
+ * 1. `supersede` mints a replacement attempt, and is returned from exactly one
+ *    place, guarded by `requestedTargetVersion !== current.targetVersion`. The
+ *    recovery is driven with the RECORD'S OWN target, so both operands are two
+ *    reads of one property of one object with no re-read between them: `!==`
+ *    is always false and the arm is unreachable.
+ *
+ * 2. `resume-new-generation` starts the interrupted attempt again - it commits
+ *    generation N+1 and the caller then RUNS the segment. It is gated by
+ *    `actionMayResume(request.action, continuation)`, and the action is
+ *    `defer` precisely because `actionMayResume` refuses `defer` for BOTH
+ *    continuations. The core states the rule itself: "a defer request can
+ *    reconcile to a terminal fact but can never start work." `continue` would
+ *    be the worst available choice - it adopts either continuation
+ *    unconditionally, so an ordinary interrupted-mid-apply record would be
+ *    resumed and applied by a run whose own plan was a no-op.
+ *
+ * Both are reachability arguments, so the pins that matter assert the
+ * observable: after this path the record on disk is still A's attemptId, now
+ * terminal; no new attempt exists; and for a resumable record nothing was
+ * written and nothing ran.
+ *
+ * A recovery that cannot conclude (flapped evidence, a refusal, a rejected
+ * commit) falls back to the plain release. Declining is still the honest
+ * answer, and nothing was written.
+ */
+/**
+ * The decline's reason with the cleanup noted, WITHOUT overflowing the ACK.
+ *
+ * `UPDATE_DISPATCH_ACK_REASON_PATTERN` is `^[a-z0-9-]{1,64}$` and the suffix is
+ * 21 characters, so the incoming reason has a 43-character budget. Every
+ * selector release reason today is well inside it (the longest,
+ * `refused-unverifiable`, is 20 -> 41), but overflow is not a truncated
+ * reason: the DECODER answers `{kind:"invalid", reason:"malformed-fields"}`
+ * and the whole acknowledgement degrades, losing the outcome as well as the
+ * detail. So the suffix is dropped rather than the ACK, and the caller gets
+ * the reason it would have sent anyway.
+ */
+function staleAttemptClosedReason(reason: string): string {
+  const suffixed = `${reason}-stale-attempt-closed`;
+  return isValidUpdateDispatchAckReason(suffixed) ? suffixed : reason;
+}
+
+async function releaseAfterClosingStaleAttempt(
+  capability: UpdateMutationCapability,
+  options: RunAttemptExecutorClaimOptions,
+  current: HostUpdateAttemptRead,
+  reason: string,
+  boundAttemptId: string | null,
+): Promise<ExecutorClaimOutcome> {
+  if (current.kind !== "valid" || current.value.execution !== "active") {
+    return { kind: "released", reason, outcome: null };
+  }
+  // You may close what you could have NAMED (cold review; ticket-02 owner).
+  //
+  // #1773's justification is that the record is unreferenced DEBRIS - a claim
+  // about a record nobody will ever name. A decline that named nothing
+  // (`nothing-to-do` under plain `install`) satisfies that. A BOUND verb whose
+  // id missed does not: it named something specific, and the record actually
+  // present is a bystander that a correct `--expect-attempt` would resume.
+  //
+  // The case that decides it is not a human typo, it is automated: the
+  // reconciler dispatches bound verbs on a timer, reading a park's `attemptId`
+  // and passing it as `--expect-attempt`. If the record moves between that read
+  // and this lock acquisition - an ordinary race on a level-triggered loop -
+  // the id mismatches, and without this guard the CLI would terminalize a
+  // record nothing named and no human ever saw.
+  //
+  // The second disjunct does no work today: a bound release on a MATCHED id no
+  // longer occurs, because ticket 02's recovery fix turns that case into a
+  // claim. It states the rule rather than the current topology, so the guard
+  // stays correct if such a release ever reappears.
+  if (boundAttemptId !== null && boundAttemptId !== current.value.attemptId) {
+    return { kind: "released", reason, outcome: null };
+  }
+  const record = current.value;
+  const outcome = await recoverInterruptedAttempt(
+    capability,
+    // `report`, NEVER the caller's disposition. `defer` shuts
+    // `resume-new-generation`, but that check sits below the terminalize arms,
+    // which return first - so under the caller's `reselect` a terminalizing
+    // recovery reaches `afterTerminalizingRecovery`, calls the selector a
+    // SECOND time (in a different world: `selectClaim` maps the now-terminal
+    // record to `null`), and can commit a brand-new claim. Cold review probed
+    // it: a fresh attempt on disk, generation 1, `downloading`, ACTIVE and
+    // unheld, while this call returned "nothing to do" with a null outcome.
+    // That is the leak this function closes, recreated one level down and
+    // strictly worse - #1773 stranded an EXISTING record; this mints one.
+    //
+    // The reselect contributes nothing here in exchange. Of its three
+    // outcomes: a release returns `recovered-complete`/`recovered-failed`,
+    // whose reason `staleAttemptClosedReason` overrides anyway, keeping only
+    // the record - which is what `report` hands back; a `rejected` reaches the
+    // same fallback either way; and a `claimed` is the defect. This call site
+    // is cleanup after a DECLINE, not a second bite at claiming.
+    { ...options, afterRecovery: "report" },
+    record,
+    {
+      // Synthetic, and never committed as a claim: `recoverInterruptedAttempt`
+      // reads `action` and `targetVersion` to build the RECOVERY request, and
+      // the remaining fields exist only because the type carries them. The
+      // target is the record's own, which is what makes `supersede` unreachable;
+      // the action is `defer`, which is what makes `resume-new-generation`
+      // unreachable. `defer` is legal here only because `expected` is non-null
+      // below, which it always is - this path names the record it just read.
+      targetVersion: record.targetVersion,
+      trigger: record.trigger,
+      action: "defer",
+      expected: attemptIdentityOf(record),
+      newAttemptId: record.attemptId,
+      initialPhase: "preparing",
+      initialContinuation: null,
+      claim: null,
+      nowIso: options.nowIso(),
+    },
+  );
+  // Both settled arms report the SAME reason, deliberately overriding one the
+  // recovery chose. `afterTerminalizingRecovery`'s contract is that a decline
+  // keeps `recovered-complete`/`recovered-failed` because "the ACK reason is
+  // what the GUI renders" - and this call site overrides it, so the
+  // complete-vs-failed distinction leaves the reason string. That is a real
+  // trade and it is made knowingly: the caller's question here was "is there
+  // work?", the answer is no, and `<reason>-stale-attempt-closed` says the one
+  // thing the plain decline could not - that a dead run's attempt was cleaned
+  // up on the way. Nothing is lost that cannot be recovered: the terminal
+  // record travels on `outcome` and carries its own phase and error.
+  if (outcome.kind === "released") {
+    // Defensive rather than reachable: under `report` + `defer` the recovery
+    // settles as `terminalized` or `rejected`, and the arms that release
+    // (`parkResumedActivation`, `createAfterSupersede`) hang off
+    // `resume-new-generation` and `supersede`, both of which are shut above.
+    return {
+      kind: "released",
+      reason: staleAttemptClosedReason(reason),
+      outcome: outcome.outcome,
+    };
+  }
+  if (outcome.kind === "terminalized") {
+    return {
+      kind: "released",
+      reason: staleAttemptClosedReason(reason),
+      outcome: outcome.record,
+    };
+  }
+  // Anything else is a recovery that could not conclude - a refusal, a
+  // rejected commit. It is NOT this call's answer: the selector already
+  // decided to decline, and reporting a `rejected` from a path whose plan was
+  // a no-op would turn "nothing to do" into a failure the caller never asked
+  // for. Fall back to the plain release, which is what the decline meant and
+  // what the doc above promises.
+  //
+  // `claimed` cannot occur, and it takes BOTH guards above to say that: `defer`
+  // shuts `resume-new-generation`, and `report` stops the terminalize arms from
+  // reaching the second selector call that could commit a fresh claim. It
+  // collapses here rather than being given an arm of its own, so if a later
+  // edit re-opens either route the result is a silent decline rather than an
+  // unannounced install - but the pin below is what actually holds the line,
+  // because a collapse alone would HIDE the very defect the review found.
+  return { kind: "released", reason, outcome: null };
 }
 
 /**

@@ -1775,6 +1775,426 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
     await acquired.handle.release();
   }
 
+  it.each(["report", "reselect"] as const)(
+    "P2: a DECLINE closes an interrupted attempt it would otherwise strand (afterRecovery: %s)",
+    async (afterRecovery) => {
+      // Codex #1773. Recovery lives on the CLAIM path, so a release returned
+      // before `decideAttemptClaim` was ever taken - and an interrupted
+      // attempt for A, met by a run whose plan is a no-op for B, stayed active
+      // forever: no later default run names A, and every contender keeps
+      // refusing it as active.
+      // Falsification (the ablation): return the plain
+      // `{ kind: "released", reason, outcome: null }` from the release arm and
+      // both rows redden on the record still being active.
+      mockCohortEligible("linux");
+      const hostHomeDir = await freshHome();
+      await seedInterruptedActiveRecordAt(
+        hostHomeDir,
+        "attempt-p2-stale",
+        "1.2.3",
+        null,
+      );
+
+      const outcome = await runAttemptExecutorSegment(
+        claimOptions(hostHomeDir, {
+          afterRecovery,
+          request: async () => ({
+            kind: "release",
+            boundAttemptId: null,
+            reason: "nothing-to-do",
+          }),
+          // The world moved on: another actor installed and runs 3.0.0, so
+          // the interrupted 1.2.3 attempt is stale by evidence, not by phase.
+          readRecoveryEvidence: () =>
+            Promise.resolve(
+              observation({
+                installed: { kind: "verified", version: "3.0.0" },
+                staged: { kind: "absent" },
+                running: {
+                  kind: "verified",
+                  version: "3.0.0",
+                  owner: "host-home-bound",
+                },
+              }),
+            ),
+        }),
+        async () => {},
+        async () => "must-not-run",
+      );
+
+      expect(outcome.kind).toBe("released");
+      if (outcome.kind === "released") {
+        // The ACK can tell "nothing to do" from "nothing to do, and a dead
+        // run's attempt was closed".
+        expect(outcome.reason).toBe("nothing-to-do-stale-attempt-closed");
+        expect(outcome.outcome).not.toBeNull();
+        expect(outcome.outcome?.attemptId).toBe("attempt-p2-stale");
+      }
+
+      const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+      expect(onDisk.kind).toBe("valid");
+      if (onDisk.kind === "valid") {
+        // Closed, and NOTHING minted: still A's attempt, now terminal. This is
+        // the observable that stands in for "the `supersede` arm is
+        // unreachable when the recovery is driven with the record's own
+        // target" - a replacement would show up here as a different id.
+        expect(onDisk.value.attemptId).toBe("attempt-p2-stale");
+        expect(onDisk.value.execution).toBe("terminal");
+        expect(onDisk.value.targetVersion).toBe("1.2.3");
+      }
+    },
+  );
+
+  it("P2 control: a BOUND decline that named ANOTHER attempt leaves this one alone", async () => {
+    // "You may close what you could have named" (cold review + ticket-02
+    // owner). #1773's justification is that the record is unreferenced DEBRIS,
+    // which is a claim about a record nobody will ever name. A bound verb whose
+    // id missed named something specific, and the record actually present is a
+    // bystander - after ticket 02's recovery fix, precisely what a CORRECT
+    // `--expect-attempt` resumes. Correct-id-resumes / wrong-id-destroys is not
+    // an acceptable pairing on a recovery verb.
+    //
+    // The deciding case is automated, not a typo: the reconciler dispatches
+    // bound verbs on a timer from a park's `attemptId`, so a record that moves
+    // between that read and this lock acquisition mismatches on an ordinary
+    // race - and would otherwise terminalize a record nothing named.
+    //
+    // Falsification (the ablation): drop the `boundAttemptId` guard from
+    // `releaseAfterClosingStaleAttempt` and this reddens on the record being
+    // terminalized, while the unbound P2 rows stay green.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-bystander",
+      "1.2.3",
+      null,
+    );
+    const before = await readUpdateAttemptRecord(hostHomeDir);
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          // The verb named a DIFFERENT attempt than the one on disk.
+          boundAttemptId: "attempt-the-caller-actually-named",
+          reason: "refused-attempt-gone",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.reject(
+            new Error("a bystander record must not reach recovery"),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      // The plain reason: nothing was closed, so nothing is claimed to be.
+      expect(outcome.reason).toBe("refused-attempt-gone");
+      expect(outcome.outcome).toBeNull();
+    }
+    const after = await readUpdateAttemptRecord(hostHomeDir);
+    expect(after).toEqual(before);
+    if (after.kind === "valid") {
+      expect(after.value.attemptId).toBe("attempt-bystander");
+      expect(after.value.execution).toBe("active");
+    }
+  });
+
+  it("P2 control: a DECLINE leaves a PARK exactly as it found it", async () => {
+    // The half that must not change. A park is waiting for its own
+    // continuation and is resumable by design (D-49); closing one here would
+    // destroy work a later run is entitled to finish.
+    // Falsification (the ablation): drop the `execution !== "active"` guard
+    // from `releaseAfterClosingStaleAttempt` and this reddens on the phase.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedParkedActivateRecord(hostHomeDir, "attempt-p2-park", "1.2.3");
+    const before = await readUpdateAttemptRecord(hostHomeDir);
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          boundAttemptId: null,
+          reason: "nothing-to-do",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.reject(new Error("a park must not reach recovery")),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("nothing-to-do");
+      expect(outcome.outcome).toBeNull();
+    }
+    const after = await readUpdateAttemptRecord(hostHomeDir);
+    expect(after).toEqual(before);
+    if (after.kind === "valid") {
+      expect(after.value.execution).toBe("parked");
+      expect(after.value.attemptId).toBe("attempt-p2-park");
+    }
+  });
+
+  it.each([
+    {
+      label:
+        "a verified STAGE (continuation resume-apply), afterRecovery report",
+      attemptId: "attempt-p2-resumable-stage-report",
+      recoveredActivation: "execute" as const,
+      afterRecovery: "report" as const,
+      evidence: {
+        installed: { kind: "verified" as const, version: "1.0.0" },
+        staged: { kind: "verified" as const, version: "1.2.3" },
+        running: {
+          kind: "verified" as const,
+          version: "1.0.0",
+          owner: "host-home-bound" as const,
+        },
+      },
+    },
+    {
+      label:
+        "a verified STAGE (continuation resume-apply), PRODUCTION shape (execute + reselect)",
+      attemptId: "attempt-p2-resumable-stage-reselect",
+      recoveredActivation: "execute" as const,
+      afterRecovery: "reselect" as const,
+      evidence: {
+        installed: { kind: "verified" as const, version: "1.0.0" },
+        staged: { kind: "verified" as const, version: "1.2.3" },
+        running: {
+          kind: "verified" as const,
+          version: "1.0.0",
+          owner: "host-home-bound" as const,
+        },
+      },
+    },
+    {
+      label:
+        "verified INSTALLED bytes (continuation activate), afterRecovery report",
+      attemptId: "attempt-p2-resumable-installed-report",
+      recoveredActivation: "park" as const,
+      afterRecovery: "report" as const,
+      evidence: {
+        installed: { kind: "verified" as const, version: "1.2.3" },
+        staged: { kind: "absent" as const },
+        running: {
+          kind: "verified" as const,
+          version: "1.0.0",
+          owner: "host-home-bound" as const,
+        },
+      },
+    },
+    {
+      label:
+        "verified INSTALLED bytes (continuation activate), PRODUCTION shape (execute + reselect)",
+      attemptId: "attempt-p2-resumable-installed-reselect",
+      recoveredActivation: "execute" as const,
+      afterRecovery: "reselect" as const,
+      evidence: {
+        installed: { kind: "verified" as const, version: "1.2.3" },
+        staged: { kind: "absent" as const },
+        running: {
+          kind: "verified" as const,
+          version: "1.0.0",
+          owner: "host-home-bound" as const,
+        },
+      },
+    },
+  ])(
+    "P2: a DECLINE never RESUMES a recoverable attempt - $label",
+    async ({ attemptId, recoveredActivation, afterRecovery, evidence }) => {
+      // The blocker the cold review found in the first cut of this fix.
+      // `supersede` is not the only arm of `decideAttemptRecovery` that creates
+      // work: with the targets equal the decision falls through to
+      // `recoveryContinuation`, and `actionMayResume("continue", …)` is
+      // UNCONDITIONALLY true (transition.ts). So a synthetic `continue` reached
+      // `resume-new-generation`, committed generation 2, returned `claimed`,
+      // and the caller RAN the segment - a run whose own plan was a no-op for B
+      // resuming and applying A. The user asked for nothing and got an install.
+      //
+      // `defer` is what closes it, and the transition core says so itself: "a
+      // defer request can reconcile to a terminal fact but can never start
+      // work." `actionMayResume` refuses `defer` for BOTH continuations.
+      //
+      // BOTH `afterRecovery` dispositions are rowed, because they fail
+      // DIFFERENTLY and only one of them is production. Under `report` the
+      // resume arm still commits generation 2 inside the recovery closure but
+      // the segment body never runs, so only the record shows it. Under
+      // `reselect` - what `update-run.ts:320` actually passes, beside
+      // `recoveredActivation: "execute"` at `:317` - the re-selection reaches
+      // the claim and the BODY RUNS: a run whose own plan was a no-op installs
+      // 1.2.3. A row that pinned only `report` would call the second one green.
+      //
+      // Falsification (the ablation): change `action: "defer"` back to
+      // `"continue"` in `releaseAfterClosingStaleAttempt`. All four rows redden.
+      //
+      // The two fixes INTERLOCK, and the ablation shows it. Reverting the
+      // action alone reddens all four on the RECORD (generation 2, still
+      // active) but not on `bodyRan`, because the trailing
+      // `{kind:"released", …}` catches the `claimed` the recovery now returns -
+      // defence in depth doing its job. Revert BOTH (action to `"continue"`
+      // AND the trailing arm to `return outcome;`) and all four redden on
+      // `bodyRan` instead: the segment runs and installs 1.2.3. Neither fix
+      // alone is sufficient - the resume arm commits its write inside the
+      // recovery closure, before any outcome is returned.
+      mockCohortEligible("linux");
+      const hostHomeDir = await freshHome();
+      await seedInterruptedActiveRecordAt(
+        hostHomeDir,
+        attemptId,
+        "1.2.3",
+        null,
+      );
+      const before = await readUpdateAttemptRecord(hostHomeDir);
+
+      let bodyRan = false;
+      const outcome = await runAttemptExecutorSegment(
+        claimOptions(hostHomeDir, {
+          recoveredActivation,
+          afterRecovery,
+          request: async () => ({
+            kind: "release",
+            boundAttemptId: null,
+            reason: "nothing-to-do",
+          }),
+          readRecoveryEvidence: () => Promise.resolve(observation(evidence)),
+        }),
+        async () => {},
+        async () => {
+          bodyRan = true;
+          return "must-not-run";
+        },
+      );
+
+      expect(bodyRan).toBe(false);
+      expect(outcome.kind).toBe("released");
+      if (outcome.kind === "released") {
+        // No suffix: nothing was CLOSED. A recoverable attempt is exactly the
+        // work D-49 protects, so the honest answer is the plain decline the
+        // selector already made, not a claim and not a failure.
+        expect(outcome.reason).toBe("nothing-to-do");
+        expect(outcome.outcome).toBeNull();
+      }
+
+      // Byte-for-byte untouched: no generation 2, no phase move, no
+      // continuation written. The resume arm commits INSIDE the recovery
+      // closure, so a fallback that only fixed the returned outcome would
+      // still show up here.
+      const after = await readUpdateAttemptRecord(hostHomeDir);
+      expect(after).toEqual(before);
+      if (after.kind === "valid") {
+        expect(after.value.attemptId).toBe(attemptId);
+        expect(after.value.generation).toBe(1);
+        expect(after.value.execution).toBe("active");
+      }
+    },
+  );
+
+  it("P2: a DECLINE never lets the RESELECT mint a fresh attempt behind it", async () => {
+    // Cold review, rev3. The `defer` action shuts `resume-new-generation`, but
+    // that check sits BELOW the terminalize arms - so under the caller's
+    // production `afterRecovery: "reselect"` a terminalizing recovery reached
+    // `afterTerminalizingRecovery`, called the selector a SECOND time, and
+    // could commit a brand-new claim. The second call decides in a different
+    // world: `selectClaim` maps the now-terminal record to `null`, so a
+    // selector that declined an ACTIVE record can legitimately claim against
+    // `null` - which is what the activation-debt route does when the host
+    // exits between the two under-lock activation reads.
+    //
+    // The observable that matters is NOT the returned outcome (the trailing
+    // fallback would flatten it to `released` either way) but what is left ON
+    // DISK: before the fix, a fresh attempt, generation 1, `downloading`,
+    // ACTIVE and unheld, while the caller was told "nothing to do".
+    //
+    // Falsification (the ablation): drop the `{...options, afterRecovery:
+    // "report"}` override and pass `options` through. This reddens on
+    // `selectorCalls` and on the minted record; the four rows above stay green,
+    // which is why this row exists.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-p2-reselect",
+      "1.2.3",
+      null,
+    );
+
+    let selectorCalls = 0;
+    let bodyRan = false;
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        // The production pair, which is the only one that reaches the second
+        // selector call.
+        recoveredActivation: "execute",
+        afterRecovery: "reselect",
+        request: async () => {
+          selectorCalls += 1;
+          if (selectorCalls === 1) {
+            return {
+              kind: "release",
+              boundAttemptId: null,
+              reason: "nothing-to-do",
+            };
+          }
+          return {
+            kind: "claim",
+            request: {
+              targetVersion: "1.2.3",
+              trigger: "manual",
+              action: "start",
+              expected: null,
+              newAttemptId: "attempt-review-minted",
+              initialPhase: "downloading",
+              initialContinuation: null,
+              claim: null,
+            },
+          };
+        },
+        // Terminalizing evidence: the world moved past 1.2.3 entirely, so the
+        // recovery concludes rather than resuming.
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "3.0.0" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "3.0.0",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => {
+        bodyRan = true;
+        return "must-not-run";
+      },
+    );
+
+    // The selector is asked ONCE. It is not side-effect free - it mutates the
+    // shared `SelectionFacts` the shell renders from - so a second call is a
+    // defect in its own right, before anything is committed.
+    expect(selectorCalls).toBe(1);
+    expect(bodyRan).toBe(false);
+    expect(outcome.kind).toBe("released");
+
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      // The recovery's terminal record for the ORIGINAL attempt - never the
+      // minted one.
+      expect(onDisk.value.attemptId).toBe("attempt-p2-reselect");
+      expect(onDisk.value.execution).toBe("terminal");
+    }
+  });
+
   it("A1: the selector receives the record read UNDER the lock, and the executor's own lock is held while it runs", async () => {
     mockCohortEligible("linux");
     const hostHomeDir = await freshHome();
