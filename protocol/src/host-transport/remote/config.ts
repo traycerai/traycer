@@ -326,5 +326,9 @@ export const REASSEMBLY_PROGRESS_TIMEOUT_MS = 20_000;
  */
 export const MAX_TERMINAL_STREAM_IDS = 256;
 
-/** @deprecated alias of the mux legacy grant batch. */
+/**
+ * @deprecated Import `LEGACY_INBOUND_CREDIT_GRANT_BATCH` from
+ * `@traycer/protocol/host-transport/mux` directly. This alias exists only for
+ * call sites that predate the fine-credits split.
+ */
 export { LEGACY_INBOUND_CREDIT_GRANT_BATCH as INBOUND_CREDIT_GRANT_BATCH } from "@traycer/protocol/host-transport/mux";

@@ -29,6 +29,8 @@ import { NOISE_PROLOGUE } from "@traycer/protocol/host-transport/mux";
  */
 
 const EMPTY_ASSOCIATED_DATA = new Uint8Array(0);
+/** The handshake carries no payload; kept distinct from the AD on transport frames. */
+const EMPTY_HANDSHAKE_PAYLOAD = new Uint8Array(0);
 
 export class NoiseChannel {
   private readonly handshake: NoiseHandshakeState;
@@ -49,7 +51,7 @@ export class NoiseChannel {
 
   /** Produces the initiator's `msg0` to forward to the host through the relay. */
   writeInitiatorMessage(): Promise<Uint8Array> {
-    return this.handshake.writeMessage(EMPTY_ASSOCIATED_DATA);
+    return this.handshake.writeMessage(EMPTY_HANDSHAKE_PAYLOAD);
   }
 
   /** Consumes the responder's `msg1`, completing the handshake + deriving keys. */

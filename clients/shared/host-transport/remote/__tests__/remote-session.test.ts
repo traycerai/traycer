@@ -354,6 +354,7 @@ class FakeRelayHost {
     schemaVersion: unknown;
     params: unknown;
     idempotencyKey: string | null;
+    callerAgentId: string | null;
     streamId: number;
   }[] = [];
   /** Answers the next REQUEST with this result payload. */
@@ -699,6 +700,8 @@ class FakeRelayHost {
         params: json.params,
         idempotencyKey:
           typeof json.idempotencyKey === "string" ? json.idempotencyKey : null,
+        callerAgentId:
+          typeof json.callerAgentId === "string" ? json.callerAgentId : null,
         streamId: message.streamId,
       });
       if (this.skipUnaryAutoRespond) {
@@ -4261,6 +4264,39 @@ describe("RemoteSession unary idempotency negotiation", () => {
         },
       },
     });
+
+  it("puts caller attribution on the wire when a callerAgentId is supplied", async () => {
+    // Every other unary in this file passes `null`, so a transport that
+    // silently dropped the field would stay green. This is the one assertion
+    // that the REQUEST envelope actually carries the agent id the host-side
+    // dialer attributes the call to.
+    const relay = new FakeRelayHost();
+    relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: statusRegistry,
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+      await session.sendUnary(
+        "host.status",
+        {},
+        null,
+        null,
+        "agent-7c2c45ad",
+        undefined,
+        false,
+      );
+
+      expect(relay.unaryRequests).toHaveLength(1);
+      expect(relay.unaryRequests[0]?.callerAgentId).toBe("agent-7c2c45ad");
+    } finally {
+      session.close();
+    }
+  });
 
   it.each([
     ["legacy openAck", [] as string[], null, HostTransportFailureError],
