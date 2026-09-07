@@ -1501,6 +1501,54 @@ describe("runHostUpdate - bound intents", () => {
     expect((await requireRecord()).phase).toBe("complete");
   });
 
+  it("Q3: a bound activate on a park whose target is ALREADY RUNNING settles without restarting", async () => {
+    // The reconciler dispatches exactly this when an out-of-band restart
+    // brought the host up on the placed bytes. Its whole close depends on
+    // `writer.supersede()` being legal from the resumed park's phase - a fact
+    // owned by the shared transition table, which no host-side pin can reach.
+    // If that transition ever becomes illegal the dispatch throws, the park
+    // survives untouched, and the level-triggered reconciler re-dispatches
+    // every tick forever. Routed here rather than through the dispatch side
+    // because this file is where the transition table is exercised.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.assertHostNotBusy.mockRejectedValueOnce(busyError());
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+    const parked = await requireRecord();
+    expect(parked.phase).toBe("waiting-to-activate");
+    mocks.writes.length = 0;
+    mocks.assertHostNotBusy.mockClear();
+    mocks.stopHostForRestartWithAttempt.mockClear();
+    mocks.relaunchHostAfterRestartWithAttempt.mockClear();
+
+    // The out-of-band restart: the host came back up on the placed bytes.
+    world.runningVersion = "2.0.0";
+
+    await runUpdate({
+      intent: "activate",
+      expectAttempt: parked.attemptId,
+      registryClient: unreachableRegistry(),
+    });
+
+    // The dispatch is EVIDENCE, not a disruption: `activationArm`'s under-lock
+    // reading is `activated`, so it returns before the gate, the stop and the
+    // relaunch, and settles instead.
+    expect(mocks.assertHostNotBusy).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.relaunchHostAfterRestartWithAttempt).not.toHaveBeenCalled();
+
+    const record = await requireRecord();
+    expect(record.execution).toBe("terminal");
+    // `superseded`, NOT `complete`: `canReachVerifying` admits an `activate`
+    // continuation only from `restarting`/`verifying`, and this route wrote
+    // neither - so the settlement takes `writer.supersede()`. Nothing may pin
+    // `complete` for this close.
+    expect(record.phase).toBe("superseded");
+    expect(phaseTrace()).toEqual(["preparing", "superseded"]);
+  });
+
   it("continue on a waiting-to-activate park completes with the registry unreachable too", async () => {
     await seedInstalled("2.0.0");
     world.runningVersion = "1.0.0";
