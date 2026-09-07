@@ -1347,7 +1347,9 @@ function OfficeCursorChip(props: {
   return (
     <div
       data-testid="comm-graph-office-cursor-chip"
-      className="absolute top-2 left-2 z-10 rounded-md border border-border bg-popover px-1.5 py-0.5 text-ui-xs text-popover-foreground tabular-nums shadow-xs"
+      // Read-only: it must not take the pan or the click a person aims at the
+      // floor underneath it.
+      className="pointer-events-none absolute top-2 left-2 z-10 rounded-md border border-border bg-popover px-1.5 py-0.5 text-ui-xs text-popover-foreground tabular-nums shadow-xs"
     >
       <span className="text-muted-foreground">
         {props.playing ? "Replaying " : "Paused at "}
