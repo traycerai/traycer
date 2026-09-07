@@ -21,6 +21,7 @@ import {
 } from "vitest";
 import {
   __resetTabNavigationControllerForTesting,
+  __resetTabNavigationHydrationForTesting,
   activatePreparedPairTabIntent,
   activateTabIntent,
   getTabNavigationDiagnostics,
@@ -1747,6 +1748,7 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
       systemTabs: { history: null, settings: null },
     });
     const nav = makeDeferredNavigate();
+    const onRejected = vi.fn();
 
     expect(
       activatePreparedPairTabIntent(
@@ -1759,10 +1761,11 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
           leftRatio: 0.5,
         },
         epicIntent("epic-b", b.tabId),
-        undefined,
+        { onRejected },
       ),
     ).toBe(true);
 
+    expect(onRejected).not.toHaveBeenCalled();
     expect(nav.calls[0]?.replace).not.toBe(true);
     expect(nav.envelopeAt(0).intentKind).toBe("activate-push");
     expect(focusedRefKey()).toBe(tabRefKey(b.ref));
@@ -1784,6 +1787,149 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
       index: 0,
     });
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
+  });
+
+  it("rejects prepared pairing before hydration without navigating", () => {
+    const a = openEpic("epic-a", "A");
+    const b = openEpic("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(a.ref), ref: a.ref },
+        { kind: "tab", id: tabItemId(b.ref), ref: b.ref },
+      ],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    __resetTabNavigationHydrationForTesting();
+    const nav = makeDeferredNavigate();
+    const onRejected = vi.fn();
+
+    expect(
+      activatePreparedPairTabIntent(
+        nav.asNavigate,
+        {
+          left: a.ref,
+          right: b.ref,
+          focusedRef: b.ref,
+          splitId: "split-ab",
+          leftRatio: 0.5,
+        },
+        epicIntent("epic-b", b.tabId),
+        { onRejected },
+      ),
+    ).toBe(false);
+
+    expect(onRejected).toHaveBeenCalledTimes(1);
+    expect(onRejected).toHaveBeenCalledWith(
+      new Error("The tabs could not be paired. Try again."),
+    );
+    expect(nav.calls).toHaveLength(0);
+  });
+
+  it("rejects prepared pairing when the intent cannot be canonicalized", () => {
+    const a = openEpic("epic-a", "A");
+    const b = openEpic("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(a.ref), ref: a.ref },
+        { kind: "tab", id: tabItemId(b.ref), ref: b.ref },
+      ],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const nav = makeDeferredNavigate();
+    const onRejected = vi.fn();
+
+    expect(
+      activatePreparedPairTabIntent(
+        nav.asNavigate,
+        {
+          left: a.ref,
+          right: b.ref,
+          focusedRef: b.ref,
+          splitId: "split-ab",
+          leftRatio: 0.5,
+        },
+        newDraftTabIntent(null),
+        { onRejected },
+      ),
+    ).toBe(false);
+
+    expect(onRejected).toHaveBeenCalledTimes(1);
+    expect(onRejected).toHaveBeenCalledWith(
+      new Error("The tabs could not be paired. Try again."),
+    );
+    expect(nav.calls).toHaveLength(0);
+  });
+
+  it("rejects prepared pairing when there is no prior backing member", () => {
+    const a = openEpic("epic-a", "A");
+    const b = openEpic("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+    });
+    const nav = makeDeferredNavigate();
+    const onRejected = vi.fn();
+
+    expect(
+      activatePreparedPairTabIntent(
+        nav.asNavigate,
+        {
+          left: a.ref,
+          right: b.ref,
+          focusedRef: b.ref,
+          splitId: "split-ab",
+          leftRatio: 0.5,
+        },
+        epicIntent("epic-b", b.tabId),
+        { onRejected },
+      ),
+    ).toBe(false);
+
+    expect(onRejected).toHaveBeenCalledTimes(1);
+    expect(onRejected).toHaveBeenCalledWith(
+      new Error("The tabs could not be paired. Try again."),
+    );
+    expect(nav.calls).toHaveLength(0);
+  });
+
+  it("rejects prepared pairing when the pair command is refused", () => {
+    const a = openEpic("epic-a", "A");
+    const b = openEpic("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(a.ref), ref: a.ref }],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const nav = makeDeferredNavigate();
+    const onRejected = vi.fn();
+
+    expect(
+      activatePreparedPairTabIntent(
+        nav.asNavigate,
+        {
+          left: a.ref,
+          right: b.ref,
+          focusedRef: b.ref,
+          splitId: "split-ab",
+          leftRatio: 0.5,
+        },
+        epicIntent("epic-b", b.tabId),
+        { onRejected },
+      ),
+    ).toBe(false);
+
+    expect(onRejected).toHaveBeenCalledTimes(1);
+    expect(onRejected).toHaveBeenCalledWith(
+      new Error("The tabs could not be paired. Try again."),
+    );
+    expect(nav.calls).toHaveLength(0);
   });
 
   it("rejected prepared pairing retains members but restores the prior owner", async () => {

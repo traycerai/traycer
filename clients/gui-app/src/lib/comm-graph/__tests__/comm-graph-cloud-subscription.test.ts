@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
 import {
   CommGraphCloudSubscriptionManager,
@@ -605,6 +605,444 @@ describe("CommGraphCloudSubscriptionManager", () => {
     expect(recorded.requests[0].readSinceCursor()).toEqual({
       ingestVersion: 9,
       eventId: "live-9",
+    });
+  });
+
+  describe("reconcileRelays", () => {
+    function trackedOpener(): {
+      readonly opener: CommGraphCloudSubscriptionOpener;
+      readonly opens: CommGraphCloudSubscriptionRequest[];
+      readonly closeSpyFor: (hostId: string) => Mock;
+    } {
+      const opens: CommGraphCloudSubscriptionRequest[] = [];
+      const closeSpies = new Map<string, Mock>();
+      const closeSpyFor = (hostId: string): Mock => {
+        const existing = closeSpies.get(hostId);
+        if (existing !== undefined) return existing;
+        const spy = vi.fn();
+        closeSpies.set(hostId, spy);
+        return spy;
+      };
+      return {
+        opens,
+        closeSpyFor,
+        opener: (request) => {
+          opens.push(request);
+          return { close: closeSpyFor(request.hostId) };
+        },
+      };
+    }
+
+    it("keeps a live incumbent through a pure order change: no close, no open, no timer change", () => {
+      vi.useFakeTimers();
+      const tracked = trackedOpener();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        tracked.opener,
+        () => undefined,
+      );
+      try {
+        manager.reconcileRelays({
+          hostIds: ["relay-a", "relay-b"],
+          readinessKeys: new Map([
+            ["relay-a", "available:v1"],
+            ["relay-b", "available:v1"],
+          ]),
+        });
+        manager.attach();
+        expect(tracked.opens.map((request) => request.hostId)).toEqual([
+          "relay-a",
+        ]);
+
+        // The list-equality guard in `reconcileRelays` compares by INDEX
+        // (`every((hostId, index) => hostId === this.relayHostIds[index])`),
+        // not as sets, so putting "relay-b" first makes `hostIdsUnchanged`
+        // false and this call falls through past the early return into the
+        // incumbent decision and the trailing `scheduleReconnectingFailover`.
+        // The assertions below are therefore about what the KEEP branch does,
+        // not about the update being swallowed by the guard.
+        manager.reconcileRelays({
+          hostIds: ["relay-b", "relay-a"],
+          readinessKeys: new Map([
+            ["relay-a", "available:v1"],
+            ["relay-b", "available:v1"],
+          ]),
+        });
+
+        // Falsification: delete the
+        // `!nextHostIds.includes(incumbentHostId) || changedHostIds.has(incumbentHostId)`
+        // condition guarding `closeCurrent()` in `reconcileRelays` (e.g.
+        // always close) and this reddens.
+        expect(tracked.closeSpyFor("relay-a")).not.toHaveBeenCalled();
+        expect(tracked.opens).toHaveLength(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        manager.dispose();
+        vi.useRealTimers();
+      }
+    });
+
+    it("clears only the changed host's verdict on another host's readiness change, keeping the incumbent", () => {
+      let rejectRelayB = true;
+      const opens: CommGraphCloudSubscriptionRequest[] = [];
+      const closeSpies = new Map<string, Mock>();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        (request) => {
+          // Recorded BEFORE the throw: a dial that fails is still a dial, and
+          // a recorder that skips it turns every "no open" count in this test
+          // into a count of SUCCESSFUL opens - which would not notice the
+          // manager re-attempting a rejected candidate.
+          opens.push(request);
+          if (request.hostId === "relay-b" && rejectRelayB) {
+            throw new Error("relay-b not ready yet");
+          }
+          const spy = vi.fn();
+          closeSpies.set(request.hostId, spy);
+          return { close: spy };
+        },
+        () => undefined,
+      );
+
+      // relay-b is tried first and throws, so relay-a becomes the incumbent
+      // and relay-b is left in the rejected set. Both attempts are recorded.
+      manager.reconcileRelays({
+        hostIds: ["relay-b", "relay-a"],
+        readinessKeys: new Map([
+          ["relay-b", "available:v1"],
+          ["relay-a", "available:v1"],
+        ]),
+      });
+      manager.attach();
+      expect(opens.map((request) => request.hostId)).toEqual([
+        "relay-b",
+        "relay-a",
+      ]);
+
+      // relay-b's own readiness key changes; relay-a's is untouched.
+      manager.reconcileRelays({
+        hostIds: ["relay-b", "relay-a"],
+        readinessKeys: new Map([
+          ["relay-b", "available:v2"],
+          ["relay-a", "available:v1"],
+        ]),
+      });
+
+      // No close and no dial of ANY kind - the readiness change belongs to a
+      // host that is not the incumbent, so nothing is retried yet.
+      expect(closeSpies.get("relay-a")).not.toHaveBeenCalled();
+      expect(opens).toHaveLength(2);
+
+      // Positive control proving relay-b's rejected verdict was actually
+      // cleared (not merely "incumbent untouched"): force relay-a to fail and
+      // confirm relay-b - previously rejected - is now retried. relay-a is the
+      // SECOND recorded request, since relay-b's failed dial holds index 0.
+      rejectRelayB = false;
+      opens[1].handlers.onStatus("unreachable");
+
+      // Falsification: delete the per-changed-host
+      // `rejectedRelayHostIds.delete(hostId)` / `unsupportedRelayHostIds.delete(hostId)`
+      // loop in `reconcileRelays` and this reddens - relay-b stays rejected
+      // forever, so `openNextRelay` finds no candidate and no third request is
+      // ever issued.
+      expect(closeSpies.get("relay-a")).toHaveBeenCalledTimes(1);
+      expect(opens.map((request) => request.hostId)).toEqual([
+        "relay-b",
+        "relay-a",
+        "relay-b",
+      ]);
+    });
+
+    it("reopens onto the new first candidate when the incumbent's own key changes", () => {
+      const tracked = trackedOpener();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        tracked.opener,
+        () => undefined,
+      );
+      manager.reconcileRelays({
+        hostIds: ["relay-incumbent"],
+        readinessKeys: new Map([["relay-incumbent", "available:v1"]]),
+      });
+      manager.attach();
+      expect(tracked.opens.map((request) => request.hostId)).toEqual([
+        "relay-incumbent",
+      ]);
+
+      manager.reconcileRelays({
+        hostIds: ["relay-ahead", "relay-incumbent"],
+        readinessKeys: new Map([
+          ["relay-ahead", "available:v1"],
+          ["relay-incumbent", "available:v2"],
+        ]),
+      });
+
+      // Falsification: drop the `changedHostIds.has(incumbentHostId)`
+      // disjunct from the incumbent close condition in `reconcileRelays` and
+      // this reddens - the reopen never happens, so the new head of the list
+      // (relay-ahead) is never dialed.
+      expect(tracked.opens.map((request) => request.hostId)).toEqual([
+        "relay-incumbent",
+        "relay-ahead",
+      ]);
+      expect(tracked.closeSpyFor("relay-incumbent")).toHaveBeenCalledTimes(1);
+      expect(tracked.closeSpyFor("relay-ahead")).not.toHaveBeenCalled();
+    });
+
+    it("opens exactly one relay - the new first candidate - when the active host is removed and replaced together", () => {
+      const tracked = trackedOpener();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        tracked.opener,
+        () => undefined,
+      );
+      manager.reconcileRelays({
+        hostIds: ["relay-a", "relay-b"],
+        readinessKeys: new Map([
+          ["relay-a", "available:v1"],
+          ["relay-b", "available:v1"],
+        ]),
+      });
+      manager.attach();
+      expect(tracked.opens.map((request) => request.hostId)).toEqual([
+        "relay-a",
+      ]);
+
+      manager.reconcileRelays({
+        hostIds: ["relay-c"],
+        readinessKeys: new Map([["relay-c", "available:v1"]]),
+      });
+
+      // Falsification: replace the `reconcileRelays` call above with the two
+      // setters it supersedes, in the order the hook used to run them -
+      // readiness keys FIRST, then host ids:
+      //
+      //   manager.setRelayReadinessKeys(new Map([["relay-c", "available:v1"]]));
+      //   manager.setRelayHostIds(["relay-c"]);
+      //
+      // This reddens on the close count (relay-a closed twice, not once) and
+      // then on the sequence, which becomes `["relay-a", "relay-a",
+      // "relay-c"]`. The readiness call runs while the host list is still
+      // ["relay-a", "relay-b"], sees the incumbent's own key change
+      // ("available:v1" -> absent) and so closes and REDIALS relay-a - a host
+      // the caller had already dropped - before the second call closes it
+      // again and moves to relay-c. That wasted dial against half-installed
+      // state is what "exactly one open" exists to pin.
+      expect(tracked.closeSpyFor("relay-a")).toHaveBeenCalledTimes(1);
+      expect(tracked.opens.map((request) => request.hostId)).toEqual([
+        "relay-a",
+        "relay-c",
+      ]);
+    });
+
+    it("keeps a synchronous unsupported verdict through the same reconcile and opens the next candidate once", () => {
+      const opens: CommGraphCloudSubscriptionRequest[] = [];
+      const closeSpies = new Map<string, Mock>();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        (request) => {
+          opens.push(request);
+          const spy = vi.fn();
+          closeSpies.set(request.hostId, spy);
+          if (request.hostId === "relay-new") {
+            request.handlers.onStatus("unsupported");
+          }
+          return { close: spy };
+        },
+        () => undefined,
+      );
+      manager.reconcileRelays({
+        hostIds: ["relay-a"],
+        readinessKeys: new Map([["relay-a", "available:v1"]]),
+      });
+      manager.attach();
+      expect(opens.map((request) => request.hostId)).toEqual(["relay-a"]);
+
+      manager.reconcileRelays({
+        hostIds: ["relay-new", "relay-fallback"],
+        readinessKeys: new Map([
+          ["relay-new", "available:v1"],
+          ["relay-fallback", "available:v1"],
+        ]),
+      });
+
+      expect(opens.map((request) => request.hostId)).toEqual([
+        "relay-a",
+        "relay-new",
+        "relay-fallback",
+      ]);
+      // relay-new's stale handle is torn down once its onStatus callback
+      // fails over to relay-fallback synchronously, inside the same open.
+      expect(closeSpies.get("relay-new")).toHaveBeenCalledTimes(1);
+      expect(closeSpies.get("relay-fallback")).not.toHaveBeenCalled();
+
+      // Positive control proving the verdict outlives the reconcile call
+      // that set it: fail relay-fallback and confirm relay-new - marked
+      // unsupported inside THIS reconcile - is never retried.
+      opens[2].handlers.onStatus("unreachable");
+
+      // Falsification: move the per-changed-host verdict-clearing loop in
+      // `reconcileRelays` to run AFTER `this.openNextRelay()` instead of
+      // before, and this reddens - relay-new's synchronous `unsupported`
+      // verdict (set during that same `openNextRelay()` call) would then be
+      // wiped by the same reconcile's own clearing pass, so relay-new
+      // becomes a candidate again and gets redialed here.
+      expect(opens).toHaveLength(3);
+    });
+
+    it("arms exactly one failover timer for a reconnecting incumbent once an alternative appears, unmoved by a later reorder or unrelated readiness change", () => {
+      vi.useFakeTimers();
+      const tracked = trackedOpener();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        tracked.opener,
+        () => undefined,
+      );
+      try {
+        manager.reconcileRelays({
+          hostIds: ["relay-a"],
+          readinessKeys: new Map([["relay-a", "available:v1"]]),
+        });
+        manager.attach();
+        tracked.opens[0].handlers.onStatus("reconnecting");
+        // No alternative listed yet: no deadline armed.
+        expect(vi.getTimerCount()).toBe(0);
+
+        manager.reconcileRelays({
+          hostIds: ["relay-a", "relay-b"],
+          readinessKeys: new Map([
+            ["relay-a", "available:v1"],
+            ["relay-b", "available:v1"],
+          ]),
+        });
+        expect(vi.getTimerCount()).toBe(1);
+        expect(tracked.opens).toHaveLength(1);
+        expect(tracked.closeSpyFor("relay-a")).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(10_000);
+        expect(tracked.opens).toHaveLength(1);
+
+        // Pure reorder, same keys - must not restart the budget.
+        manager.reconcileRelays({
+          hostIds: ["relay-b", "relay-a"],
+          readinessKeys: new Map([
+            ["relay-a", "available:v1"],
+            ["relay-b", "available:v1"],
+          ]),
+        });
+        expect(vi.getTimerCount()).toBe(1);
+
+        vi.advanceTimersByTime(4_000);
+        expect(tracked.opens).toHaveLength(1);
+
+        // Unrelated readiness change (relay-b's own key, not the incumbent's)
+        // - must also not restart the budget.
+        manager.reconcileRelays({
+          hostIds: ["relay-b", "relay-a"],
+          readinessKeys: new Map([
+            ["relay-a", "available:v1"],
+            ["relay-b", "available:v2"],
+          ]),
+        });
+        expect(vi.getTimerCount()).toBe(1);
+
+        vi.advanceTimersByTime(999);
+        // Total elapsed since the timer armed: 14_999ms - one short of the
+        // ORIGINAL deadline. Nothing has fired.
+        expect(tracked.opens).toHaveLength(1);
+
+        // Falsification: remove the `this.reconnectingFailoverTimer !== null`
+        // early-return guard in `scheduleReconnectingFailover` and this
+        // reddens at the FIRST `getTimerCount()` after the reorder, with 2
+        // rather than 1. The guard's absence does not restart the existing
+        // deadline - nothing clears it - it ADDS a second timer beside it, so
+        // each later reconcile leaves another one armed and the host is
+        // failed over from a deadline the budget never accounted for.
+        vi.advanceTimersByTime(1);
+        expect(tracked.opens.map((request) => request.hostId)).toEqual([
+          "relay-a",
+          "relay-b",
+        ]);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        manager.dispose();
+        vi.useRealTimers();
+      }
+    });
+
+    it("clears an unsupported alternative's verdict and arms the failover timer on its readiness change", () => {
+      vi.useFakeTimers();
+      const opens: CommGraphCloudSubscriptionRequest[] = [];
+      const closeSpies = new Map<string, Mock>();
+      // Only the FIRST dial of relay-b reports unsupported. Its later retry
+      // (after the incumbent's failover timer fires) must succeed normally,
+      // or the test could not tell "retried" from "retried and rejected
+      // again" - a real opener's compatibility verdict for a given transport
+      // identity does not flip back and forth within one attach cycle.
+      let reportRelayBUnsupported = true;
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        (request) => {
+          opens.push(request);
+          const spy = vi.fn();
+          closeSpies.set(request.hostId, spy);
+          if (request.hostId === "relay-b" && reportRelayBUnsupported) {
+            reportRelayBUnsupported = false;
+            request.handlers.onStatus("unsupported");
+          }
+          return { close: spy };
+        },
+        () => undefined,
+      );
+      try {
+        // relay-b is tried first and marks itself unsupported synchronously,
+        // so relay-a becomes the incumbent.
+        manager.reconcileRelays({
+          hostIds: ["relay-b", "relay-a"],
+          readinessKeys: new Map([
+            ["relay-b", "available:v1"],
+            ["relay-a", "available:v1"],
+          ]),
+        });
+        manager.attach();
+        expect(opens.map((request) => request.hostId)).toEqual([
+          "relay-b",
+          "relay-a",
+        ]);
+
+        opens[1].handlers.onStatus("reconnecting");
+        // relay-b is rejected AND sticky-unsupported, so it is not a
+        // retryable alternative: no deadline armed.
+        expect(vi.getTimerCount()).toBe(0);
+
+        // relay-b's own readiness key changes; relay-a's incumbent key does
+        // not, so it stays put.
+        manager.reconcileRelays({
+          hostIds: ["relay-b", "relay-a"],
+          readinessKeys: new Map([
+            ["relay-b", "available:v2"],
+            ["relay-a", "available:v1"],
+          ]),
+        });
+
+        // Falsification: drop the trailing `scheduleReconnectingFailover`
+        // call in `reconcileRelays` and this reddens - clearing relay-b's
+        // verdict would make it a valid alternative, but nothing would ever
+        // arm the deadline to fail over to it.
+        expect(vi.getTimerCount()).toBe(1);
+        expect(closeSpies.get("relay-a")).not.toHaveBeenCalled();
+        expect(opens).toHaveLength(2);
+
+        vi.advanceTimersByTime(15_000);
+        expect(opens.map((request) => request.hostId)).toEqual([
+          "relay-b",
+          "relay-a",
+          "relay-b",
+        ]);
+      } finally {
+        manager.dispose();
+        vi.useRealTimers();
+      }
     });
   });
 });
