@@ -94,6 +94,7 @@ vi.mock("../../internal/host-rpc", () => ({
 
 // Imports must come AFTER the vi.mock calls so the mocked modules are in
 // place when `update-recovery-evidence` resolves them.
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import * as paths from "../../store/paths";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import { writeHostStagedRecordAt } from "../../manifest/host-staged";
@@ -1056,6 +1057,92 @@ describe("observeAttemptRecoveryEvidence - the running leg's DIAGNOSIS (Linux E1
       expect(observation.runningDiagnosis).toBe(diagnosis);
     },
   );
+
+  it.each([
+    [
+      "an UNAUTHORIZED frame is a refusal",
+      "UNAUTHORIZED",
+      "host-refuses-authenticated-rpc",
+    ],
+    [
+      "a FORBIDDEN frame is a refusal",
+      "FORBIDDEN",
+      "host-refuses-authenticated-rpc",
+    ],
+    [
+      "any OTHER RPC error keeps the budgeted reading",
+      "WORKTREE_BUSY",
+      "host-rpc-unreachable",
+    ],
+  ] as const)("Q19: %s", async (_label, code, diagnosis) => {
+    // The gate is the RPC error CODE, never the host's wording. `WORKTREE_BUSY`
+    // is here as the negative: a host that answered with something that is not
+    // about admission has not decided anything the next poll cannot change, so
+    // it must NOT shorten the budget.
+    // Falsification: widen the code test in `authenticatedRefusalReason` and
+    // the third row reddens; narrow it to UNAUTHORIZED alone and the second
+    // does.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("current");
+    callHostRpcMock.mockRejectedValue(
+      new HostRpcError({
+        code,
+        message: "no applicable key found in the JSON Web Key Set",
+        requestId: "r",
+        method: "host.status",
+        fatalDetails: null,
+      }),
+    );
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+
+    expect(observation.runningDiagnosis).toBe(diagnosis);
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+  });
+
+  it("Q19: the host's refusal text is CAPPED where it is minted", async () => {
+    // Cold review B: this string is host-authored and unbounded, it is
+    // interpolated into the verify failure's message, and that message is what
+    // `writer.fail` stores - which `host.status.operation.error` mirrors onto a
+    // rendered surface. So an unbounded value would sit beside a token whose
+    // whole contract is that it is a closed set of fixed strings.
+    //
+    // Capped at the MINT rather than at any consumer, because the durable
+    // record is the furthest-travelling consumer and capping one caller would
+    // leave it uncapped.
+    // Falsification: drop the `slice` and this reddens on the length.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("current");
+    callHostRpcMock.mockRejectedValue(
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "x".repeat(10_000),
+        requestId: "r",
+        method: "host.status",
+        fatalDetails: null,
+      }),
+    );
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+
+    expect(observation.runningRefusal).not.toBeNull();
+    // The code, a separator, the capped body and the truncation marker.
+    expect(observation.runningRefusal?.length).toBeLessThan(250);
+    expect(observation.runningRefusal?.startsWith("UNAUTHORIZED: ")).toBe(true);
+    expect(observation.runningRefusal?.endsWith("...")).toBe(true);
+  });
 
   it("names a MISSING start stamp rather than lumping it in with an unreadable record", async () => {
     // #1763's stamp: a record without it is refused rather than failed open,

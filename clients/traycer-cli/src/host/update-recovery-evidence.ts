@@ -656,9 +656,30 @@ function authenticatedRefusalReason(err: unknown): string | null {
   if (!(err instanceof HostRpcError)) return null;
   if (err.code !== "UNAUTHORIZED" && err.code !== "FORBIDDEN") return null;
   // The host's words, tagged with its own code so the operator can match the
-  // CLI's report against the host log line that produced it.
-  return `${err.code}: ${err.message}`;
+  // CLI's report against the host log line that produced it - and CAPPED here,
+  // at the one place this text is minted (cold review B).
+  //
+  // The cap is not cosmetic. This string is interpolated into the verify
+  // failure's message, and that message is what `writer.fail` stores, which
+  // `host.status.operation.error` mirrors onto a rendered GUI surface. So an
+  // unbounded, host-authored value sits beside a token whose whole contract is
+  // that it is a closed set of fixed strings. Bounding it at the source bounds
+  // every consumer at once; bounding it at any one consumer would leave the
+  // durable record - the furthest-travelling one - unbounded.
+  const detail = err.message.slice(0, REFUSAL_REASON_MAX_CHARS);
+  const suffix = err.message.length > REFUSAL_REASON_MAX_CHARS ? "..." : "";
+  return `${err.code}: ${detail}${suffix}`;
 }
+
+/**
+ * How much of a host's refusal text is carried.
+ *
+ * Long enough for the messages the field actually produces - the lane's
+ * samples run to about 60 characters ("no applicable key found in the JSON Web
+ * Key Set") - with room for a host that says more, and short enough that a
+ * record and a rendered card cannot be flooded by one.
+ */
+const REFUSAL_REASON_MAX_CHARS = 200;
 
 function absentRunning(
   diagnosis: RunningEvidenceDiagnosis,

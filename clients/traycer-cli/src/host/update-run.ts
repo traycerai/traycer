@@ -3003,15 +3003,25 @@ async function verifyUnderClaim(
     // counting rather than latching: a host that refuses once and then goes
     // quiet is restarting, and a restart gets its budget.
     //
-    // WHAT THIS DOES NOT COVER, and why not. Only a host whose `pid.json`
-    // carries the start stamp ever reaches the RPC at all; an older one is
-    // already `pid-start-stamp-missing` two gates up and still burns the whole
-    // budget. That reading looks equally terminal - a pid record does not grow
-    // a field while we poll - but it is NOT: mid-restart the path can still
-    // hold the OLD host's record, which the new host is about to replace. So
-    // the stamp check is exactly the transient case the budget exists for, and
-    // shortening it would report a failure against a host that was seconds
-    // from being healthy. The refusal is the opposite: an answer.
+    // WHAT THIS DOES NOT COVER, and why not (sharpened by cold review B).
+    //
+    // The discriminator for this whole design is DURABILITY, not terminality.
+    // An RPC error frame proves the next poll returns the same answer. Only a
+    // host whose `pid.json` carries the start stamp ever reaches the RPC at
+    // all; an older one is already `pid-start-stamp-missing` two gates up and
+    // still burns the whole budget - and that is right, because a missing
+    // stamp proves nothing about the next poll. Mid-restart the path can still
+    // hold the OLD host's record, which the new host is about to replace, and
+    // that transient is exactly what the budget exists for.
+    //
+    // There IS a durable half of `pid-start-stamp-missing`: a rollback below
+    // the stamp floor, where the build has no stamp at all and never will
+    // (Q18's report has that row, dying at the stamp gate with ZERO
+    // authenticated rejections). But nothing at this gate can tell that case
+    // from a restarting host - only the VERSION can, and this loop does not
+    // reason about the installed version's era. So the durable half belongs to
+    // a version floor (Q18's O2), not to this set, and that boundary is what
+    // makes the exclusion a rule rather than a judgement call.
     consecutiveRefusals =
       observation.runningDiagnosis === "host-refuses-authenticated-rpc"
         ? consecutiveRefusals + 1
@@ -3602,13 +3612,29 @@ async function classifyActivationAgainst(
  * `pid.json` reading the caller's comment explains is not evidence of health.
  * The ablation for that extension came back GREEN; nothing pinned it.
  *
- * Membership is the shared property, not the spelling: **the bytes are
- * committed and the host did not come back**. Such a failure is disturbed by
- * construction, so the observed-running suppressions below it - which read a
- * `pid.json` that a host up but not yet answering already fills in AT the
- * target - would withhold the only signal a 1.2.x host ever shows for a failed
- * update. A third code of that class belongs here; adding one elsewhere and
- * forgetting this line is the trap the name exists to make visible.
+ * Membership is the shared property, not the spelling: **the observed-running
+ * reading is not evidence that this update succeeded.** Such a failure is
+ * disturbed by construction, so the suppressions below it - which read a
+ * `pid.json` filled in AT the target - would withhold the only signal a 1.2.x
+ * host ever shows for a failed update. A code of that class belongs here;
+ * adding one elsewhere and forgetting this line is the trap the name exists to
+ * make visible.
+ *
+ * The property was written as "the host did not come back", which the first two
+ * members satisfy and the third does not (cold review B). A refusing host DID
+ * come back - up, listening, handshaking, answering - and the test above is
+ * what all three actually share, reached by different routes: `verify-timeout`
+ * and `service-start-failed` because the host is up and not answering,
+ * `host-refuses-rpc` because it is answering and refusing. A fourth member is
+ * tested against the written property, not against anyone's intent, so the
+ * narrow wording read as excluding exactly the Q19 kind.
+ *
+ * NOT in conflict with Q11's "never stamp `failed` over a host verified healthy
+ * at the target", though a reader holding one in mind while meeting the other
+ * will think so and may "fix" it. Q11's predicate is *verified healthy*: it
+ * fires past the verify loop's `break`, where the health check PASSED and only
+ * the bookkeeping failed. Every member here is a case where the health check
+ * itself failed. Same host at the same version, opposite evidence.
  */
 const UNCONDITIONALLY_STAMPED_FAILURE_CODES: ReadonlySet<string> = new Set([
   "verify-timeout",
