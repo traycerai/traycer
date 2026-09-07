@@ -9366,6 +9366,12 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // to `unsupported` and the client hides the "Import sessions" entry
   // entirely - the feature is de-emphasised by design (spec §5), so there is
   // nothing to fall back to and nothing lost by its absence.
+  // @1.0 and @1.1 share all three schemas by design, so nothing here or in the
+  // payloads enforces the boundary between them: the NEGOTIATED MINOR is the
+  // capability signal, and a host must gate `already_in_traycer` rows on it.
+  // The reasoning lives with the contract (`./session-import/scan.ts`) and the
+  // row (`./session-import/candidate.ts`); this note only keeps a reader who
+  // arrives at the registry first from concluding the schemas differ.
   "sessionImport.scan": {
     1: {
       latestMinor: 1,
