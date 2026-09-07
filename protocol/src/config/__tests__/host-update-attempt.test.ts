@@ -170,7 +170,7 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
   // The decoder guards `recovery`'s phase legality TWICE: a terminal-only gate
   // (`executionForPhase(phase) !== "terminal"`), and then an outcome-must-match-
   // phase check. Deleting the terminal-only gate alone reddens NOTHING here -
-  // all 22 rows still pass. That is not a gap in these rows; it is a property
+  // all 35 rows still pass. That is not a gap in these rows; it is a property
   // of the code. `parseRecovery` closes `outcome` over exactly
   // `complete | failed | superseded`, and each of those is rejected against
   // every phase but its own namesake - all three of which are terminal. So by
