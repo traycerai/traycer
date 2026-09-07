@@ -20,6 +20,17 @@ const BASE_REASONS = [
   "nothing-to-do",
   "record-fail-closed",
   "refused-attempt-gone",
+  // P1 window B's third answer at the binding site: present, named, and MOVED.
+  // Added here rather than on the branch that mints it because this helper did
+  // not exist there - the two lived on disjoint branches and only meet in this
+  // assembly, which is exactly the kind of gap a vocabulary table is for.
+  //
+  // 21 characters, so the suffixed form is 42 and still inside the wire
+  // pattern's 64 - which matters more for this base than for its neighbours:
+  // it is one of only two that can actually ARRIVE suffixed (see below), so a
+  // base long enough to overflow would silently drop the suffix on a live
+  // path rather than a hypothetical one.
+  "refused-attempt-moved",
   "refused-unverifiable",
   "recovered-complete",
   "recovered-failed",
