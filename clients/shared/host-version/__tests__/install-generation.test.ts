@@ -15,6 +15,29 @@ const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
  * that owns them, so the list is a debt register rather than a blanket
  * exemption: a site that appears here without being written down fails the pin,
  * which is the case that matters - a NEW hand-built literal.
+ *
+ * ## What "hands the RECORD through whole" is actually checked to mean
+ *
+ * Read the claim as narrowly as the check makes it. `HAND_BUILT_LITERAL` is a
+ * regex over source text and it matches ONE spelling: an object literal opened
+ * directly at the call. A caller that assembles the same four fields into a
+ * local first -
+ *
+ *     const identity = { installId, installedAt, archiveSha256, version };
+ *     encodeInstallGeneration(identity);
+ *
+ * - satisfies every assertion below while being precisely the per-site field
+ * mapping F1 exists to prevent. No caller does this today (cold review B
+ * checked the two that plausibly could), and it is not worth an AST walker to
+ * catch: the shape is rare, and a walker is a second thing to keep correct.
+ *
+ * The consequence for a reader is about which half to trust. The two
+ * directional lists below are a claim of INTENT, and the regex can only
+ * enforce the crudest spelling of it. What is load-bearing is
+ * `discoveredCallers()` - it cannot miss a call site whatever shape the
+ * argument takes, so a new caller always reaches a human, who is then the one
+ * deciding whether it passes the record. Treat the lists as the register and
+ * the scan as the guard, not the other way round.
  */
 const MIGRATED_CALLERS: readonly string[] = [
   "clients/traycer-cli/src/installer/apply.ts",

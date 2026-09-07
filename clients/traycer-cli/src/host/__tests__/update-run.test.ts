@@ -5444,6 +5444,25 @@ describe("acceptance: cells with no legacy ancestor", () => {
   // down. It is the measurement of how invisible the clause has become, and
   // the reason someone reading only a green suite would delete it: before
   // this pin existed, that same deletion was green across the board.
+  //
+  // A SECOND ablation, because the per-site pins prove each swap arm records
+  // SOMETHING and not WHAT it records. Give `generationWrittenBySwap` a
+  // legal-but-wrong generation while keeping the correct version, and the
+  // file answers 2 failed / 199 passed of 201. So the generation half is NOT
+  // carried by the version half - it is load-bearing, in exactly two rows:
+  // the Q5 recovery pair. The mechanism is worth knowing before touching
+  // either: a wrong generation defeats the primary equality check, and the
+  // refreshed VERSION then defeats this clause's third condition
+  // (`baseline.installedVersion !== record.targetVersion`), so the recovery
+  // falls through to `failed {install-changed}` - the original field wedge,
+  // re-created from the other direction.
+  //
+  // Nulling the generation OUTRIGHT is not that experiment and cannot be:
+  // `store.ts:538` requires a non-empty string, so a blank never reaches the
+  // record. It answers 70 failed with every failure reading "the attempt
+  // record refused a restarting write" - a schema refusal, not a claim about
+  // what any test observes. Recorded so the cheap version of this ablation is
+  // not mistaken for the informative one.
 
   it("Q12 fail-open: a swap-time read failure leaves the PRE-swap baseline, and the forgiveness clause still admits the recovery", async () => {
     await seedInstalled("1.0.0");
@@ -5466,19 +5485,25 @@ describe("acceptance: cells with no legacy ancestor", () => {
     // baseline and the live record disagree, so the primary equality check in
     // `revalidateInstallIdentity` cannot be what admits this run.
     expect(crashed.claim?.installedVersion).not.toBe(live?.version);
-    // A HARNESS GAP, written down rather than papered over. Production mints a
-    // fresh install id at every swap, so in the field the baseline's
-    // GENERATION goes stale too - that is the half Q12 exists to refresh, and
-    // the wedged Linux box showed both ids differing. `installRecordOf` reuses
-    // one `world.installId` for every version, so here the two generations are
-    // equal and only the version differs.
+    // FIXTURE-TRUE AND PRODUCTION-FALSE. Read this assertion as a statement
+    // about the harness, never about the system: in the field a pre-swap
+    // baseline's generation names the install the swap REPLACED and therefore
+    // differs from the live one - the wedged Linux box had `id:4950d09a-...`
+    // in the record against `id:f55134a3-...` on disk. Here they are equal
+    // only because `installRecordOf` reuses one `world.installId` for every
+    // version, so the fixture cannot express the difference that made Q12
+    // worth writing.
     //
-    // It does not weaken the pin: `matches` is a conjunction, version
+    // It is asserted rather than omitted, and asserted in the direction the
+    // fixture actually behaves, so that it is DELIBERATELY SELF-INVALIDATING:
+    // the day someone makes the harness mint a fresh id per swap - which is
+    // the more faithful harness - this line goes red and lands them on this
+    // comment, instead of a silently weaker fixture going unnoticed. It is a
+    // marker for a known infidelity, not a property anyone should preserve.
+    //
+    // It does not weaken the pin. `matches` is a conjunction, version
     // inequality alone defeats it, and `installedByThisAttempt` reads no
-    // generation at all. It would matter to any FUTURE clause that compared
-    // generations here - which the docblock argues is a tautology and must not
-    // be added - so the gap is recorded at the one place someone would go
-    // looking for a fixture to write it against.
+    // generation at all.
     expect(crashed.claim?.installGeneration).toBe(
       live === null ? null : encodeInstallGeneration(live),
     );

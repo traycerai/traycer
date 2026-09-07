@@ -418,8 +418,17 @@ export function hostInstallRecordPath(environment: Environment): string {
 // Cross-process handoff marker `traycer host update` writes before it
 // touches anything and clears/rewrites on outcome - see
 // `host/update-progress-marker.ts`. Deliberately mirrored (by contract, not
-// by import) at `traycer-host/src/paths.ts::hostHomeDir` so the daemon
-// polls the exact same path this CLI writes.
+// by import) at `traycer-host/src/domain/update/update-progress-marker.ts:14`,
+// where the host's reader and its copy of the filename both live, so the
+// daemon polls the exact same path this CLI writes. The host is a pure READER
+// here - it never writes this file (Q25, dc84fa8b's host-writer column).
+//
+// The pointer used to name `traycer-host/src/paths.ts::hostHomeDir`, which is
+// the wrong file: that is where the host resolves the DIRECTORY, not this
+// filename. Worth a line because this is the last cross-process filename in
+// this module still hand-mirrored - stop-intent and cli-invocation, above,
+// both went through `@traycer/protocol` instead. Single-sourcing this one is
+// deliberately NOT being done at freeze.
 export function hostUpdateProgressMarkerPath(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_UPDATE_PROGRESS_FILENAME);
 }

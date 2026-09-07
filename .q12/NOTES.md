@@ -159,10 +159,10 @@ forced stop that had not taken effect.
 
 The distinction the inversion blurred, and it is the useful part:
 
-| State | Meaning | Answer |
-| --- | --- | --- |
-| signalled instance not provably gone | we could not tell | `forcedRecycle: true`; the relaunch recycles and repairs it |
-| `--force`, and the forced stop reports `hung` | the stop **did not take effect** | reject — the caller explicitly asked to be told |
+| State                                         | Meaning                          | Answer                                                      |
+| --------------------------------------------- | -------------------------------- | ----------------------------------------------------------- |
+| signalled instance not provably gone          | we could not tell                | `forcedRecycle: true`; the relaunch recycles and repairs it |
+| `--force`, and the forced stop reports `hung` | the stop **did not take effect** | reject — the caller explicitly asked to be told             |
 
 The coordinator's reading of the name `SERVICE_CONTROL_FAILED` was right, and
 it was right for the reason the name suggests: a service-control call that
@@ -181,10 +181,10 @@ the REPLACEMENT systemd has already started rather than the instance we
 signalled. That is the same hazard `ea23f8911` pinned for the confirmation,
 arriving at a second site. One-sided pins are how the first regression got in.
 
-| # | Ablation | Reddened |
-| --- | --- | --- |
-| RW-F1 | the force escalation removed again | the force row alone |
-| RW-F2 | the escalation made unconditional | the non-force twin alone |
+| #     | Ablation                           | Reddened                 |
+| ----- | ---------------------------------- | ------------------------ |
+| RW-F1 | the force escalation removed again | the force row alone      |
+| RW-F2 | the escalation made unconditional  | the non-force twin alone |
 
 ## Red-watches
 
