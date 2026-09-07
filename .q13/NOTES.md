@@ -105,6 +105,11 @@ not ship the verb change without it.
 | RW-13m | plain `kickstart` applied unconditionally (macOS)  | the `-k` pin plus one pre-existing test                     |
 | RW-13n | the busy refusal reverted to `logger.warn`         | the cadence pin alone                                       |
 | RW-13o | the `busy` reason string made to interpolate       | the cadence pin alone                                       |
+| RW-13p | the `forcedRecycle` consumer removed              | the recycle pin alone                                       |
+| RW-13q | the recycle done with `stop` instead of `restart` | the recycle pin + the never-INACTIVE pin                    |
+| RW-13r | the identity predicate never consulted            | the SIGKILL row (now on `goneCalls`) + the ordering pin     |
+| RW-13s | an `accountId` added to the INFO field bag        | the cadence pin — **the leak B predicted**                  |
+| RW-13t | the line emitted at BOTH info and warn            | the cadence pin, via the absence assertion                  |
 
 **RW-13h initially came back GREEN** and that is the finding: the ordering the
 whole confirmation rests on was unpinned, because the mock answered the same
@@ -119,45 +124,81 @@ by a pre-existing test in RW-13m — so the asymmetry was real: the branch B
 named as the hazard was the unguarded one. A conjunct can be half-pinned and
 look covered.
 
-## Convergence (coordinator's pin 1) — `364759e53`
+**B named the mechanism behind all three green ablations, and it is checkable
+rather than a hunch:** in every case the pin passed because *a guard earlier in
+the same predicate short-circuited before the clause under test*. The
+discipline that follows — for any pin on a multi-clause predicate, build the
+fixture with every clause except the one under test at its **permissive**
+value. RW-13h's replacement instance is exactly that move.
+
+## Convergence (coordinator's pin 1) — `364759e53`, corrected by cold review B
 
 Leaving the manager armed means the executor stops being the only thing that
-can start a host. At the moment the swap finishes and calls
-`relaunchAfterRestart`, a supervisor the manager relaunched is already sitting
-in the job's instance slot, WAITING on the attempt lock.
+can start a host. **The incumbent check cannot arbitrate that**:
+`host-start.ts:927` calls it a gate that "runs exactly once", before the
+relaunch loop, and the admission callback at `:1472` spawns without re-asking.
 
-The incumbent check cannot arbitrate that. `host-start.ts:927` calls it a gate
-that "runs exactly once", before the relaunch loop, and the admission callback
-at `:1472` spawns without re-asking — so a supervisor admitted after a 60s wait
-does not re-check whether a host appeared meanwhile. Convergence therefore
-rests **entirely** on the relaunch verb no-opping against a live job:
+### The property I first cited was too narrow
 
-| Platform | Relaunch verb                                   | Why one host                                                                                                        |
-| -------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Linux    | `systemctl --user start`                        | systemd no-ops a start job on an active unit. **Pinned.**                                                           |
-| Windows  | `schtasks /Run`                                 | `MultipleInstancesPolicy: IgnoreNew` drops the second run. **Pinned.**                                              |
-| macOS    | `kickstart` / `kickstart -k` by `forcedRecycle` | plain kickstart no-ops; `-k` recycles the waiter and launchd replaces it. Both single-instance. **Not yet pinned.** |
+I claimed convergence rests on *"the start verb no-ops against a job the
+manager already considers running"*. **That governs only the case where an
+instance IS running, and Q13 both creates and lengthens the case where none
+is** (B):
 
-dc84fa8b relays that reviewer B found this same conjunct sitting under **Q9's**
-three admit rows, where it was citation only and named as falsifiable by an
-ordinary in-repo edit (`kickstart -k` unconditionally). Two thirds of it are
-now pinned; the macOS third is the one B's falsifier actually names, so it is
-the one still worth writing.
+- the stop no longer disarms the manager, so the manager has its own pending
+  relaunch in flight;
+- **an admission refusal exits 76, which EMPTIES the job's instance slot.**
+  "A supervisor occupies the slot" holds only while that supervisor lives, and
+  the design's own back-off is to die and be restarted.
 
-### `forcedRecycle` is inert on Linux, and the note should not imply otherwise
+So the window to attack is: waiter refused → exits 76 → slot empty → manager
+has a pending auto-restart → the executor issues its start. Two start
+requests, nothing running, and the verb property is silent about it.
 
-`forcedRecycle` has exactly one consumer: `kickstartDesktopAgent` on macOS
-(`macos.ts:1804`, `:2534`, `:2537`). Linux and Windows both route
-`relaunchAfterRestart` to `startService` and never read it. So B's H1 ruling —
-which I implemented, inverting the default so an unprovable instance recycles —
-is **correct but currently unread on the only platform I changed**.
+**The property actually depended on:** the manager admits at most one instance
+of the job *in every state*, including while a restart is pending. That is the
+manager's object model, not the verb's behaviour.
 
-Computing it honestly is still right: `RestartStop` is the cross-platform
-contract, and this is the one field whose entire purpose is naming "we could
-not tell". Windows can hard-code `false` and says why (its stop kills the tree
-and waits); Linux cannot, because its stop genuinely may fail to prove the
-instance gone. But "inert today" is the accurate claim, and it is now pinned as
-such rather than left to be mistaken for live protection.
+| Platform | The singleton | Holds in every state? |
+| --- | --- | --- |
+| systemd | the **unit** — an explicit start job and a pending auto-restart converge on one main process | yes |
+| launchd | the **label** — a kickstart during a throttle hold is deferred, not duplicated | yes |
+| Task Scheduler | `IgnoreNew`, which **is** the narrow property verbatim | **UNVERIFIED — nothing behind it** |
+
+**Windows is therefore downgraded from "pinned" to the same UNVERIFIED tier as
+its verb change.** The pin stays and reads the right artifact; what shrank is
+what it discharges. It buys that the narrow property is not silently lost —
+which still matters, because `runTaskAndVerifyStart` depends on it from the
+other direction.
+
+Cleared by B so nobody re-derives it: a **second manager job** (Desktop's
+SMAppService agent beside the CLI label) would defeat every verb property at
+once, but it is refused at install time — `macos.ts:1038`, `:1059`, the
+both-labels-alive refusal at `:283`, and `host doctor`. Not a Q13 gap.
+
+### `forcedRecycle` had no consumer on Linux — that was a live bug, now fixed
+
+Reported here first as merely "inert". **B showed it was a real failure on the
+one platform this round changed**, and the fix landed in `48aa79900`.
+
+A plain `systemctl --user start` no-ops against a unit systemd still considers
+active — the *same* no-op `forcedRecycle` was invented to name on macOS. So a
+Linux stop returning `forcedRecycle: true` (SIGKILL could not prove the
+instance gone, or `systemctl kill` itself failed — invisible, since `killUnit`
+tolerates a non-zero exit and never reads it) issued a start that did nothing,
+and the run proceeded to **activation over a host still serving the pre-swap
+bytes**. Exactly what the field exists for.
+
+The relaunch now recycles with a `restart` job when the stop could not prove
+the instance gone. `restart` rather than `stop`: it is a stop job followed by a
+start and the unit ends ACTIVE, so it cannot reintroduce Q13 on the recovery
+path — where it would have been hardest to see. Both directions pinned.
+
+That the ladder cannot read `systemctl kill`'s exit code is not a gap in
+itself: a failed kill leaves the instance alive, the confirmation fails to
+prove it gone, and the result routes to `forcedRecycle: true` — which now has
+a consumer. The instance-bound confirmation is the authority, not the exit
+code.
 
 ## The logging cadence, and the half of it I did not build — `47ed81417`
 
