@@ -50,7 +50,8 @@ carving into it: dead by the decoder, but it would have blocked this arm.
 
 | Conjunct | Authority | Watched by |
 | --- | --- | --- |
-| `restarting`/`verifying` ⇒ the target's bytes are placed | `LEGAL_SUCCESSORS`, `shared/host-update/transition.ts` | **citation only** — no contender pin reaches it. Partly backstopped by the independent install-record read below, which fails if the install is not the target. |
+| `restarting`/`verifying` ⇒ the target's bytes are placed, for a `resume-apply` record | `continuationPhaseOrderRejected`, `shared/host-update/transition.ts:1223` | **pinned in-package, behaviourally**: the "Q9 dependency" row in `contender.test.ts`; red-watched by deleting the `resume-apply` arm |
+| ...the same, for a `null`-continuation record | the three `restarting` writers in `cli/host/update-run.ts` (`:1838`, `:2259`, `:2402`) — the core does NOT forbid `preparing`+`null` → `restarting` | **cross-package citation.** The live `installedVersion === targetVersion` read is what actually protects this case |
 | `preparing` + `activate` is the recovery-resume shape | `resumedRecord` / `recoveryContinuation`, `transition.ts` | citation; the production path is exercised by the Q5 pins in `cli/host/__tests__/update-run.test.ts` |
 | the decoder derives `execution` from `phase`, so the removed line was dead | `executionForPhase`, `@traycer/protocol/config/host-update-attempt` | **pinned**: `shared/host-update/__tests__/decode.test.ts:226`; independently ablated (deleting the line left 82/82 green) |
 | `installed === null` is also the swap's absent window | `atomicSwap`'s two renames, `cli/installer/install.ts` | citation + the absent-window pin (RW-Q5) |

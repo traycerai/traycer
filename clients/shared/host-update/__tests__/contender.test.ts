@@ -17,6 +17,8 @@ import {
 } from "../lock";
 import { updateAttemptLockPath, updateAttemptRecordPath } from "../paths";
 import { TERMINAL_ATTEMPT_RETENTION_MS } from "../record";
+import { advanceAttempt } from "../transition";
+import { attemptIdentityOf } from "@traycer/protocol/config/host-update-attempt";
 import type {
   HostUpdateAttemptClaimBaseline,
   HostUpdateAttemptRecord,
@@ -1280,6 +1282,41 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
       expect(readerCalls).toBe(0);
     },
   );
+
+  it("Q9 dependency: a resume-apply record that has not written `applying` may not reach `restarting`", () => {
+    // `supervisorRelaunchOverActive` admits `restarting`/`verifying` on the
+    // premise that reaching either means this record's target is PLACED.
+    // `LEGAL_SUCCESSORS` does NOT carry that premise - `preparing ->
+    // restarting` is a legal edge, and `preparing` covers pre-placement
+    // states. `continuationPhaseOrderRejected` is what carries it for a
+    // `resume-apply` record, and this is the pin the admission actually
+    // depends on. (Cold review B found the citation naming the wrong
+    // function.)
+    //
+    // The `null`-continuation case falls through to `false` here and is NOT
+    // guarded by this package at all - what forbids it is that all three
+    // writers of `restarting` in `traycer-cli`'s `update-run.ts` write it
+    // after placement. That half stays a cross-package citation, and the
+    // live `installedVersion === targetVersion` read is what actually
+    // protects the admission in both halves.
+    const current = record({
+      phase: "preparing",
+      execution: "active",
+      continuation: "resume-apply",
+      claim: claim({}),
+    });
+
+    expect(
+      advanceAttempt(current, attemptIdentityOf(current), {
+        phase: "restarting",
+        continuation: "resume-apply",
+        progress: null,
+        error: null,
+        claimRefresh: null,
+        nowIso: "2026-01-01T00:00:01.000Z",
+      }),
+    ).toEqual({ kind: "rejected", reason: "continuation-phase-order" });
+  });
 
   it.each([
     [
