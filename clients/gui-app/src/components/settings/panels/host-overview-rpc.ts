@@ -15,13 +15,9 @@ import type {
   HostGetInstallationInfoResponse,
   HostServiceDeregisterResponse,
   HostServiceRegisterResponse,
+  HostUpdateBoundDispatchExpectedIdentity,
   HostUpdateInstallResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
-// Deep path rather than the barrel: `maintenance/index` re-exports a chosen
-// subset of `schemas.ts` and this type is not in it. Reaching past the barrel
-// for one type is the smaller wrong than widening the barrel from here, which
-// is the protocol's call to make.
-import type { HostUpdateBoundDispatchExpectedIdentity } from "@traycer/protocol/host/maintenance/schemas";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartResponse } from "@traycer/protocol/host/restart/index";
 import { useEffect } from "react";
