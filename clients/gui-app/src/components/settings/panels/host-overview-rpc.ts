@@ -710,8 +710,24 @@ export function useHostUpdateInstall(
           classifyInstallOutcome(response),
         );
       },
-      onError: (_error, _variables, context) => {
+      onError: (error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;
+        // A transport DROP is this dispatch's probable-success shape, exactly
+        // as it is register's and deregister's — and the strongest instance of
+        // it: the swap is DETACHED and outlives the request by design, and the
+        // process that would have answered is the one being replaced.
+        // Releasing re-enables Restart and the service verbs over a swap that
+        // is already running. The bounded 60s timer backstops the case where
+        // nothing was dispatched at all. Only an error that definitively
+        // PRECEDED execution refutes the dispatch.
+        //
+        // NOT the same call as `dispatch-indeterminate`, which also cannot
+        // attribute its dispatch and DOES release (O3): there the socket is
+        // healthy and the release is paired with a `host.status` refresh, so
+        // observation corrects the page within one poll. Here the socket is
+        // down — the reason register's arm invalidates with
+        // `refetchType: "none"` — and no observation is coming.
+        if (error instanceof HostTransportFailureError) return;
         useHostServiceWriteLatchStore
           .getState()
           .releaseUpdateInstallAccepted(context.hostId);
@@ -831,8 +847,24 @@ function boundDispatchOptions(
         classifyBoundDispatchOutcome(response),
       );
     },
-    onError: (_error, _variables, context) => {
+    onError: (error, _variables, context) => {
       if (context === undefined || context.hostId === null) return;
+      // A transport DROP is this dispatch's probable-success shape, exactly
+      // as it is register's and deregister's — and the strongest instance of
+      // it: the swap is DETACHED and outlives the request by design, and the
+      // process that would have answered is the one being replaced.
+      // Releasing re-enables Restart and the service verbs over a swap that
+      // is already running. The bounded 60s timer backstops the case where
+      // nothing was dispatched at all. Only an error that definitively
+      // PRECEDED execution refutes the dispatch.
+      //
+      // NOT the same call as `dispatch-indeterminate`, which also cannot
+      // attribute its dispatch and DOES release (O3): there the socket is
+      // healthy and the release is paired with a `host.status` refresh, so
+      // observation corrects the page within one poll. Here the socket is
+      // down — the reason register's arm invalidates with
+      // `refetchType: "none"` — and no observation is coming.
+      if (error instanceof HostTransportFailureError) return;
       useHostServiceWriteLatchStore
         .getState()
         .releaseUpdateInstallAccepted(context.hostId);

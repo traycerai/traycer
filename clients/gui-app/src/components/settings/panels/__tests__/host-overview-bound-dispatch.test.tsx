@@ -75,6 +75,7 @@ import type {
   HostStagedRecord,
 } from "@traycer/protocol/config/installation-records";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { BoundDispatchResponse } from "@/components/settings/panels/host-overview-rpc";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -1769,4 +1770,187 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
     panel.rerender(panelElement(panel.queryClient));
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
   });
+});
+
+/**
+ * CodeRabbit #1773 round 2: an update dispatch's `onError` released the
+ * page-wide accepted latch for EVERY error, transport drops included.
+ *
+ * A `HostTransportFailureError` is not a refusal — it is the answer going
+ * missing, and for an update that is the likeliest shape there is: the swap is
+ * detached and outlives the request by design, and the process that would have
+ * answered is the one being replaced. Releasing there re-enables Restart and
+ * the service verbs over a swap that is already running, and no observation is
+ * coming to correct it, because the socket the page would observe over is the
+ * one that just dropped.
+ *
+ * The same file already holds its latch on exactly this error for
+ * `host.service.register` and `host.service.deregister`, whose comment states
+ * the rule these two sites were breaking: "Only an error that definitively
+ * PRECEDED execution refutes the dispatch."
+ *
+ * BOTH sites get their own case, not just the flagged one. The bound
+ * dispatch's `onError` was copied from the install's, which is how they came
+ * to share the defect — and an install-only pin stays green when the bound
+ * guard is deleted, which is measured, not assumed: removing the bound guard
+ * with only the INSTALL cases present left all 22 tests passing.
+ */
+describe("update dispatch onError — a transport drop keeps the accepted latch armed", () => {
+  function latch(): number | null {
+    return (
+      useHostServiceWriteLatchStore.getState().byHost["host-a"]
+        ?.updateInstallAcceptedAt ?? null
+    );
+  }
+
+  const transportDrop = (): never => {
+    throw new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "socket closed before the response arrived",
+      requestId: "req-1",
+      method: "host.update.install",
+      fatalDetails: null,
+    });
+  };
+  const plainFailure = (): never => {
+    throw new Error("host refused the request");
+  };
+
+  for (const scenario of [
+    { label: "transport drop", handler: transportDrop, armed: true },
+    { label: "ordinary error", handler: plainFailure, armed: false },
+  ] as const) {
+    it(`INSTALL — ${scenario.label}: latch ${scenario.armed ? "stays armed" : "releases"}`, async () => {
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: true,
+        hostVersion: "1.2.0",
+        installation: managedInstallation(installRecord("1.2.0"), null),
+        overrideHandlers: {
+          "host.update.check": () => ({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: updateCheckManifest("1.3.0"),
+          }),
+          "host.update.install": scenario.handler,
+        },
+      });
+      record("host-a", METHODS_WITHOUT_BOUND);
+      hostBindingMock.current = { hostClient: fixture.client };
+      scopeOverrides.current = scopeFrom("host-a", fixture);
+      const panel = renderPanel();
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Update now" }),
+      );
+
+      // THE BARRIER, and the whole pin turns on it. `onMutate` arms the latch
+      // before the request goes out, so "still armed" is trivially true until
+      // the error has actually settled — an earlier draft asserted it straight
+      // after the click and passed under BOTH ablations, proving nothing. The
+      // The MUTATION CACHE is the barrier, not the error toast: a transport
+      // drop is deliberately not toasted (`host-error-toast.ts` treats it as
+      // the expected shape of a host going away), so a toast barrier would
+      // hang on exactly the case this pin is about. `status === "error"` is
+      // set after the hook-level `onError` has run, which is the decision
+      // under test.
+      await waitFor(() => {
+        expect(
+          panel.queryClient
+            .getMutationCache()
+            .getAll()
+            .some(
+              (mutation) =>
+                // SCOPED to the dispatch under test, not "something errored".
+                // All three update dispatches share this one mutation key, so
+                // it covers the install and both bound methods and nothing
+                // else. Unscoped, a future fixture that lets any other
+                // mutation fail would satisfy the barrier before this one
+                // settled and restore the vacuity this pin already had once.
+                mutation.options.mutationKey?.[0] === "host.update.install" &&
+                mutation.state.status === "error",
+            ),
+        ).toBe(true);
+      });
+      if (scenario.armed) {
+        expect(latch()).not.toBeNull();
+      } else {
+        expect(latch()).toBeNull();
+      }
+    });
+  }
+
+  for (const scenario of [
+    { label: "transport drop", handler: transportDrop, armed: true },
+    { label: "ordinary error", handler: plainFailure, armed: false },
+  ] as const) {
+    it(`BOUND — ${scenario.label}: latch ${scenario.armed ? "stays armed" : "releases"}`, async () => {
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.status": () => ({
+            ready: true,
+            hostVersion: "1.5.0",
+            protocolVersion: { major: 1, minor: 3 },
+            busy: false,
+            busySessionCount: 2,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: attempt({
+              phase: "waiting-to-activate",
+              execution: "parked",
+              busySessionCount: 2,
+            }),
+            updateTransaction: {
+              recordSchemaVersion: 2 as const,
+              authority: "attempt" as const,
+            },
+          }),
+          "host.update.check": () => ({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: updateCheckManifest("1.6.0"),
+          }),
+          "host.update.activate": scenario.handler,
+        },
+      });
+      record("host-a", METHODS_WITH_BOUND);
+      hostBindingMock.current = { hostClient: fixture.client };
+      scopeOverrides.current = scopeFrom("host-a", fixture);
+      const panel = renderPanel();
+
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-restart"),
+      );
+      await screen.findByTestId("host-busy-force-defer-dialog");
+      fireEvent.click(screen.getByTestId("host-busy-force"));
+
+      await waitFor(() => {
+        expect(
+          panel.queryClient
+            .getMutationCache()
+            .getAll()
+            .some(
+              (mutation) =>
+                // SCOPED to the dispatch under test, not "something errored".
+                // All three update dispatches share this one mutation key, so
+                // it covers the install and both bound methods and nothing
+                // else. Unscoped, a future fixture that lets any other
+                // mutation fail would satisfy the barrier before this one
+                // settled and restore the vacuity this pin already had once.
+                mutation.options.mutationKey?.[0] === "host.update.install" &&
+                mutation.state.status === "error",
+            ),
+        ).toBe(true);
+      });
+      if (scenario.armed) {
+        expect(latch()).not.toBeNull();
+      } else {
+        expect(latch()).toBeNull();
+      }
+    });
+  }
 });
