@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { DurableBytes } from "../host-update-attempt";
-import { decodeHostUpdateAttempt } from "../host-update-attempt";
+import {
+  HOST_UPDATE_REFUSES_RPC_CODE,
+  decodeHostUpdateAttempt,
+} from "../host-update-attempt";
 
 // Protocol-level pins for `decodeHostUpdateAttempt`. The contract is
 // currently defended only from `clients/shared/host-update/__tests__/decode.test.ts`,
@@ -581,5 +584,39 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
         expect(result.value.verification).toEqual(VERSION_ONLY);
       }
     });
+  });
+});
+
+// A wire-value pin, not a tautology. `HOST_UPDATE_REFUSES_RPC_CODE` exists so
+// the CLI that STAMPS the code and the GUI that COMPARES it stop carrying two
+// literals, and the value is the one already written into durable records by
+// shipped CLIs. Rename the constant freely; change the string and every
+// existing `failed` record stops being recognised as a refusal, which is a
+// silent, one-way regression that no type can catch. The row is what makes
+// that edit loud.
+describe("HOST_UPDATE_REFUSES_RPC_CODE", () => {
+  it("is the exact wire string a stamped refusal carries", () => {
+    expect(HOST_UPDATE_REFUSES_RPC_CODE).toBe("host-refuses-rpc");
+  });
+
+  it("is the code a decoded terminal record reports, end to end", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(
+        JSON.stringify({
+          ...VALID_ACTIVE,
+          phase: "failed",
+          execution: "terminal",
+          completedAt: "2026-01-01T00:05:00.000Z",
+          error: {
+            code: HOST_UPDATE_REFUSES_RPC_CODE,
+            message: "the host refused the authenticated check",
+            phase: "verifying",
+          },
+        }),
+      ),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.error?.code).toBe("host-refuses-rpc");
   });
 });

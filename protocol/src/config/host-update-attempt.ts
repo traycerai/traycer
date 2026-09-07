@@ -113,6 +113,36 @@ export type HostUpdateAttemptError = {
 } | null;
 
 /**
+ * The `error.code` a failed attempt carries when the freshly started target
+ * host answered the verify leg's authenticated RPC with two consecutive
+ * UNAUTHORIZED/FORBIDDEN frames (Q19).
+ *
+ * `code` is a free `string` above and stays one - the record must be able to
+ * carry a code from a writer this reader predates. This constant is not a
+ * narrowing of that type; it is the one code with a SECOND consumer, and the
+ * two are in different packages:
+ *
+ *  - the CLI stamps it and holds it in `UNCONDITIONALLY_STAMPED_FAILURE_CODES`
+ *    (`clients/traycer-cli/src/host/update-run.ts`);
+ *  - the GUI compares it to decide whether a terminal record says the host
+ *    refused the authenticated check
+ *    (`clients/gui-app/src/lib/host/fleet-update/fleet-update-view.ts`).
+ *
+ * It lives here for the reason the module header gives: this file is
+ * renderer-safe and both sides already resolve their record vocabulary from
+ * it, so a shared definition costs nothing that two literals were not already
+ * costing. The value IS the wire string - a record written by an older CLI
+ * carries these exact bytes - so it may never be "tidied" into a different
+ * spelling, and the row pinning it is not ceremony.
+ *
+ * The two sibling members of that CLI set, `verify-timeout` and
+ * `service-start-failed`, are deliberately NOT here: a sweep of the GUI found
+ * neither compared anywhere in its production source, so exporting them would
+ * add protocol surface with only one consumer apiece.
+ */
+export const HOST_UPDATE_REFUSES_RPC_CODE = "host-refuses-rpc";
+
+/**
  * Durable provenance for a terminal conclusion written by crash recovery.
  *
  * A normal executor reaches `complete` through its verifying segment. Recovery
