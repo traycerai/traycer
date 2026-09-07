@@ -27,6 +27,7 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -34,6 +35,7 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
 } from "@traycer/protocol/host/provider-schemas";
+import { agentListProviderProfilesResponseSchemaV5 } from "@traycer/protocol/host/agent/profiles";
 import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -103,16 +105,19 @@ const LIVE_FROZEN_EXPORTS = {
   // records what a line served, so undoing the growth that triggered it does
   // not un-freeze it.
   "providers.list@7.0": providersListResponseSchemaV70,
-  // The head line now, holding v7.0's old job: it names the LIVE schema, so
-  // the next attempt to grow it fails here first. Same response - freeze the
-  // line that stopped being head, open the next one, do not regenerate.
+  // v8.0 held v7.0's old job until W1-T9 froze it too: `host-v1.3.0-rc.*`
+  // released `providers.list@8.0`, ahead of `providers.list@9.0` opening
+  // above it (authType/endpoint/config/profilesSupported), so this row now
+  // names the frozen `providersListResponseSchemaV80` instead of the LIVE
+  // schema. This row was NOT regenerated - it names the frozen schema now
+  // and its dump is unchanged, same discipline as the v7.0 row above.
   //
   // There is no `providers.list@7.1` row because there is no such line: the
   // enablement pair was its entire delta over 7.0 and both were removed. This
   // list and the snapshot's key set are held equal below, so deleting a row
   // here without deleting the fixture (or the reverse) fails rather than
   // silently narrowing what is guarded.
-  "providers.list@8.0": providersListResponseSchema,
+  "providers.list@8.0": providersListResponseSchemaV80,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate
@@ -121,6 +126,13 @@ const LIVE_FROZEN_EXPORTS = {
   "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
+  // New (W1-T9): the shared `agentProviderProfileSummarySchema` is embedded
+  // by identity in the frozen v1.0-v4.0 responses and the rc-shipped v5.0
+  // line (`host-v1.2.0-rc.*`/`host-v1.3.0-rc.*`), so this hand-frozen v5.0
+  // response needs its own guard the way `providers.list@8.0` above does -
+  // this key genuinely adds to the fixture (critique M13), unlike the
+  // repoint above.
+  "agent.listProviderProfiles@5.0": agentListProviderProfilesResponseSchemaV5,
 } as const;
 
 describe("frozen catalog line snapshots", () => {

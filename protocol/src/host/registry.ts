@@ -763,11 +763,14 @@ import {
   providersStartTerminalLoginResponseSchema,
   providersEnsurePackRequestSchema,
   providersEnsurePackResponseSchema,
-  // The canonical schemas back the v8.0 head; every older line names a frozen
+  // The canonical schemas currently back no contract here (W1-T9 froze v7.0
+  // and v8.0, the two lines that used to bind them); the next major to open
+  // publishes them - not imported below since nothing in this file still
+  // references them by value. Every released line below names a frozen
   // shape.
-  providersListRequestSchema,
-  providersListResponseSchema,
   providersListRequestSchemaBeforeV70,
+  providersListRequestSchemaV70,
+  providersListRequestSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -775,6 +778,7 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV80,
   isProfileEnabled,
   providersListModelProvidersRequestSchema,
   providersListModelProvidersResponseSchema,
@@ -1875,10 +1879,18 @@ export const providersListV60 = defineRpcContract({
 // freeze under the `V70` names and leave the pre-image beside it - do not add a
 // third naming scheme.
 //
-// The REQUEST side needs no such work. The collapse moved only the response, so
-// `providersListRequestSchemaV70` still equals what v7.0 serializes and is
-// already the real freeze; `providersListRequestSchemaBeforeV70` covers
-// v1.0-v6.0. Only the response ever diverged.
+// The REQUEST side needed no such work AT THE TIME: the collapse moved only
+// the response, so `providersListRequestSchemaV70` already equalled what
+// v7.0 serialized. THAT HAS SINCE CHANGED (W1-T9): both v7.0 and v8.0 were
+// still binding the live `providersListRequestSchema` directly, which meant
+// `providers.list@9.0`'s planned `native.profileId` growth would have
+// widened both already-released request lines the instant it landed. The
+// request side is now frozen too, under the same discipline as the response:
+// `providersListV70` binds `providersListRequestSchemaV70` (unchanged
+// contents, now actually bound) and `providersListV80` binds the new
+// `providersListRequestSchemaV80` (whose `native` arm is the hand-frozen
+// `nativeListQuerySchemaV80`). See `provider-schemas-v70-pins.test.ts` for
+// the pin.
 // THE FREEZE DESCRIBED ABOVE HAS NOW BEEN TAKEN, one line earlier than that
 // text anticipates and for a reason it explicitly discounts. Read both.
 //
@@ -1906,25 +1918,31 @@ export const providersListV60 = defineRpcContract({
 // this line - v7.0's row now names the frozen schema and dumps identically.
 //
 // Profile eligibility then opened v8.0, which is a real major (the response
-// grows a per-profile `enabled` a v7 peer must not silently ignore) and is now
-// the sole live response line. v7.0 is the last frozen line under it.
+// grows a per-profile `enabled` a v7 peer must not silently ignore). v8.0 WAS
+// the sole live response (and request) line until W1-T9 froze it too, ahead
+// of `providers.list@9.0` growing the live shapes with `authType` / `endpoint`
+// / `config` / `profilesSupported`: it now binds `providersListResponseSchemaV80`
+// / `providersListRequestSchemaV80`, its own hand copies, so that growth
+// lands only on the live schemas above and the next major that opens to
+// publish them. v7.0 is the last frozen line under it.
 export const providersListV70 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 7, minor: 0 } as const,
-  // The REQUEST is deliberately still the live schema: the freeze moved only
-  // the response, and `providersListRequestSchemaV70` remains the hand-copy
-  // that `provider-schemas-v70-pins.test.ts` holds equal to it. A request field
-  // added to the live schema would still reach this line - unchanged from
-  // before, and still the part to watch.
-  requestSchema: providersListRequestSchema,
+  // Frozen alongside the response (W1-T9): `providersListRequestSchemaV70` is
+  // the hand-copy `provider-schemas-v70-pins.test.ts` pins, now actually
+  // bound here instead of the live `providersListRequestSchema`.
+  requestSchema: providersListRequestSchemaV70,
   responseSchema: providersListResponseSchemaV70,
 });
 
 export const providersListV80 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 8, minor: 0 } as const,
-  requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  // Frozen (W1-T9), ahead of `providers.list@9.0` growing the live shapes:
+  // hand copies, not the live `providersListRequestSchema` /
+  // `providersListResponseSchema` above.
+  requestSchema: providersListRequestSchemaV80,
+  responseSchema: providersListResponseSchemaV80,
 });
 
 export const providersListUpgradeV70ToV80 = defineUpgradePath<
@@ -2298,9 +2316,13 @@ export const providersListDowngradeV8ToV7 = defineDowngradePath<
 >({
   from: { major: 8, minor: 0 },
   to: { major: 7, minor: 0 },
+  // Re-parsed through the frozen `providersListRequestSchemaV70` target, not
+  // the live `providersListRequestSchema` - a v9.0 `native.profileId` on the
+  // incoming v8.0 request must not silently ride the v7.0 wire through this
+  // downgrade (W1-T9).
   downgradeRequest: (request) => ({
     ok: true,
-    value: providersListRequestSchema.parse(request),
+    value: providersListRequestSchemaV70.parse(request),
   }),
   downgradeResponse: (response) => ({
     ok: true,

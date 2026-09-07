@@ -17,10 +17,12 @@ import {
   providerManagedInstallStateSchemaV70Preimage,
   providersListRequestSchema,
   providersListRequestSchemaV70,
+  providersListRequestSchemaV80,
   providersListResponseSchema,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
   providersListResponseSchemaV70Preimage,
+  providersListResponseSchemaV80,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -155,27 +157,31 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     );
   });
 
-  it("v8.0 is the head and names the canonical response; 7.0 names its freeze", () => {
-    // This assertion has now flipped four times, and the flips ARE the
+  it("v7.0 and v8.0 both name their own freeze now; the canonical schemas back neither (W1-T9)", () => {
+    // This assertion has now flipped five times, and the flips ARE the
     // judgement the freeze rule exists to force. While an unreleased v8.0 sat
     // above v7.0, v7.0 was pinned; collapsing that major made v7.0 the head and
     // it tracked live again; opening a v7.1 for the auth-aware enablement
     // fields pinned v7.0 to the REAL freeze
-    // (`providersListResponseSchemaV70`); and removing those two fields removed
-    // that minor with them - they were its entire delta - so v7.0 is once again
-    // the only frozen line under a real v8.0.
+    // (`providersListResponseSchemaV70`); removing those two fields removed
+    // that minor with them - they were its entire delta - so v7.0 was once
+    // again the only frozen line under a real v8.0; and now (W1-T9) v8.0 is
+    // released too (`host-v1.3.0-rc.*`) and frozen the same way, ahead of
+    // `providers.list@9.0` opening above it.
     //
-    // The v7.0 PIN survived all four flips, which is the point: what freezes a
-    // line is another line opening above it, not which one. v8.0 is above it
-    // now, and 7.0 must not drift back onto live just because the line
-    // immediately above it went away.
+    // The v7.0 PIN survived all five flips, which is the point: what freezes a
+    // line is another line opening above it, not which one. v8.0 no longer
+    // tracks live either, and both must not drift back onto live just because
+    // no major currently sits above v8.0.
     //
     // "A line that has STOPPED being the head still points at live" is the
-    // defect being guarded, so both halves are asserted: the head names live,
-    // and the line below it does not.
+    // defect being guarded, so both halves are asserted for both lines: the
+    // canonical schemas are named nowhere in the registry, and neither frozen
+    // line is the canonical export.
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
     const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
-    expect(v80.responseSchema).toBe(providersListResponseSchema);
+    expect(v80.responseSchema).toBe(providersListResponseSchemaV80);
+    expect(v80.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).toBe(providersListResponseSchemaV70);
     expect(v70.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchemaV70Preimage);
@@ -186,15 +192,16 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     expect(Object.keys(hostRpcRegistry["providers.list"][7].versions)).toEqual([
       "0",
     ]);
-    // The REQUEST side did not move: the freezes covered only the response, so
-    // both lines still bind the live request and
-    // `providersListRequestSchemaV70` remains the hand-copy held equal to it by
-    // the pin above. Request-side enum growth is advisory (a released client
-    // never emits a new value), which is why it is allowed to track live here
-    // while the response is not.
-    expect(v70.requestSchema).toBe(providersListRequestSchema);
-    expect(v80.requestSchema).toBe(providersListRequestSchema);
-    expect(v70.requestSchema).not.toBe(providersListRequestSchemaV70);
+    // The REQUEST side moved too, as of W1-T9: `providers.list@9.0` grows
+    // `native` with `profileId`, so an unpinned already-released request line
+    // would have widened silently the same way an unpinned response line did
+    // before v7.0's own freeze. Both lines now bind their own hand copy
+    // instead of the ever-growing live `providersListRequestSchema`.
+    expect(v70.requestSchema).toBe(providersListRequestSchemaV70);
+    expect(v70.requestSchema).not.toBe(providersListRequestSchema);
+    expect(v80.requestSchema).toBe(providersListRequestSchemaV80);
+    expect(v80.requestSchema).not.toBe(providersListRequestSchema);
+    expect(v80.requestSchema).not.toBe(v70.requestSchema);
   });
 
   it("providerIdSchemaV70 includes huggingface, the newest id major 7 can carry", () => {
@@ -444,7 +451,7 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
     expect(viaFrozen.native).toEqual(NATIVE_RESULT_SAMPLE);
   });
 
-  it("the request round-trips identically through the canonical and frozen v7.0 schemas", () => {
+  it("the request round-trips identically through the canonical and frozen v7.0/v8.0 schemas", () => {
     const raw = {
       forceAuthRefresh: true,
       native: {
@@ -457,18 +464,30 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
     expect(providersListRequestSchemaV70.parse(raw)).toEqual(
       providersListRequestSchema.parse(raw),
     );
+    expect(providersListRequestSchemaV80.parse(raw)).toEqual(
+      providersListRequestSchema.parse(raw),
+    );
   });
 
   // The round-trip above drives ONE sample value, which an added optional field
   // would slip straight past. This compares the schemas themselves, and it is
-  // what keeps the bare `V70` name honest: v7.0 binds the LIVE request, so the
-  // day a field is added there the frozen copy stops being the v7.0 wire - the
-  // exact drift the response side had to be renamed out of. Red here means
-  // "update the copy, or rename it `Preimage` like the response", never
-  // "regenerate to green".
-  it("the frozen v7.0 request is still exactly the live request", () => {
+  // what proves the hand copies are faithful - not that they track the live
+  // request going forward (neither `providersListV70` nor `providersListV80`
+  // binds the live schema any more, see the "both name their own freeze" test
+  // above), but that freezing them NOW, before `providers.list@9.0` grows
+  // `native` with `profileId`, changed nothing about what a v7.0/v8.0 peer
+  // already serializes. Red here means "the hand copy has drifted from what it
+  // was supposed to freeze" - the live schema growing after this point is
+  // expected to turn this red, and that is the freeze doing its job, not a
+  // regression to fix by regenerating.
+  it("the frozen v7.0 and v8.0 requests are still exactly the live request", () => {
     expect(
       z.toJSONSchema(providersListRequestSchemaV70, { unrepresentable: "any" }),
+    ).toEqual(
+      z.toJSONSchema(providersListRequestSchema, { unrepresentable: "any" }),
+    );
+    expect(
+      z.toJSONSchema(providersListRequestSchemaV80, { unrepresentable: "any" }),
     ).toEqual(
       z.toJSONSchema(providersListRequestSchema, { unrepresentable: "any" }),
     );

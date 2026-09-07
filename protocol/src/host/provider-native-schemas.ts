@@ -1103,6 +1103,57 @@ export const nativeListQuerySchema = z
   .superRefine(refineProviderNativeScope);
 export type NativeListQuery = z.infer<typeof nativeListQuerySchema>;
 
+/**
+ * Frozen `providers.list@8.0` native query arm: a hand copy of the live
+ * {@link nativeListQuerySchema} above, taken now (W1-T9) because
+ * `providers.list@9.0` grows every variant here with `profileId`. Same
+ * "deliberate stop" as `providersListRequestSchemaV70`'s own comment: the
+ * per-kind `providerId` / `scope` / `workspaceRoot` / `theme` leaves stay
+ * live, since it is THIS union's key set that v8.0 must not silently absorb
+ * a new field into, not those leaf enums (guarded separately by the deep
+ * JSON-Schema snapshot). Do not widen this schema; extend the live one and
+ * let v9.0 publish it.
+ */
+export const nativeListQuerySchemaV80 = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("mcp"),
+      providerId: providerIdSchema,
+      scope: providerNativeScopeSchema,
+      workspaceRoot: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("plugins"),
+      providerId: providerIdSchema,
+      scope: providerNativeScopeSchema,
+      workspaceRoot: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("skills"),
+      providerId: providerIdSchema,
+      scope: providerNativeScopeSchema,
+      workspaceRoot: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("mcpDiscover"),
+      providerId: providerIdSchema,
+      scope: providerNativeScopeSchema,
+      workspaceRoot: z.string().nullable(),
+      serverName: z.string().min(1),
+      forceRefresh: z.boolean(),
+    }),
+    z.object({
+      kind: z.literal("pluginIcon"),
+      providerId: providerIdSchema,
+      scope: providerNativeScopeSchema,
+      workspaceRoot: z.string().nullable(),
+      pluginId: z.string().min(1),
+      theme: providerPluginIconThemeSchema,
+    }),
+  ])
+  .superRefine(refineProviderNativeScope);
+export type NativeListQueryV80 = z.infer<typeof nativeListQuerySchemaV80>;
+
 const nativeListSuccessResultSchema = z.discriminatedUnion("kind", [
   z.object({
     ok: z.literal(true),

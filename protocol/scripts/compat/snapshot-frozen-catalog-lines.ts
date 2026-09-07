@@ -44,6 +44,7 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -51,6 +52,7 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
 } from "../../src/host/provider-schemas";
+import { agentListProviderProfilesResponseSchemaV5 } from "../../src/host/agent/profiles";
 
 function dump(schema: z.ZodType): unknown {
   return z.toJSONSchema(schema, { unrepresentable: "any" });
@@ -132,11 +134,12 @@ const FIXTURES = {
   // this snapshot. When that happens, hand-freeze the sub-schema that grew (the
   // `*V70Preimage` shapes are the precedent); do not regenerate to green.
   "providers.list@7.0": dump(providersListResponseSchemaV70),
-  // The head line. It dumps the LIVE schema,
-  // so the FIRST attempt to grow the live shape goes red on this row rather
-  // than on the release that ships the growth. Same response then applies -
-  // freeze the line that stopped being head, open the next one.
-  "providers.list@8.0": dump(providersListResponseSchema),
+  // v8.0 held v7.0's old job - dumping the LIVE schema so the first growth
+  // attempt went red here - until W1-T9 froze it too, ahead of
+  // `providers.list@9.0` opening above it. This row now dumps the frozen
+  // `providersListResponseSchemaV80` instead; its bytes are unchanged by that
+  // freeze, same as the v7.0 row above.
+  "providers.list@8.0": dump(providersListResponseSchemaV80),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was
@@ -158,17 +161,29 @@ const FIXTURES = {
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
   // This row DOES get regenerated when a provider id is added, and it is the
   // one row here where that is the right answer rather than the forbidden one.
-  // It dumps the LIVE request (which v7.0 and v8.0 both bind), and the growth
-  // reaches it through `nativeListQuerySchema.providerId`. A request is a
-  // client->host slot: `surface-compat.ts` scores enum growth there ADVISORY,
-  // because a released client never emits the new value and a new client
-  // sending it to an old host fails per-call with a clear upgrade path. The
-  // row exists to make that growth VISIBLE, not to forbid it.
+  // It dumps the LIVE request, and the growth reaches it through
+  // `nativeListQuerySchema.providerId`. A request is a client->host slot:
+  // `surface-compat.ts` scores enum growth there ADVISORY, because a released
+  // client never emits the new value and a new client sending it to an old
+  // host fails per-call with a clear upgrade path. The row exists to make
+  // that growth VISIBLE, not to forbid it.
+  //
+  // Neither `providers.list@7.0` nor `@8.0` binds this live request any more
+  // (W1-T9 froze both, `providersListRequestSchemaV70`/`V80`) - this row just
+  // keeps tracking the live shape under its historical name so provider-id
+  // growth here stays visible the same way it always has.
   //
   // The response rows are the opposite and must never be regenerated to green
-  // - see `providers.list@7.0` above, and `providerManagedVersionsSchemaV70`
-  // for the sub-schema freeze that kept it byte-identical when Reasonix landed.
+  // - see `providers.list@7.0`/`@8.0` above, and `providerManagedVersionsSchemaV70`
+  // for the sub-schema freeze that kept `@7.0` byte-identical when Reasonix
+  // landed.
   "providers.list@7.0 request": dump(providersListRequestSchema),
+  // New (W1-T9): the shared `agentProviderProfileSummarySchema` is embedded
+  // by identity in the frozen v1.0-v4.0 responses and the rc-shipped v5.0
+  // line, so it needs its own guard the same way `providers.list@8.0` does.
+  "agent.listProviderProfiles@5.0": dump(
+    agentListProviderProfilesResponseSchemaV5,
+  ),
 };
 
 const HEADER =

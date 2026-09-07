@@ -32,6 +32,7 @@ import {
   nativeAuthPollContextSchema,
   nativeAuthResultSchema,
   nativeListQuerySchema,
+  nativeListQuerySchemaV80,
   nativeListResultSchema,
   nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
@@ -48,6 +49,7 @@ import {
   type NativeAuthPollContext,
   type NativeAuthResult,
   type NativeListQuery,
+  type NativeListQueryV80,
   type NativeListResult,
   type NativeMutation,
   type NativeMutationResult,
@@ -202,6 +204,39 @@ export const providerIdSchemaV70 = z.enum([
   "huggingface",
 ]);
 export type ProviderIdV70 = z.infer<typeof providerIdSchemaV70>;
+
+/**
+ * Frozen provider id set as shipped in protocol v8.0 (v7.0 plus reasonix).
+ *
+ * This line IS released - `host-v1.3.0-rc.*` (2026-09) ships `providers.list@8.0`
+ * pointed at this hand copy. Pinned so a v9.0-only provider id cannot reach
+ * an already-released v8.0 peer's strict decode the way `omp` first reached
+ * v5.0 and `huggingface` first reached v6.0 - a new provider opens v9.0
+ * rather than growing this enum.
+ */
+export const providerIdSchemaV80 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+export type ProviderIdV80 = z.infer<typeof providerIdSchemaV80>;
 
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
@@ -726,6 +761,34 @@ export type ProviderManagedVersionsV70 = z.infer<
 >;
 
 /**
+ * Frozen `providers.list@8.0` version-manager state: the same shape again,
+ * with `sharedWithProviders` pinned to `providerIdSchemaV80`.
+ *
+ * v8.0 cannot reuse the V70 copy even though the surrounding keys are
+ * identical. `host-v1.3.0-rc.*` shipped `providers.list@8.0` bound to the
+ * then-LIVE schema, so the id enum a released v8.0 peer serializes here is
+ * v8.0's - v7.0's list plus `reasonix`. Pointing the frozen 8.0 base at
+ * `providerManagedVersionsSchemaV70` would silently NARROW an already-released
+ * line, which the deep `frozen-catalog-lines` dump reports as a changed
+ * `providers.list@8.0` row: a changed dump on a released row means the hand
+ * copy diverged from what shipped, and the fix is the copy, never the bytes.
+ *
+ * Same rule as V70: do NOT widen this schema. A v9.0-only provider id belongs
+ * in the live schema, and v9.0 publishes it.
+ */
+export const providerManagedVersionsSchemaV80 = z.object({
+  autoDownload: z.boolean(),
+  pinnedVersion: z.string().nullable(),
+  updateAvailable: z.object({ version: z.string() }).nullable(),
+  sharedWithProviders: z.array(providerIdSchemaV80).catch([]),
+  totalSizeBytes: z.number().int().nonnegative().nullable(),
+  available: z.array(providerPackVersionSchema),
+});
+export type ProviderManagedVersionsV80 = z.infer<
+  typeof providerManagedVersionsSchemaV80
+>;
+
+/**
  * Why the version manager cannot be offered for a pack that HAS one.
  *
  * A null `managedVersions` used to be the whole story, and the panel simply
@@ -1104,6 +1167,13 @@ export type ProviderProfileKind = z.infer<typeof providerProfileKindSchema>;
  * kept as a discriminator (not a bare boolean/omitted field) so a future
  * API-key profile type can be added as a new union variant without schema
  * surgery on `profiles[]` itself - see the decision log's "Auth types" row.
+ *
+ * That variant rides a NEW enum on the `providers.list@9.0` row
+ * (`providerProfileAuthTypeSchemaV90`), never this constant: this one is
+ * embedded by identity in the frozen v7.0 (`providerProfileShapeV70`) and
+ * v8.0 (`providerProfileShapeV80`) profile rows, both released
+ * (`host-v1.2.0-rc.*` / `host-v1.3.0-rc.*`), so widening it in place would
+ * widen two already-shipped lines at once (critique B1).
  */
 export const providerProfileAuthTypeSchema = z.enum(["oauth"]);
 export type ProviderProfileAuthType = z.infer<
@@ -1261,8 +1331,9 @@ export const providerProfileSchema = z.object({
   enabled: z.boolean().default(true).catch(true),
   // Copyable command for opening this managed account directly in its CLI.
   // The host owns the absolute config path and shell quoting; ambient rows and
-  // hosts that predate this field omit it. Kept inside v8.0 because that line
-  // is still the unreleased live head opened by profile eligibility.
+  // hosts that predate this field omit it. `providers.list@8.0`
+  // (`host-v1.3.0-rc.*`) is released and frozen below as `providerProfileSchemaV80`;
+  // this live schema now backs `providers.list@9.0`.
   launchCommand: z
     .object({
       command: z.string(),
@@ -1273,6 +1344,31 @@ export const providerProfileSchema = z.object({
     .optional(),
 });
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
+
+// Frozen `providers.list@8.0` profile row: v7.0's frozen shape
+// (`providerProfileShapeV70`) plus `enabled` and `launchCommand`, exactly as
+// the live `providerProfileSchema` above carries them today. Hand-frozen
+// because `host-v1.3.0-rc.*` released `providers.list@8.0` pointed at the
+// live schema (see `providersListV80`'s comment in `registry.ts`), so a
+// field `providers.list@9.0` adds must not widen this already-shipped row.
+// `providerProfileAuthTypeSchema` is embedded here BY IDENTITY, not copied -
+// see its own comment for why it must stay `z.enum(["oauth"])` (B1). Do NOT
+// widen this schema - extend the live one and use a v9 bridge instead.
+const providerProfileShapeV80 = {
+  ...providerProfileShapeV70,
+  enabled: z.boolean().default(true).catch(true),
+  launchCommand: z
+    .object({
+      command: z.string(),
+      shell: z.enum(["posix", "powershell"]),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
+} as const;
+
+export const providerProfileSchemaV80 = z.object(providerProfileShapeV80);
+export type ProviderProfileV80 = z.infer<typeof providerProfileSchemaV80>;
 
 export function isProfileEnabled(profile: {
   readonly enabled?: boolean;
@@ -1548,20 +1644,16 @@ export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
  * v4.0/v5.0/v6.0 request lines too; `host-v1.1.10` then froze those three
  * lines without it, because the commit that added it was not in the release
  * cherry-pick. Every line below v7.0 is pinned to
- * `providersListRequestSchemaBeforeV70` for that reason. v7.0 itself BINDS this
- * live schema (the release collapsed the unreleased v8.0 into it), so a request
- * field added here reaches the v7.0 wire immediately - it does not wait for a
- * new line. `providersListRequestSchemaV70` is the hand-frozen copy of that same
- * wire, and it keeps its `V70` name because it still earns it: the collapse
- * moved only the response, so the frozen request and this live one are the same
- * shape. It is not a contract pin - the contract binds this schema - but it is
- * a real freeze rather than a fixture.
+ * `providersListRequestSchemaBeforeV70` for that reason.
  *
- * Nothing enforces that equality, which is the part to watch. Add a request
- * field here and v7.0's wire grows with it while the copy below does not,
- * turning `providersListRequestSchemaV70` into a name for a shape no line
- * serializes - exactly what the response side had to be renamed out of. See the
- * equality pin in `__tests__/provider-schemas-v70-pins.test.ts`.
+ * v7.0 and v8.0 no longer bind this live schema either (W1-T9): both are
+ * released (`host-v1.2.0-rc.*` / `host-v1.3.0-rc.*`) and now bind their own
+ * hand copies, `providersListRequestSchemaV70` and
+ * `providersListRequestSchemaV80` below, for the same reason the response
+ * side was frozen - `providers.list@9.0` grows this live schema's `native`
+ * arm with `profileId`, and an unpinned already-released line would have
+ * widened silently with it. This live schema currently backs no contract;
+ * the next major to open publishes it.
  */
 export const providersListRequestSchema = z.object({
   forceAuthRefresh: z.boolean().optional(),
@@ -1596,6 +1688,10 @@ export type ProvidersListRequestBeforeV70 = z.infer<
  * set, and growth INSIDE the native query is caught by the deep JSON-Schema
  * snapshot in `__tests__/__fixtures__/frozen-catalog-lines.ts` rather than
  * silently. Same for the live sub-schemas the response shape below keeps.
+ *
+ * `providersListV70`'s contract now binds this constant (W1-T9); it used to
+ * bind the live `providersListRequestSchema` above instead, which is the
+ * defect this freeze exists to fix - see that schema's own comment.
  */
 export const providersListRequestSchemaV70 = z.object({
   forceAuthRefresh: z.boolean().optional(),
@@ -1603,6 +1699,26 @@ export const providersListRequestSchemaV70 = z.object({
 });
 export type ProvidersListRequestV70 = z.infer<
   typeof providersListRequestSchemaV70
+>;
+
+/**
+ * Frozen `providers.list@8.0` request: `providers.list@8.0` added no request
+ * field over v7.0 - only the response's per-profile eligibility - so this is
+ * structurally identical to `providersListRequestSchemaV70`. It still needs
+ * its own hand copy rather than reusing that constant by reference: v7.0 and
+ * v8.0 are independently released lines (`host-v1.2.0-rc.*` /
+ * `host-v1.3.0-rc.*`), and `providers.list@9.0` grows the native arm with
+ * `profileId` - a shared reference would widen both at once the instant one
+ * of them needs to diverge. `nativeListQuerySchemaV80` is the frozen native
+ * arm (see its own comment in `provider-native-schemas.ts`); the other leaf
+ * (`forceAuthRefresh`) has no growable structure to protect.
+ */
+export const providersListRequestSchemaV80 = z.object({
+  forceAuthRefresh: z.boolean().optional(),
+  native: nativeListQuerySchemaV80.nullable().default(null),
+});
+export type ProvidersListRequestV80 = z.infer<
+  typeof providersListRequestSchemaV80
 >;
 
 /**
@@ -1969,6 +2085,53 @@ export type ProvidersListResponseV70 = z.infer<
 // delta was `authStatus`, which the picker still renders (an enabled provider
 // whose account is signed out dims rather than vanishing), so that minor has
 // real content.
+
+// ── Frozen protocol-v8.0 provider state + list response (W1-T9) ────────────
+//
+// `providers.list@8.0` is released - `host-v1.3.0-rc.*` (2026-09) ships it -
+// but until now it bound the LIVE `providerCliStateSchema` /
+// `providersListResponseSchema` directly (see `providersListV80` in
+// `registry.ts`), so every field wave 2 was about to add to the live shape
+// would have widened this already-shipped line. This is the hand freeze that
+// stops that, taken before anything grows it, same discipline as v7.0 above.
+//
+// `providerCliStateBaseShapeV80` is v7.0's frozen base
+// (`providerCliStateBaseShapeV70`) with `profiles` repointed at the v8.0
+// profile row (`providerProfileSchemaV80`, i.e. profile eligibility) and
+// `managedVersions` repointed at `providerManagedVersionsSchemaV80`. That
+// second repoint is not bookkeeping: the released 8.0 line was bound to the
+// live schema, so its `sharedWithProviders` carries the v8.0 id enum, and
+// inheriting v7.0's copy would narrow a shipped row (drop `reasonix`).
+// Every other leaf stays live, guarded by the deep `z.toJSONSchema`
+// snapshot in `__tests__/__fixtures__/frozen-catalog-lines.ts` the same way
+// v7.0's leaves are. Do NOT widen this schema; extend the live one and let
+// v9.0 publish it.
+const providerCliStateBaseShapeV80 = {
+  ...providerCliStateBaseShapeV70,
+  profiles: z.array(providerProfileSchemaV80).catch([]),
+  managedVersions: providerManagedVersionsSchemaV80
+    .nullable()
+    .catch(null)
+    .optional(),
+};
+
+export const providerCliStateSchemaV80 = z.object({
+  providerId: providerIdSchemaV80,
+  ...providerCliStateBaseShapeV80,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+  nativeCapabilities: providerNativeCapabilitiesSchema.catch(
+    DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  ),
+});
+export type ProviderCliStateV80 = z.infer<typeof providerCliStateSchemaV80>;
+
+export const providersListResponseSchemaV80 = z.object({
+  providers: z.array(providerCliStateSchemaV80),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV80 = z.infer<
+  typeof providersListResponseSchemaV80
+>;
 
 // Frozen protocol-v1.0 provider state + list response. The v2.0 line of
 // `providers.list` adds ACP GUI harness providers; the v2→v1 bridge filters
@@ -2785,6 +2948,7 @@ export type {
   NativeAuthPollContext,
   NativeAuthResult,
   NativeListQuery,
+  NativeListQueryV80,
   NativeListResult,
   NativeMutation,
   NativeMutationResult,

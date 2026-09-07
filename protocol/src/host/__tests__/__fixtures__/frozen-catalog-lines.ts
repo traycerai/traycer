@@ -11801,6 +11801,128 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
         "native"
       ],
       "additionalProperties": false
+    },
+    "agent.listProviderProfiles@5.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "providerId": {
+          "type": "string",
+          "enum": [
+            "claude-code",
+            "codex",
+            "opencode",
+            "cursor",
+            "traycer",
+            "grok",
+            "qwen",
+            "kiro",
+            "droid",
+            "kimi",
+            "copilot",
+            "kilocode",
+            "openrouter",
+            "amp",
+            "devin",
+            "pi",
+            "hermes",
+            "omp",
+            "huggingface",
+            "reasonix"
+          ]
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "selection": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "ambient"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "profile"
+                      },
+                      "profileId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "profileId"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "authStatus": {
+                "type": "string",
+                "enum": [
+                  "authenticated",
+                  "unauthenticated",
+                  "configured",
+                  "unavailable",
+                  "unknown"
+                ]
+              },
+              "rateLimitStatus": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "near_limit",
+                  "hard_limit",
+                  "unknown"
+                ]
+              },
+              "usageUpdatedAt": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "isEffectiveLastUsed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "selection",
+              "label",
+              "authStatus",
+              "rateLimitStatus",
+              "usageUpdatedAt",
+              "isEffectiveLastUsed"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "providerId",
+        "profiles"
+      ],
+      "additionalProperties": false
     }
   }
 } as const;

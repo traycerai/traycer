@@ -15,6 +15,7 @@ import {
   providerCliStateSchemaV30,
   providerMutationCliStateSchemaV20,
   providerProfileActionSchema,
+  providerProfileSchemaV80,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersSetEnabledRequestSchemaV21,
@@ -313,6 +314,39 @@ const stateWithProfile = providerCliStateSchema.parse({
       },
     },
   ],
+});
+
+describe("providers.list@8.0 freeze rejects the wave-2 authType widening", () => {
+  it('a profile row with authType: "apiKey" fails to parse providerProfileSchemaV80', () => {
+    // The freeze made executable in the direction wave 2 will push (W1-T9):
+    // `providerProfileAuthTypeSchema` is `z.enum(["oauth"])` and stays that
+    // way (critique B1) - `apiKey` is a W2-T1 addition that must ride a new
+    // v9.0 enum, never widen this already-shipped row in place.
+    //
+    // Asserted directly against `providerProfileSchemaV80`, not against the
+    // full `providersListResponseSchemaV80` - the array-level `profiles:
+    // z.array(...).catch([])` on `providerCliStateSchemaV80` is deliberately
+    // forgiving (see its own comment on why: one out-of-palette value must
+    // not wipe every profile for a provider), so a full-response parse of
+    // this same row would succeed with `profiles: []` rather than fail. The
+    // row schema itself has no such catch, so it is where "fails to parse"
+    // is actually true.
+    const result = providerProfileSchemaV80.safeParse({
+      profileId: "profile-1",
+      kind: "managed" as const,
+      authType: "apiKey",
+      label: "Work",
+      auth: {
+        status: "authenticated" as const,
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      identity: null,
+      usageUpdatedAt: null,
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {

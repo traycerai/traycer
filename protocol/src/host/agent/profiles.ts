@@ -24,6 +24,7 @@ import {
   providerIdSchemaV50,
   providerIdSchemaV60,
   providerIdSchemaV70,
+  providerIdSchemaV80,
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -89,6 +90,27 @@ export type AgentProviderProfileSummary = z.infer<
   typeof agentProviderProfileSummarySchema
 >;
 
+/**
+ * Frozen copy of {@link agentProviderProfileSummarySchema} as it stands at
+ * `agent.listProviderProfiles@5.0`. This live schema is embedded BY IDENTITY
+ * in the frozen v1.0-v4.0 responses below and in the rc-shipped v5.0 line
+ * (`host-v1.2.0-rc.*`/`host-v1.3.0-rc.*`), so widening it in place would grow
+ * five already-shipped rows at once (critique H8). `authType` (W2-T3) rides a
+ * NEW live summary schema only, never this one. Do NOT widen this schema;
+ * add the new summary and repoint the next major to it.
+ */
+export const agentProviderProfileSummarySchemaV50 = z.object({
+  selection: concreteProfileSelectionSchema,
+  label: z.string(),
+  authStatus: PROVIDER_AUTH_STATUS_SCHEMA,
+  rateLimitStatus: providerProfileRateLimitStatusSchema,
+  usageUpdatedAt: z.number().nullable(),
+  isEffectiveLastUsed: z.boolean(),
+});
+export type AgentProviderProfileSummaryV50 = z.infer<
+  typeof agentProviderProfileSummarySchemaV50
+>;
+
 export const agentListProviderProfilesResponseSchema = z.object({
   providerId: providerIdSchema,
   profiles: z.array(agentProviderProfileSummarySchema),
@@ -106,10 +128,14 @@ export type AgentListProviderProfilesResponse = z.infer<
  * bridge that fails closed (`DOWNGRADE_UNSUPPORTED`) for a post-v4.0-only
  * provider id instead of silently mis-decoding it. Do NOT widen this schema -
  * extend the latest schema and use the v2 bridge instead.
+ *
+ * `profiles` uses the frozen `agentProviderProfileSummarySchemaV50` (W1-T9),
+ * not the live summary above - it is embedded by identity, so widening the
+ * live summary must not widen this already-shipped row (critique H8).
  */
 export const agentListProviderProfilesResponseSchemaV1 = z.object({
   providerId: providerIdSchemaV40,
-  profiles: z.array(agentProviderProfileSummarySchema),
+  profiles: z.array(agentProviderProfileSummarySchemaV50),
 });
 export type AgentListProviderProfilesResponseV1 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV1
@@ -133,10 +159,13 @@ export const agentListProviderProfilesV10 = defineRpcContract({
  * schema, with a v3->v2 downgrade bridge that fails closed
  * (`DOWNGRADE_UNSUPPORTED`) for a post-v5.0-only provider id. Do NOT widen
  * this schema - extend the latest schema and use the v3 bridge instead.
+ *
+ * `profiles` uses the frozen `agentProviderProfileSummarySchemaV50` (W1-T9)
+ * for the same reason v1.0's row does - see its comment above.
  */
 export const agentListProviderProfilesResponseSchemaV2 = z.object({
   providerId: providerIdSchemaV50,
-  profiles: z.array(agentProviderProfileSummarySchema),
+  profiles: z.array(agentProviderProfileSummarySchemaV50),
 });
 export type AgentListProviderProfilesResponseV2 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV2
@@ -160,10 +189,13 @@ export const agentListProviderProfilesV20 = defineRpcContract({
  * carries the live schema, with a v4->v3 downgrade bridge that fails closed
  * (`DOWNGRADE_UNSUPPORTED`) for a post-v6.0-only provider id. Do NOT widen
  * this schema - extend the latest schema and use the v4 bridge instead.
+ *
+ * `profiles` uses the frozen `agentProviderProfileSummarySchemaV50` (W1-T9)
+ * for the same reason v1.0's row does - see its comment above.
  */
 export const agentListProviderProfilesResponseSchemaV3 = z.object({
   providerId: providerIdSchemaV60,
-  profiles: z.array(agentProviderProfileSummarySchema),
+  profiles: z.array(agentProviderProfileSummarySchemaV50),
 });
 export type AgentListProviderProfilesResponseV3 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV3
@@ -188,10 +220,13 @@ export const agentListProviderProfilesV30 = defineRpcContract({
  * that fails closed (`DOWNGRADE_UNSUPPORTED`) for a post-v7.0-only provider id.
  * Do NOT widen this schema - extend the latest schema and use the v5 bridge
  * instead.
+ *
+ * `profiles` uses the frozen `agentProviderProfileSummarySchemaV50` (W1-T9)
+ * for the same reason v1.0's row does - see its comment above.
  */
 export const agentListProviderProfilesResponseSchemaV4 = z.object({
   providerId: providerIdSchemaV70,
-  profiles: z.array(agentProviderProfileSummarySchema),
+  profiles: z.array(agentProviderProfileSummarySchemaV50),
 });
 export type AgentListProviderProfilesResponseV4 = z.infer<
   typeof agentListProviderProfilesResponseSchemaV4
@@ -204,11 +239,31 @@ export const agentListProviderProfilesV40 = defineRpcContract({
   responseSchema: agentListProviderProfilesResponseSchemaV4,
 });
 
+/**
+ * Frozen `agent.listProviderProfiles@5.0` response. This line IS released -
+ * `host-v1.2.0-rc.*`/`host-v1.3.0-rc.*` ship it pointed at the live
+ * `agentListProviderProfilesResponseSchema` above, which is the same defect
+ * that let `omp`/`huggingface`/`reasonix` first ride the line below them.
+ * `providerId` reuses `providerIdSchemaV80` (the id enum as of 5.0) rather
+ * than minting a second copy; `profiles` uses the frozen
+ * `agentProviderProfileSummarySchemaV50` for the same reason v1.0-v4.0's rows
+ * do. `authType` (W2-T3) rides a new live summary and a `5.1` line only. Do
+ * NOT widen this schema - extend the latest schema and use a v6 bridge
+ * instead.
+ */
+export const agentListProviderProfilesResponseSchemaV5 = z.object({
+  providerId: providerIdSchemaV80,
+  profiles: z.array(agentProviderProfileSummarySchemaV50),
+});
+export type AgentListProviderProfilesResponseV5 = z.infer<
+  typeof agentListProviderProfilesResponseSchemaV5
+>;
+
 export const agentListProviderProfilesV50 = defineRpcContract({
   method: "agent.listProviderProfiles",
   schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: agentListProviderProfilesRequestSchema,
-  responseSchema: agentListProviderProfilesResponseSchema,
+  responseSchema: agentListProviderProfilesResponseSchemaV5,
 });
 
 export const agentListProviderProfilesUpgradeV10ToV20 = defineUpgradePath<
