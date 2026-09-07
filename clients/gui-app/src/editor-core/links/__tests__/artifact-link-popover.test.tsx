@@ -142,6 +142,7 @@ function ToolbarPopoverHarness(props: { readonly editor: Editor }) {
         className={undefined}
         scrollTarget={null}
         commentAction={null}
+        quoteAction={null}
         suppressBubbleMenu={linkOpen}
       />
       <ArtifactLinkPopover
@@ -1245,6 +1246,7 @@ describe("ArtifactLinkPopover", () => {
           className={undefined}
           scrollTarget={null}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </>,
@@ -1290,6 +1292,7 @@ describe("ArtifactLinkPopover", () => {
           className={undefined}
           scrollTarget={null}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </>,

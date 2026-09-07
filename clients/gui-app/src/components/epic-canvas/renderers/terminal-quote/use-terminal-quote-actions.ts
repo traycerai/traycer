@@ -1,19 +1,12 @@
 import { useCallback } from "react";
-import { v4 as uuidv4 } from "uuid";
 
 import {
   appendTerminalQuoteToDraft,
   appendTerminalQuoteToNewConversationDraft,
 } from "@/components/chat/quote/append-terminal-quote-to-draft";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
-import { displayTitle } from "@/lib/display-title";
-import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import {
-  findOpenArtifactInTab,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 interface UseTerminalQuoteActionsArgs {
@@ -44,55 +37,11 @@ export function useTerminalQuoteActions(
   args: UseTerminalQuoteActionsArgs,
 ): TerminalQuoteActions {
   const { epicId, viewTabId, terminalId, terminalTitle, terminalCwd } = args;
-  const handle = useOpenEpicHandle();
   const tabHostId = useTabHostId();
-  const navigateNested = useEpicNestedFocusNavigation();
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
-    (state) => state.prepareSetActiveTileTabFocusTarget,
-  );
-
-  const revealChat = useCallback(
-    (chatId: string) => {
-      const alreadyOpen = findOpenArtifactInTab(viewTabId, chatId);
-      if (alreadyOpen !== null) {
-        navigateNested(epicId, viewTabId, () =>
-          prepareSetActiveTileTabFocusTarget(
-            viewTabId,
-            alreadyOpen.paneId,
-            alreadyOpen.instanceId,
-          ),
-        );
-        return;
-      }
-      const chats = handle.store.getState().chats;
-      if (!Object.hasOwn(chats.byId, chatId)) return;
-      const chat = chats.byId[chatId];
-      navigateNested(epicId, viewTabId, () =>
-        prepareOpenTileInTabFocusTarget(viewTabId, {
-          id: chat.id,
-          instanceId: uuidv4(),
-          type: "chat",
-          name: displayTitle(chat.title, "agent"),
-          hostId: chat.hostId ?? tabHostId,
-        }),
-      );
-    },
-    [
-      epicId,
-      handle,
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      prepareSetActiveTileTabFocusTarget,
-      tabHostId,
-      viewTabId,
-    ],
-  );
+  const revealChat = useRevealChatInTab({ epicId, viewTabId });
 
   const quoteToChat = useCallback(
     (chatId: string, text: string) => {

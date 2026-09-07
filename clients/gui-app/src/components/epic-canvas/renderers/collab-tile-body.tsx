@@ -74,6 +74,11 @@ import { seedArtifactTitleHeading } from "./artifact-editor-seed";
 import { useArtifactDocTitleFollow } from "./use-artifact-doc-title-follow";
 import { useCollabTileEditor } from "./use-collab-tile-editor";
 import { useArtifactLinkOpener } from "./use-artifact-link-opener";
+import { ArtifactQuotePopover } from "./artifact-quote/artifact-quote-popover";
+import {
+  useArtifactQuoteSurface,
+  type ArtifactQuoteSurface,
+} from "./artifact-quote/use-artifact-quote-surface";
 import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 
@@ -390,6 +395,22 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     };
   }, [commentsSupported, editor, epicId, viewTabId, tileId, node.id, setDraft]);
 
+  // Send to chat: the excerpt is frozen the moment the button is pressed and
+  // kept tile-local - a sibling pane editing the same artifact must not adopt
+  // it. The same artifact kinds that take comments can be quoted.
+  const quote = useArtifactQuoteSurface({
+    epicId,
+    viewTabId,
+    artifactId: node.id,
+    artifactKind: commentArtifactKind,
+    editor,
+  });
+  const selectionSurfaceOpen = isSelectionSurfaceOpen({
+    ownedDraftRange,
+    linkPopoverOpen,
+    quoteOpen: quote.isOpen,
+  });
+
   useEffect(() => {
     const rootElement = editorRootRef.current;
     if (rootElement === null || editor === null || !isActive || !editable) {
@@ -510,15 +531,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       // this existing handler so the rail never attaches a scroll listener of
       // its own (the lesson the chat rail's own consolidation encodes).
       headingMinimapRefreshRef.current();
-      if (editor === null || ownedDraftRange !== null || linkPopoverOpen) {
-        return;
-      }
+      if (editor === null || selectionSurfaceOpen) return;
       // TipTap's native BubbleMenu scroll listener is trailing-debounced.
       // Drive its documented escape hatch from this existing handler so the
       // selection toolbar tracks every native tile scroll event immediately.
       updateArtifactToolbarPosition(editor);
     },
-    [editor, linkPopoverOpen, onScrollRestoration, ownedDraftRange],
+    [editor, onScrollRestoration, selectionSurfaceOpen],
   );
 
   // The heading rail is a sibling of the scroller, not a child: the scroller is
@@ -559,7 +578,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
                 className={undefined}
                 scrollTarget={scrollContainer}
                 commentAction={commentAction}
-                suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
+                quoteAction={quote.action}
+                suppressBubbleMenu={selectionSurfaceOpen}
               />
             ) : null}
           </div>
@@ -594,6 +614,12 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             />
           </>
         ) : null}
+        <ArtifactQuotePopoverMount
+          epicId={epicId}
+          viewTabId={viewTabId}
+          editor={editor}
+          quote={quote}
+        />
         {editor !== null ? (
           <ArtifactLinkPopover
             editor={editor}
@@ -641,6 +667,53 @@ function ArtifactHeadingMinimapMount(props: {
       refreshRef={props.refreshRef}
       scroller={props.scroller}
       side={side}
+    />
+  );
+}
+
+/**
+ * Whether a surface other than the bubble bar owns the current selection: the
+ * comment draft, the link popover, or the send-to-chat picker. The bar hides
+ * for it and the scroll handler stops repositioning it, which is what keeps
+ * the interaction single-modal. One predicate, so the next such surface is
+ * added in one place - and, like the gates below, so its conditions do not
+ * count against `CollabTileBodyEditor`'s complexity ceiling.
+ */
+function isSelectionSurfaceOpen(input: {
+  readonly ownedDraftRange: {
+    readonly from: number;
+    readonly to: number;
+  } | null;
+  readonly linkPopoverOpen: boolean;
+  readonly quoteOpen: boolean;
+}): boolean {
+  return (
+    input.ownedDraftRange !== null || input.linkPopoverOpen || input.quoteOpen
+  );
+}
+
+/**
+ * Gate for the send-to-chat picker, kept out of `CollabTileBodyEditor` for the
+ * same reason as the heading rail above: its two null checks would otherwise
+ * count against that component's complexity ceiling.
+ */
+function ArtifactQuotePopoverMount(props: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly editor: Editor | null;
+  readonly quote: ArtifactQuoteSurface;
+}) {
+  const { editor, quote } = props;
+  if (editor === null || quote.snapshot === null) return null;
+  return (
+    <ArtifactQuotePopover
+      epicId={props.epicId}
+      viewTabId={props.viewTabId}
+      editor={editor}
+      snapshot={quote.snapshot}
+      onSendToChat={quote.actions.quoteToChat}
+      onSendToNewChat={quote.actions.quoteToNewChat}
+      onDone={quote.dismiss}
     />
   );
 }
