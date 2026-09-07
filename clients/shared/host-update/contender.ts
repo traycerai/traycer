@@ -1186,6 +1186,16 @@ async function supervisorRelaunchDisposition(
   if (record.phase === "waiting-for-work") return "allow";
   if (record.phase !== "waiting-to-activate") return "refuse";
   const claim = record.claim;
+  // TWO DIFFERENT NULLS, and they are not the same failure:
+  //
+  //  - `readInstalledIdentity === null` means no reader was SUPPLIED. It is
+  //    structurally unreachable from the public entry point, which requires
+  //    one, and holds only for the admissions that never reach this function.
+  //    Written as a refusal rather than an assertion so that a caller which
+  //    cannot read the install record can never be treated as one that read
+  //    it and found agreement.
+  //  - `installed === null` (the next line) means the reader ran and there is
+  //    no readable install record. Unverifiable, so also refused.
   if (claim === undefined || readInstalledIdentity === null) return "refuse";
   const installed = await readInstalledIdentity();
   if (installed === null) return "refuse";
