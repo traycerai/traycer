@@ -39,11 +39,68 @@ export type UpdateMaintenanceExemption =
   | "desktop-activation-maintenance"
   | "runtime-repair-maintenance"
   /**
+   * The supervisor's own relaunch: an OS service manager (or a crash
+   * relaunch) running a plain `host start`. Deliberately its own name rather
+   * than a widening of `runtime-repair-maintenance`, which it used to share:
+   * that name is also `host stamp-runtime`'s, and stamping the runtime
+   * identity while a park stands would move the very install generation the
+   * park's claim is validated against.
+   *
+   * **With a durable nonterminal attempt it REFUSES**, exactly as
+   * `runtime-repair-maintenance` does, with two parked exceptions where the
+   * relaunch IS the attempt's own next step rather than a parallel updater:
+   *
+   *  - `waiting-for-work` - no bytes are placed, so what comes up is the
+   *    currently installed host, the same one this park was created under.
+   *    The reconciler resumes the park at the idle edge as it already does.
+   *  - an activation park the restart already satisfied: a
+   *    `waiting-to-activate` attempt whose target is the version already
+   *    INSTALLED, and whose claim still matches that install. The park exists
+   *    because a busy host deferred the restart, and a busy condition cannot
+   *    survive the reboot that is asking for admission here.
+   *
+   *    Ticket 07's reconciler names the same state from the other side, as "a
+   *    `waiting-to-activate` attempt whose target is the version this host is
+   *    already running". The two vantage points are deliberate, not a drift:
+   *    the reconciler compares the RUNNING version because it executes inside
+   *    a live host; this admission compares the INSTALL RECORD because at
+   *    admission time nothing is running - that is the condition it exists to
+   *    resolve.
+   *
+   * It never creates, advances, or terminalizes a record - it holds no
+   * capability that could - so the record is closed by the reconciler's
+   * evidence pass, never from the supervisor.
+   */
+  | "supervisor-relaunch-maintenance"
+  /**
    * User-confirmed restart/doctor recovery. This performs only the existing
    * service/process recovery edge; it neither creates nor advances a v2
    * attempt and is deliberately distinct from Desktop activation.
    */
   | "recovery-maintenance";
+
+/**
+ * The local installation facts a supervisor relaunch is admitted against.
+ *
+ * `installGeneration` is the string `encodeInstallGeneration` returns, never
+ * `installId` or any other single field, so it compares byte-equal with the
+ * baseline a claim recorded.
+ */
+export interface SupervisorRelaunchInstalledIdentity {
+  readonly installedVersion: string;
+  readonly installGeneration: string;
+}
+
+/**
+ * Reads the live install record. Invoked UNDER the canonical attempt lock and
+ * only when the record's phase could admit the relaunch, so the comparison is
+ * against what is on disk at the moment of the decision rather than whatever
+ * the supervisor happened to read before it contended.
+ *
+ * `null` when there is no readable install record: unverifiable, so refused.
+ */
+export type SupervisorRelaunchIdentityReader =
+  () => Promise<SupervisorRelaunchInstalledIdentity | null>;
 
 /**
  * The compatibility bridge while legacy update execution remains selected.
@@ -641,8 +698,36 @@ export async function withUpdateContender<T>(
     context: UpdateContenderExecutionContext,
   ) => Promise<T>,
 ): Promise<UpdateContenderOutcome<T>> {
-  return withUpdateContenderInternal(options, (capability, context) =>
-    run(capability, context),
+  return withUpdateContenderInternal(
+    options,
+    (capability, context) => run(capability, context),
+    null,
+  );
+}
+
+/**
+ * The supervisor's own relaunch admission - a plain `host start` asking
+ * whether it may spawn the host while a durable attempt stands.
+ *
+ * A dedicated entry point rather than an admission a caller can name, for the
+ * reason `withUpdateExecutorCompletionSegment` is one: the exemption is only
+ * sound while it is decided against a live install record, so the reader is
+ * required HERE and the admission is unreachable without it. A caller cannot
+ * select this exemption and forget the evidence it rests on.
+ */
+export async function withSupervisorRelaunchContender<T>(
+  options: Omit<WithUpdateContenderOptions, "admission"> & {
+    readonly readInstalledIdentity: SupervisorRelaunchIdentityReader;
+  },
+  run: (
+    capability: UpdateMutationCapability,
+    context: UpdateContenderExecutionContext,
+  ) => Promise<T>,
+): Promise<UpdateContenderOutcome<T>> {
+  return withUpdateContenderInternal(
+    { ...options, admission: "supervisor-relaunch-maintenance" },
+    (capability, context) => run(capability, context),
+    options.readInstalledIdentity,
   );
 }
 
@@ -674,6 +759,7 @@ export async function withUpdateExecutorCompletionSegment<T>(
         await completion.revoke();
       }
     },
+    null,
   );
 }
 
@@ -773,6 +859,10 @@ async function withUpdateContenderInternal<T>(
     context: UpdateContenderExecutionContext,
     completion: ExecutorCompletionSession | null,
   ) => Promise<T>,
+  // Supplied only by `withSupervisorRelaunchContender`, whose admission is the
+  // only one that consults it. `null` everywhere else, and a `null` reader can
+  // only ever refuse - there is no arm where its absence widens an admission.
+  readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
 ): Promise<UpdateContenderOutcome<T>> {
   // The attempt lock lives directly under the canonical host home. First-run
   // install and Desktop activation legitimately contend before a legacy
@@ -841,7 +931,11 @@ async function withUpdateContenderInternal<T>(
       });
     }
     if (activeAttempt !== null) {
-      const disposition = dispositionFor(options.admission);
+      const disposition = await dispositionForAttempt(
+        options.admission,
+        activeAttempt,
+        readInstalledIdentity,
+      );
       // Update state is not a global host-action mutex. A direct, confirmed
       // recovery restart/doctor action remains available while a logical
       // update is active or parked, provided this contender won the physical
@@ -1010,9 +1104,94 @@ function dispositionFor(
     case "service-maintenance":
     case "desktop-activation-maintenance":
     case "runtime-repair-maintenance":
+    // The BASE answer, and the one every non-parked record keeps. The parked
+    // exceptions are an upgrade applied by `supervisorRelaunchDisposition`
+    // below, never a different answer here: a disposition keyed on admission
+    // alone cannot see a phase, and flipping this arm to `allow` would admit
+    // a relaunch into an ACTIVE segment - the crash-during-activation case,
+    // which is exactly what must keep refusing.
+    case "supervisor-relaunch-maintenance":
       return "refuse";
     case "recovery-maintenance":
     case "attempt-executor":
       return "allow";
   }
+}
+
+/**
+ * The admission a nonterminal record actually gets, which for one exemption
+ * depends on the record rather than only on the name.
+ *
+ * Everything else is `dispositionFor` unchanged, evaluated first, so this
+ * function can only ever narrow the set of records that refuse - never widen
+ * what another admission may do.
+ */
+async function dispositionForAttempt(
+  admission: UpdateContenderAdmission,
+  activeAttempt: HostUpdateAttemptRecord,
+  readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
+): Promise<ActiveAttemptDisposition> {
+  const base = dispositionFor(admission);
+  if (admission !== "supervisor-relaunch-maintenance") return base;
+  return supervisorRelaunchDisposition(activeAttempt, readInstalledIdentity);
+}
+
+/**
+ * Whether a plain supervisor relaunch may proceed with this record standing.
+ *
+ * The refusal this narrows is not hypothetical tidiness: a refused supervisor
+ * start exits 0, and both service managers relaunch only on a NON-zero exit,
+ * so a reboot while an update is parked leaves the host down with nothing left
+ * to bring it back. On a CLI-only install that is an indefinite silent outage,
+ * because the reconciler that would resume the park lives inside the host that
+ * is not running.
+ *
+ * What makes the two parked shapes safe is that neither asks this supervisor
+ * to do anything the attempt did not already authorize:
+ *
+ *  - `waiting-for-work` has placed no bytes. Starting the installed host is
+ *    what the machine did before the attempt began, and the park survives to
+ *    be resumed at the idle edge.
+ *  - `waiting-to-activate` has placed the target's bytes and is waiting for a
+ *    restart to run them. When the installed version IS the target and the
+ *    claim still matches that install, this relaunch is that restart. The
+ *    equality is what turns `recoveryActionFor`'s "possibly-new bytes" into
+ *    "exactly the bytes this attempt placed"; without it a relaunch would be
+ *    activating an install nobody in this attempt vouched for.
+ *
+ * A claim-less park is REFUSED, deliberately, and it is the same answer a
+ * bound `host.update.activate` gives it (`refused-unverifiable`): with no
+ * baseline there is nothing to prove the installed generation is the one the
+ * claimant placed, and version equality alone cannot tell this attempt's bytes
+ * from a different install that happens to carry the same version.
+ */
+async function supervisorRelaunchDisposition(
+  record: HostUpdateAttemptRecord,
+  readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
+): Promise<ActiveAttemptDisposition> {
+  // ACTIVE (or interrupted-active) is the whole point of the refusal and is
+  // checked first: a segment that died mid-activation leaves `preparing/
+  // activate` or `applying`, and relaunching into those would activate bytes
+  // outside the continuation that owns them.
+  //
+  // IMPLIED, not an independent conjunct: the decoder derives `execution`
+  // from the phase and refuses any record that disagrees, so the two phase
+  // tests below already carry it. It is spelled out anyway so the refusal a
+  // reader must not weaken is the first line of the function rather than an
+  // inference about a phase set. Ticket 07's reconciler predicate omits the
+  // same field for the same reason, and says so.
+  if (record.execution !== "parked") return "refuse";
+  // The decoder refuses a park whose continuation is not its phase's own
+  // (`continuationLegalFor`), so the phase alone identifies the shape here.
+  if (record.phase === "waiting-for-work") return "allow";
+  if (record.phase !== "waiting-to-activate") return "refuse";
+  const claim = record.claim;
+  if (claim === undefined || readInstalledIdentity === null) return "refuse";
+  const installed = await readInstalledIdentity();
+  if (installed === null) return "refuse";
+  return installed.installedVersion === record.targetVersion &&
+    installed.installedVersion === claim.installedVersion &&
+    installed.installGeneration === claim.installGeneration
+    ? "allow"
+    : "refuse";
 }

@@ -138,6 +138,8 @@ export type {
   UpdateMutationCapability,
   UpdateMutationCapabilityAdoption,
   UpdateMutationCapabilityVerdict,
+  SupervisorRelaunchIdentityReader,
+  SupervisorRelaunchInstalledIdentity,
   WithUpdateContenderOptions,
 } from "./contender";
 export {
@@ -146,6 +148,7 @@ export {
   validateUpdateMutationCapabilityAdoption,
   rebindUpdateMutationCapabilityLiveness,
   withUpdateContender,
+  withSupervisorRelaunchContender,
   commitAttemptMutationWithCapability,
   withUpdateContenderAdoption,
 } from "./contender";

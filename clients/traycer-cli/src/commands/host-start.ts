@@ -80,9 +80,10 @@ import {
   type EnvOverrideValue,
 } from "../store/config-store";
 import {
-  withUpdateContender,
+  withSupervisorRelaunchContender,
   type UpdateContenderOutcome,
 } from "@traycer-clients/shared/host-update";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
@@ -247,6 +248,14 @@ const FORWARDED_SHUTDOWN_SIGNALS = [
  * segment owns the restart boundary. See the `retryableServiceRefusal` branch
  * for why this arm alone must not exit 0.
  *
+ * A PARKED attempt used to reach that same clean exit and was the worse half
+ * of this problem: a reboot while an update waited for a busy host left the
+ * service manager told "finished successfully" with nothing left to bring the
+ * host back, and on a CLI-only install nothing to notice. That is no longer a
+ * refusal at all - `supervisor-relaunch-maintenance` admits the two parked
+ * shapes a relaunch legally continues - so what still exits 0 here is the set
+ * a retry genuinely cannot clear.
+ *
  * The value only has to be non-zero and unambiguous: launchd assigns no meaning
  * to particular codes, and with `KeepAlive.SuccessfulExit = false` any non-zero
  * exit is what triggers the relaunch. Distinct from the codes already in use
@@ -364,8 +373,13 @@ function describeHostStartAdmission(
     case "busy":
     case "held-in-process":
       return "another update execution segment currently owns the restart boundary";
+    // Reached only for a record the parked exemption did NOT cover: an active
+    // or interrupted segment, or a park whose installed bytes no longer match
+    // what the attempt claimed. The two parked shapes a relaunch can legally
+    // continue - `waiting-for-work`, and `waiting-to-activate` at the claimed
+    // install - are admitted upstream and never produce this string.
     case "nonterminal-attempt":
-      return `attempt ${outcome.record.attemptId} is ${outcome.record.phase}/${outcome.record.execution}; supervisor relaunch is not a legal continuation`;
+      return `attempt ${outcome.record.attemptId} is ${outcome.record.phase}/${outcome.record.execution}; supervisor relaunch is not a legal continuation for it`;
     case "record-fail-closed":
       return `update attempt evidence is ${outcome.record.kind}; supervisor relaunch refused`;
     case "lock-not-live":
@@ -516,13 +530,30 @@ const defaultRunDeps: RunHostStartDeps = {
         await adoption.grant.abandon();
       }
     }
-    return withUpdateContender(
+    return withSupervisorRelaunchContender(
       {
         hostHomeDir: hostHomeDir(options.environment),
         reason: "host-supervisor-spawn",
         waitMs: 0,
         pollIntervalMs: 50,
-        admission: "runtime-repair-maintenance",
+        // Read UNDER the attempt lock, and only for a park whose phase could
+        // admit this relaunch. `resolveHostStartTarget` read the same record
+        // before we contended, and deliberately is not reused: an install
+        // that moved between that read and this lock is exactly the case the
+        // baseline comparison exists to catch.
+        readInstalledIdentity: async () => {
+          const record = await readHostInstallRecord(options.environment);
+          if (record === null) return null;
+          return {
+            installedVersion: record.version,
+            installGeneration: encodeInstallGeneration({
+              installId: record.installId,
+              installedAt: record.installedAt,
+              archiveSha256: record.archiveSha256,
+              version: record.version,
+            }),
+          };
+        },
       },
       async () => run(),
     );
@@ -1473,6 +1504,10 @@ export async function runHostStart(
         // only `busy` retries: `held-in-process`, `nonterminal-attempt`,
         // `record-fail-closed` and `lock-not-live` are all states a relaunch
         // cannot clear, so retrying them would be a crash-loop, not a recovery.
+        // `nonterminal-attempt` keeps that classification precisely BECAUSE of
+        // the parked exemption above it: the records a relaunch could have
+        // cleared are admitted and never arrive here, so every one that does
+        // needs a bound activate/continue or another actor's segment to end.
         //
         // This bounds the outage to the transfer's length rather than removing
         // it; `ThrottleInterval: 10` in the same plist paces the retries. The
