@@ -18,6 +18,7 @@ import {
   appendLiveRecords,
   MAX_LIVE_EVENTS,
   SPAN_MERGE_MAX_BYTES,
+  activeTurnOrdinalsOf,
   applyIndexChange,
   applyRangeResponse,
   applySkeletonChunk,
@@ -28,6 +29,7 @@ import {
   hydratedRecords,
   isActiveTurnStreamingEcho,
   mapWindowMessages,
+  rangeRecordsInstalled,
   planTranscriptHydration,
   settleWindowBytes,
   spanChargeBytes,
@@ -7479,3 +7481,68 @@ function messageWithText(message: Message, text: string): Message {
     },
   };
 }
+
+describe("what a range answer owes the active turn", () => {
+  it("counts only the ACTIVE turn's own rows as repair work", () => {
+    // A range can serve a settled row beside the streaming one. Only the
+    // streaming turn's rows are what a write staled, so only they are retired
+    // and only they are the repair a later request is charged for. Taking every
+    // ordinal the answer carried threw away the settled row's hydration and let
+    // a plain revisit to it be charged against the streaming row's budget.
+    const response = rangeResponse({
+      epoch: 1,
+      fromOrdinal: 9,
+      rowIds: [assistantRowId("t-8"), assistantRowId("t-9")],
+      messages: [
+        assistantMessage("m-9", "t-8", 9),
+        assistantMessage("m-10", "t-9", 10),
+      ],
+    });
+
+    expect(activeTurnOrdinalsOf(response, "t-9")).toEqual([10]);
+    expect(activeTurnOrdinalsOf(response, "t-8")).toEqual([9]);
+    expect(activeTurnOrdinalsOf(response, null)).toEqual([]);
+
+    // A STEER row of the same turn is NOT one of its assistant rows, so the
+    // row-id scan finds nothing here even though the answer carries the turn's
+    // records - a steer bubble's projection sources the whole turn's messages.
+    // The store reads the emptiness as "no repair can follow this answer" and
+    // keeps the drawn body rather than forfeiting it for a repair that would
+    // never be asked for.
+    const steerOnly = rangeResponse({
+      epoch: 1,
+      fromOrdinal: 11,
+      rowIds: ["steer:q-9"],
+      messages: [assistantMessage("m-10", "t-9", 10)],
+    });
+    expect(activeTurnOrdinalsOf(steerOnly, "t-9")).toEqual([]);
+  });
+
+  it("reports whether the fold installed the answer's own copies", () => {
+    // Seating an answer is not the same as its records reaching the ledger: the
+    // fold can substitute a held copy for a served one. Certifying the turn on
+    // the request's mark alone then declared the row current while the body on
+    // screen was the one the answer had been sent to replace.
+    const served = assistantMessage("m-10", "t-9", 10);
+    const response = rangeResponse({
+      epoch: 1,
+      fromOrdinal: 10,
+      // Matching the seeded skeleton: a row-id disagreement voids the index
+      // instead of seating, which is a different path entirely.
+      rowIds: ["row-10"],
+      messages: [served],
+    });
+    const seated = applyRangeResponse(
+      windowWithSkeleton(40),
+      response,
+      null,
+      null,
+    );
+
+    expect(rangeRecordsInstalled(seated, [served], "t-9")).toBe(true);
+    // A copy the fold never saw is not installed, however alike it looks.
+    expect(rangeRecordsInstalled(seated, [{ ...served }], "t-9")).toBe(false);
+    // And an answer carrying nothing of the turn cannot close its gap.
+    expect(rangeRecordsInstalled(seated, [], "t-9")).toBe(false);
+  });
+});
