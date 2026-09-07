@@ -11,10 +11,15 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 
 const EPIC_SEARCH_ARTIFACTS_LIMIT = 50;
 
-/** Artifact search covers user-visible content, not mirror-relative paths. */
+/**
+ * Titles, logical artifact paths, and bodies. Paths are searched because agents
+ * routinely print an artifact's slug chain (`tickets/sweep-dialog-discovery`)
+ * and users paste that back to find it; the host ranks the logical path, never
+ * the physical `index.md` mirror layout.
+ */
 const ARTIFACT_SEARCH_FIELDS = Object.freeze({
   title: true,
-  path: false,
+  path: true,
   body: true,
 });
 

@@ -21,6 +21,7 @@ import {
   interviewQuestionSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  agentMessageReceiptSchema,
   agentMessageSendSchema,
   artifactOperationActionSchema,
   backgroundTaskOutputSchema,
@@ -38,6 +39,7 @@ import {
 import { imageResolutionEntrySchema } from "@traycer/protocol/persistence/epic/messages";
 
 export {
+  agentMessageReceiptSchema,
   agentMessageSendSchema,
   backgroundTaskOutputSchema,
   diffSourceSchema,
@@ -71,6 +73,9 @@ const jsonContentSchema = getRecordSchema(
   "latest",
 );
 
+// Canonical artifact-kind vocabulary, reused for the `artifact_operation` event
+// so the wire kind matches the persisted block kind (both resolve from the same
+// `epic-artifact-kind` registry record).
 const artifactOperationKindSchema = getRecordSchema(
   commonRecordRegistry,
   "epic-artifact-kind",
@@ -78,29 +83,48 @@ const artifactOperationKindSchema = getRecordSchema(
 );
 
 export const runtimeTokenUsageSchema = z.object({
-  // Raw per-call SDK fields.
+  // Raw per-call SDK fields. Semantics differ across harnesses (Anthropic
+  // treats input_tokens as NEW input with cache_read/cache_creation as
+  // separate additive buckets; OpenAI treats input_tokens as the full input
+  // with cached_input_tokens as a SUBSET) - the chip MUST NOT compute the
+  // context-window denominator from these alone, or it will double-count
+  // cache reads on OpenAI-style adapters. Use `contextTokens` instead.
   inputTokens: z.number(),
   outputTokens: z.number(),
   totalTokens: z.number(),
   cacheReadInputTokens: z.number().optional(),
   cacheCreationInputTokens: z.number().optional(),
   /**
-   * Adapter-normalized "tokens currently occupying the context window" - the canonical numerator for the "% context left" chip.
-   * Optional only so legacy harness paths that don't yet populate it parse cleanly; the chip hides without it.
+   * Adapter-normalized "tokens currently occupying the context window" -
+   * the canonical numerator for the "% context left" chip. Each adapter
+   * computes this from its SDK's per-call snapshot (NOT the cumulative
+   * thread total) and resolves its own cache-vs-input semantics, so the
+   * renderer can divide `contextTokens / contextWindow` without knowing
+   * which SDK produced the event. Optional only so legacy harness paths
+   * that don't yet populate it parse cleanly; the chip hides without it.
    */
   contextTokens: z.number().optional(),
   /**
-   * Model context window for this turn.
+   * Model context window for this turn. Adapters source this from their
+   * own SDK (Claude: `getContextUsage().rawMaxTokens`; Codex:
+   * `tokenUsage.modelContextWindow`; OpenCode: `model.limit.context`).
    * Never hardcoded - if the SDK doesn't expose it, the chip hides.
    */
   contextWindow: z.number().optional(),
   /**
-   * Tokens that are ALWAYS present in the window regardless of conversation length (fixed system prompt + tool instructions).
+   * Tokens that are ALWAYS present in the window regardless of conversation
+   * length (fixed system prompt + tool instructions). Adapters set this only
+   * when `contextTokens` excludes that fixed baseline; the renderer folds it
+   * into the displayed used total while keeping `contextWindow` as the reported
+   * model capacity. Omitted (treated as 0) by harnesses with no separate
+   * baseline convention.
    */
   contextBaselineTokens: z.number().optional(),
   /**
-   * Cumulative billed cost for the turn in USD.
-   * Omitted by harnesses that don't surface a price (Codex/Cursor); the cost chip hides without it.
+   * Cumulative billed cost for the turn in USD. Populated only where the SDK
+   * reports it (Claude: `SDKResultSuccess.total_cost_usd`; OpenCode:
+   * `StepFinishPart.cost` where available). Omitted by harnesses that don't
+   * surface a price (Codex/Cursor); the cost chip hides without it.
    */
   costUsd: z.number().optional(),
 });
@@ -128,8 +152,10 @@ export const runtimeSessionInfoSchema = z.object({
 });
 export type RuntimeSessionInfo = z.infer<typeof runtimeSessionInfoSchema>;
 
-// Wire-freeze copy for the released `chat.subscribe@1.0-1.5` blockDelta frames.
-// `session.created` / `session.resumed` carry the harness id verbatim, so the live enum would otherwise let a newer host announce a Reasonix session on a minor whose installed client cannot decode the id.
+// Wire-freeze copy for the released `chat.subscribe@1.0–1.5` blockDelta frames.
+// `session.created` / `session.resumed` carry the harness id verbatim, so the
+// live enum would otherwise let a newer host announce a Reasonix session on a
+// minor whose installed client cannot decode the id. Hand-frozen, not derived.
 const runtimeSessionInfoSchemaPreReasonix = z.object({
   id: z.string(),
   harnessId: guiHarnessIdSchemaPreReasonix,
@@ -156,8 +182,16 @@ export type RuntimeApprovalRequest = z.infer<
 >;
 
 /**
- * Reasoning effort on the wire is a free-form string.
- * `null` is reserved for non-reasoning models that bypass reasoning entirely and is distinct from an explicit `"none"` level a provider may expose as a selectable variant.
+ * Reasoning effort on the wire is a free-form string. Each harness advertises
+ * its model's selectable levels via `supportedReasoningEfforts` on the
+ * model-list response (sourced from the provider SDK at list time), and
+ * adapters validate the chosen value at their own SDK boundary. Keeping the
+ * wire open lets new provider levels (e.g. `"minimal"`, `"none"`,
+ * `"extra-high"`) flow through without a protocol bump.
+ *
+ * `null` is reserved for non-reasoning models that bypass reasoning entirely
+ * and is distinct from an explicit `"none"` level a provider may expose as a
+ * selectable variant.
  */
 export const runtimeReasoningEffortSchema = z.string().nullable();
 export type RuntimeReasoningEffort = z.infer<
@@ -189,6 +223,9 @@ export const runtimeAgentRunInputSchema = z.object({
   prompt: z.string(),
   contextPrelude: z.string().nullable().default(null),
   sessionId: z.string().nullable().default(null),
+  // Concrete model slug the run executes; resolved upstream (the renderer/
+  // caller always selects a real model - there is no "use the harness default"
+  // sentinel anymore).
   model: z.string().min(1),
   reasoningEffort: runtimeReasoningEffortSchema.default(null),
   serviceTier: z.string().nullable().default(null),
@@ -202,8 +239,17 @@ export const runtimeAgentRunInputSchema = z.object({
   // Skills selected as inline composer modifiers. Optional preserves runtime
   // compatibility with callers created before multi-skill composer support.
   skillInvocations: z.array(runtimeSkillInvocationSchema).optional(),
-  // Billing/account context for the turn, sourced from the turn-bearing frame's `accountContext` (a global app-wide selection), not from per-chat `chatRunSettings`.
+  // Billing/account context for the turn, sourced from the turn-bearing frame's
+  // `accountContext` (a global app-wide selection), not from per-chat
+  // `chatRunSettings`. The Traycer harness threads this to its per-user
+  // OpenCode server so the inference call bills the right account; other
+  // harnesses ignore it.
   accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+  // Which of the harness's logged-in profiles (subscriptions) to spawn this
+  // turn's adapter with (resolved to a config-dir env override by the host's
+  // ProfileResolver). `null` = the ambient/host login. Distinct from
+  // `accountContext`, which selects Traycer's own billing org, not a
+  // provider-CLI login. See the multi-profile decision log.
   profileId: z.string().nullable().default(null),
 });
 export type RuntimeAgentRunInput = z.infer<typeof runtimeAgentRunInputSchema>;
@@ -243,8 +289,10 @@ export const runtimePlanSourceSchema = z.object({
 });
 export type RuntimePlanSource = z.infer<typeof runtimePlanSourceSchema>;
 
-// Wire-freeze copy for the released `chat.subscribe@1.0-1.5` blockDelta frames.
-// Hand-frozen, not derived from the live shape.
+// Wire-freeze copy for the released `chat.subscribe@1.0–1.5` blockDelta frames.
+// Every `plan.*` event embeds the plan's originating harness, so this shares the
+// same exposure as `runtimeSessionInfoSchemaPreReasonix`. Hand-frozen, not
+// derived from the live shape.
 const runtimePlanSourceSchemaPreReasonix = z.object({
   harnessId: guiHarnessIdSchemaPreReasonix,
   sessionId: z.string().nullable(),
@@ -274,8 +322,12 @@ export const runtimePlanContentRefSchema = z.object({
 });
 export type RuntimePlanContentRef = z.infer<typeof runtimePlanContentRefSchema>;
 
-// Interview option/question/answer shapes are shared with the persistence layer - see `interviewQuestionOptionSchema`, `interviewQuestionSchema`, `interviewAnswerSchema` in `protocol/persistence/epic/schemas.ts`.
-// The runtime aliases re-export those schemas/types so wire frames and stored chat history use one canonical shape (nullable string fields, not optional).
+// Interview option/question/answer shapes are shared with the persistence
+// layer - see `interviewQuestionOptionSchema`, `interviewQuestionSchema`,
+// `interviewAnswerSchema` in `protocol/persistence/epic/schemas.ts`. The
+// runtime aliases re-export those schemas/types so wire frames and stored
+// chat history use one canonical shape (nullable string fields, not
+// optional). Producers must emit `null` for absent values.
 export const runtimeInterviewQuestionOptionSchema =
   interviewQuestionOptionSchema;
 export type RuntimeInterviewQuestionOption = z.infer<
@@ -292,15 +344,21 @@ export type RuntimeInterviewAnswer = z.infer<
   typeof runtimeInterviewAnswerSchema
 >;
 
-// Wire-freeze alias of the answer shape from before selection evidence existed.
-// Bound to every `chat.subscribe` line through `@1.6` - both on the frames that carry answers directly (`interviewAnswered`, the `interviewAnswer` client action) and inside the frozen `blockDelta` event unions below.
+// Wire-freeze alias of the answer shape from before selection evidence
+// existed. Bound to every `chat.subscribe` line through `@1.6` - both on the
+// frames that carry answers directly (`interviewAnswered`, the
+// `interviewAnswer` client action) and inside the frozen `blockDelta` event
+// unions below.
 export const runtimeInterviewAnswerSchemaPreSettlement =
   interviewAnswerSchemaPreSettlement;
 
 const baseRuntimeEventFields = {
   blockId: z.string(),
   timestamp: z.number(),
-  // Owner of this event for nested rendering.
+  // Owner of this event for nested rendering. When set, the produced block is
+  // a CHILD of the block with this id (currently: a subagent's own tool_call /
+  // file_change activity nests under its `subagent.*` block, keyed by the
+  // subagent's task id). Absent/null for top-level (main-agent) activity.
   parentBlockId: z.string().nullish(),
 } as const;
 
@@ -341,6 +399,12 @@ export const toolCallStartedEventSchema = z.object({
   // Explicit call/task start time. Optional so older emitters remain valid; the
   // accumulator falls back to the event timestamp when absent.
   startedAt: z.number().optional(),
+  // True when this call gets a durable "background card" treatment: a
+  // backgrounded command/Monitor (Bash with `run_in_background`, or the
+  // Monitor tool), or a ScheduleWakeup call. Stamped at started so the
+  // persistent block marker is set before any terminal path - this is
+  // broader than the Bash/Monitor/subagent background-task FSM (ScheduleWakeup
+  // is not part of that FSM), it only governs whether the card stays promoted.
   backgroundTask: z.boolean().optional(),
 });
 export type ToolCallStartedEvent = z.infer<typeof toolCallStartedEventSchema>;
@@ -350,8 +414,22 @@ export const toolCallCompletedEventSchema = z.object({
   type: z.literal("tool_call.completed"),
   toolName: z.string(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
-  // The shell a `traycer_run_shell` call created.
+  // The shell a `traycer_run_shell` call created. Carried on COMPLETION rather
+  // than on `started` because the id does not exist until the host has minted
+  // it - the call's input names a command to run, not a shell that already is.
+  // Optional rather than defaulted, like `backgroundOutput` beside it: most
+  // adapters have no opinion about shells and omit it, and an omission must
+  // read as "nothing to say" rather than as "definitely not a shell", so a
+  // re-completion cannot erase what a first one established. See
+  // `toolCallManagedCommandSchema`.
   managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+  // Where a `traycer_send_message` call landed in the receiver's transcript.
+  // Carried on COMPLETION for the same reason as `managedCommand`: the host
+  // mints the receipt while serving the call, and the tool result is the only
+  // place it is observable. Optional rather than defaulted for the same reason
+  // too - an omission is "nothing to say", not "no receipt". See
+  // `agentMessageReceiptSchema`.
+  agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
   backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
   // For detached background command/Monitor completion, this is the SDK task's
   // own start time from BackgroundItem, not the short foreground spawn call.
@@ -359,16 +437,39 @@ export const toolCallCompletedEventSchema = z.object({
   // Reinforces the persistent background marker at terminal (the runtime now
   // knows for certain this was a backgrounded task). Optional/preserved.
   backgroundTask: z.boolean().optional(),
-  // Images this call produced (`chat.subscribe@1.6`).
-  // Defaulted so an old emitter that never sends this reproduces today's shipped (image-free) behavior.
+  // Images this call produced (`chat.subscribe@1.6`). The accumulator stamps
+  // this explicitly in both completion branches (started-then-completed and
+  // completion-without-start) so a persisted block always carries the same
+  // shape the live broadcast did. Defaulted so an old emitter that never
+  // sends this reproduces today's shipped (image-free) behavior.
   imageResults: z.array(imageGenerationResultSchema).default([]),
 });
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
 >;
 
-// Wire-freeze copy of `toolCallCompletedEventSchema` from before `imageResults` existed.
-// Hand-frozen, NOT derived from the live shape.
+// Wire-freeze copy of `toolCallCompletedEventSchema` as `chat.subscribe@1.6`
+// shipped it in `host-v1.2.0`: image results present, `agentMessageReceipt`
+// absent. Bound to `@1.6`'s `blockDelta` frame via
+// `runtimeEventSchemaPreSettlement`. Hand-frozen, NOT derived from the live
+// shape.
+export const toolCallCompletedEventSchemaPreReceipt = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("tool_call.completed"),
+  toolName: z.string(),
+  agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+  backgroundStartedAt: z.number().optional(),
+  backgroundTask: z.boolean().optional(),
+  imageResults: z.array(imageGenerationResultSchema).default([]),
+});
+
+// Wire-freeze copy of `toolCallCompletedEventSchema` from before
+// `imageResults` existed. Bound (via `runtimeEventSchemaPreImage` /
+// `runtimeEventSchemaV12PreInReplyTo`) to every released `chat.subscribe`
+// minor so those lines can never observe image data. Hand-frozen, NOT
+// derived from the live shape.
 export const toolCallCompletedEventSchemaPreImage = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("tool_call.completed"),
@@ -384,8 +485,10 @@ export const toolCallErroredEventSchema = z.object({
   type: z.literal("tool_call.errored"),
   toolName: z.string(),
   error: z.string(),
-  // Distinguishes an explicit stop (deadline-killed Monitor, user-stopped command) from a genuine failure.
-  // Optional/defaulted: an old emitter that never sends this reproduces today's shipped behavior exactly - every terminal failure rendered as a plain error.
+  // Distinguishes an explicit stop (deadline-killed Monitor, user-stopped
+  // command) from a genuine failure. Optional/defaulted: an old emitter that
+  // never sends this reproduces today's shipped behavior exactly - every
+  // terminal failure rendered as a plain error.
   terminationReason: z.enum(["error", "stopped"]).default("error"),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
   backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
@@ -398,8 +501,13 @@ export const toolCallErroredEventSchema = z.object({
 export type ToolCallErroredEvent = z.infer<typeof toolCallErroredEventSchema>;
 
 /**
- * Intermediate human progress line for an in-flight tool call (e.g. a long MCP call reporting "Fetched 3/10 pages").
- * Replace-latest: the accumulator keeps only the most recent `update` on the owning `tool_call` block and never advances its `timestamp`, so the GUI's elapsed heartbeat stays anchored to the tool's start.
+ * Intermediate human progress line for an in-flight tool call (e.g. a long MCP
+ * call reporting "Fetched 3/10 pages"). Replace-latest: the accumulator keeps
+ * only the most recent `update` on the owning `tool_call` block and never
+ * advances its `timestamp`, so the GUI's elapsed heartbeat stays anchored to
+ * the tool's start. NOT a streaming log - carrying growing content here would
+ * reintroduce the message-store memory blow-up that deferred streaming stdout.
+ * `blockId` is the `tool_call` block; `parentBlockId` nests it under a subagent.
  */
 export const toolCallProgressEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -481,8 +589,11 @@ export const planCompletedEventSchema = z.object({
 });
 export type PlanCompletedEvent = z.infer<typeof planCompletedEventSchema>;
 
-// Wire-freeze copies of the three `plan.*` events with `source` pinned to the pre-Reasonix harness enum, bound to the released `chat.subscribe@1.0-1.5` blockDelta frames.
-// Only `source` differs from the live shapes above; every other field (and every default) is reproduced verbatim so the frozen line keeps parsing exactly what it shipped with.
+// Wire-freeze copies of the three `plan.*` events with `source` pinned to the
+// pre-Reasonix harness enum, bound to the released `chat.subscribe@1.0–1.5`
+// blockDelta frames. Only `source` differs from the live shapes above; every
+// other field (and every default) is reproduced verbatim so the frozen line
+// keeps parsing exactly what it shipped with.
 const planDeltaEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("plan.delta"),
@@ -568,13 +679,21 @@ export const steerSubmittedEventSchema = z.object({
   messageId: z.string(),
   content: jsonContentSchema,
   mode: chatQueueSteerModeSchema.default("safe_point"),
-  // Who authored the steered message, carried onto the `steer` content block by the shared accumulator.
-  // Additive + nullable: a host that predates this field sends no sender, the block's stays `null`, and the fallback renders a plain user row exactly as before.
+  // Who authored the steered message, carried onto the `steer` content block by
+  // the shared accumulator. The steered USER row (`messageId`) is the primary
+  // record, but it and the block have asymmetric durability - so a renderer that
+  // sees only the block must still be able to tell an agent-to-agent message
+  // from a human one. Additive + nullable: a host that predates this field sends
+  // no sender, the block's stays `null`, and the fallback renders a plain user
+  // row exactly as before.
   sender: userMessageSenderSchema.nullable().default(null),
 });
 export type SteerSubmittedEvent = z.infer<typeof steerSubmittedEventSchema>;
 
-// Wire-freeze copy with the `sender` swapped for its pre-`inReplyTo` freeze, bound (via the frozen runtime unions below) to the `blockDelta` frame on the released `chat.subscribe@1.0-1.3` lines so those lines strip.
+// Wire-freeze copy with the `sender` swapped for its pre-`inReplyTo` freeze,
+// bound (via the frozen runtime unions below) to the `blockDelta` frame on the
+// released `chat.subscribe@1.0–1.3` lines so those lines strip `inReplyTo` from
+// a steer sender too. Hand-frozen; see `agentSenderSchemaPreInReplyTo`.
 export const steerSubmittedEventSchemaPreInReplyTo = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("steer.submitted"),
@@ -582,12 +701,14 @@ export const steerSubmittedEventSchemaPreInReplyTo = z.object({
   messageId: z.string(),
   content: jsonContentSchema,
   mode: chatQueueSteerModeSchema.default("safe_point"),
-  // Pre-Reasonix pin: this copy is bound only to released `1.0-1.3`, so it
+  // Pre-Reasonix pin: this copy is bound only to released `1.0–1.3`, so it
   // carries the enum freeze as well as the `inReplyTo` freeze.
   sender: userMessageSenderSchemaPreInReplyTo.nullable().default(null),
 });
 
-// Wire-freeze copy for released `chat.subscribe@1.4`/`@1.5`: those lines shipped after `inReplyTo`, so the steer sender keeps that field and freezes only the harness enum.
+// Wire-freeze copy for released `chat.subscribe@1.4`/`@1.5`: those lines shipped
+// after `inReplyTo`, so the steer sender keeps that field and freezes only the
+// harness enum. Hand-frozen; see `agentSenderSchemaPreReasonix`.
 const steerSubmittedEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("steer.submitted"),
@@ -623,7 +744,9 @@ export type InterviewResolvedEvent = z.infer<
   typeof interviewResolvedEventSchema
 >;
 
-// Wire-freeze copy of `interview.resolved` from before answers carried selection evidence.
+// Wire-freeze copy of `interview.resolved` from before answers carried
+// selection evidence. Bound to the `blockDelta` frame on every
+// `chat.subscribe` line through `@1.6` via the frozen unions below.
 // Hand-frozen field-for-field; NOT derived from the live shape.
 export const interviewResolvedEventSchemaPreSettlement = z.object({
   ...baseRuntimeEventFields,
@@ -650,7 +773,10 @@ export const subAgentStartedEventSchema = z.object({
   // Agent role/type (e.g. "explorer"), shown as a distinct title segment.
   // Optional so harnesses without a role concept simply omit it.
   agentType: z.string().nullable().optional(),
-  // The spawning tool_call block id, when the harness emits the spawn as a standalone tool call (Claude).
+  // The spawning tool_call block id, when the harness emits the spawn as a
+  // standalone tool call (Claude). Lets the GUI suppress that duplicate tool row
+  // in favor of the sub-agent card. Omitted by harnesses that emit no separate
+  // spawn tool call (Codex `collabAgentToolCall`, OpenCode `task` part).
   spawnToolCallId: z.string().optional(),
 });
 export type SubAgentStartedEvent = z.infer<typeof subAgentStartedEventSchema>;
@@ -665,7 +791,10 @@ export type SubAgentProgressEvent = z.infer<typeof subAgentProgressEventSchema>;
 export const subAgentCompletedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("subagent.completed"),
-  // Defaulted to "completed" so an old emitter that never sends this reproduces today's shipped (if imprecise) behavior exactly, rather than failing to parse.
+  // Defaulted to "completed" so an old emitter that never sends this
+  // reproduces today's shipped (if imprecise) behavior exactly, rather than
+  // failing to parse. Only an emitter that knows the real outcome sets this
+  // explicitly to "failed"/"stopped".
   outcome: z.enum(["completed", "failed", "stopped"]).default("completed"),
   result: z.string().optional(),
 });
@@ -674,7 +803,14 @@ export type SubAgentCompletedEvent = z.infer<
 >;
 
 /**
- * `workflow.*` mirrors the `subagent.*` triple above for a Workflow tool run (a `/code-review`-style finder fleet).
+ * `workflow.*` mirrors the `subagent.*` triple above for a Workflow tool run
+ * (a `/code-review`-style finder fleet). Inner `agent()` calls have no
+ * individually addressable identity on the wire (see the detection findings) -
+ * these events carry only the aggregate the host can observe: name/intent at
+ * spawn, one activity milestone + fleet counts + tokens per progress tick, and
+ * a terminal outcome. The accumulator dual-writes them onto a `subagent` block
+ * (base fields = degradation, `workflowMeta` = the rich data) rather than a
+ * distinct block type - see `persistence/epic/content-blocks.ts`.
  */
 export const workflowStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -695,7 +831,9 @@ export const workflowProgressEventSchema = z.object({
   // One new milestone (a phase transition or a label sighting), or `null`
   // when this tick only refreshes counts/tokens with no new milestone.
   activity: workflowActivityEntrySchema.nullable().default(null),
-  // Latest known fleet counts / aggregate token usage.
+  // Latest known fleet counts / aggregate token usage. Absent/`null` ⇒
+  // "unknown or unchanged this tick" - the accumulator preserves the prior
+  // value rather than clearing it.
   agentsStarted: z.number().nullable().optional(),
   agentsFinished: z.number().nullable().optional(),
   totalTokens: z.number().nullable().optional(),
@@ -715,8 +853,17 @@ export type WorkflowCompletedEvent = z.infer<
 >;
 
 /**
- * `chat.subscribe@1.3` - Upserts a durable provider-generated notice (Codex model reroute / safety verification / buffering, and future equivalents) - see the tech plan.
- * Repeated events for the same `blockId` replace the rendered fields and fallback text; this is NOT a content boundary (see `completionEventsBeforeRuntimeEvent`), so an interleaved notice never finalizes an active.
+ * Upserts a durable provider-generated notice (Codex model reroute / safety
+ * verification / buffering, and future equivalents) - see the tech plan.
+ * `chat.subscribe@1.3`-only, like `workflow.*` above. The accumulator writes
+ * this onto a compatibility-safe persisted `text` block (`text: fallbackText`
+ * + `providerNotice` enrichment) rather than a new `ContentBlock.type`, so
+ * older same-major readers still parse the chat - see
+ * `persistence/epic/content-blocks.ts`'s `providerNotice` field. Repeated
+ * events for the same `blockId` replace the rendered fields and fallback
+ * text; this is NOT a content boundary (see
+ * `completionEventsBeforeRuntimeEvent`), so an interleaved notice never
+ * finalizes an active text/reasoning stream.
  */
 export const providerNoticeUpsertEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -735,8 +882,17 @@ export type ProviderNoticeUpsertEvent = z.infer<
   typeof providerNoticeUpsertEventSchema
 >;
 
-// Wire-freeze copy with `harnessId` pinned to the pre-Reasonix enum, bound to the released `chat.subscribe@1.0`/`@1.3`/`@1.4`/`@1.5`/`@1.6` blockDelta frames (`1.1`/`1.2` predate `provider_notice.upsert` entirely).
-// Hand-frozen, not derived from the live shape.
+// Wire-freeze copy with `harnessId` pinned to the pre-Reasonix enum, bound to
+// the released `chat.subscribe@1.0`/`@1.3`/`@1.4`/`@1.5`/`@1.6` blockDelta frames
+// (`1.1`/`1.2` predate `provider_notice.upsert` entirely). Hand-frozen, not
+// derived from the live shape.
+//
+// `noticeKind` carries a second, later freeze the name does not record: those
+// lines shipped three kinds and strict-decode the value, so `harness_message`
+// must never ride one. Freezing the schema is only half of it - the host also
+// has to stop EMITTING the new kind to a pre-`1.7` peer, since nothing
+// reparses an outgoing frame through this copy
+// (`chat-frame-projection.ts`, `projectHarnessMessageNoticeForPreV17`).
 const providerNoticeUpsertEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("provider_notice.upsert"),
@@ -782,7 +938,14 @@ export type FileChangeCompletedEvent = z.infer<
 >;
 
 /**
- * A semantic artifact create / update / delete inferred from the agent's filesystem actions during a turn and emitted by the chat session (NOT a harness adapter).
+ * A semantic artifact create / update / delete inferred from the agent's
+ * filesystem actions during a turn and emitted by the chat session (NOT a
+ * harness adapter). Replaces the raw `file_change` / bash noise for
+ * artifact-root paths with one card. The GUI resolves live title / status /
+ * tombstone from its projection; `title` is only a fallback for the short
+ * delete window before the tombstone projects. `blockId` follows
+ * `artifactOperationBlockId(actionId, index)` - indexed so one bash action
+ * deleting N artifacts yields N distinct keys.
  */
 export const artifactOperationEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -805,7 +968,11 @@ export const commandStartedEventSchema = z.object({
   type: z.literal("command.started"),
   command: z.string(),
   cwd: z.string().optional(),
-  // True when the harness has promoted this command to a backgrounded one.
+  // True when the harness has promoted this command to a backgrounded one. A
+  // harness that only learns this later (Codex decides at the parent turn's
+  // end, by which time the card is already open) re-emits `command.started`
+  // with the same `blockId` to stamp the marker - the accumulator updates the
+  // open block in place rather than appending a second card.
   backgroundTask: z.boolean().optional(),
 });
 export type CommandStartedEvent = z.infer<typeof commandStartedEventSchema>;
@@ -815,6 +982,11 @@ export const commandCompletedEventSchema = z.object({
   type: z.literal("command.completed"),
   command: z.string(),
   exitCode: z.number().optional(),
+  // Present ONLY when the ending was abnormal: `"stopped"` when the host
+  // terminated the command (an explicit stop, or a teardown kill), `"error"`
+  // for a genuine failure. Absent on a clean exit - and absent from every
+  // event an emitter that predates this field sends, which is exactly the
+  // "nothing abnormal to report" reading.
   terminationReason: z.enum(["error", "stopped"]).optional(),
   // Reinforces the persistent background marker at terminal, so a card whose
   // promotion re-emit was lost still settles as a background card.
@@ -822,8 +994,11 @@ export const commandCompletedEventSchema = z.object({
 });
 export type CommandCompletedEvent = z.infer<typeof commandCompletedEventSchema>;
 
-// Wire-freeze copies of the `command.*` events, hand-frozen at the shape the released `chat.subscribe@1.0-1.3` lines shipped - before `backgroundTask` and `terminationReason` existed.
-// Bound (via the frozen runtime unions below) to those lines' `blockDelta` frame, so a background marker or a termination reason cannot reach a peer that negotiated a released minor.
+// Wire-freeze copies of the `command.*` events, hand-frozen at the shape the
+// released `chat.subscribe@1.0–1.3` lines shipped - before `backgroundTask` and
+// `terminationReason` existed. Bound (via the frozen runtime unions below) to
+// those lines' `blockDelta` frame, so a background marker or a termination
+// reason cannot reach a peer that negotiated a released minor.
 export const commandStartedEventSchemaPreBackgroundTask = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("command.started"),
@@ -852,7 +1027,9 @@ export const sessionResumedEventSchema = z.object({
 });
 export type SessionResumedEvent = z.infer<typeof sessionResumedEventSchema>;
 
-// Wire-freeze copies of the two session-announcement events, bound to the released `chat.subscribe@1.0-1.5` blockDelta frames (see `runtimeSessionInfoSchemaPreReasonix`).
+// Wire-freeze copies of the two session-announcement events, bound to the
+// released `chat.subscribe@1.0–1.5` blockDelta frames (see
+// `runtimeSessionInfoSchemaPreReasonix`).
 const sessionCreatedEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("session.created"),
@@ -870,16 +1047,38 @@ export const turnStartedEventSchema = z.object({
   type: z.literal("turn.started"),
   turnId: z.string(),
   /**
-   * NAME of the environment variable whose credential authenticated this turn (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`), or absent when the turn ran on the profile the user signed into.
-   * Never the value: this reaches the persisted transcript, which replicates cross-host.
+   * NAME of the environment variable whose credential authenticated this turn
+   * (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`), or absent when the turn
+   * ran on the profile the user signed into.
+   *
+   * A GROUND-TRUTH fact about the spawn, and the reason it rides turn-start
+   * rather than being derived later: only the adapter, at the moment it builds
+   * the spawn env, knows which credential actually won. By the time the turn
+   * ends the shell env may have been re-probed, the override edited, or the
+   * profile switched - so a renderer that recomputed this would answer for the
+   * wrong turn. It is stamped on the turn record and read back verbatim.
+   *
+   * ABSENCE IS MEANINGFUL and must stay that way: no value means the profile
+   * sign-in was used. So an emitter that cannot determine this must not send a
+   * placeholder, and a consumer must not treat absence as "unknown" - that
+   * would quietly turn a positive claim into a shrug on every legacy turn.
+   *
+   * The name only. Never the value: this reaches the persisted transcript,
+   * which replicates cross-host.
    */
   envCredentialVar: z.string().optional(),
 });
 export type TurnStartedEvent = z.infer<typeof turnStartedEventSchema>;
 
 /**
- * Wire-freeze copy of {@link turnStartedEventSchema} at the shape released `chat.subscribe@1.0-1.6` lines shipped - before `envCredentialVar` existed.
- * Hand copy, NOT `.omit()` off the live shape - same rule as every freeze in this file: a future field must not silently leak onto a released line.
+ * Wire-freeze copy of {@link turnStartedEventSchema} at the shape released
+ * `chat.subscribe@1.0–1.6` lines shipped - before `envCredentialVar` existed.
+ * Bound (via the frozen runtime unions below) to those lines' `blockDelta`
+ * frame, so a peer that negotiated a released minor never observes the
+ * credential-provenance field.
+ *
+ * Hand copy, NOT `.omit()` off the live shape - same rule as every freeze in
+ * this file: a future field must not silently leak onto a released line.
  */
 export const turnStartedEventSchemaPreEnvCredential = z.object({
   ...baseRuntimeEventFields,
@@ -951,7 +1150,9 @@ export const kiroUserMessageAnchorResolvedSchema = z.object({
 export const droidUserMessageAnchorResolvedSchema = z.object({
   harnessId: z.literal("droid"),
   sessionId: z.string(),
-  // The native Droid session id (`@factory/droid-sdk` exec session) assigned for this turn.
+  // The native Droid session id (`@factory/droid-sdk` exec session) assigned for
+  // this turn. Used to resume the same Droid session on a later turn via the
+  // SDK's `resumeSession`. Null only when the session id was not yet resolved.
   droidSessionId: z.string().nullable(),
 });
 
@@ -982,7 +1183,9 @@ export const kilocodeUserMessageAnchorResolvedSchema = z.object({
 export const ampUserMessageAnchorResolvedSchema = z.object({
   harnessId: z.literal("amp"),
   sessionId: z.string(),
-  // The Amp thread id (the `system`/`init` message's `session_id`) assigned for this turn.
+  // The Amp thread id (the `system`/`init` message's `session_id`) assigned for
+  // this turn. Used to resume the same Amp thread on a later turn via
+  // `execute`'s `options.continue`. Null only when it was not yet resolved.
   ampSessionId: z.string().nullable(),
 });
 
@@ -1063,8 +1266,10 @@ export type UserMessageAnchorResolvedEvent = z.infer<
   typeof userMessageAnchorResolvedEventSchema
 >;
 
-// Wire-freeze copy for released `chat.subscribe@1.0-1.6` blockDelta frames.
-// Reasonix first rides the unreleased 1.7 line; keeping its discriminant out of this union prevents a newer host from sending an anchor an installed older client cannot decode.
+// Wire-freeze copy for released `chat.subscribe@1.0–1.6` blockDelta frames.
+// Reasonix first rides the unreleased 1.7 line; keeping its discriminant out of
+// this union prevents a newer host from sending an anchor an installed older
+// client cannot decode.
 const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -1093,17 +1298,29 @@ const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
 });
 
 /**
- * Advances the durable turn-tail on a user message's session anchor while the turn is still streaming (see `turnTailUuid` on the persisted Claude anchor).
- * Host-internal: the chat session consumes it before the blockDelta broadcast, so it never reaches the wire and needs no subscribe-version freeze entry.
+ * Advances the durable turn-tail on a user message's session anchor while the
+ * turn is still streaming (see `turnTailUuid` on the persisted Claude anchor).
+ * Emitted per provider transcript row, so a crash mid-turn leaves the tail at
+ * the last row the host actually observed. Host-internal: the chat session
+ * consumes it before the blockDelta broadcast, so it never reaches the wire
+ * and needs no subscribe-version freeze entry.
  */
 export const userMessageAnchorTailUpdatedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_tail_updated"),
   messageId: z.string(),
   harnessId: z.literal("claude"),
-  // Session the tail row belongs to.
+  // Session the tail row belongs to. A tail is only meaningful on the anchor
+  // that names the same session; the consumer drops a mismatch instead of
+  // stitching a row from one transcript onto an anchor for another.
   sessionId: z.string(),
-  // Null CLEARS the recorded tail.
+  // Null CLEARS the recorded tail. Emitted when tail ownership moves to a
+  // just-accepted steer: acceptance is stdin-enqueue, but the CLI only
+  // consumes the queued message at its next boundary, so rows emitted in
+  // that window still belong to the PREVIOUS message. Freezing the previous
+  // tail at hand-off would cut its slice early; clearing it hands the slice
+  // back to the boundary scan, which stops exactly at the steer's
+  // queued_command attachment row.
   tailUuid: z.string().nullable(),
 });
 export type UserMessageAnchorTailUpdatedEvent = z.infer<
@@ -1115,13 +1332,31 @@ export const turnCompletedEventSchema = z.object({
   type: z.literal("turn.completed"),
   turnId: z.string(),
   usage: runtimeTokenUsageSchema.optional(),
-  /** Degraded-success channel: how the turn ended when it wasn't a clean finish (e.g. */
+  /**
+   * Degraded-success channel: how the turn ended when it wasn't a clean finish
+   * (e.g. `"max_tokens"` truncation). Mirrors `turn.stopped`/`turn.interrupted`,
+   * which already carry a reason. Absent on a normal completion. A refusal is
+   * NOT here - it routes to the `error` lane instead.
+   */
   reason: z.string().optional(),
 });
 export type TurnCompletedEvent = z.infer<typeof turnCompletedEventSchema>;
 
 /**
- * Interim usage rollup emitted DURING a running turn so the renderer can update the "% context left" composer chip without waiting for `turn.completed`.
+ * Interim usage rollup emitted DURING a running turn so the renderer can
+ * update the "% context left" composer chip without waiting for
+ * `turn.completed`. Each adapter fires this from its SDK's own event
+ * channel - no polling:
+ *   - Claude: per `SDKAssistantMessage.message.usage` (BetaUsage) on each
+ *     agent step; one-shot `getContextUsage()` at turn.started seeds the
+ *     contextWindow that the adapter stamps onto every emit.
+ *   - Codex: per `thread/tokenUsage/updated` notification (carries
+ *     `tokenUsage.last` snapshot + `modelContextWindow` inline).
+ *   - OpenCode: per `message.updated` on the primary agent's assistant
+ *     message (info.agent filter); contextWindow from provider.list.
+ *   - Cursor: per `TurnEndedUpdate` via `SendOptions.onDelta`; no
+ *     public-API contextWindow source, so events flow without one and
+ *     the chip hides for Cursor turns rather than guessing.
  */
 export const usageUpdatedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1159,19 +1394,50 @@ export const errorEventSchema = z.object({
 export type ErrorEvent = z.infer<typeof errorEventSchema>;
 
 /**
- * Stable `ErrorEvent.code` flagging a *recoverable* provider auth failure (an invalid/expired/missing credential the user can fix by reconnecting).
+ * Stable `ErrorEvent.code` flagging a *recoverable* provider auth failure (an
+ * invalid/expired/missing credential the user can fix by reconnecting). Part of
+ * the wire contract: host harnesses emit it and the renderer keys on it,
+ * provider-agnostic, to mount the composer re-auth banner and restore the
+ * doomed prompt for re-send. The error row itself renders in the transcript
+ * like any other error - it is the failure's durable record (a headless
+ * A2A-triggered turn may fail with no live subscriber, so the persisted row is
+ * the only trace). Lives here (next to `errorEventSchema`) so both sides
+ * import the one definition.
  */
 export const AUTH_ERROR_CODE = "auth";
 
 /**
- * Stable `ErrorEvent.code` for an auth failure where the credential that actually authenticated the run came from an ENVIRONMENT VARIABLE, not the profile the user signed into.
- * The variable's NAME is carried in the message text (an `ErrorEvent` has no structured payload); its VALUE never leaves the host.
+ * Stable `ErrorEvent.code` for an auth failure where the credential that
+ * actually authenticated the run came from an ENVIRONMENT VARIABLE, not the
+ * profile the user signed into.
+ *
+ * Deliberately NOT {@link AUTH_ERROR_CODE}: that code means "reconnect and this
+ * is fixed", and here reconnecting is precisely what cannot help - the provider
+ * CLI prefers an env key/token over its own signed-in credential store, so the
+ * sign-in the banner would offer to repair is not the credential being
+ * rejected. Emitting the banner for this class is what made the original
+ * incident so hard to read: every GUI turn failed 401 while the terminal
+ * worked, and the only remedy on offer (sign in again) was inert.
+ *
+ * The renderer keys on this code to mount a deep link to the provider's
+ * environment-variable settings, where the offending variable can be given an
+ * explicit unset. The variable's NAME is carried in the message text (an
+ * `ErrorEvent` has no structured payload); its VALUE never leaves the host.
  */
 export const ENV_CREDENTIAL_AUTH_ERROR_CODE = "auth_env_credential";
 
 /**
- * Upserts the image resolution record for a markdown-referenced image in an assistant message (`chat.subscribe@1.6`) - both the initial resolution and any later mid-turn watcher change (see the shared image ingestion.
- * `blockId` remains the runtime envelope identity and equals `messageId`; consumers must not treat it as a content-block address.
+ * Upserts the image resolution record for a markdown-referenced image in an
+ * assistant message (`chat.subscribe@1.6`) - both the initial resolution and
+ * any later mid-turn watcher change (see the shared image ingestion
+ * service). The accumulator/blockDelta consumers depend on this shape, so it
+ * is part of the versioned union, not implementer discretion. `messageId`
+ * addresses the assistant row whose `imageResolutions` this entry upserts
+ * (keyed by `entry.canonicalSource`); `entry` is the same shape persisted on
+ * the message - see `imageResolutionEntrySchema`. `blockId` remains the
+ * runtime envelope identity and equals `messageId`; consumers must not treat it
+ * as a content-block address. `turnId` lets a live renderer reject a delayed
+ * update after the addressed assistant row has left its message snapshot.
  */
 export const imageResolutionUpdatedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1185,7 +1451,15 @@ export type ImageResolutionUpdatedEvent = z.infer<
 >;
 
 // ─── Frozen pre-`workflow.*` runtime-event union (`chat.subscribe@1.2`) ────
-// Do not add the `workflow.*` variants here - a 1.2 peer must never observe them.
+//
+// Kept so `chat.subscribe@1.2`'s frozen `blockDelta` frame schema (see
+// `subscribe.ts`) parses only events a real 1.2 peer could produce. Do not
+// add the `workflow.*` variants here - a 1.2 peer must never observe them.
+//
+// It is `runtimeEventSchemaV12PreInReplyTo` below - not this union - that
+// `subscribe.ts` actually binds to the 1.2 frame; this one only supplies the
+// live `runtimeEventSchema` its non-`workflow.*` members. So per-event wire
+// freezes belong in that copy, and this list stays on the live schemas.
 export const runtimeEventSchemaV12 = z.discriminatedUnion("type", [
   textDeltaEventSchema,
   textCompletedEventSchema,
@@ -1238,8 +1512,19 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 
-// Wire-freeze copy of the live runtime-event union from before image support existed (`chat.subscribe@1.4`/`1.5` - `1.6` takes `runtimeEventSchemaPreSettlement`): every live member EXCEPT `image_resolution.updated`.
-// Explicitly listed (not derived from the live union) so the freeze can't silently absorb a future event, and to keep the discriminated-union typing intact.
+// Wire-freeze copy of the live runtime-event union from before image support
+// existed (`chat.subscribe@1.4`/`1.5` - `1.6` takes `runtimeEventSchemaPreSettlement`):
+// every live member EXCEPT
+// `image_resolution.updated` (which cannot exist on these lines at all), with
+// `tool_call.completed` swapped for its pre-image freeze
+// (`tool_call.progress` needs no freeze - it carries no image field).
+// Bound to `chat.subscribe@1.4`/`1.5`'s `blockDelta` frame (`1.6` takes
+// `runtimeEventSchemaPreSettlement`) - those
+// minors shipped after `inReplyTo` (so they keep the live sender-bearing
+// `steerSubmittedEventSchema`, unlike `runtimeEventSchemaPreInReplyTo`) but
+// before image support. Explicitly listed (not derived from the live union)
+// so the freeze can't silently absorb a future event, and to keep the
+// discriminated-union typing intact.
 export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   textDeltaEventSchema,
   textCompletedEventSchema,
@@ -1285,8 +1570,12 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   providerNoticeUpsertEventSchemaPreReasonix,
 ]);
 
-// Wire-freeze copies of the runtime-event unions with `steer.submitted` swapped for its pre-`inReplyTo` freeze - bound to the `blockDelta` frame on the released `chat.subscribe@1.0-1.3` lines.
-// Explicitly listed (not derived from the live union) so the freeze can't silently absorb a future sender-bearing event, and to keep the discriminated-union typing intact.
+// Wire-freeze copies of the runtime-event unions with `steer.submitted` swapped
+// for its pre-`inReplyTo` freeze — bound to the `blockDelta` frame on the
+// released `chat.subscribe@1.0–1.3` lines. `steer.submitted` is the only runtime
+// event that carries a sender. Explicitly listed (not derived from the live
+// union) so the freeze can't silently absorb a future sender-bearing event, and
+// to keep the discriminated-union typing intact.
 export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   textDeltaEventSchema,
   textCompletedEventSchema,
@@ -1336,15 +1625,24 @@ export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
   providerNoticeUpsertEventSchemaPreReasonix,
 ]);
 
-// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.6` shipped it in `host-v1.2.0-rc.1`: every live member (image events included - `1.6` is the minor that added them) with `interview.resolved` swapped for.
-// Explicitly listed rather than derived from the live union, for the same reason `runtimeEventSchemaPreImage` is: a future event must not silently join a line that has shipped peers.
+// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.6` shipped
+// it in `host-v1.2.0-rc.1`: every live member (image events included - `1.6`
+// is the minor that added them) with `interview.resolved` swapped for its
+// pre-settlement freeze, so a `1.6` peer's `blockDelta` can never carry answer
+// selection evidence, `tool_call.completed` swapped for its pre-receipt freeze
+// (`host-v1.2.0` shipped `1.6` without `agentMessageReceipt`) - AND every
+// harness-bearing member swapped for its pre-Reasonix copy, since `1.6` is
+// released with a nineteen-id enum and its decoder rejects any frame naming an
+// id outside it. Explicitly listed rather than derived from the live
+// union, for the same reason `runtimeEventSchemaPreImage` is: a future event
+// must not silently join a line that has shipped peers.
 export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   textDeltaEventSchema,
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,
   toolCallStartedEventSchema,
-  toolCallCompletedEventSchema,
+  toolCallCompletedEventSchemaPreReceipt,
   toolCallErroredEventSchema,
   toolCallProgressEventSchema,
   approvalRequestedEventSchema,

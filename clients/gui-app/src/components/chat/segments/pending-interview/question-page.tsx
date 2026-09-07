@@ -41,10 +41,17 @@ const ANSWER_TEXTAREA_CLASS =
 interface QuestionPageProps {
   question: InterviewQuestion;
   draft: DraftAnswer;
-  // Gates auto-focus so a background pane's field never steals focus.
-  isActive: boolean;
-  // True while a Submit/Skip this card sent is in flight or accepted but unresolved.
-  // Natively disables every option button and text field so they are neither focusable, typeable, nor exposed as actionable to assistive tech - callbacks already reject while busy, but the controls must also look and behave disabled.
+  // The card's own focus-ownership answer (`useInterviewCard`'s
+  // `focusActive`): the tile is active AND its pane is focused AND its tab is
+  // selected. Gates auto-focus so a field in a background pane - or in a
+  // background top-level tab, which the tile flag alone does not exclude -
+  // never steals focus.
+  focusActive: boolean;
+  // True while a Submit/Skip this card sent is in flight or accepted but
+  // unresolved. Natively disables every option button and text field so they
+  // are neither focusable, typeable, nor exposed as actionable to assistive
+  // tech - callbacks already reject while busy, but the controls must also
+  // look and behave disabled.
   disabled: boolean;
   pendingOptionIndex: number | null;
   onToggleOption: (optionIndex: number) => void;
@@ -57,7 +64,7 @@ export function QuestionPage(props: QuestionPageProps) {
   const {
     question,
     draft,
-    isActive,
+    focusActive,
     disabled,
     pendingOptionIndex,
     onToggleOption,
@@ -66,18 +73,30 @@ export function QuestionPage(props: QuestionPageProps) {
     onFreeTextChange,
   } = props;
 
-  // Memoized on isActive so the same node re-focuses when the tab becomes active (the ref re-runs) and never steals focus while inactive.
-  // On the installed mobile app it does nothing: a question rendering, or its tab becoming active, is not a tap, and a phone keyboard must be summoned by a tap.
+  // Callback ref for the free-text inputs: they appear exactly when the user
+  // chose to type, so focus belongs in them - but only when this card owns
+  // focus. Memoized on `focusActive` so the same node re-focuses when the tab
+  // becomes active (the ref re-runs) and never steals focus while the card is
+  // in a background pane or top-level tab. The focus is
+  // deferred one frame for the same reason as the card itself: a pane is
+  // activated on pointerdown, and the trailing mousedown's native focus would
+  // otherwise steal focus before this runs (see useInterviewCard).
+  // On the installed mobile app it does nothing: a question rendering, or its
+  // tab becoming active, is not a tap, and a phone keyboard must be summoned by
+  // a tap. Tapping the field there focuses it the ordinary way.
   const focusFieldIfActive = useCallback(
     (node: HTMLInputElement | HTMLTextAreaElement | null) => {
-      if (!isActive || disabled || node === null || isMobileApp()) return;
+      if (!focusActive || disabled || node === null || isMobileApp()) return;
       const frame = window.requestAnimationFrame(() => {
         node.focus({ preventScroll: true });
       });
       return () => window.cancelAnimationFrame(frame);
     },
-    // `disabled` is a dependency (not just a guard) so the ref re-runs and restores focus when a rejected action clears the busy gate: a disabled field cannot take focus, and a callback ref only re-fires when its identity changes, not merely when the prop it reads changes.
-    [disabled, isActive],
+    // `disabled` is a dependency (not just a guard) so the ref re-runs and
+    // restores focus when a rejected action clears the busy gate: a disabled
+    // field cannot take focus, and a callback ref only re-fires when its
+    // identity changes, not merely when the prop it reads changes.
+    [disabled, focusActive],
   );
 
   // A question with no options is pure free-text: a single textarea that
@@ -141,8 +160,9 @@ interface OtherRowProps {
   onValueChange: (text: string) => void;
 }
 
-// The "write your own answer" affordance.
-// Unselected it is a pickable row with a pencil badge; selecting it (click or the N+1 key) morphs the row in place into a focused multi-line answer field.
+// The "write your own answer" affordance. Unselected it is a pickable row with
+// a pencil badge; selecting it (click or the N+1 key) morphs the row in place
+// into a focused multi-line answer field.
 function OtherRow(props: OtherRowProps) {
   const { selected, value, disabled, inputRef, onSelect, onValueChange } =
     props;
@@ -233,13 +253,19 @@ function OptionRow(props: OptionRowProps) {
           selected
             ? "border-border bg-foreground/6 text-foreground shadow-sm"
             : "text-muted-foreground",
-          // `hover:*` matches an ancestor whenever ANY hit-tested descendant is hovered - including through this row's own `pointer-events: none` state, since the shared details button deliberately keeps `pointer-events-auto` so its tooltip stays usable.
-          // So hovering it alone would still light up the row unless these classes are omitted outright while disabled; `pointer-events-none` here can't suppress that.
+          // `hover:*` matches an ancestor whenever ANY hit-tested descendant
+          // is hovered - including through this row's own `pointer-events:
+          // none` state, since the shared details button deliberately keeps
+          // `pointer-events-auto` so its tooltip stays usable. So hovering it
+          // alone would still light up the row unless these classes are
+          // omitted outright while disabled; `pointer-events-none` here
+          // can't suppress that.
           !disabled &&
             !selected &&
             "hover:border-border/70 hover:bg-foreground/5 hover:text-foreground",
-          // The overlay button below is transparent (no visible pixels of its own), so a `disabled:` class on it has nothing to dim.
-          // Apply the disabled look to this visible container instead.
+          // The overlay button below is transparent (no visible pixels of
+          // its own), so a `disabled:` class on it has nothing to dim. Apply
+          // the disabled look to this visible container instead.
           disabled && "opacity-60",
         )}
       >

@@ -1,10 +1,10 @@
 import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { resolve } from "node:path";
+import { PACKAGE_MANAGER_CLI_SOURCES } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import {
   type CliInstallManifest,
   type CliInstallSource,
-  PACKAGE_MANAGER_CLI_SOURCES,
   readCliManifest,
   VALID_CLI_INSTALL_SOURCES,
   writeCliManifest,

@@ -8,6 +8,8 @@ export {
   currentProcessIdentityToken,
   getPublishedProcessIdentityVerdict,
   isProcessAlive,
+  ownProcessStartIdentity,
+  probeProcessLiveness,
   readLiveProcessStartTimeMs,
   readProcessStartIdentity,
   readProcessStartTimeMs,

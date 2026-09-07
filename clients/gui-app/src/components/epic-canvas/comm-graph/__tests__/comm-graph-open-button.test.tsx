@@ -32,9 +32,7 @@ describe("CommGraphOpenButton", () => {
       <CommGraphOpenButton epicId={EPIC_ID} disabled={false} className="" />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open communication graph" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Agent office" }));
 
     expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -64,7 +62,7 @@ describe("CommGraphOpenButton", () => {
     );
 
     const button = screen.getByRole("button", {
-      name: "Open communication graph",
+      name: "Agent office",
     });
     fireEvent.click(button);
     fireEvent.click(button);
@@ -94,9 +92,7 @@ describe("CommGraphOpenButton", () => {
   it("does not open while the panel is collapsed", () => {
     render(<CommGraphOpenButton epicId={EPIC_ID} disabled className="" />);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open communication graph" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Agent office" }));
 
     expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
   });
@@ -112,9 +108,7 @@ describe("CommGraphOpenMenuItem", () => {
       </DropdownMenu>,
     );
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Open communication graph" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Agent office" }));
 
     expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({

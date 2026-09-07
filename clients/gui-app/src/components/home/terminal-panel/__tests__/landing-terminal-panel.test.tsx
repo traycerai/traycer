@@ -2242,6 +2242,7 @@ describe("<LandingTerminalPanel />", () => {
           isEligible: () => true,
         },
         true,
+        () => true,
       ),
     );
 
@@ -2949,6 +2950,7 @@ describe("<LandingTerminalPanel />", () => {
           isEligible: () => true,
         },
         true,
+        () => true,
       ),
     );
 
@@ -3406,6 +3408,7 @@ describe("<LandingTerminalPanel />", () => {
           isEligible: () => true,
         },
         true,
+        () => true,
       ),
     );
 

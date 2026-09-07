@@ -31,9 +31,9 @@ import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import {
   isValidLocalHostWebsocketUrl,
+  publishedHostProcessGone,
   readHostPidMetadata,
 } from "../host/pid-metadata";
-import { isProcessAlive } from "../store/cli-lock";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
@@ -49,7 +49,18 @@ import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
 const FRAME_TIMEOUT_MS = 15_000;
 
-/** One-shot unary RPC to the host's `/rpc` WebSocket endpoint. The protocol (open → openAck → request → response, manifest negotiation, frame parsing, timeouts) is the shared `WsRpcClient` that the Desktop renderer also uses - the CLI no longer hand-rolls it. */
+/**
+ * One-shot unary RPC to the host's `/rpc` WebSocket endpoint.
+ *
+ * The protocol (open → openAck → request → response, manifest negotiation,
+ * frame parsing, timeouts) is the shared `WsRpcClient` that the Desktop renderer
+ * also uses - the CLI no longer hand-rolls it. The bearer comes from the stored
+ * credentials (`resolveHostAuth`), seeded by `traycer login`; on a host
+ * `UNAUTHORIZED` the shared auth-aware wrapper refreshes the bearer via the
+ * store-backed revalidator - the refresh spend runs inside the shared credentials
+ * file lock (`store.rotate`, §7) - rotates the lease, and retries once before the
+ * error surfaces.
+ */
 export async function callHostRpc<
   Method extends keyof HostRpcRegistry & string,
 >(
@@ -76,8 +87,10 @@ export async function callHostRpc<
     });
   }
 
-  // Resolve the endpoint once (throws when the host isn't running).
-  // Endpoint discovery belongs to the endpoint provider, not the auth revalidator; a unary call is short-lived, so a same-call host-restart simply fails and the caller re-runs.
+  // Resolve the endpoint once (throws when the host isn't running). Endpoint
+  // discovery belongs to the endpoint provider, not the auth revalidator; a
+  // unary call is short-lived, so a same-call host-restart simply fails and
+  // the caller re-runs. (The long-running monitor owns its own endpoint poller.)
   const endpoint = await resolveEndpoint();
   return requestAtEndpoint(
     method,
@@ -88,7 +101,17 @@ export async function callHostRpc<
   );
 }
 
-/** Like {@link callHostRpc} but fails fast: a transient transport failure surfaces on the first attempt with no retry. For best-effort, latency-bound callers (IDE hook commands such as title/activity reporting) where blocking the agent for a multi-attempt retry of a non-responsive host is worse than a quick miss. */
+/**
+ * Like {@link callHostRpc} but fails fast: a transient transport failure
+ * surfaces on the first attempt with no retry. For best-effort, latency-bound
+ * callers (IDE hook commands such as title/activity reporting) where blocking
+ * the agent for a multi-attempt retry of a non-responsive host is worse than a
+ * quick miss.
+ *
+ * Because it never redials, it also waives the host attestation window (see
+ * `attestationWindowForPolicy`): a post-send miss surfaces at the 15s response
+ * deadline instead of waiting out an attestation this caller could not act on.
+ */
 export async function callHostRpcFastFail<
   Method extends keyof HostRpcRegistry & string,
 >(
@@ -125,7 +148,13 @@ export async function callHostRpcFastFail<
   );
 }
 
-/** Like {@link callHostRpc} but targets an explicitly-resolved endpoint instead of re-reading pid metadata. Doctor uses this so its TCP probe and its RPC probe provably hit the *same* host URL - a fresh `resolveEndpoint()` could otherwise race a host restart between the two probes and report on a URL it never actually probed. */
+/**
+ * Like {@link callHostRpc} but targets an explicitly-resolved endpoint instead
+ * of re-reading pid metadata. Doctor uses this so its TCP probe and its RPC
+ * probe provably hit the *same* host URL - a fresh `resolveEndpoint()` could
+ * otherwise race a host restart between the two probes and report on a URL it
+ * never actually probed.
+ */
 export async function callHostRpcAtEndpoint<
   Method extends keyof HostRpcRegistry & string,
 >(
@@ -175,7 +204,10 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const lease = new MutableBearerLease(auth.token, auth.userId);
-  // On a host UNAUTHORIZED the auth-aware messenger drives the refresh through the locked `rotate` (§7): a short-lived store for this one call, disposed once the request settles so a `commit-failed` continuation timer never outlives the command.
+  // On a host UNAUTHORIZED the auth-aware messenger drives the refresh through
+  // the locked `rotate` (§7): a short-lived store for this one call, disposed
+  // once the request settles so a `commit-failed` continuation timer never
+  // outlives the command.
   const store = createCliCredentialsStore();
   // `signal: null`: this revalidator lives for exactly one unary call, whose
   // own transport timeout already bounds it.
@@ -241,12 +273,23 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   }
 }
 
-/** Reads the `/rpc` WebSocket endpoint from the host pid metadata file. The pid file advertises the unary endpoint URL verbatim. */
+/**
+ * Reads the `/rpc` WebSocket endpoint from the host pid metadata file. The
+ * pid file advertises the unary endpoint URL verbatim. Exported so streaming
+ * commands (`worktree delete`) that dial the shared `WsStreamClient` resolve
+ * the endpoint through the same liveness-checked path as the unary calls -
+ * an absent/dead pid surfaces as a clean `HOST_NOT_RUNNING` CliError, and the
+ * stream client maps the `/rpc` URL to `/stream` itself.
+ */
 export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
   const logger = createCliLogger(config.environment);
   const metadata = await readHostPidMetadata(config.environment);
-  // Liveness check, not just presence: a stopped/crashed host can leave a stale pid.json behind (the same reason `host status` checks `isProcessAlive`).
-  // Catching a dead pid here is what lets `mapHostRpcError` treat a transport `RPC_ERROR` as a genuine host error rather than overloading it to mean "not running".
+  // Identity check, not just presence: a stopped/crashed host can leave a
+  // stale pid.json behind, and the pid it names can since have been handed to
+  // an unrelated process (the same reason `host status` reads
+  // `publishedHostProcessGone`). Catching that record here is what lets
+  // `mapHostRpcError` treat a transport `RPC_ERROR` as a genuine host error
+  // rather than overloading it to mean "not running".
   if (metadata === null) {
     logger.warn("Host RPC endpoint resolution failed; metadata missing", {
       environment: config.environment,
@@ -254,21 +297,24 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
       message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is no longer alive.",
+        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
       details: null,
       exitCode: 1,
     });
   }
-  if (!isProcessAlive(metadata.pid)) {
-    logger.warn("Host RPC endpoint resolution failed; process is not alive", {
-      environment: config.environment,
-      hostId: metadata.hostId,
-      pid: metadata.pid,
-    });
+  if (publishedHostProcessGone(metadata)) {
+    logger.warn(
+      "Host RPC endpoint resolution failed; the published process is gone (exited, or a recycled pid)",
+      {
+        environment: config.environment,
+        hostId: metadata.hostId,
+        pid: metadata.pid,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
       message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is no longer alive.",
+        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
       details: null,
       exitCode: 1,
     });
@@ -281,7 +327,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
       message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is no longer alive.",
+        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
       details: null,
       exitCode: 1,
     });
@@ -294,19 +340,43 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
 }
 
-/** Wraps a `callHostRpc` promise so a `HostRpcError` (the only error the shared transport throws on a wire/host failure) becomes a `CliError` with a stable code and no leaked stack. This is the single boundary the agent commands route their RPC calls through, so every caller maps failures the same way and the runner never blankets them as `E_UNEXPECTED`. */
+/**
+ * Wraps a `callHostRpc` promise so a `HostRpcError` (the only error the
+ * shared transport throws on a wire/host failure) becomes a `CliError` with
+ * a stable code and no leaked stack. This is the single boundary the agent
+ * commands route their RPC calls through, so every caller maps failures the
+ * same way and the runner never blankets them as `E_UNEXPECTED`.
+ *
+ * Codes already raised as `CliError` inside `callHostRpc` itself (not signed
+ * in, host-not-running) pass through untouched.
+ */
 export async function toAgentCliError<T>(call: Promise<T>): Promise<T> {
   return call.catch((err: unknown) => {
     throw hostRpcToCliError(err);
   });
 }
 
-// Prefix of the message the shared transport throws when the client is the newer side and its request cannot be projected onto the host's older minor request schema (`prepareRequestPayload` in `ws-rpc-client.ts`).
-// This is a client-side failure raised during request preparation, before anything is sent to the host.
+// Prefix of the message the shared transport throws when the client is the
+// newer side and its request cannot be projected onto the host's older minor
+// request schema (`prepareRequestPayload` in `ws-rpc-client.ts`). This is a
+// client-side failure raised during request preparation, before anything is
+// sent to the host.
 const REQUEST_PROJECTION_FAILURE_PREFIX =
   "Failed to project request params onto";
 
-/** True when `err` is the transport's client-side request-projection failure - i.e. this CLI negotiated a newer canonical version for the method than the host speaks, and the request carries a value the host's older minor request schema cannot represent (e.g. a newer enum value that isn't strippable like an additive field). The transport raises this as a `RPC_ERROR` locally during request preparation, so it never reached the host. */
+/**
+ * True when `err` is the transport's client-side request-projection failure -
+ * i.e. this CLI negotiated a newer canonical version for the method than the
+ * host speaks, and the request carries a value the host's older minor request
+ * schema cannot represent (e.g. a newer enum value that isn't strippable like an
+ * additive field). The transport raises this as a `RPC_ERROR` locally during
+ * request preparation, so it never reached the host.
+ *
+ * Best-effort hook commands use this to degrade a version-skew miss to a quiet
+ * no-op instead of surfacing it: the call is meaningless against a host too old
+ * to understand it. Matched narrowly (the specific code + preparation message)
+ * so genuine host `RPC_ERROR`s and auth failures still surface.
+ */
 export function isRequestVersionProjectionError(err: unknown): boolean {
   return (
     err instanceof HostRpcError &&
@@ -315,7 +385,14 @@ export function isRequestVersionProjectionError(err: unknown): boolean {
   );
 }
 
-/** Validate user-supplied request input against its protocol schema, turning a schema failure into a clean `E_INVALID_ARGUMENT` instead of an uncaught `ZodError` (which the runner would blanket as `E_UNEXPECTED` with the raw stack trace leaked into the NDJSON envelope). Used by the agent commands for the request they build from flags (e.g. */
+/**
+ * Validate user-supplied request input against its protocol schema, turning a
+ * schema failure into a clean `E_INVALID_ARGUMENT` instead of an uncaught
+ * `ZodError` (which the runner would blanket as `E_UNEXPECTED` with the raw
+ * stack trace leaked into the NDJSON envelope). Used by the agent commands for
+ * the request they build from flags (e.g. `--harness`), so a bad value reports
+ * the allowed options rather than dumping a Zod parse tree.
+ */
 export function parseUserInput<T>(schema: ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
   if (parsed.success) return parsed.data;
@@ -338,7 +415,14 @@ export function parseUserInput<T>(schema: ZodType<T>, value: unknown): T {
   });
 }
 
-/** Validate a host RESPONSE against its protocol schema. A failure here means the host replied with a shape this CLI can't read - almost always a host/CLI version skew - so it surfaces as a clean `E_HOST_INCOMPATIBLE` with `details: null` instead of letting the raw `ZodError` (with its stack) leak into the NDJSON envelope as the runner's blanket `E_UNEXPECTED`. */
+/**
+ * Validate a host RESPONSE against its protocol schema. A failure here means
+ * the host replied with a shape this CLI can't read - almost always a
+ * host/CLI version skew - so it surfaces as a clean `E_HOST_INCOMPATIBLE`
+ * with `details: null` instead of letting the raw `ZodError` (with its stack)
+ * leak into the NDJSON envelope as the runner's blanket `E_UNEXPECTED`. Mirrors
+ * `parseUserInput` on the request side.
+ */
 export function parseHostResponse<T>(schema: ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
   if (parsed.success) return parsed.data;
@@ -358,7 +442,35 @@ export function parseHostResponse<T>(schema: ZodType<T>, value: unknown): T {
   });
 }
 
-/** Validate against the latest installed response schema, not the negotiated one. */
+/**
+ * Validate a host response against the CANONICAL (latest installed) response
+ * schema for `method`, resolved from the same `hostRpcRegistry` the transport
+ * negotiates against. Prefer this over {@link parseHostResponse} everywhere the
+ * payload is just "the response to the call we made".
+ *
+ * Why this exists rather than each call site naming a schema: the transport
+ * hands back a payload already at the client's canonical version - either the
+ * host spoke it directly (returned unvalidated, so this parse IS the validation
+ * boundary) or `upgradeResponseAlongChain` bridged an older host's reply up to
+ * it. A call site that names an older `...SchemaVNN` therefore validates the
+ * wrong contract AND, because Zod strips unknown keys, silently discards every
+ * field added since - turning a host fact the CLI was told into one it never
+ * saw. That skew is invisible to the type checker, because `parseHostResponse`
+ * takes `value: unknown` and returns whatever the schema it was handed infers.
+ *
+ * Naming the METHOD alongside the schema is what closes that hole. The schema
+ * parameter is typed as the method's canonical `ResponseOfMethod` - the same
+ * type `callHostRpc` already promises for the value being parsed - so handing
+ * it a stale `...SchemaVNN` is a compile error at the call site instead of a
+ * silent field drop at runtime. When a protocol minor lands, every CLI call
+ * site on that method stops compiling until someone decides what the new field
+ * means here, which is the loud, reviewable moment the old signature never had.
+ * `assertCanonicalResponseSchema` covers the residue the types cannot see.
+ *
+ * {@link parseHostResponse} stays for the callers that genuinely mean a
+ * specific historical version - the streaming frame bridge in `monitor.ts`
+ * decodes v1.0/v1.1/v1.2 envelopes on purpose.
+ */
 export function parseCanonicalHostResponse<
   Method extends keyof HostRpcRegistry & string,
 >(
@@ -370,14 +482,34 @@ export function parseCanonicalHostResponse<
   return parseHostResponse(schema, value);
 }
 
-/** The canonical (latest installed) response schema the registry declares for `method` - the contract the transport negotiates and therefore the only one a plain response parse may use. Exported so a test can assert the pairing for every method without re-deriving the traversal. */
+/**
+ * The canonical (latest installed) response schema the registry declares for
+ * `method` - the contract the transport negotiates and therefore the only one a
+ * plain response parse may use. Exported so a test can assert the pairing for
+ * every method without re-deriving the traversal.
+ */
 export function canonicalResponseSchemaFor(
   method: keyof HostRpcRegistry & string,
 ): ZodType<unknown> {
   return getLatestContract(hostRpcRegistry[method], undefined).responseSchema;
 }
 
-/** Backstop for the drift the signature alone cannot catch. The `ZodType<ResponseOfMethod<...>>` parameter rejects a stale schema whenever the versions differ by a REQUIRED field - which is what an additive protocol minor normally adds, since its upgrade path has to supply a value for older hosts. */
+/**
+ * Backstop for the drift the signature alone cannot catch. The
+ * `ZodType<ResponseOfMethod<...>>` parameter rejects a stale schema whenever the
+ * versions differ by a REQUIRED field - which is what an additive protocol minor
+ * normally adds, since its upgrade path has to supply a value for older hosts.
+ * It does not reject a schema that merely differs by an optional field, and it
+ * cannot see a base-name alias that tracks the latest line today but is free to
+ * stop doing so (`agentGetProviderProfileRateLimitsResponseSchema` is exactly
+ * that shape).
+ *
+ * So compare identity against the registry as well. This is an O(1) property
+ * walk against a call that just crossed a WebSocket, and it fails as a plain
+ * `Error`, not a `CliError`: reaching it means the CLI was built with a
+ * mismatched pairing, which is a bug in this repo rather than anything the user
+ * or the host did.
+ */
 function assertCanonicalResponseSchema(
   method: keyof HostRpcRegistry & string,
   schema: ZodType<unknown>,
@@ -400,7 +532,29 @@ function hostRpcToCliError(err: unknown): unknown {
   return mapHostRpcError(err);
 }
 
-/** Map a host wire error code to a stable CLI error code. Unknown codes stay unknown. */
+/**
+ * Maps a host wire error code to a stable CLI error code:
+ *   - authorization failure → `FORBIDDEN`: the host signals "no access" with a
+ *     `FORBIDDEN` wire code - a cloud 403 is mapped to `FORBIDDEN` in the host's
+ *     `cloudErrorFromResponse`, and a viewer/no-role caller hits
+ *     `EpicAccessForbiddenError`. `isAccessDenied` is a best-effort fallback for
+ *     an access denial that still arrives bucketed as `RPC_ERROR`. We do NOT pass
+ *     the host's raw text through here: it can embed an internal user UUID and
+ *     the internal term "task" (epic), neither actionable for a CLI user.
+ *   - `UNAUTHORIZED` → `AUTH_REJECTED`: bearer rejected even after the
+ *     auth-aware wrapper's refresh-and-retry.
+ *   - `E_HOST_UNSUPPORTED` → `HOST_UNSUPPORTED`: per-feature unsupported on
+ *     this host, actionable by updating the host.
+ *   - `INCOMPATIBLE` / `DOWNGRADE_UNSUPPORTED` → `HOST_INCOMPATIBLE`: host/CLI
+ *     protocol skew, actionable via `host restart` / updating the CLI.
+ *   - everything else, including `RPC_ERROR` → `UNEXPECTED`: `RPC_ERROR` is the
+ *     host's catch-all for any resolver error (e.g. "agent not found"), so it
+ *     must NOT be reported as "host not running" - the host answered. A
+ *     genuinely unreachable/dead host is already caught upstream in
+ *     `resolveEndpoint` (absent/dead pid → `HOST_NOT_RUNNING`). `details: null`
+ *     keeps the raw stack out of the NDJSON envelope; the host's own message
+ *     is preserved so the user still sees what went wrong.
+ */
 function mapHostRpcError(err: HostRpcError): CliError {
   if (err.code === "FORBIDDEN" || isAccessDenied(err)) {
     return cliError({
@@ -455,8 +609,22 @@ function mapHostRpcError(err: HostRpcError): CliError {
     });
   }
   if (err.code === "INCOMPATIBLE" || err.code === "DOWNGRADE_UNSUPPORTED") {
-    // Append the recovery hint derived from the rejecting frame's `upgradeGuidance` so the user is told which side is stale and how to recover, instead of the bare protocol-skew message.
-    // The vector-aware form (with the exact per-install-vector command) lives in `traycer host doctor`; this boundary has no install vector in scope.
+    // Append the recovery hint derived from the rejecting frame's
+    // `upgradeGuidance` so the user is told which side is stale and how to
+    // recover, instead of the bare protocol-skew message. The vector-aware
+    // form (with the exact per-install-vector command) lives in `traycer
+    // host doctor`; this boundary has no install vector in scope.
+    //
+    // Route through `effectiveUpgradeGuidance` so `DOWNGRADE_UNSUPPORTED`
+    // (client-newer, `fatalDetails: null`) maps to "update the host" - the
+    // SAME verdict `traycer host doctor` derives - instead of falling through
+    // null guidance to an ineffective "restart" hint.
+    //
+    // An EPOCH rejection wins over both: the host named the generation it
+    // needs and the build that provides it, which is strictly more than the
+    // two guidance booleans can express. `exitCode: 1` and no retry are
+    // unchanged and are the point - the same binary against the same host
+    // reaches the same verdict, so a reconnect is a loop.
     const epochHint = clientCompatibilityRecoveryHint(
       err.fatalDetails?.clientCompatibilityRequirement ?? null,
     );
@@ -479,8 +647,12 @@ function mapHostRpcError(err: HostRpcError): CliError {
   });
 }
 
-// Best-effort fallback: an `RPC_ERROR` whose message still indicates an access denial ("...does not have access to..." / "...does not have ... permission...").
-// The primary path is the host's `FORBIDDEN` wire code (cloud 403 and viewer/no-role both map there); this only catches an access denial that some other code path bucketed as a generic `RPC_ERROR`, routing it to `FORBIDDEN` rather than `UNEXPECTED`.
+// Best-effort fallback: an `RPC_ERROR` whose message still indicates an access
+// denial ("...does not have access to..." / "...does not have ... permission...").
+// The primary path is the host's `FORBIDDEN` wire code (cloud 403 and
+// viewer/no-role both map there); this only catches an access denial that some
+// other code path bucketed as a generic `RPC_ERROR`, routing it to `FORBIDDEN`
+// rather than `UNEXPECTED`.
 function isAccessDenied(err: HostRpcError): boolean {
   return (
     err.code === "RPC_ERROR" &&
@@ -494,7 +666,25 @@ function retryPolicyLabel(
   return policy === NO_RETRY_TRANSPORT_POLICY ? "fast-fail" : "default";
 }
 
-/** The attestation window a call gets is a function of what it could do with an attestation. A retrying call gets the production window: the CLI's 15s response deadline is half the host's 30s post-`openAck` deadline - and a stalled host fires that timer later still - so without the window every stalled host would surface an ambiguous, non-retryable timeout long before it could attest that it never dispatched the request, and the retry wrapper would never get its one safe reason to redial a non-idempotent method. */
+/**
+ * The attestation window a call gets is a function of what it could do with an
+ * attestation.
+ *
+ * A retrying call gets the production window: the CLI's 15s response deadline
+ * is half the host's 30s post-`openAck` deadline - and a stalled host fires that
+ * timer later still - so without the window every stalled host would surface an
+ * ambiguous, non-retryable timeout long before it could attest that it never
+ * dispatched the request, and the retry wrapper would never get its one safe
+ * reason to redial a non-idempotent method.
+ *
+ * A `maxRetries: 0` policy has no such reason to wait. Its retry wrapper goes
+ * straight to the final attempt and propagates even a valid
+ * `RetryableTransportError` without redialing, so holding the socket open for an
+ * attestation would only delay a failure that is already decided - exactly what
+ * `callHostRpcFastFail`'s latency-bound IDE-hook callers must not pay. Keyed off
+ * `maxRetries` rather than policy identity so any future no-retry policy
+ * inherits the same wiring.
+ */
 function attestationWindowForPolicy(policy: TransportRetryPolicy): number {
   return policy.maxRetries === 0 ? 0 : HOST_POST_OPEN_ATTESTATION_WINDOW_MS;
 }

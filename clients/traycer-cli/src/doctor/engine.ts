@@ -17,6 +17,7 @@ import {
   hostDevIdentityPoolRoot,
   hostIdentityNeedsReauthPath,
   hostNeedsReauthPath,
+  hostUpdateProgressMarkerLockPath,
 } from "../store/paths";
 import {
   pendingUpgradeFinalisable,
@@ -33,6 +34,7 @@ import {
 } from "../host/bootstrap-log";
 import { isFatalSignal } from "../host/crash-diagnostics";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   type HostLayer0Record,
   type HostPidMetadata,
@@ -58,6 +60,7 @@ import {
 import { readCliFeedCompatibilityEpoch } from "../registry/cli-versions";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { Environment } from "../runner/environment";
+import { probeUpdateMarkerLock } from "./update-marker-lock";
 import { CliError } from "../runner/errors";
 import {
   createServiceController,
@@ -73,7 +76,6 @@ import {
   createRealSystemdProbeRunner,
   probeLinuxSystemdHealth,
 } from "./systemd-health";
-import { isProcessAlive } from "../store/cli-lock";
 import {
   DOCTOR_ISSUE_CODES,
   type DoctorIssue,
@@ -85,13 +87,25 @@ import {
   type ResolvePortConflictDeps,
 } from "./port-conflict";
 
-// Doctor engine - collects structured DoctorIssue records covering installed host presence, install-record integrity, service registration, pid metadata freshness, port reachability, recent crash/bootstrap markers, and the registry implementation gap.
-// Design constraints from the Tech Plan: - Issue codes are stable; severities map to the failure-card UI. - Each issue carries a `fixAction` that Desktop maps back to a CLI subcommand - Desktop never invents repairs. - The same record set drives human-readable terminal output (`renderHumanDoctorReport`) and the NDJSON `result.data` payload.
+// Doctor engine - collects structured DoctorIssue records covering
+// installed host presence, install-record integrity, service
+// registration, pid metadata freshness, port reachability, recent
+// crash/bootstrap markers, and the registry implementation gap.
+//
+// Design constraints from the Tech Plan:
+//   - Issue codes are stable; severities map to the failure-card UI.
+//   - Each issue carries a `fixAction` that Desktop maps back to a CLI
+//     subcommand - Desktop never invents repairs.
+//   - The same record set drives human-readable terminal output
+//     (`renderHumanDoctorReport`) and the NDJSON `result.data` payload.
 
 export interface RunDoctorOptions {
   readonly environment: Environment;
-  // Dependency injection so tests can stub the conflicting-PID lookup without spawning `lsof` / `ss` / `netstat`.
-  // Production callers pass `null` and the engine falls back to the real shell-out runner from `port-conflict.ts`.
+  // Dependency injection so tests can stub the conflicting-PID lookup
+  // without spawning `lsof` / `ss` / `netstat`. Production callers
+  // pass `null` and the engine falls back to the real shell-out
+  // runner from `port-conflict.ts`. Required (no optional `?:`) per
+  // project style.
   readonly portConflictDeps: ResolvePortConflictDeps | null;
 }
 
@@ -188,22 +202,42 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         details: { label: label.id },
       });
     } else if (serviceStatus.state === "externally-managed") {
-      // Desktop's SMAppService owns this label.
-      // This is a healthy configuration, NOT a missing registration - and the old error card's suggested fix (`service install`) refuses SMAppService-owned labels by design, so surfacing it as an error routed users into a repair loop with no working fix.
+      // Desktop's SMAppService owns this label. This is a healthy
+      // configuration, NOT a missing registration - and the old error card's
+      // suggested fix (`service install`) refuses SMAppService-owned labels
+      // by design, so surfacing it as an error routed users into a repair
+      // loop with no working fix. Informational only.
       issues.push({
         code: DOCTOR_ISSUE_CODES.SERVICE_EXTERNALLY_MANAGED,
         severity: "info",
         title: "Service managed by Traycer Desktop",
         message: `The OS service for '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI manages the host's lifecycle cooperatively but not its registration. Use the Traycer app to repair or remove the host on this machine. If the app itself is the broken part, take registration over from the CLI with 'traycer host service install --takeover'.`,
-        // No `fixAction`: taking over Desktop's registration is an ownership change and must stay an explicit user act, not a button on an informational card - which is exactly what `--takeover` encodes.
-        // The command is still handed over, because a card that NAMES an escape hatch and gives you no way to copy it is the same dead end as one that names nothing.
+        // No `fixAction`: taking over Desktop's registration is an ownership
+        // change and must stay an explicit user act, not a button on an
+        // informational card - which is exactly what `--takeover` encodes.
+        // The command is still handed over, because a card that NAMES an
+        // escape hatch and gives you no way to copy it is the same dead end
+        // as one that names nothing.
         fixAction: null,
         terminalCommand: `traycer host service install --takeover`,
         details: { label: label.id },
       });
     } else if (serviceStatus.state === "stopped") {
-      // `host-start` is intentionally kept as the GUI `fixAction` label - Desktop's CLI bridge maps that key to `restartHost()` (see desktop/src/electron-main/host/host-lifecycle.ts), which is the idempotent, non-blocking service-recovery path.
-      // The `terminalCommand` (what the user copies from the Doctor card) MUST NOT be `traycer host start`, though: that subcommand is the long-running OS supervisor entrypoint launchd/systemd/Scheduled Task manifests invoke - running it from a shell would block the user's terminal until they hit Ctrl-C, and risks two supervisors racing for the same socket.
+      // `host-start` is intentionally kept as the GUI `fixAction`
+      // label - Desktop's CLI bridge maps that key to
+      // `restartHost()` (see
+      // desktop/src/electron-main/host/host-lifecycle.ts), which is
+      // the idempotent, non-blocking service-recovery path.
+      //
+      // The `terminalCommand` (what the user copies from the Doctor
+      // card) MUST NOT be `traycer host start`, though: that
+      // subcommand is the long-running OS supervisor entrypoint
+      // launchd/systemd/Scheduled Task manifests invoke - running it
+      // from a shell would block the user's terminal until they hit
+      // Ctrl-C, and risks two supervisors racing for the same socket.
+      // Route the copyable command to `host restart`, which goes
+      // through the service controller and returns immediately
+      // regardless of prior service state.
       stoppedServiceIssue = {
         code: DOCTOR_ISSUE_CODES.SERVICE_STOPPED,
         severity: "warning",
@@ -216,12 +250,29 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     }
   }
 
-  // ---- 3.
-  // Pid metadata freshness ---- These diagnostics used to drop their fixAction AND terminalCommand when Desktop owned the label, on the premise that "the CLI must not hand the user a fix for a job it doesn't control".
+  // ---- 3. Pid metadata freshness ----
+  // These diagnostics used to drop their fixAction AND terminalCommand when
+  // Desktop owned the label, on the premise that "the CLI must not hand the
+  // user a fix for a job it doesn't control". That premise no longer holds:
+  // `host restart` on a Desktop-managed machine asks the running host to
+  // stand down over its own lifecycle RPCs and then kickstarts the agent
+  // label - it controls the host's LIFECYCLE while mutating none of
+  // Desktop's REGISTRATION. Ownership routes which mechanism runs; it is not
+  // a reason to withhold the repair.
+  //
+  // Suppressing them turned every terminal card on a Desktop-managed
+  // machine ("stale pid", "endpoint unreachable", "port held", "RPC failed")
+  // into a description of a broken host with nothing to press and nothing to
+  // copy - the dead end this whole change exists to remove. The card now
+  // carries the repair that actually works there.
   const isExternallyManaged = serviceStatus?.state === "externally-managed";
   const pidMetadata = await readHostPidMetadata(opts.environment);
+  // Liveness AND identity: a crashed host's pid recycled onto an unrelated
+  // process is "alive" to a signal probe and would otherwise pass every
+  // pid-keyed check below as the host, including the port-conflict path's
+  // "that pid is the host, not a conflict" exclusion.
   const hostProcessAlive =
-    pidMetadata !== null && isProcessAlive(pidMetadata.pid);
+    pidMetadata !== null && !publishedHostProcessGone(pidMetadata);
   if (!hostProcessAlive && stoppedServiceIssue !== null) {
     issues.push(stoppedServiceIssue);
   }
@@ -243,7 +294,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       code: DOCTOR_ISSUE_CODES.PID_METADATA_STALE,
       severity: "warning",
       title: "Stale host pid metadata",
-      message: `pid.json references pid=${pidMetadata.pid} which is no longer alive.`,
+      message: `pid.json references pid=${pidMetadata.pid} which is no longer alive, or now belongs to an unrelated process.`,
       fixAction: "host-restart",
       terminalCommand: `traycer host restart`,
       details: { pid: pidMetadata.pid, version: pidMetadata.version },
@@ -275,14 +326,17 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
             )
           : null;
       if (conflict !== null && portInfo !== null) {
-        // True port conflict: a *different* process is listening on the host's port.
-        // Surface PID/name so the GUI's Free Port + Restart card can ask for confirmation by identity (Flow 4).
+        // True port conflict: a *different* process is listening on the
+        // host's port. Surface PID/name so the GUI's Free Port +
+        // Restart card can ask for confirmation by identity (Flow 4).
         issues.push({
           code: DOCTOR_ISSUE_CODES.PORT_CONFLICT,
           severity: "error",
           title: "Host port held by another process",
           message: `Port ${portInfo.port} (${pidMetadata.websocketUrl}) is held by ${conflict.processName} (pid=${conflict.pid}), not the host (pid=${pidMetadata.pid}).`,
-          // Safe under Desktop management too: freeing the port kills the FOREIGN holder, and the restart that follows goes through the same cooperative controller path.
+          // Safe under Desktop management too: freeing the port kills the
+          // FOREIGN holder, and the restart that follows goes through the
+          // same cooperative controller path.
           fixAction: "host-free-port-and-restart",
           terminalCommand: `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
           details: {
@@ -294,8 +348,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           },
         });
       } else {
-        // Endpoint unreachable but we couldn't identify a foreign holder.
-        // Route to restart/logs instead of Free Port + Restart - killing an unknown PID (or port=0) is the unsafe path the ticket explicitly forbids.
+        // Endpoint unreachable but we couldn't identify a foreign
+        // holder. Route to restart/logs instead of Free Port + Restart -
+        // killing an unknown PID (or port=0) is the unsafe path the
+        // ticket explicitly forbids.
         issues.push({
           code: DOCTOR_ISSUE_CODES.PORT_UNREACHABLE,
           severity: "error",
@@ -313,8 +369,14 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         });
       }
     } else {
-      // A bare TCP connect proves only that the port is open - not that a client can actually talk to the host (the renderer still has to complete the WS upgrade, present its bearer, and pass the protocol handshake).
-      // Probe that authenticated path so doctor reflects what the app experiences instead of staying green on a TCP accept.
+      // A bare TCP connect proves only that the port is open - not that a
+      // client can actually talk to the host (the renderer still has to
+      // complete the WS upgrade, present its bearer, and pass the protocol
+      // handshake). Probe that authenticated path so doctor reflects what
+      // the app experiences instead of staying green on a TCP accept. Pass the
+      // already-resolved endpoint so the RPC probe hits the exact same host
+      // URL the TCP probe just checked (no re-resolve that could race a
+      // restart).
       const rpcIssue = await probeHostRpc(
         {
           hostId: pidMetadata.hostId,
@@ -328,17 +390,60 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     }
   }
 
-  // ---- 4.
-  // Pending CLI upgrade ---- READ the marker the detached finalize helper may have written on a prior restart cycle; do not consume it.
+  // ---- 4. Pending CLI upgrade ----
+  // READ the marker the detached finalize helper may have written on a prior
+  // restart cycle; do not consume it.
+  //
+  // This used to call `reconcilePostFinalizeMarker`, which deletes the marker
+  // file and can rewrite the CLI install manifest to clear `pendingUpgrade`.
+  // The intent was benign - make doctor's report reflect the helper's outcome
+  // without waiting for another `host restart` - but it made a diagnostic
+  // command mutate CLI upgrade state as a side effect of being asked a
+  // question (audit finding CLI-007). Running `host doctor` twice gave two
+  // different answers, and anyone inspecting a broken machine destroyed the
+  // evidence by looking at it.
+  //
+  // Reporting the marker instead gets the same honesty with none of the
+  // mutation: doctor can still say "the swap already happened, only the
+  // bookkeeping is stale", and the fix it names - `traycer host restart` - is
+  // the lifecycle command that actually performs the reconcile
+  // (commands/host-restart.ts). Observation here, mutation there.
   const finalizeMarker = await readPostFinalizeMarker({
     environment: opts.environment,
   });
-  // Read here rather than at section 6 because the finalize marker's service-start report needs this history: "is the host up right now" cannot distinguish a start failure the host never recovered from, from one it recovered from before a later, unrelated stop.
+  // Read here rather than at section 6 because the finalize marker's
+  // service-start report needs this history: "is the host up right now" cannot
+  // distinguish a start failure the host never recovered from, from one it
+  // recovered from before a later, unrelated stop.
   const bootstrapMarkers = await readBootstrapMarkers(opts.environment, 20);
-  // An UNREADABLE marker is a fault in its own right, and independent of whether the manifest currently has a pending upgrade.
-  // `readPostFinalize- Marker` distinguishes `invalid` from `absent` precisely so it can be reported; consulting that only inside the pending-upgrade branch below would mean a corrupt marker on a manifest with nothing pending produces silence, and doctor calls the CLI-upgrade state clean while a file it could not parse sits on disk shaping the next `host restart`.
+  // An UNREADABLE marker is a fault in its own right, and independent of
+  // whether the manifest currently has a pending upgrade. `readPostFinalize-
+  // Marker` distinguishes `invalid` from `absent` precisely so it can be
+  // reported; consulting that only inside the pending-upgrade branch below
+  // would mean a corrupt marker on a manifest with nothing pending produces
+  // silence, and doctor calls the CLI-upgrade state clean while a file it
+  // could not parse sits on disk shaping the next `host restart`.
   if (finalizeMarker.status === "invalid") {
-    // W_OK on the parent is necessary but not sufficient to unlink the marker; describe repair rather than guarantee it.
+    // Whether `host restart` can actually clear this depends on a fact the
+    // marker's CONTENTS cannot tell us: reconciliation removes an unparseable
+    // marker with `safeUnlink`, which swallows its errors, so on a directory
+    // this user cannot write to the restart completes and the marker - and
+    // this warning - survive untouched, forever.
+    //
+    // `W_OK` on the parent is NECESSARY but not SUFFICIENT, and the copy below
+    // is written to match exactly that. A readable marker owned by another
+    // user inside a writable STICKY directory passes this check and still
+    // fails to unlink with EPERM, and Windows ACL delete rights can diverge
+    // from writability in their own ways. Establishing deletability for real
+    // would mean ownership plus sticky-bit inspection on POSIX and an ACL
+    // query on Windows - and a wrong prediction in EITHER direction is worse
+    // than not predicting: refusing to name the repair that would have worked,
+    // or promising one that cannot.
+    //
+    // So the negative result is still asserted (a non-writable directory
+    // definitely cannot be unlinked from, which is worth saying outright), and
+    // the positive one is described rather than guaranteed: try the restart,
+    // and here is what it means if the warning survives it.
     const markerDirWritable = await access(
       dirname(cliPostFinalizeMarkerPath(opts.environment)),
       fsConstants.W_OK,
@@ -361,8 +466,18 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           : "Its directory is not writable by this user, so 'traycer host restart' cannot delete it either - " +
             "its reconcile step would complete while leaving this warning in place. " +
             "Fix the ownership or permissions on that directory first."),
-      // `host restart` is the command that actually clears this.
-      // The previous `traycer cli upgrade` was inert against the reported condition - it never touches post-finalize.json, so an already-current CLI would leave the same marker in place and every later doctor run would repeat the identical warning.
+      // `host restart` is the command that actually clears this. The previous
+      // `traycer cli upgrade` was inert against the reported condition - it
+      // never touches post-finalize.json, so an already-current CLI would
+      // leave the same marker in place and every later doctor run would
+      // repeat the identical warning. Offering a command that cannot resolve
+      // what it is offered for is the CLI-006 defect wearing different
+      // clothes: the string parses, it just does not do the job.
+      //
+      // Scoped to the PARSE-failure subtype for precisely that reason - see
+      // the `unreadable` branch below, where the same promise would be false -
+      // and withheld again when the directory is not writable, where the
+      // deletion that makes it true cannot happen.
       fixAction: markerDirWritable ? "host-restart" : null,
       terminalCommand: markerDirWritable ? `traycer host restart` : null,
       details: {
@@ -372,8 +487,13 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       },
     });
   }
-  // The marker file exists and cannot be READ.
-  // Deliberately no fix action and no terminal command: `reconcilePostFinalizeMarker` reads the file the same way this probe just failed to, and returns without unlinking when that read throws - so `host restart` would leave the marker, the warning, and the user's impression that they had been given a repair exactly as they were.
+  // The marker file exists and cannot be READ. Deliberately no fix action and
+  // no terminal command: `reconcilePostFinalizeMarker` reads the file the same
+  // way this probe just failed to, and returns without unlinking when that
+  // read throws - so `host restart` would leave the marker, the warning, and
+  // the user's impression that they had been given a repair exactly as they
+  // were. Nothing on a command line fixes a permission; the message has to
+  // carry the actual remedy, which is what it does.
   if (finalizeMarker.status === "unreadable") {
     issues.push({
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_MARKER_UNREADABLE,
@@ -393,12 +513,43 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     });
   }
 
-  // `traycer cli upgrade` stages a new binary and records `pendingUpgrade` when the live binary is locked (Windows: the supervisor holds the .exe; cross-platform: read-only filesystem).
-  // Doctor surfaces the staged upgrade so the user knows a swap is queued, and offers `host restart` as the fix - restarting the service releases the binary lock and the next CLI invocation (or the finalize hook on `host restart`) completes the swap.
+  // `traycer cli upgrade` stages a new binary and records
+  // `pendingUpgrade` when the live binary is locked (Windows: the
+  // supervisor holds the .exe; cross-platform: read-only filesystem).
+  // Doctor surfaces the staged upgrade so the user knows a swap is
+  // queued, and offers `host restart` as the fix - restarting the
+  // service releases the binary lock and the next CLI invocation (or
+  // the finalize hook on `host restart`) completes the swap.
   const pendingUpgrade = await readPendingCliUpgrade({
     environment: opts.environment,
   });
-  // A swapped marker carrying a service-start failure still means the host is down; do not report a clean upgrade.
+  // A SWAPPED MARKER CARRYING A SERVICE-START FAILURE, on a manifest with
+  // nothing pending. This is not an exotic combination - it is the NORMAL
+  // on-disk state for that failure, which is why gating marker interpretation
+  // on `pendingUpgrade !== null` lost it entirely.
+  //
+  // The ordering in `commands/cli-finalize-upgrade.ts` is: run the swap
+  // (`finalizePendingCliUpgrade`, which CLEARS `pendingUpgrade` on success),
+  // then try to start the service, then write the marker recording whether
+  // that start failed. So by the time a `serviceStartError` exists to report,
+  // the pending record it would have been attached to is already gone.
+  //
+  // Other probes will notice the host is not running, but none of them can
+  // say WHY - and the helper's own error is the only artifact that explains
+  // it.
+  //
+  // The gate is DUPLICATION, not pending state. An earlier version skipped
+  // this whenever any pending upgrade existed, which lost the error in a
+  // second, entirely reachable arrangement: an old `swapped` marker carrying
+  // a `serviceStartError` survives, a later `cli upgrade` records a NEW
+  // pending upgrade, and `postFinalizeMarkerIssue` then correctly rejects
+  // that marker as stale - so nothing reported the failure at all, while the
+  // host stayed down for exactly the reason the marker names.
+  //
+  // The only case that must not double-report is a marker the pending card
+  // already covers, since that card appends the same `serviceStartError` to
+  // its own message. That is precisely `markerDescribesUpgrade`, so it is
+  // asked here rather than approximated by "is anything pending".
   const matchingPendingMarker =
     pendingUpgrade !== null &&
     finalizeMarker.status === "present" &&
@@ -420,8 +571,11 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     finalizeMarker.marker.serviceStartError !== null
   ) {
     const markerSwapCompleted = finalizeMarker.marker.status === "swapped";
-    // Empty paths are the explicit identity-less marker written when the detached helper discovers that no pending manifest remains.
-    // Every attempted swap carries both paths, even if its manifest is later cleared or replaced, so preserve that failed-swap history instead of describing all uncovered markers as empty finalization.
+    // Empty paths are the explicit identity-less marker written when the
+    // detached helper discovers that no pending manifest remains. Every
+    // attempted swap carries both paths, even if its manifest is later
+    // cleared or replaced, so preserve that failed-swap history instead of
+    // describing all uncovered markers as empty finalization.
     const markerAttemptedSwap =
       finalizeMarker.marker.livePath !== "" ||
       finalizeMarker.marker.stagedBinaryPath !== "";
@@ -431,7 +585,39 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         ? `The CLI swap from ${finalizeMarker.marker.stagedBinaryPath} to ${finalizeMarker.marker.livePath} failed: ` +
           `${finalizeMarker.marker.errorMessage ?? "no error message recorded"}. `
         : "No pending CLI upgrade remained for the helper to apply. ";
-    // The marker is history, not a live reading. Correlate it with this pending upgrade before believing it.
+    // THE MARKER IS HISTORY, NOT A LIVE READING. It records what happened at
+    // `attemptedAt` and then persists until some later `host restart`
+    // reconciles it - so on a machine whose supervisor already recovered the
+    // host, an unconditional warning would assert "the host is down" while
+    // this same doctor run has positive evidence that it is up. That is the
+    // failure mode this PR exists to remove, and reporting it about a stale
+    // file rather than a command's return value does not make it better.
+    //
+    // Both states are worth saying, so the severity carries the difference
+    // instead of suppressing one: a host that is still down gets an
+    // actionable warning, and a host that recovered gets an info-level note
+    // explaining the outage it just had. Info keeps `host doctor`'s exit code
+    // (error/fatal only) unaffected for a machine that is now healthy.
+    //
+    // TWO SEPARATE FACTS, deliberately not merged into one boolean.
+    //
+    // An earlier revision folded "a `starting` marker exists after
+    // `attemptedAt`" into the liveness flag, and got both halves wrong at
+    // once. `starting` is written by `host-start.ts` BEFORE it opens the log
+    // fd and spawns the child, so the same attempt can go on to emit
+    // `failed-to-spawn` or `crashed` - it is evidence that another attempt
+    // BEGAN, never that one succeeded. Treating it as recovery downgraded a
+    // host that has never come up to informational and took away its fix. And
+    // because the merged flag also drove the copy, the card said "The host is
+    // running now" and reported `hostRunningNow: true` while the service probe
+    // and pid probe both said it was down - contradicting the outage the rest
+    // of the same report was describing.
+    //
+    // So liveness decides severity, because "the host is down" is the
+    // actionable part and it is the one thing here that is directly observed.
+    // History only qualifies the wording: if a start has been attempted since
+    // this failure, the current outage may well have a different cause, and
+    // saying so is useful without pretending to know that it does.
     const markerAt = Date.parse(finalizeMarker.marker.attemptedAt);
     const startAttemptedSince = bootstrapMarkers.some((entry) => {
       if (entry.phase !== "starting") return false;
@@ -473,15 +659,19 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         livePath: finalizeMarker.marker.livePath,
         stagedBinaryPath: finalizeMarker.marker.stagedBinaryPath,
         errorMessage: finalizeMarker.marker.errorMessage,
-        // Directly observed, and named for exactly what it is.
-        // Kept apart from the history flag below so nothing downstream can read one as the other, which is how the contradiction above happened.
+        // Directly observed, and named for exactly what it is. Kept apart from
+        // the history flag below so nothing downstream can read one as the
+        // other, which is how the contradiction above happened.
         hostRunningNow,
         startAttemptedSinceFailure: startAttemptedSince,
       },
     });
   }
   if (pendingUpgrade !== null) {
-    // A marker that already settled the swap outranks everything below it: the manifest still says "pending", but the disk says otherwise, and reporting the manifest alone would send the reader to re-stage an upgrade that has already happened.
+    // A marker that already settled the swap outranks everything below it:
+    // the manifest still says "pending", but the disk says otherwise, and
+    // reporting the manifest alone would send the reader to re-stage an
+    // upgrade that has already happened.
     const stagedExists = await pendingUpgradeFinalisable({
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
     });
@@ -499,8 +689,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     if (settled !== null) {
       issues.push(settled);
     } else if (!stagedExists) {
-      // The staged binary has been deleted out from under the manifest (cleanup, AV, ...).
-      // There is no machine-driven recovery - surface the terminal command so the user can re-run upgrade explicitly, but don't offer a Doctor auto-fix button (the Desktop bridge doesn't proxy `cli upgrade` through the host management IPC surface).
+      // The staged binary has been deleted out from under the manifest
+      // (cleanup, AV, ...). There is no machine-driven recovery -
+      // surface the terminal command so the user can re-run upgrade
+      // explicitly, but don't offer a Doctor auto-fix button (the
+      // Desktop bridge doesn't proxy `cli upgrade` through the host
+      // management IPC surface).
       issues.push({
         code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_PENDING,
         severity: "warning",
@@ -552,8 +746,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     }
   }
 
-  // ---- 4a. macOS launchd job wedge ---- Registration presence is not health: launchd can hold the label loaded while the job is unable to run, and every ownership-keyed check reads that as "healthy".
-  // Read the job's run state directly.
+  // ---- 4a. macOS launchd job wedge ----
+  // Registration presence is not health: launchd can hold the label loaded
+  // while the job is unable to run, and every ownership-keyed check reads
+  // that as "healthy". Read the job's run state directly.
   if (process.platform === "darwin") {
     const wedgeIssue = await probeMacosWedgedJob({
       labelId: label.id,
@@ -564,8 +760,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     if (wedgeIssue !== null) issues.push(wedgeIssue);
   }
 
-  // ---- 4a-linux. systemd user-manager health ---- The Linux counterpart of the launchd wedge probe.
-  // Reads the manager's actual run state: no reachable user bus (WSL without systemd, sudo su), a failed / restart-looping unit ("stopped" everywhere else, since liveness deliberately keys off pid metadata), a start skipped because the CLI binary is gone, and disabled lingering.
+  // ---- 4a-linux. systemd user-manager health ----
+  // The Linux counterpart of the launchd wedge probe. Reads the manager's
+  // actual run state: no reachable user bus (WSL without systemd, sudo su),
+  // a failed / restart-looping unit ("stopped" everywhere else, since
+  // liveness deliberately keys off pid metadata), a start skipped because
+  // the CLI binary is gone, and disabled lingering.
   if (process.platform === "linux") {
     const systemdIssues = await probeLinuxSystemdHealth({
       labelId: label.id,
@@ -576,35 +776,66 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     issues.push(...systemdIssues);
   }
 
-  // ---- 4b.
-  // CLI slot binary health ---- The manifest's binaryPath may be a symlink into the Desktop app bundle; a bundle remove/replace leaves it dangling, and the only repair is the app's own cli-reconcile at its next successful launch.
+  // ---- 4b. CLI slot binary health ----
+  // The manifest's binaryPath may be a symlink into the Desktop app
+  // bundle; a bundle remove/replace leaves it dangling, and the only
+  // repair is the app's own cli-reconcile at its next successful launch.
   const cliSlotIssue = await probeDanglingCliSlotBinary(opts.environment);
   if (cliSlotIssue !== null) issues.push(cliSlotIssue);
 
-  // ---- 4c.
-  // Host delegated-credential health ---- Local, cheap, and the only surface that reports this at all: the host reports `needs-reauth` to CLIENTS on every stream open, but a user whose client cannot get far enough to see that has nothing else to look at.
+  // ---- 4c. Host delegated-credential health ----
+  // Local, cheap, and the only surface that reports this at all: the host
+  // reports `needs-reauth` to CLIENTS on every stream open, but a user whose
+  // client cannot get far enough to see that has nothing else to look at.
   const credentialIssue = await probeHostCredentialNeedsReauth(
     opts.environment,
   );
   if (credentialIssue !== null) issues.push(credentialIssue);
 
-  // ---- 4d.
-  // Host identity-plane health ---- The OTHER needs-reauth marker.
+  // ---- 4d. Host identity-plane health ----
+  // The OTHER needs-reauth marker. Same filename, different directory,
+  // different plane, and a recovery that is the opposite of 4c's - so it gets
+  // its own probe and its own codes rather than a branch inside that one.
+  //
+  // Unlike 4c this probe can never say "clean", because the location it reads
+  // is only the DEFAULT identity home and the host may have acquired another.
+  // `hostProcessAlive` is passed so the deferral names something the reader
+  // can act on: a running host answers this authoritatively.
   const identityIssue = await probeHostIdentityNeedsReauth(
     opts.environment,
     hostProcessAlive,
   );
   if (identityIssue !== null) issues.push(identityIssue);
 
-  // ---- 5.
-  // Windows credentials ACL ---- Windows ignores POSIX mode bits on the credentials file.
+  // ---- 4e. Host update progress-marker lock ----
+  // `host update` takes a short lock beside its progress marker for every
+  // conditional write and answers `failed` for a write it could not make
+  // after a bounded wait. A holder that stays - a hung updater, or a lock
+  // whose holder cannot be verified and so is never broken - fails the
+  // marker step of every later update with nothing on disk that says why
+  // but the lock file itself. Read-only: doctor never breaks it.
+  const markerLockIssue = await probeUpdateMarkerLock({
+    lockPath: hostUpdateProgressMarkerLockPath(opts.environment),
+    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  if (markerLockIssue !== null) issues.push(markerLockIssue);
+
+  // ---- 5. Windows credentials ACL ----
+  // Windows ignores POSIX mode bits on the credentials file. On a
+  // shared / VDI host, other users may have read access via default
+  // Windows ACL inheritance. Probe `icacls` and warn if any
+  // non-owner principal has read permission.
   if (process.platform === "win32") {
     const aclIssue = await probeWindowsCredentialsAcl(opts.environment);
     if (aclIssue !== null) issues.push(aclIssue);
   }
 
-  // ---- 5b.
-  // Windows Script Host policy ---- The scheduled task launches the host through wscript.exe.
+  // ---- 5b. Windows Script Host policy ----
+  // The scheduled task launches the host through wscript.exe. With the WSH
+  // Enabled=0 policy set (common enterprise hardening), the launcher never
+  // executes and nothing surfaces - probed live: `//B` suppresses even the
+  // block dialog, so the host silently never starts at login. Install-time
+  // verification can't see a policy applied later; this can.
   if (
     process.platform === "win32" &&
     serviceStatus !== null &&
@@ -614,8 +845,9 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     if (wshIssue !== null) issues.push(wshIssue);
   }
 
-  // ---- 6.
-  // Recent bootstrap markers ---- Already read above (the finalize marker's service-start report needs the same history to tell a live failure from one the host recovered from).
+  // ---- 6. Recent bootstrap markers ----
+  // Already read above (the finalize marker's service-start report needs the
+  // same history to tell a live failure from one the host recovered from).
   const recentMarkers = bootstrapMarkers;
   const recentCrash = lastCrashMarker(recentMarkers);
   if (recentCrash !== null) {
@@ -649,8 +881,26 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   return { issues };
 }
 
-/** Surfaces a running host that does NOT hold the Layer 0 single-writer guarantee. This is the only place a support engineer can learn the fact without log archaeology. */
-/** A Layer 0 record that does NOT carry the guarantee - degraded, or a shape this CLI cannot read. Named rather than inlined so the two-home loop below narrows once instead of at every use. */
+/**
+ * Surfaces a running host that does NOT hold the Layer 0 single-writer
+ * guarantee.
+ *
+ * This is the only place a support engineer can learn the fact without log
+ * archaeology. The host records it in pid.json precisely because its other
+ * channels do not survive: the framed status pipe has no reader on an ordinary
+ * production start, and the `[host] layer0-degraded` stderr line is one line
+ * at the very top of a log whose diagnostic tail is 200 lines and whose
+ * support attachment is 500.
+ *
+ * `null` for an acquired host, and for a pid.json that predates the field -
+ * absence is "not recorded", and inventing a warning for every host older than
+ * this CLI would drown the real signal.
+ */
+/**
+ * A Layer 0 record that does NOT carry the guarantee - degraded, or a shape
+ * this CLI cannot read. Named rather than inlined so the two-home loop below
+ * narrows once instead of at every use.
+ */
 type UnguaranteedLayer0Record = Exclude<
   HostLayer0Record,
   { readonly status: "acquired" }
@@ -659,11 +909,15 @@ type UnguaranteedLayer0Record = Exclude<
 function layer0GuaranteeIssue(
   pidMetadata: HostPidMetadata,
 ): DoctorIssue | null {
-  // `?? null` rather than a bare null check: a pid.json older than this field decodes without the key at all, and so does any in-process fixture that predates it.
-  // Both mean "not recorded".
+  // `?? null` rather than a bare null check: a pid.json older than this field
+  // decodes without the key at all, and so does any in-process fixture that
+  // predates it. Both mean "not recorded".
   const record = pidMetadata.layer0 ?? null;
-  // ...and the SLOT home's own verdict, on a dev pool host that took two locks (chat-sync-v2 ticket 38).
-  // EITHER home failing costs the guarantee, so this arm must fire on the slot record even when the identity record is a clean `acquired` - that combination is precisely the half-truth the field was added to end.
+  // ...and the SLOT home's own verdict, on a dev pool host that took two locks
+  // (chat-sync-v2 ticket 38). EITHER home failing costs the guarantee, so this
+  // arm must fire on the slot record even when the identity record is a clean
+  // `acquired` - that combination is precisely the half-truth the field was
+  // added to end. `null` on every ordinary host and every older pid.json.
   const slotRecord = pidMetadata.layer0Slot ?? null;
   const degraded: { home: string; record: UnguaranteedLayer0Record }[] = [];
   for (const entry of [
@@ -693,21 +947,29 @@ function layer0GuaranteeIssue(
       "this is a deliberate degradation, not a failure - but a second host " +
       "started against the same data directory would not be refused, so " +
       "quote this in any report of duplicated or corrupted host state.",
-    // No CLI fix exists: the remedy depends on the cause (a reinstall for a missing native addon, relocating the data directory off a network filesystem for fs-unsupported).
-    // Offering `host restart` would just reproduce the same degradation.
+    // No CLI fix exists: the remedy depends on the cause (a reinstall for a
+    // missing native addon, relocating the data directory off a network
+    // filesystem for fs-unsupported). Offering `host restart` would just
+    // reproduce the same degradation.
     fixAction: null,
     terminalCommand: null,
     details: {
       pid: pidMetadata.pid,
       hostId: pidMetadata.hostId,
       layer0: record,
-      // Reported alongside rather than folded into `layer0`: an investigator reading this needs to know WHICH home lost the lock, and a merged value would answer a question nobody asked.
+      // Reported alongside rather than folded into `layer0`: an investigator
+      // reading this needs to know WHICH home lost the lock, and a merged
+      // value would answer a question nobody asked.
       layer0Slot: slotRecord,
     },
   };
 }
 
-/** The manifest fields the post-finalize reporting needs. Named rather than threading `readPendingCliUpgrade`'s whole anonymous return shape through, so this stays a pure projection of four strings. */
+/**
+ * The manifest fields the post-finalize reporting needs. Named rather than
+ * threading `readPendingCliUpgrade`'s whole anonymous return shape through,
+ * so this stays a pure projection of four strings.
+ */
 interface PendingUpgradeFacts {
   readonly version: string;
   readonly stagedBinaryPath: string;
@@ -716,7 +978,20 @@ interface PendingUpgradeFacts {
   readonly stagedAt: string;
 }
 
-/** Turns a post-finalize marker into the issue that DESCRIBES it, for the two marker states that contradict the manifest's `pendingUpgrade` record. `null` means "this marker does not override the manifest" - absent (the helper never ran or is still running), invalid, or `parent-still-alive` (the helper gave up waiting, so the upgrade really is still pending and the ordinary pending card is the honest report). */
+/**
+ * Turns a post-finalize marker into the issue that DESCRIBES it, for the two
+ * marker states that contradict the manifest's `pendingUpgrade` record.
+ *
+ * `null` means "this marker does not override the manifest" - absent (the
+ * helper never ran or is still running), invalid, or `parent-still-alive`
+ * (the helper gave up waiting, so the upgrade really is still pending and the
+ * ordinary pending card is the honest report). Those fall through to the
+ * caller's existing branches, which carry the marker status in `details`.
+ *
+ * Doctor no longer consumes the marker (CLI-007), so both issues below name
+ * `traycer host restart` - the lifecycle command that performs the reconcile
+ * this report is describing the absence of.
+ */
 function postFinalizeMarkerIssue(
   read: PostFinalizeMarkerRead,
   pending: PendingUpgradeFacts,
@@ -724,7 +999,33 @@ function postFinalizeMarkerIssue(
 ): DoctorIssue | null {
   if (read.status !== "present") return null;
   const marker = read.marker;
-  // Correlate the marker with this pending upgrade before believing it. A foreign marker is discarded.
+  // CORRELATE THE MARKER WITH THIS PENDING UPGRADE BEFORE BELIEVING IT.
+  //
+  // The marker carries no version - only the two paths it operated on - so
+  // "a marker exists" is not evidence about "the upgrade the manifest is
+  // currently pending". The helper writes the marker and `host restart`
+  // consumes it, but nothing guarantees that consumption happened: a helper
+  // that swapped 1.2.0 can leave its marker behind, and a later
+  // `traycer cli upgrade` will overwrite `pendingUpgrade` with 1.3.0 without
+  // clearing it. Doctor would then read the 1.2.0 marker as proof that 1.3.0
+  // is "already applied" and tell the user their upgrade was done - the
+  // opposite of true, and unfalsifiable from the card.
+  //
+  // `stagedBinaryPath` is a strong discriminator because `cli upgrade` stamps
+  // the target version into the filename it stages to
+  // (`traycer-<version>-<platform>`), so a mismatch here is precisely the
+  // stale-marker case. A mismatched marker is treated as not describing this
+  // upgrade at all: the caller falls through to the ordinary pending report,
+  // which carries the marker's status in `details` for anyone investigating.
+  // Both paths, for the reason spelled out in `reconcilePostFinalizeMarker`:
+  // the staged filename carries the version and defeats a stale-VERSION
+  // marker, but `cli re-anchor` can repoint the live binary without deleting
+  // the marker, so a same-version retry would match on staged path alone.
+  // Identity is decided by the SHARED `markerDescribesUpgrade` predicate, not
+  // re-implemented here. These two call sites disagreeing is not hypothetical:
+  // it happened in this PR's history, and produced doctor announcing an
+  // upgrade as already applied while `host restart` correctly discarded the
+  // same marker as stale. One predicate, one answer.
   if (
     !markerDescribesUpgrade(marker, {
       stagedBinaryPath: pending.stagedBinaryPath,
@@ -734,12 +1035,23 @@ function postFinalizeMarkerIssue(
   ) {
     return null;
   }
-  // A `swap-failed` marker whose staged bytes have since been deleted is NOT the story to tell.
-  // `host restart` - the fix this branch offers - would consume the marker, find nothing to finalize, and leave the upgrade pending exactly as it was.
+  // A `swap-failed` marker whose staged bytes have since been deleted is NOT
+  // the story to tell. `host restart` - the fix this branch offers - would
+  // consume the marker, find nothing to finalize, and leave the upgrade
+  // pending exactly as it was. The caller's `!stagedExists` branch has the
+  // guidance that actually recovers it ("re-run 'traycer cli upgrade' to
+  // re-stage"), so defer to it.
+  //
+  // Deliberately not applied to `swapped`: there, the staged binary is
+  // MEANT to be gone, because the helper moved it onto the live path. Absence
+  // is the expected end state of a success, so treating it as a fault would
+  // report every completed swap as a missing-stage failure.
   if (marker.status === "swap-failed" && !stagedExists) return null;
   if (marker.status === "swapped") {
-    // The bytes are already swapped; only the manifest is behind.
-    // INFO, not warning: nothing is broken and nothing is at risk, so this must not flip `host doctor`'s exit code (which keys off error/fatal) for a machine that is, in every way that matters, already upgraded.
+    // The bytes are already swapped; only the manifest is behind. INFO, not
+    // warning: nothing is broken and nothing is at risk, so this must not
+    // flip `host doctor`'s exit code (which keys off error/fatal) for a
+    // machine that is, in every way that matters, already upgraded.
     return {
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_FINALIZED_UNRECONCILED,
       severity: "info",
@@ -770,8 +1082,11 @@ function postFinalizeMarkerIssue(
     };
   }
   if (marker.status === "swap-failed") {
-    // Distinct from the ordinary pending card, which says "the live binary is locked, restart to finalise".
-    // That advice is wrong here: a helper already ran with the lock released and the swap itself failed, so repeating the restart is not obviously the cure and the operator needs the helper's error to decide.
+    // Distinct from the ordinary pending card, which says "the live binary is
+    // locked, restart to finalise". That advice is wrong here: a helper
+    // already ran with the lock released and the swap itself failed, so
+    // repeating the restart is not obviously the cure and the operator needs
+    // the helper's error to decide.
     return {
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_FINALIZE_FAILED,
       severity: "warning",
@@ -804,7 +1119,11 @@ function postFinalizeMarkerIssue(
   return null;
 }
 
-/** Compact, always-safe projection of the marker read for an issue's `details`. Support bundles want to know which of the five states doctor saw even when the marker did not change the verdict. */
+/**
+ * Compact, always-safe projection of the marker read for an issue's
+ * `details`. Support bundles want to know which of the five states doctor
+ * saw even when the marker did not change the verdict.
+ */
 function finalizeMarkerDetail(read: PostFinalizeMarkerRead): string {
   if (read.status === "absent") return "absent";
   if (read.status === "invalid") return `invalid: ${read.errorMessage}`;
@@ -822,14 +1141,18 @@ function lastCrashMarker(
     if (
       entry.phase === "crashed" ||
       entry.phase === "failed-to-spawn" ||
-      // A fatal signal (SIGABRT et al.) is a crash wearing the killed phase: Node fatal aborts on POSIX surface as signal deaths, and skipping them here would hide exactly the evidence the enrichment attaches.
+      // A fatal signal (SIGABRT et al.) is a crash wearing the killed phase:
+      // Node fatal aborts on POSIX surface as signal deaths, and skipping
+      // them here would hide exactly the evidence the enrichment attaches.
       (entry.phase === "killed" && isFatalSignal(entry.fields.signal))
     ) {
       return { entry, recovered };
     }
     if (entry.phase === "starting") {
-      // A more recent start used to CANCEL the crash signal entirely - which erased the evidence in exactly the auto-respawn-recovered case where the crash is the only thing worth diagnosing.
-      // It now only downgrades the finding to "recovered".
+      // A more recent start used to CANCEL the crash signal entirely - which
+      // erased the evidence in exactly the auto-respawn-recovered case where
+      // the crash is the only thing worth diagnosing. It now only downgrades
+      // the finding to "recovered".
       recovered = true;
     }
   }
@@ -850,9 +1173,16 @@ function formatMarkerMessage(entry: BootstrapLogEntry): string {
   return parts.join(" ");
 }
 
-// Probe `icacls <credentialsPath>` and return a Doctor issue if any principal other than the file owner / well-known system principals has read access.
-// Returns null when the file is owner-only or when the probe itself fails (icacls missing, transient error).
-/** Reads the Windows Script Host Enabled policy from both hives. `0` in either disables wscript.exe for this user, which kills the host's scheduled-task launch chain silently. */
+// Probe `icacls <credentialsPath>` and return a Doctor issue if any
+// principal other than the file owner / well-known system principals
+// has read access. Returns null when the file is owner-only or when
+// the probe itself fails (icacls missing, transient error).
+/**
+ * Reads the Windows Script Host Enabled policy from both hives. `0` in
+ * either disables wscript.exe for this user, which kills the host's
+ * scheduled-task launch chain silently. HKCU wins over HKLM only in the
+ * sense that EITHER being 0 blocks; a missing value means enabled.
+ */
 function probeWindowsScriptHostPolicy(): DoctorIssue | null {
   const disabledIn: string[] = [];
   for (const hive of ["HKLM", "HKCU"]) {
@@ -909,7 +1239,12 @@ async function probeWindowsCredentialsAcl(
   } catch {
     return null;
   }
-  // icacls prints lines like: C:\Users\me\.traycer\cli\credentials NT AUTHORITY\SYSTEM:(F) BUILTIN\Administrators:(F) DOMAIN\me:(F) We accept owner-only + the conventional SYSTEM / Administrators anchors and flag anything else with read (R) or full (F) access.
+  // icacls prints lines like:
+  //   C:\Users\me\.traycer\cli\credentials NT AUTHORITY\SYSTEM:(F)
+  //                                         BUILTIN\Administrators:(F)
+  //                                         DOMAIN\me:(F)
+  // We accept owner-only + the conventional SYSTEM / Administrators
+  // anchors and flag anything else with read (R) or full (F) access.
   const acceptedPrincipals = [
     /\\SYSTEM(?::|\s|$)/i,
     /\\Administrators(?::|\s|$)/i,
@@ -980,8 +1315,12 @@ function probeWebsocketUrl(url: string): Promise<boolean> {
   });
 }
 
-// Exercise the *real* authenticated RPC path (the cheap, no-arg `host.status`) so doctor catches the WS-handshake / auth / protocol failures a TCP probe is blind to - the layer where "Desktop can't connect" actually lives.
-// Returns null when the round-trip succeeds.
+// Exercise the *real* authenticated RPC path (the cheap, no-arg
+// `host.status`) so doctor catches the WS-handshake / auth / protocol
+// failures a TCP probe is blind to - the layer where "Desktop can't
+// connect" actually lives. Returns null when the round-trip succeeds.
+// Never throws: a probe failure becomes a DoctorIssue, never a doctor
+// crash.
 async function probeHostRpc(
   endpoint: HostTransportEndpoint,
   environment: Environment,
@@ -1048,8 +1387,19 @@ async function probeHostRpc(
   }
 }
 
-// Route a handshake `INCOMPATIBLE` (or cross-major `DOWNGRADE_UNSUPPORTED`) to the vector-aware recovery (C2).
-// The frame's `upgradeGuidance` tells us which side is stale; the install vector (from the CLI manifest) tells us how to update this client.
+// Route a handshake `INCOMPATIBLE` (or cross-major `DOWNGRADE_UNSUPPORTED`) to
+// the vector-aware recovery (C2). The frame's `upgradeGuidance` tells us which
+// side is stale; the install vector (from the CLI manifest) tells us how to
+// update this client. The action is driven off the resolver's
+// `reinstallHost` flag (NOT re-derived here): whenever the host is stale -
+// host-only OR mutual - the fix is the renderer's existing
+// `host-install-latest` (reinstall the latest host, `traycer host
+// update`), and any client-side staleness rides along as copy in the summary
+// (no auto-fix button - the CLI must not self-replace a package-manager-owned
+// binary). A client-only verdict offers no button; a no-stale-side verdict
+// falls back to a host restart. This matters under the softened production
+// trigger: an ordinary launch no longer auto-updates, so a genuinely-stale
+// host must be routed to an UPDATE, not an ineffective restart loop.
 async function incompatibleRpcIssue(
   websocketUrl: string | null,
   err: HostRpcError,
@@ -1062,8 +1412,16 @@ async function incompatibleRpcIssue(
     source,
   );
 
-  // AN EPOCH REJECTION WINS over the guidance-derived summary, and resolves the remedy through the install vector's own mechanism.
-  // `routing.plan.summary` answers "which side is stale" from two booleans; the host has already answered that and gone further - it named the generation it needs - so restating the vaguer answer beside it would be printing the worse of two.
+  // AN EPOCH REJECTION WINS over the guidance-derived summary, and resolves the
+  // remedy through the install vector's own mechanism. `routing.plan.summary`
+  // answers "which side is stale" from two booleans; the host has already
+  // answered that and gone further - it named the generation it needs - so
+  // restating the vaguer answer beside it would be printing the worse of two.
+  //
+  // The `manual` vector is the only one that reaches the network here (see
+  // `clientCompatibilityRecoveryHintForVector`), and it cannot throw: an
+  // unreachable feed degrades the advice rather than replacing a compatibility
+  // rejection with a registry error.
   const epochHint = await clientCompatibilityRecoveryHintForVector({
     requirement: err.fatalDetails?.clientCompatibilityRequirement ?? null,
     source,
@@ -1096,8 +1454,25 @@ export interface IncompatibleRecoveryRouting {
   readonly plan: CompatRecoveryPlan;
 }
 
-// Pure routing for a handshake `INCOMPATIBLE` / cross-major `DOWNGRADE_UNSUPPORTED` verdict.
-// Exported so the action mapping is unit- testable without standing up the WS/filesystem probes.
+// Pure routing for a handshake `INCOMPATIBLE` / cross-major
+// `DOWNGRADE_UNSUPPORTED` verdict. Exported so the action mapping is unit-
+// testable without standing up the WS/filesystem probes.
+//
+// The action is driven off the resolver's `reinstallHost` flag (NOT
+// re-derived per-case): whenever the host is stale - host-only OR mutual -
+// the fix is the renderer's existing `host-install-latest` (`traycer host
+// update`), and any client-side staleness rides along as copy in the summary
+// (no auto-fix button - the CLI must not self-replace a package-manager-owned
+// binary). A client-only verdict offers no button; a no-stale-side verdict
+// falls back to a host restart.
+//
+// `DOWNGRADE_UNSUPPORTED` is thrown by the client transport with
+// `fatalDetails: null` when this client is NEWER than the host and no
+// downgrade bridge exists for the called method (ws-rpc-client.ts) -
+// client-newer ⇒ the host is the stale side ⇒ it must UPDATE, not restart.
+// We synthesize a host-should-upgrade verdict for it instead of letting the
+// null guidance fall through to a restart that, under the softened production
+// trigger (ordinary launches no longer auto-update), would never heal it.
 export function routeIncompatibleRecovery(
   rpcCode: string,
   upgradeGuidance: IncompatibilityUpgradeGuidance | null,
@@ -1122,7 +1497,28 @@ export function routeIncompatibleRecovery(
   return { fixAction, terminalCommand, plan };
 }
 
-// Sticky needs-reauth marker on the auth plane, not the identity plane.
+// Reads the host's sticky needs-reauth marker.
+//
+// PRESENCE of the marker is the verdict, on its own. The tempting stronger
+// test - marker AND credential file - is nearly unsatisfiable and would make
+// this probe dead code: the host DELETES the credential and then writes the
+// marker, so the two coexist only when that delete failed, which the host
+// already self-repairs at its next startup. In the state this probe is for,
+// the credential file is gone and the marker is the only thing left.
+//
+// The marker's own lifecycle is what makes reporting it safe: it is cleared by
+// every successful adopt/refresh, so it can only be found set while the host
+// genuinely still needs a fresh provisioning.
+//
+// PRESENT-BUT-UNREADABLE IS STILL PRESENT. Tolerating a truncated, hand-edited
+// or permission-denied marker means "do not crash", not "report clean" - the
+// file existing is the verdict, and its contents are only diagnostics. Reading
+// a malformed marker as absent inverted exactly the contract stated above and
+// hid the fault it exists to surface, so only ENOENT is clean; anything else
+// present reports the issue with `unknown` diagnostics.
+//
+// Never throws - doctor probes are advisory and must not take the whole report
+// down.
 async function probeHostCredentialNeedsReauth(
   environment: Environment,
 ): Promise<DoctorIssue | null> {
@@ -1135,8 +1531,13 @@ async function probeHostCredentialNeedsReauth(
       // The only clean answer: this host has no burn on record.
       return null;
     }
-    // A read that failed for some reason OTHER than "not there" used to be read as "present but unreadable", i.e. as a burn.
-    // That inference needs the marker's PARENT to have been inspectable, and it silently assumed so: on a host whose auth directory is unsearchable, `readFile` answers EACCES whether or not the file exists, so doctor asserted a burned credential over a directory that may well be empty - and pointed the reader at re-provisioning, which cannot fix a permission.
+    // A read that failed for some reason OTHER than "not there" used to be
+    // read as "present but unreadable", i.e. as a burn. That inference needs
+    // the marker's PARENT to have been inspectable, and it silently assumed
+    // so: on a host whose auth directory is unsearchable, `readFile` answers
+    // EACCES whether or not the file exists, so doctor asserted a burned
+    // credential over a directory that may well be empty - and pointed the
+    // reader at re-provisioning, which cannot fix a permission.
     const parent = await probeAuthDirectory(dirname(markerPath));
     if (parent === "absent") {
       // No directory, so no marker inside it. Clean, for the same reason
@@ -1168,8 +1569,20 @@ async function probeHostCredentialNeedsReauth(
         `This host's own delegated credential was rejected in a way refreshing cannot repair (${reason}, recorded ${recordedAt}), ` +
         "so the host stopped using it. Until it is replaced, work the host does on your behalf - opening Tasks, notifications, shared artifacts - can fail with sign-in-looking errors that signing in again does not fix. " +
         "To replace it, open the Traycer desktop app while signed in as this host's owner and let it connect: a connected owner client provisions a new credential on its own, with nothing to confirm and nothing to run here.",
-      // NEITHER a fix action NOR a terminal command, and for the same reason: nothing on a command line repairs this.
-      // A connected owner client mints the replacement silently, so the instruction has to live in the MESSAGE - which is why the message carries it explicitly.
+      // NEITHER a fix action NOR a terminal command, and for the same reason:
+      // nothing on a command line repairs this. A connected owner client mints
+      // the replacement silently, so the instruction has to live in the
+      // MESSAGE - which is why the message carries it explicitly. With both
+      // action fields null, this text is the entire recovery path the CLI
+      // report and Desktop's issue card have to offer; a message that only
+      // rules out signing in again leaves the reader with a dead end.
+      //
+      // `terminalCommand` was `traycer login`, which reads as a repair and is
+      // not one: signing the HUMAN in again does not provision the HOST's
+      // delegated credential, which is the whole distinction this issue
+      // exists to draw. Desktop's failure card renders "Open in Terminal"
+      // whenever this is non-null (`host-doctor-issue-card.tsx`), so leaving
+      // it set offered a button that could only look like it had failed.
       fixAction: null,
       terminalCommand: null,
       details: {
@@ -1179,7 +1592,9 @@ async function probeHostCredentialNeedsReauth(
         // True only in the delete-failed shape above. Carried because a
         // support bundle wants to know which of the two it is looking at.
         credentialFilePresent: credentialPresent,
-        // Distinguishes "the host told us why" from "a marker is there and we could not read it" - the two lead to the same verdict but not to the same support conversation.
+        // Distinguishes "the host told us why" from "a marker is there and we
+        // could not read it" - the two lead to the same verdict but not to the
+        // same support conversation.
         markerReadable: raw !== null && reason !== UNKNOWN_MARKER_FIELD,
       },
     };
@@ -1192,7 +1607,25 @@ async function probeHostCredentialNeedsReauth(
 
 const UNKNOWN_MARKER_FIELD = "unknown";
 
-/** Whether the directory holding the needs-reauth marker can be inspected at all, which is the precondition the marker probe's verdict rests on. `R_OK | X_OK` because the two failures are different and both matter: a directory without SEARCH permission makes every `readFile` inside it EACCES regardless of what it contains, which is exactly the state that turns "unreadable file" into a false burn. */
+/**
+ * Whether the directory holding the needs-reauth marker can be inspected at
+ * all, which is the precondition the marker probe's verdict rests on.
+ *
+ * `R_OK | X_OK` because the two failures are different and both matter: a
+ * directory without SEARCH permission makes every `readFile` inside it EACCES
+ * regardless of what it contains, which is exactly the state that turns
+ * "unreadable file" into a false burn. The `isDirectory` check is not
+ * ceremony either - a regular file standing where the auth directory belongs
+ * passes `access` happily while every path under it is ENOTDIR, so access
+ * alone would call that state probeable and re-create the same wrong verdict
+ * through a different door.
+ *
+ * Plane-agnostic despite the name (it takes the directory): the identity-plane
+ * probe below asks the same question about its own marker's parent, and the
+ * two planes must not answer "can I look here?" differently.
+ *
+ * Never throws.
+ */
 async function probeAuthDirectory(
   dirPath: string,
 ): Promise<"ok" | "absent" | "unprobeable"> {
@@ -1209,7 +1642,15 @@ async function probeAuthDirectory(
   }
 }
 
-/** The INDETERMINATE answer: doctor could not look, and says so. Deliberately not `HOST_CREDENTIAL_NEEDS_REAUTH`. */
+/**
+ * The INDETERMINATE answer: doctor could not look, and says so.
+ *
+ * Deliberately not `HOST_CREDENTIAL_NEEDS_REAUTH`. That code asserts a burn
+ * and names a repair - open the app and let it re-provision - which does
+ * nothing for a directory the host cannot read. Reporting it here would send
+ * someone to fix a credential over a filesystem permission, and the fix they
+ * were told to apply would appear not to work.
+ */
 function authDirectoryInaccessibleIssue(dirPath: string): DoctorIssue {
   return {
     code: DOCTOR_ISSUE_CODES.HOST_AUTH_DIR_INACCESSIBLE,
@@ -1225,7 +1666,11 @@ function authDirectoryInaccessibleIssue(dirPath: string): DoctorIssue {
   };
 }
 
-/** Best-effort read of the marker's diagnostic fields. A `null` body (unreadable file) or unparseable/incomplete JSON yields `unknown` rather than changing the verdict - the verdict was already decided by the file existing. */
+/**
+ * Best-effort read of the marker's diagnostic fields. A `null` body (unreadable
+ * file) or unparseable/incomplete JSON yields `unknown` rather than changing
+ * the verdict - the verdict was already decided by the file existing.
+ */
 function parseMarkerFields(raw: string | null): {
   readonly reason: string;
   readonly recordedAt: string;
@@ -1268,7 +1713,36 @@ function isFileNotFoundError(error: unknown): boolean {
 
 // ---- Identity plane ------------------------------------------------------ //
 
-// Identity-plane needs-reauth marker. Unreadable is not absent.
+// Reads the host's IDENTITY-plane needs-reauth marker, and is honest about
+// what reading it can and cannot settle.
+//
+// Everything above this line is the AUTH plane: the host's own delegated
+// credential under `<host home>/auth/`, which a connected owner client
+// re-provisions. This marker lives under `<identity home>/identity/` and means
+// something else - the host's coordination identity paused after a credential
+// refresh was rejected - and it clears when a user bearer NEWER than the
+// marker lands in the shared CLI credentials file, i.e. when somebody signs in
+// again here. Two planes, two markers of the same name, opposite repairs.
+//
+// WHY THIS ONE CANNOT REPORT CLEAN. A host resolves its identity home as
+// `devIdentityHomeOverride ?? <host home>`, and the override is installed
+// inside the host process by the dev identity pool walk - not in a file, not
+// in an env var this CLI is spawned with, not derivable from any path here. On
+// a pool machine the marker this probe is looking for may sit under
+// `~/.traycer/host/dev/identities/<name>/identity/`, and which `<name>` a
+// running host took is knowledge that exists only in that process. An
+// ENOENT-is-clean probe would therefore report a stranded dev-pool host as
+// healthy, which is the environment the original incident was filed from.
+//
+// So the answer is scoped rather than asserted: a marker found here is
+// reported, a marker that cannot be found here is reported as NOT VERIFIED
+// whenever this host could actually have taken a pool identity (see
+// `identityHomeUnverifiedIssue` for the two negatives that rule that out),
+// and the host's own `host.doctor` - the only party that resolves the live
+// identity home - substitutes its own verdict for every code this function
+// emits.
+//
+// Never throws; doctor probes are advisory and must not take the report down.
 async function probeHostIdentityNeedsReauth(
   environment: Environment,
   hostProcessAlive: boolean,
@@ -1317,8 +1791,10 @@ async function probeHostIdentityNeedsReauth(
         "This is NOT the host's own delegated credential (HOST_CREDENTIAL_NEEDS_REAUTH), which a connected owner client re-provisions and signing in again does not repair. If both are reported they are two separate faults, each needing its own repair. " +
         "Scope: this is the DEFAULT identity home. A host that acquired a dev-pool identity home resolves a different one in-process, so its own `host.doctor` is the authority on whether this marker is the one it is holding.",
       fixAction: null,
-      // Unlike the auth plane, a sign-in IS the repair here: the pause watches the CLI login file for a bearer issued after the marker.
-      // Desktop renders "Open in Terminal" for a non-null command, and here that button does the thing the card describes.
+      // Unlike the auth plane, a sign-in IS the repair here: the pause watches
+      // the CLI login file for a bearer issued after the marker. Desktop
+      // renders "Open in Terminal" for a non-null command, and here that
+      // button does the thing the card describes.
       terminalCommand: `traycer login`,
       details: {
         markerPath,
@@ -1344,7 +1820,40 @@ async function probeHostIdentityNeedsReauth(
   }
 }
 
-/** No marker in the default identity home is not the same as no marker in this slot. */
+/**
+ * The scope caption: no marker in the default identity home, and what that is
+ * worth.
+ *
+ * `null` - genuine silence - whenever the pool walk that installs an identity
+ * override could not have run, because then the absence just read IS the whole
+ * answer. Two independent negatives establish that, and each one alone is
+ * enough:
+ *
+ * 1. THE ENVIRONMENT IS NOT `dev`. The host's own gate opens with
+ *    `config.environment !== "dev" -> not-applicable`
+ *    (`lifecycle/dev-identity-pool.ts`), so a production host always falls
+ *    back to its own host home no matter what the pool contains. Spelled
+ *    `!== "dev"` rather than `=== "production"` to mirror that gate exactly:
+ *    `Environment` is an open string alias, and a future slot must be
+ *    ineligible until something deliberately makes it eligible. Without this,
+ *    one developer's internal `make dev-desktop` pool would caption every
+ *    PRODUCTION doctor run on their machine forever - false uncertainty about
+ *    a home that process cannot use, which is the same noise this gate exists
+ *    to avoid, only pointed the other way.
+ * 2. THERE IS NO POOL. With no identity seated under
+ *    {@link hostDevIdentityPoolRoot}, no host here can hold an overridden
+ *    identity home even on a dev build.
+ *
+ * What is deliberately NOT mirrored is the host's second gate,
+ * `isEffectiveHomeCanonical()`. It reads the host's EFFECTIVE home, which
+ * honours a `--host-data-dir` this CLI cannot see: a dev host launched
+ * manually into a non-canonical directory looks canonical from here while
+ * being fully pool-eligible. Suppressing on a canonical-looking dev home would
+ * therefore report exactly that host clean, so `dev` stays conservative.
+ *
+ * The pool root is read for EXISTENCE, never attributed: which identity a
+ * running host took is not recorded anywhere this CLI can see.
+ */
 async function identityHomeUnverifiedIssue(
   environment: Environment,
   markerPath: string,
@@ -1388,7 +1897,17 @@ async function identityHomeUnverifiedIssue(
   };
 }
 
-/** Whether a dev identity pool exists on this machine - one `readdir`, existence only. An empty pool root counts as no pool: the directory can outlive every identity in it, and a pool with nothing in it cannot have given a host an identity home. */
+/**
+ * Whether a dev identity pool exists on this machine - one `readdir`, existence
+ * only.
+ *
+ * An empty pool root counts as no pool: the directory can outlive every
+ * identity in it, and a pool with nothing in it cannot have given a host an
+ * identity home. A readdir that fails for any reason OTHER than "not there"
+ * counts as a pool, because the caller's silence is the unsafe direction: this
+ * function exists to decide whether the CLI may stay quiet, and "I could not
+ * tell" must not resolve to quiet.
+ */
 async function devIdentityPoolExists(poolRoot: string): Promise<boolean> {
   try {
     const entries = await readdir(poolRoot, { withFileTypes: true });
@@ -1400,7 +1919,14 @@ async function devIdentityPoolExists(poolRoot: string): Promise<boolean> {
   }
 }
 
-/** The identity plane's "could not look", kept separate from {@link authDirectoryInaccessibleIssue} for the reason both exist: an issue that names a repair must name the one that applies. This is a permission on a different directory belonging to a different plane, and it is also NOT the scope caption above - that one means "I looked and found nothing here", this one means "I could not look". */
+/**
+ * The identity plane's "could not look", kept separate from
+ * {@link authDirectoryInaccessibleIssue} for the reason both exist: an issue
+ * that names a repair must name the one that applies. This is a permission on
+ * a different directory belonging to a different plane, and it is also NOT the
+ * scope caption above - that one means "I looked and found nothing here", this
+ * one means "I could not look".
+ */
 function identityDirectoryInaccessibleIssue(dirPath: string): DoctorIssue {
   return {
     code: DOCTOR_ISSUE_CODES.HOST_IDENTITY_DIR_INACCESSIBLE,
@@ -1416,7 +1942,13 @@ function identityDirectoryInaccessibleIssue(dirPath: string): DoctorIssue {
   };
 }
 
-/** Best-effort read of the identity marker's diagnostic fields. Separate from {@link parseMarkerFields} because the two markers do not agree on their field names - the identity plane stamps `since`, the auth plane `recordedAt` - and reusing one reader would silently report `unknown` for whichever plane it was not written for. */
+/**
+ * Best-effort read of the identity marker's diagnostic fields. Separate from
+ * {@link parseMarkerFields} because the two markers do not agree on their
+ * field names - the identity plane stamps `since`, the auth plane
+ * `recordedAt` - and reusing one reader would silently report `unknown` for
+ * whichever plane it was not written for.
+ */
 function parseIdentityMarkerFields(raw: string | null): {
   readonly reason: string;
   readonly since: string;
@@ -1443,8 +1975,11 @@ function parseIdentityMarkerFields(raw: string | null): {
   };
 }
 
-// Detects the "file is both there and not found" field shape: the CLI manifest's binaryPath is a symlink whose target no longer exists, so lstat (and `ls`) succeed while exec fails ENOENT.
-// Never throws - doctor probes are advisory, and an unreadable manifest or a healthy binary both read as "nothing to report".
+// Detects the "file is both there and not found" field shape: the CLI
+// manifest's binaryPath is a symlink whose target no longer exists, so
+// lstat (and `ls`) succeed while exec fails ENOENT. Never throws -
+// doctor probes are advisory, and an unreadable manifest or a healthy
+// binary both read as "nothing to report".
 async function probeDanglingCliSlotBinary(
   environment: Environment,
 ): Promise<DoctorIssue | null> {
@@ -1486,8 +2021,9 @@ async function probeDanglingCliSlotBinary(
   }
 }
 
-// Best-effort install-vector read for recovery routing.
-// A missing or malformed CLI manifest defaults to `manual` (the safe "you own the binary" vector) rather than throwing - Doctor never crashes on a probe.
+// Best-effort install-vector read for recovery routing. A missing or malformed
+// CLI manifest defaults to `manual` (the safe "you own the binary" vector)
+// rather than throwing - Doctor never crashes on a probe.
 async function readInstallSource(
   environment: Environment,
 ): Promise<CliInstallSource> {

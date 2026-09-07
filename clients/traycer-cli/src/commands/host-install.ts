@@ -112,6 +112,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             allowSelfInvocation: args.allowSelfInvocation,
           },
           force: args.force,
+          onWillStopHost: null,
         });
     const lifecycle =
       handle !== null
@@ -167,6 +168,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                   staged,
                   onProgress: (info) => ctx.progress(info),
                   lifecycle,
+                  onWillSwap: null,
                 },
               );
             },

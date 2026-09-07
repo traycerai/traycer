@@ -3343,6 +3343,7 @@ const BLOCK_HANDLERS: {
     error: block.error,
     agentMessageSend: block.agentMessageSend,
     managedCommand: block.managedCommand,
+    agentMessageReceipt: block.agentMessageReceipt,
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,

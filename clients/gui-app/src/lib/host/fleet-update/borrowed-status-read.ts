@@ -35,6 +35,10 @@ export async function readUpdateStatusOverBorrowedSession(input: {
       status,
       // Stamped here, after the slot wait AND the round trip.
       nowMs: input.now(),
+      // A borrowed read is one `host.status` round trip and nothing more;
+      // this leg never asks for installation info, so it has no park to
+      // derive. `null` is "not observed" here, exactly as it is on the wire.
+      legacyFacts: null,
     });
   } catch {
     // Every failure mode lands here and all of them mean the same thing: we did not learn anything this round.
@@ -53,6 +57,12 @@ export function observationFromStatus(input: {
   readonly status: ResponseOfMethod<HostRpcRegistry, "host.status">;
   readonly nowMs: number;
   readonly source?: FleetUpdateWireObservation["source"];
+  /**
+   * Record-derived park facts, or `null` when this leg had no installation
+   * read beside the status. Explicit rather than defaulted so a new caller
+   * has to SAY it did not look — the Overview is the one leg that does.
+   */
+  readonly legacyFacts: FleetUpdateWireObservation["legacyFacts"];
 }): FleetUpdateWireObservation {
   const provisional: FleetUpdateWireObservation = {
     hostId: input.hostId,
@@ -63,6 +73,7 @@ export function observationFromStatus(input: {
     operation: input.status.updateOperation,
     transaction: input.status.updateTransaction,
     coarseProgress: input.status.updateProgress,
+    legacyFacts: input.legacyFacts,
   };
   const view = projectFleetUpdateView({
     observation: provisional,

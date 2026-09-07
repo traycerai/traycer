@@ -1,13 +1,6 @@
 import { ChevronDown, MessageSquareShare } from "lucide-react";
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { ChatTargetMenu } from "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu";
 import { cn } from "@/lib/utils";
 
 import type { TerminalQuoteChatTarget } from "./terminal-quote-targets";
@@ -27,16 +20,21 @@ interface TerminalQuoteControlProps {
 }
 
 /**
- * The floating action over a terminal selection: one button that asks where the selection is going, and a panel that answers it.
- * Reads as a sibling of the transcript's quote popover and the composer's `@`-picker - same popover surface, same quiet chrome, same micro-type section headings - because it is the same kind of action in a different place.
+ * The floating action over a terminal selection: one button that asks where
+ * the selection is going, and a panel that answers it.
+ *
+ * Reads as a sibling of the transcript's quote popover and the composer's
+ * `@`-picker - same popover surface, same quiet chrome, same micro-type
+ * section headings - because it is the same kind of action in a different
+ * place. Deliberately not a split button: a primary target guessed from focus
+ * history is right often enough to be tempting and wrong often enough to send
+ * a selection somewhere the user was not looking, and the recovery for that is
+ * worse than one extra click.
+ *
+ * The roster itself is `ChatTargetMenu`, shared with the artifact editor's
+ * send-to-chat; only the pill and where it sits are terminal-specific.
  */
 export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
-  const openTargets = props.targets.filter((target) => target.isOpen);
-  const otherTargets = props.targets.filter((target) => !target.isOpen);
-  // The headings earn their space only when they separate something. With
-  // every chat open - or none - they would label a single undivided list.
-  const banded = openTargets.length > 0 && otherTargets.length > 0;
-
   return (
     <div
       data-slot={QUOTE_CONTROL_SLOT}
@@ -44,20 +42,22 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
         "absolute z-20",
         props.anchor.placement === "above" && "-translate-y-full",
       )}
-      // Both offsets and the width cap come from the anchor: it is the one place that knows where the selection starts and how much pane is left beside it (see `terminalSelectionAnchor`).
+      // Both offsets and the width cap come from the anchor: it is the one
+      // place that knows where the selection starts and how much pane is left
+      // beside it (see `terminalSelectionAnchor`).
       style={{
         top: props.anchor.top,
         left: props.anchor.left,
         maxWidth: props.anchor.maxWidth,
       }}
     >
-      {/* Non-modal: a modal Radix menu writes overflow/padding onto <body> for its scroll lock, and a layout change that reaches this pane refits the terminal - which makes xterm drop the very selection the menu was opened to act on. Nothing here needs the modal behaviour. */}
-      <DropdownMenu
-        modal={false}
+      <ChatTargetMenu
+        targets={props.targets}
+        onSelectChat={props.onSendToChat}
+        onSelectNewChat={props.onSendToNewChat}
         open={props.menuOpen}
         onOpenChange={props.onMenuOpenChange}
-      >
-        <DropdownMenuTrigger asChild>
+        trigger={
           <button
             type="button"
             className={cn(
@@ -75,79 +75,8 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
               aria-hidden
             />
           </button>
-        </DropdownMenuTrigger>
-        {/* The column is what keeps that last one reachable - the roster shrinks when the pane is short, rather than pushing the action out of view. */}
-        <DropdownMenuContent
-          align="start"
-          className="flex w-max min-w-[min(90vw,14rem)] max-w-[min(90vw,20rem)] flex-col overflow-y-hidden"
-        >
-          {props.targets.length > 0 ? (
-            <>
-              <div className="max-h-[40vh] min-h-0 flex-1 overflow-y-auto">
-                {banded ? <DropdownMenuLabel>Open</DropdownMenuLabel> : null}
-                {openTargets.map((target) => (
-                  <ChatTargetItem
-                    key={target.chatId}
-                    target={target}
-                    onSelect={props.onSendToChat}
-                  />
-                ))}
-                {banded ? (
-                  <DropdownMenuLabel>Other chats</DropdownMenuLabel>
-                ) : null}
-                {otherTargets.map((target) => (
-                  <ChatTargetItem
-                    key={target.chatId}
-                    target={target}
-                    onSelect={props.onSendToChat}
-                  />
-                ))}
-              </div>
-              <DropdownMenuSeparator className="shrink-0" />
-            </>
-          ) : null}
-          <DropdownMenuItem
-            className="shrink-0"
-            onSelect={props.onSendToNewChat}
-          >
-            New chat
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        }
+      />
     </div>
   );
-}
-
-/**
- * A chat on another host is shown disabled rather than hidden, because the user can see it in the sidebar and would otherwise be left wondering where it went.
- * The reason replaces "Last used" on such a row: why it cannot be picked is the only thing worth the space.
- */
-function ChatTargetItem(props: {
-  readonly target: TerminalQuoteChatTarget;
-  readonly onSelect: (chatId: string) => void;
-}) {
-  const meta = chatTargetMeta(props.target);
-  return (
-    <DropdownMenuItem
-      disabled={props.target.isOnOtherHost}
-      onSelect={() => props.onSelect(props.target.chatId)}
-    >
-      <span className="min-w-0 flex-1 truncate">{props.target.title}</span>
-      {meta === null ? null : (
-        <span className="shrink-0 text-ui-xs text-muted-foreground">
-          {meta}
-        </span>
-      )}
-    </DropdownMenuItem>
-  );
-}
-
-/**
- * The one line of trailing meta a row gets. Being unreachable outranks being
- * recent: on a row the user cannot pick, why is the only useful thing to say.
- */
-function chatTargetMeta(target: TerminalQuoteChatTarget): string | null {
-  if (target.isOnOtherHost) return "On a different host";
-  if (target.isLastFocused) return "Last used";
-  return null;
 }

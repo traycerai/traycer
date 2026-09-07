@@ -1,6 +1,24 @@
 /**
- * The panel header's overflow menu owns the affordance, and entering search trades the header row for the input rather than stacking a second row under it.
- * Zero is not a judgement call - there is nothing to match - so search is withheld only there.
+ * Active-query artifact search for the Epic sidebar's artifact panel.
+ *
+ * Search is a MODE, not a permanent fixture: there is no resting search box.
+ * The panel header's overflow menu owns the affordance, and entering search
+ * trades the header row for the input rather than stacking a second row under
+ * it. Typing into the focused tree enters the mode too; Escape leaves it.
+ *
+ * The affordance is gated on the Epic having ANY artifacts, and on nothing
+ * else. It was once gated on holding at least ten, which hid it from most
+ * Epics and read as a removed feature; whether nine artifacts are worth
+ * filtering is the user's call, not this module's. Zero is not a judgement
+ * call - there is nothing to match - so search is withheld only there. See
+ * `useArtifactSearchAvailable`.
+ *
+ * While the mode is on, the input's DOM is portaled into the header's slot but
+ * the component tree is unchanged - so the host query, same-scope retention,
+ * combobox keyboard navigation, every load / empty / mirror-unavailable /
+ * unsupported / error state, and opening a hit through the authoritative
+ * selection route all stay in ONE component, right next to the results they
+ * drive.
  */
 import {
   memo,
@@ -76,7 +94,14 @@ interface ArtifactPanelSearchShellProps {
 }
 
 /**
- * While a query is active the tree is HIDDEN (display:none) rather than unmounted, so its expansion/filter state and its scroll viewport both survive a round-trip through search mode.
+ * Composes the artifact panel. In browse mode this is JUST the tree - no
+ * search box occupies the panel. Entering search mode mounts
+ * `ArtifactSearchBox`, which portals its input up into the header row.
+ *
+ * While a query is active the tree is HIDDEN (display:none) rather than
+ * unmounted, so its expansion/filter state and its scroll viewport both survive
+ * a round-trip through search mode. Leaving search short-circuits the debounce
+ * so the tree returns in the same update cycle, not after the 200 ms delay.
  */
 export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
   const searchOpen = usePanelHeaderSearchOpen(props.tabId, ARTIFACTS_PANEL_ID);
@@ -94,8 +119,9 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
   const debouncedQuery = searchQuery.trim().length === 0 ? "" : debouncedRaw;
   const searchActive = searchOpen && debouncedQuery.trim().length > 0;
 
-  // Preserve the tree's scroll viewport across search mode.
-  // `onScroll` captures the live position while the tree is visible (a hidden element reports 0), and the layout effect restores it the moment search is cleared.
+  // Preserve the tree's scroll viewport across search mode. `onScroll` captures
+  // the live position while the tree is visible (a hidden element reports 0), and
+  // the layout effect restores it the moment search is cleared.
   const treeScrollRef = useRef<HTMLDivElement>(null);
   const treeScrollTopRef = useRef(0);
   const handleTreeScroll = useCallback(() => {
@@ -108,13 +134,27 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
     }
   }, [searchActive]);
 
-  // Closing the store flag rather than deriving an effective-open locally, because the header reads that same flag independently (`PanelGroupSectionHeader`).
+  // Leaving the availability window while search is already OPEN - the last
+  // artifact deleted here, by a collaborator, or in another retained view -
+  // has to close the mode, not merely stop new entries into it.
+  //
+  // Closing the store flag rather than deriving an effective-open locally,
+  // because the header reads that same flag independently
+  // (`PanelGroupSectionHeader`). A local derive would unmount this box while
+  // the header kept the search row, leaving an empty input with nothing
+  // portaled into it - a worse version of the state being fixed.
   useEffect(() => {
     if (searchAvailable || !searchOpen) return;
     closeSearch(props.tabId, ARTIFACTS_PANEL_ID);
   }, [searchAvailable, searchOpen, closeSearch, props.tabId]);
 
-  // Subscribed imperatively rather than via `onKeyDown`: this region is a scroll container, and a JSX key handler would oblige it to claim an interactive role it does not have (the tree inside owns `role="tree"`).
+  // Type-to-filter: a bare printable key anywhere in the focused tree enters
+  // search mode seeded with that character, so the keystroke that started the
+  // search is not swallowed by the focus handoff to the header input.
+  //
+  // Subscribed imperatively rather than via `onKeyDown`: this region is a
+  // scroll container, and a JSX key handler would oblige it to claim an
+  // interactive role it does not have (the tree inside owns `role="tree"`).
   useEffect(() => {
     const region = treeScrollRef.current;
     if (region === null) return;
@@ -132,7 +172,10 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
   }, [props.tabId, searchAvailable, searchOpen, openSearch]);
 
   return (
-    // `overflow-hidden` overrides SidebarContent's default `overflow-auto` so the outer surface never competes with the inner scroll surfaces below: the hidden-scrollbar tree viewport (browse mode) and the results list (search mode) are each the single active scroller for their mode.
+    // `overflow-hidden` overrides SidebarContent's default `overflow-auto` so the
+    // outer surface never competes with the inner scroll surfaces below: the
+    // hidden-scrollbar tree viewport (browse mode) and the results list (search
+    // mode) are each the single active scroller for their mode.
     <SidebarContent className="gap-0 overflow-hidden">
       {searchOpen ? (
         <ArtifactSearchBox
@@ -167,11 +210,24 @@ interface ArtifactSearchBoxProps {
   readonly debouncedQuery: string;
 }
 
-/** Mounted only in search mode. */
-// eslint-disable-next-line complexity -- query, scope-retention, read-filter, keyboard, and open flows in a fixed hook order
+/**
+ * The artifact-panel search control plus its result surface. Mounted only in
+ * search mode. The input row is portaled into the header's slot (so it visually
+ * replaces the header) while the results render here in the panel body - one
+ * component, two DOM homes.
+ */
+// Composes the query, scope-retention, read-filter, keyboard, and open flows in
+// a fixed hook order; the branches are independent, not reducible nesting.
+// eslint-disable-next-line complexity
 export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   const { epicId, tabId, searchQuery, debouncedQuery } = props;
-  // So during a re-point - when the sidebar stays interactive while only the canvas goes inert - this searched one machine and opened the results as tiles bound to another.
+  // BOTH from the Epic session, and that is the point - these two were read
+  // from two different sources (the ambient client, and the app-wide
+  // addressable id beside it) and then used together: the id keys the scope
+  // signature AND binds every opened hit's tile for life. So during a re-point
+  // - when the sidebar stays interactive while only the canvas goes inert -
+  // this searched one machine and opened the results as tiles bound to
+  // another. One source makes them incapable of disagreeing.
   const activeHostId = useEpicSessionHostId();
   const inputRef = useRef<HTMLInputElement>(null);
   const headerSlot = usePanelHeaderSearchSlot(tabId, ARTIFACTS_PANEL_ID);
@@ -199,7 +255,9 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
 
   const openHit = useCallback(
     (hit: SearchArtifactHit, gesture: TileOpenGesture) => {
-      // Re-resolve the hit against the authoritative Y.Doc projection rather than the disk mirror it was found in: a stale / deleted hit resolves to `null` and is reported in place instead of opening anything.
+      // Re-resolve the hit against the authoritative Y.Doc projection rather
+      // than the disk mirror it was found in: a stale / deleted hit resolves to
+      // `null` and is reported in place instead of opening anything.
       const ref = epicNodeRefForNodeId(
         handle.store.getState(),
         hit.artifactId,
@@ -220,7 +278,10 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const resultCount = results.length;
 
-  // Done at render time keyed on `results` identity rather than in an effect, so there is no extra commit/paint cycle.
+  // When the visible result set changes (new query, filter, retained→fresh),
+  // reset the active row to the top and clear any stale marker. Done at render
+  // time keyed on `results` identity rather than in an effect, so there is no
+  // extra commit/paint cycle.
   const [prevResults, setPrevResults] = useState(results);
   if (prevResults !== results) {
     setPrevResults(results);
@@ -247,8 +308,9 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
     inputRef.current?.focus();
   }, [onSearchQueryChange]);
 
-  // Leaving search restores the header row and the tree in one step.
-  // Escape is unconditional (not "clear first, then exit"): the mode is the thing the user wants out of, and an empty box has no separate resting state now.
+  // Leaving search restores the header row and the tree in one step. Escape is
+  // unconditional (not "clear first, then exit"): the mode is the thing the
+  // user wants out of, and an empty box has no separate resting state now.
   const exitSearch = useCallback(() => {
     closeSearch(tabId, ARTIFACTS_PANEL_ID);
   }, [closeSearch, tabId]);
@@ -289,8 +351,11 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
     [exitSearch, resultCount, clampedActiveIndex, openHit, results],
   );
 
-  // The listbox (`role="listbox"`) is only in the DOM when ranked results are actually shown - not during loading / empty / error / unsupported / mirror-unavailable.
-  // The combobox's `aria-expanded` / `aria-controls` / `aria-activedescendant` are gated on this so they never reference an absent element or a non-existent active option.
+  // The listbox (`role="listbox"`) is only in the DOM when ranked results are
+  // actually shown - not during loading / empty / error / unsupported /
+  // mirror-unavailable. The combobox's `aria-expanded` / `aria-controls` /
+  // `aria-activedescendant` are gated on this so they never reference an absent
+  // element or a non-existent active option.
   const listboxRendered =
     searchActive &&
     !isUnsupported &&
@@ -333,7 +398,9 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
         searchActive ? "flex-1" : "shrink-0",
       )}
     >
-      {/* The header slot is written by a ref callback during the header's commit, so it is null only on this component's very first render; the resulting store write re-renders us with the target in hand. */}
+      {/* The header slot is written by a ref callback during the header's
+          commit, so it is null only on this component's very first render;
+          the resulting store write re-renders us with the target in hand. */}
       {headerSlot === null ? null : createPortal(inputRow, headerSlot)}
 
       <p className="sr-only" role="status" aria-live="polite">
@@ -514,9 +581,14 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
     ? EPIC_NODE_ICONS[hit.kind]
     : FileText;
   const title = displayTitle(hit.title, hit.kind);
-  // The RPC breadcrumb includes the artifact's own folder slug last; drop it so only the ancestor trail shows (the title already names the artifact).
-  // These are folder slugs relative to the artifact root - never host-absolute paths.
-  const ancestors = hit.breadcrumb.slice(0, -1);
+  // The RPC breadcrumb includes the artifact's own folder slug last; drop it so
+  // only the ancestor trail shows (the title already names the artifact) -
+  // unless the path is what matched, in which case the full slug chain IS the
+  // evidence for the hit and must stay visible. These are folder slugs relative
+  // to the artifact root - never host-absolute paths.
+  const ancestors = hit.sources.includes("path")
+    ? hit.breadcrumb
+    : hit.breadcrumb.slice(0, -1);
   const showStatusDot =
     hit.status !== null && Object.hasOwn(STATUS_DOT_CLASSES, hit.status);
 

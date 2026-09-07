@@ -118,6 +118,7 @@ function renderCall(input: {
         error={null}
         agentMessageSend={null}
         managedCommand={input.managedCommand}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -426,6 +427,7 @@ describe("the restart shell card", () => {
           error={null}
           agentMessageSend={null}
           managedCommand={restart}
+          agentMessageReceipt={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -483,6 +485,7 @@ describe("the restart shell card", () => {
               monitoring: true,
               cwd: "/work/repo",
             }}
+            agentMessageReceipt={null}
             isStreaming={false}
             endState={null}
             stopped={false}
@@ -503,6 +506,7 @@ describe("the restart shell card", () => {
             error={null}
             agentMessageSend={null}
             managedCommand={restart1}
+            agentMessageReceipt={null}
             isStreaming={false}
             endState={null}
             stopped={false}
@@ -523,6 +527,7 @@ describe("the restart shell card", () => {
             error={null}
             agentMessageSend={null}
             managedCommand={restart2}
+            agentMessageReceipt={null}
             isStreaming={false}
             endState={null}
             stopped={false}
@@ -622,6 +627,7 @@ describe("the restart shell card", () => {
           error={null}
           agentMessageSend={null}
           managedCommand={restartPayload({})}
+          agentMessageReceipt={null}
           isStreaming={false}
           endState={null}
           stopped={false}

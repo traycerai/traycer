@@ -65,6 +65,12 @@ export function useLocalHostUpdateOperation(): LocalHostUpdateOperation {
             hasLiveSource: readiness.isReady,
           },
           source: "local",
+          // The landing banner already has a debt arm of its own, read off
+          // the desktop controller status (`activation: pendingActivation`),
+          // and it does not read `host.getInstallationInfo`. Deriving a
+          // second debt fact here would put two readers with two rules on one
+          // surface; the Overview is the leg that derives.
+          legacyFacts: null,
         });
 
   // Canonical leg: dataUpdatedAt, not a clock. Record observedAtMs must come from the controller query, never live host.status (0 while the host is down).

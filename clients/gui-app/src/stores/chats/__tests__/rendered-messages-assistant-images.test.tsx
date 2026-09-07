@@ -147,6 +147,7 @@ function toolCallWithImages(args: {
     error: null,
     agentMessageSend: null,
     managedCommand: null,
+    agentMessageReceipt: null,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,

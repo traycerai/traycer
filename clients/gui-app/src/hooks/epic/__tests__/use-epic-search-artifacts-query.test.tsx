@@ -33,7 +33,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 describe("useEpicSearchArtifacts", () => {
-  it("searches artifact titles and bodies without matching mirror-relative paths", () => {
+  it("searches artifact titles, logical paths, and bodies", () => {
     const args: UseEpicSearchArtifactsArgs = {
       client: null,
       epicId: "epic-1",
@@ -49,7 +49,7 @@ describe("useEpicSearchArtifacts", () => {
     expect(capturedQuery.current?.method).toBe("epic.searchArtifacts");
     expect(capturedQuery.current?.params.fields).toEqual({
       title: true,
-      path: false,
+      path: true,
       body: true,
     });
   });

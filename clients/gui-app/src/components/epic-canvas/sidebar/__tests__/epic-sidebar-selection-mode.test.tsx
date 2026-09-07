@@ -1695,7 +1695,7 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(
-      screen.getByRole("menuitem", { name: "Open communication graph" }),
+      screen.getByRole("menuitem", { name: "Agent office" }),
     ).not.toBeNull();
   });
 

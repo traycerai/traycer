@@ -34,6 +34,7 @@ import {
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { usePaneFocusProbe } from "@/components/epic-tabs/pane-visibility-context";
 
 import { buildComposerExtensions } from "./editor/editor-config";
 import type {
@@ -230,6 +231,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     ref,
   } = props;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
+  // The live half of `isActive` for the focus registry: a render-time flag can
+  // be one commit stale when another surface selects a composer to focus.
+  const isPaneFocusedNow = usePaneFocusProbe();
 
   // This is a *legitimate* latest-value-ref usage (closure into a static external library plugin) - do not "fix" it by adding the callbacks to the editor deps; that would rebuild Tiptap on every keystroke.
   const normalizedInitial = useMemo(
@@ -356,8 +360,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         isEligible: () => editor.view.dom.isConnected,
       },
       isActive,
+      isPaneFocusedNow,
     );
-  }, [composerSurfaceId, editor, isActive]);
+  }, [composerSurfaceId, editor, isActive, isPaneFocusedNow]);
 
   useEffect(() => {
     if (editor === null) return;

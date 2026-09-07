@@ -15,11 +15,11 @@ import {
   fetchCliVersions,
   resolveCliAsset,
 } from "../registry/cli-versions";
+import { PACKAGE_MANAGER_CLI_SOURCES } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import {
   clearPendingUpgrade,
   type CliInstallSource,
   type CliPendingUpgrade,
-  PACKAGE_MANAGER_CLI_SOURCES,
   PACKAGE_MANAGER_UPGRADE_HINT,
   readCliManifest,
   updateCliManifest,

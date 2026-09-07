@@ -16,6 +16,12 @@ import {
   registerComposerFocus,
 } from "@/lib/composer/composer-focus-registry";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
+import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import {
+  usePaneFocused,
+  usePaneFocusProbe,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import {
   readInterviewDraftSnapshot,
@@ -33,8 +39,9 @@ import {
   type DraftAnswer,
 } from "./interview-draft";
 
-// Brief window where the just-picked single-select option stays highlighted before the card auto-advances, so the choice visibly registers.
-// The page transition runs at the same speed so the two motions read as one.
+// Brief window where the just-picked single-select option stays highlighted
+// before the card auto-advances, so the choice visibly registers. The page
+// transition runs at the same speed so the two motions read as one.
 const ADVANCE_DELAY_MS = 110;
 export const QUESTION_TRANSITION = {
   duration: ADVANCE_DELAY_MS / 1000,
@@ -66,11 +73,16 @@ interface UseInterviewCardArgs {
   chatId: string;
   blockId: string;
   questions: ReadonlyArray<InterviewQuestion>;
-  // Whether this card's chat tab is the active one in its pane.
-  // Gates focus so a pending interview in a background pane never steals focus, and the card refocuses when its tab/pane becomes active - the same contract the Tiptap composer follows.
+  // Whether this card's chat tab is the active one in its pane. Gates focus so
+  // a pending interview in a background pane never steals focus, and the card
+  // refocuses when its tab/pane becomes active - the same contract the Tiptap
+  // composer follows.
   isActive: boolean;
-  // True while a Submit/Skip this card sent is still in flight or accepted but not yet resolved by the host (derived from the chat session's pending / accepted actions, scoped to this block).
-  // Gates every affordance so the same action cannot be double-sent; it clears on a rejected/failed ack, leaving the retained draft for retry.
+  // True while a Submit/Skip this card sent is still in flight or accepted but
+  // not yet resolved by the host (derived from the chat session's pending /
+  // accepted actions, scoped to this block). Gates every affordance so the same
+  // action cannot be double-sent; it clears on a rejected/failed ack, leaving
+  // the retained draft for retry.
   isBusy: boolean;
   onSubmit:
     | ((
@@ -87,17 +99,40 @@ interface UseInterviewCardArgs {
     | null;
 }
 
-// Owns every behavior of the pending interview card - draft state, paging, the highlight-then-advance timer, dispatch locking, and the keyboard shortcuts - so the components stay purely presentational.
-// Attach `containerRef` to the focusable card element.
+// Owns every behavior of the pending interview card - draft state, paging,
+// the highlight-then-advance timer, dispatch locking, and the keyboard
+// shortcuts - so the components stay purely presentational. Attach
+// `containerRef` to the focusable card element.
 export function useInterviewCard(args: UseInterviewCardArgs) {
   const { chatId, blockId, questions, isActive, isBusy, onSubmit, onSkip } =
     args;
   const composerSurfaceId = useId();
   const total = questions.length;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
+  // The card stands in for the Tiptap composer, so it owns focus on exactly
+  // the composer's own terms - the tile's `isActive` AND pane focus AND tab
+  // selection (`chatComposerFocused` -> `chatTileCatalogActivity`). The tile
+  // flag alone deliberately excludes top-level tab focus, so a hosted body in
+  // a BACKGROUND top-level tab still reports `isActive`, and a card trusting
+  // it registers as an active composer from behind whatever the user is
+  // actually looking at.
+  const paneFocused = usePaneFocused();
+  const tabSelected = useTabBodySelected();
+  const isPaneFocusedNow = usePaneFocusProbe();
+  const focusActive = chatTileCatalogActivity(
+    paneFocused,
+    tabSelected,
+    isActive,
+  );
 
-  // Subscribing (rather than reading it once) keeps duplicate live views of the same chat in lockstep and means a write always merges against the latest answers, so one view can never overwrite another's progress with a stale full snapshot.
-  // The row is a stable reference between unrelated store writes, so this selector never churns renders.
+  // The persisted row for THIS (chat, block) is the canonical draft state.
+  // Subscribing (rather than reading it once) keeps duplicate live views of the
+  // same chat in lockstep and means a write always merges against the latest
+  // answers, so one view can never overwrite another's progress with a stale
+  // full snapshot. The row is a stable reference between unrelated store writes,
+  // so this selector never churns renders. `selectInterviewDraft` reads through
+  // own-property checks so a `"__proto__"` id resolves to null, not the
+  // prototype.
   const storedDraft = useInterviewDraftStore((state) =>
     selectInterviewDraft(state.draftsByChat, chatId, blockId),
   );
@@ -115,8 +150,12 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
 
   const containerRef = useRef<HTMLElement | null>(null);
   const advanceTimerRef = useRef<number | null>(null);
-  // The single-select advance timer (~110ms) closes over `submitDrafts`/ `navigate` from the render that scheduled it, which in turn closed over that render's `isBusy`.
-  // If another live view sends an action before the timer fires, this render's `isBusy` guard inside those functions is already stale.
+  // The single-select advance timer (~110ms) closes over `submitDrafts`/
+  // `navigate` from the render that scheduled it, which in turn closed over
+  // that render's `isBusy`. If another live view sends an action before the
+  // timer fires, this render's `isBusy` guard inside those functions is
+  // already stale. Track the latest value in a ref so the timer can re-check
+  // it at fire time instead of trusting its own scheduling-time snapshot.
   const latestIsBusyRef = useRef(isBusy);
   useEffect(() => {
     latestIsBusyRef.current = isBusy;
@@ -137,14 +176,21 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
 
   const isLast = safeIndex >= total - 1;
   const answeredCount = drafts.filter(draftHasContent).length;
-  // `isBusy` is the ack-aware gate: an interview action this card sent is in flight or accepted-but-unresolved.
-  // It clears on a rejected/failed ack (the interview stays pending), so the retained draft is retryable then - but not an immediate double-submit while the first send is still live.
+  // `isBusy` is the ack-aware gate: an interview action this card sent is in
+  // flight or accepted-but-unresolved. It blocks re-sends, edits, paging,
+  // keyboard actions, and forks. It clears on a rejected/failed ack (the
+  // interview stays pending), so the retained draft is retryable then - but not
+  // an immediate double-submit while the first send is still live.
   const canAdvance = total > 0 && safeIndex < total - 1 && !isBusy;
   const canSubmit = total > 0 && onSubmit !== null && !isBusy;
   const canSkip = onSkip !== null && !isBusy;
 
-  // Read the LATEST canonical row at call time rather than trusting a render-time closure.
-  // A delayed single-select callback (see `toggleOption`) fires ~110ms later, by which point a duplicate view may have edited the answers or navigated to another page; replaying a captured snapshot would clobber it.
+  // Read the LATEST canonical row at call time rather than trusting a
+  // render-time closure. A delayed single-select callback (see `toggleOption`)
+  // fires ~110ms later, by which point a duplicate view may have edited the
+  // answers or navigated to another page; replaying a captured snapshot would
+  // clobber it. The page index is clamped exactly like `safeIndex` so the two
+  // are comparable.
   const readCanonicalState = () => {
     const latest = readInterviewDraftSnapshot(chatId, blockId);
     return {
@@ -255,8 +301,10 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     // values (draftToAnswerValues returns [] for an empty draft).
     const answers: InterviewAnswer[] = answersFromDrafts(answerDrafts);
     setPendingOptionIndex(null);
-    // Fire and keep the draft: a returned client action id only proves the renderer sent the action, not that the host accepted it.
-    // The draft is cleared authoritatively when the interviewAnswered lifecycle frame lands (chat-session-store); a rejection keeps it for retry.
+    // Fire and keep the draft: a returned client action id only proves the
+    // renderer sent the action, not that the host accepted it. The draft is
+    // cleared authoritatively when the interviewAnswered lifecycle frame lands
+    // (chat-session-store); a rejection keeps it for retry.
     onSubmit(blockId, answers);
   };
 
@@ -274,15 +322,19 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     if (!canSkip) return;
     clearAdvanceTimer();
     setPendingOptionIndex(null);
-    // Unvisited empty pages are not drafts and must not inflate the durable saved-draft count.
+    // Same lifecycle contract as submit: keep the draft until the authoritative
+    // interviewErrored frame clears it, so a rejected skip stays retryable.
+    // Skip saves only completed/non-empty pages. Unvisited empty pages are not
+    // drafts and must not inflate the durable saved-draft count.
     const savedDrafts = answersFromDrafts(drafts).filter(
       (answer) => answer.values.length > 0,
     );
     onSkip(
       blockId,
       "Skipped by user",
-      // An explicit 1.7 Skip always carries its settlement envelope, even when no page was completed.
-      // `undefined` is reserved for legacy/error paths that cannot assert a user-chosen Skip outcome.
+      // An explicit 1.7 Skip always carries its settlement envelope, even
+      // when no page was completed. `undefined` is reserved for legacy/error
+      // paths that cannot assert a user-chosen Skip outcome.
       savedDrafts,
     );
   };
@@ -301,7 +353,8 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       return;
     }
     // Single-select: commit the choice, hold a brief highlight, then advance.
-    // Re-picking during the highlight window replaces the choice and restarts the timer, so a quick correction is never swallowed.
+    // Re-picking during the highlight window replaces the choice and restarts
+    // the timer, so a quick correction is never swallowed.
     updateDraft({
       ...draft,
       selected: new Set([optionIndex]),
@@ -312,8 +365,10 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     clearAdvanceTimer();
     advanceTimerRef.current = window.setTimeout(() => {
       advanceTimerRef.current = null;
-      // Re-check busy state at fire time: another live view may have sent an action during the highlight window, making this scheduling-time snapshot stale.
-      // Submitting or advancing now would mutate state (or double-dispatch) while busy.
+      // Re-check busy state at fire time: another live view may have sent an
+      // action during the highlight window, making this scheduling-time
+      // snapshot stale. Submitting or advancing now would mutate state (or
+      // double-dispatch) while busy.
       if (latestIsBusyRef.current) {
         setPendingOptionIndex(null);
         return;
@@ -321,13 +376,19 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       // Re-derive from the LATEST canonical row at fire time. A duplicate view
       // may have changed this answer or the page during the highlight window.
       const latest = readCanonicalState();
-      // No-op when the canonical page moved off the question this timer was armed on: a duplicate view explicitly navigated (Previous/Next), and submitting or advancing from here would override that navigation - e.g. stale-submitting the last question the other view just left, or rewinding a view that advanced further ahead.
+      // No-op when the canonical page moved off the question this timer was
+      // armed on: a duplicate view explicitly navigated (Previous/Next), and
+      // submitting or advancing from here would override that navigation -
+      // e.g. stale-submitting the last question the other view just left, or
+      // rewinding a view that advanced further ahead.
       if (latest.pageIndex !== safeIndex) {
         setPendingOptionIndex(null);
         return;
       }
       const currentAnswer = latest.drafts[safeIndex] ?? emptyDraft();
-      // No-op when this single-select choice was superseded (another view picked Other, a different option, or cleared it): that view drives its own advance, and replaying our stale choice would clobber it.
+      // No-op when this single-select choice was superseded (another view
+      // picked Other, a different option, or cleared it): that view drives its
+      // own advance, and replaying our stale choice would clobber it.
       const stillOurChoice =
         !currentAnswer.otherSelected &&
         currentAnswer.selected.size === 1 &&
@@ -398,7 +459,9 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     return false;
   };
 
-  // mod+Enter always proceeds. Plain Enter proceeds too, unless focus is in a multi-line textarea (newline) or on any button (it self-activates).
+  // mod+Enter always proceeds. Plain Enter proceeds too, unless focus is in a
+  // multi-line textarea (newline) or on any button (it self-activates). The
+  // single-line Other input lets plain Enter proceed/submit.
   const handleEnter = (event: KeyboardEvent): boolean => {
     const modKey = event.metaKey || event.ctrlKey;
     if (
@@ -426,8 +489,12 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     return selectByDigit(event.key);
   };
 
-  // The card-level key handler owns the number / Enter / Arrow / Escape shortcuts while the inner option buttons keep native focus order and Enter/Space activation.
-  // It is a native listener (not JSX onKeyDown) because no honest ARIA widget role fits this container, and jsx-a11y/no-noninteractive-element-interactions correctly rejects JSX key handlers on non-widget elements; useEffectEvent keeps it on fresh state.
+  // The card-level key handler owns the number / Enter / Arrow / Escape
+  // shortcuts while the inner option buttons keep native focus order and
+  // Enter/Space activation. It is a native listener (not JSX onKeyDown)
+  // because no honest ARIA widget role fits this container, and
+  // jsx-a11y/no-noninteractive-element-interactions correctly rejects JSX key
+  // handlers on non-widget elements; useEffectEvent keeps it on fresh state.
   const handleKey = useEffectEvent((event: KeyboardEvent) => {
     if (isBusy) return;
     const editable = isEditableEventTarget(event.target);
@@ -467,16 +534,25 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     };
   }, []);
 
-  // Skipped while inactive so a pending interview in a background pane never steals focus; refocuses when the tab becomes active (isActive is a dependency).
+  // Auto-focus the card when active, on appear and on every question change, so
+  // number keys work with zero clicks. Skipped while inactive so a pending
+  // interview in a background pane or top-level tab never steals focus;
+  // refocuses when the tab becomes active (`focusActive` is a dependency).
+  // Free-text and Other inputs focus themselves via their callback ref, so the
+  // card yields to them.
   const wantsFieldFocus = freeTextQuestion || draft.otherSelected;
   useEffect(() => {
-    if (!isActive || wantsFieldFocus) return;
+    if (!focusActive || wantsFieldFocus) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
     focusActiveComposer();
-  }, [safeIndex, isActive, paneActivationFocusIntent, wantsFieldFocus]);
+  }, [safeIndex, focusActive, paneActivationFocusIntent, wantsFieldFocus]);
 
-  // Join the composer focus registry so the active-pane focus flow and the "focus editor" shortcut reach this card - it stands in for the Tiptap composer it replaced.
-  // Prefer the open text field, else the card itself.
+  // Join the composer focus registry so the active-pane focus flow and the
+  // "focus editor" shortcut reach this card - it stands in for the Tiptap
+  // composer it replaced. Prefer the open text field, else the card itself.
+  // The live pane probe rides along because this registration is a render-time
+  // value: a surface that becomes focused restores focus before a backgrounded
+  // card has re-rendered, so selection has to be able to re-ask.
   useLayoutEffect(() => {
     return registerComposerFocus(
       composerSurfaceId,
@@ -492,12 +568,17 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
           containerRef.current?.contains(activeElement) === true,
         isEligible: () => containerRef.current?.isConnected === true,
       },
-      isActive,
+      focusActive,
+      isPaneFocusedNow,
     );
-  }, [composerSurfaceId, isActive]);
+  }, [composerSurfaceId, focusActive, isPaneFocusedNow]);
 
   return {
     containerRef,
+    // The one focus-ownership answer for this card, for the field-level
+    // autofocus in `QuestionPage` as much as for the card itself - never a
+    // second boolean that means something slightly different.
+    focusActive,
     total,
     safeIndex,
     question,

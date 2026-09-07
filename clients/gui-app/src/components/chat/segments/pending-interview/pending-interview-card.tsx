@@ -48,6 +48,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
   const shouldReduceMotion = useReducedMotion();
   const {
     containerRef,
+    focusActive,
     total,
     safeIndex,
     question,
@@ -119,7 +120,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
             <QuestionPage
               question={question}
               draft={draft}
-              isActive={props.isActive}
+              focusActive={focusActive}
               disabled={props.isBusy}
               pendingOptionIndex={pendingOptionIndex}
               onToggleOption={toggleOption}

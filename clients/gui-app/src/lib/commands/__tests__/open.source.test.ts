@@ -50,7 +50,7 @@ describe("openSource", () => {
       "Files",
       "Diff",
       "Text search",
-      "Communication graph",
+      "Agent office",
     ]);
     for (const item of items) {
       expect(item.group).toBe("open");

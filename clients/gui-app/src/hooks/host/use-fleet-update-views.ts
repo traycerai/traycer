@@ -169,6 +169,12 @@ function canonicalObservation(input: {
     nowMs: state.dataUpdatedAt,
     // The enum's `local`/`selected` split names WHICH SURFACE owns a canonical read, and this hook cannot know that without a React-context value it would then have to carry in the cache key for a field nothing reads.
     source: "selected",
+    // A cache ENTRY for `host.status` alone: this leg reads no installation
+    // info, so it derives no park. The picker rows therefore show a parked
+    // legacy update as quiet while the Overview shows the park - the same
+    // asymmetry the coarse marker already has for a host whose status this
+    // leg cannot read at all.
+    legacyFacts: null,
   });
   // An errored or paused entry is EXPIRED, not absent.
   // Discarding it here would leave this host's picker row with a bare `unknown` and no retained phase, while the Overview - reading the very same response through `observationFromCanonicalRead` - would still say "last seen downloading".

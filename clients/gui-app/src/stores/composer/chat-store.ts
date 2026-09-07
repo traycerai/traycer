@@ -20,6 +20,7 @@ import type {
   BrowserAnnotationRecord,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
+  AgentMessageReceipt,
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
@@ -129,6 +130,12 @@ export interface ToolSegment {
   agentMessageSend: AgentMessageSend | null;
   // The shell a `traycer_run_shell` call created, stamped on the block at completion.
   managedCommand: ToolCallManagedCommand | null;
+  // Where a `traycer_send_message` call landed: the receiver's transcript
+  // message id, stamped on the block at completion. Lets the "Sent message"
+  // card jump to that row in the receiver's scrollback. Null for every other
+  // tool call, for a TUI receiver, and for sends persisted before the host
+  // carried this (the card then just opens the receiver's tile).
+  agentMessageReceipt: AgentMessageReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;

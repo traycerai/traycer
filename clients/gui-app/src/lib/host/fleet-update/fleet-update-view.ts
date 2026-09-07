@@ -5,9 +5,23 @@ import type {
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
 import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
+import type { LegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
 
 /**
- * The pure projection every update surface reads - landing banner, Settings selector badge, and selected-host Overview all derive from this one function, so the three cannot disagree about what a host is doing.
+ * The pure projection every update surface reads — landing banner, Settings
+ * selector badge, and selected-host Overview all derive from this one function,
+ * so the three cannot disagree about what a host is doing.
+ *
+ * Nothing here reads a clock, a query, or a store: the caller supplies the
+ * observation and `nowMs`. That is what makes the staleness rules testable
+ * without fake timers and what keeps the same input rendering the same view on
+ * every surface.
+ *
+ * THE RULE THIS MODULE EXISTS TO ENFORCE, stated once because every arm below
+ * is a consequence of it: **absence of evidence is never evidence of absence.**
+ * A peer that said nothing, a poll that did not come back, and a record that
+ * could not be read are three different kinds of "we do not know", and none of
+ * them may render as "no update is running" or as "the update failed".
  */
 
 /** Where an observation came from. Presentation and telemetry only. */
@@ -16,12 +30,21 @@ export type FleetUpdateSource =
   | "local"
   /** The Settings-scoped host, over its own live connection. */
   | "selected"
-  /** A remote row read over a BORROWED ready session - never a dial. */
+  /** A remote row read over a BORROWED ready session — never a dial. */
   | "borrowed"
   /** Directory/registry coarse state only; no live read happened. */
   | "registry";
 
-/** One `host.status` read, stamped with client-local freshness. */
+/**
+ * One `host.status` read, stamped with client-local freshness.
+ *
+ * `observedAtMs` / `freshUntilMs` are **presentation only** and must never
+ * order attempt state — that is `attemptId + generation + sequence`, which is
+ * why no timestamp crosses the wire at all. Two clients with skewed clocks have
+ * to be unable to disagree about which attempt is newer; stamping locally on
+ * receipt keeps the freshness question (a local one) away from the ordering
+ * question (a distributed one).
+ */
 export interface FleetUpdateWireObservation {
   readonly hostId: string;
   readonly source: FleetUpdateSource;
@@ -29,22 +52,69 @@ export interface FleetUpdateWireObservation {
   /** After this instant the read is stale and projects `unknown`. */
   readonly freshUntilMs: number;
   /**
-   * `null` means the PEER did not report - it is pre-`host.status@1.3`.
-   * It does NOT mean "no update": see {@link projectFleetUpdateView}'s `unknown` arm.
+   * `null` means the PEER did not report — it is pre-`host.status@1.3`. It does
+   * NOT mean "no update": see {@link projectFleetUpdateView}'s `unknown` arm.
    */
   readonly operation: HostStatusUpdateOperation | null;
   /** `null` = peer did not say. Every transaction gate fails closed on it. */
   readonly transaction: HostUpdateTransactionCapability | null;
   /**
-   * The released two-state marker (`host.status@1.1`'s `updateProgress`), carried BESIDE the attempt rather than folded into it.
+   * The released two-state marker (`host.status@1.1`'s `updateProgress`),
+   * carried BESIDE the attempt rather than folded into it.
+   *
+   * It is the only update signal the shipped legacy path emits: `traycer host
+   * update` writes `update-progress.json` around download → swap → restart →
+   * health probe and never a schema-v2 attempt record while the executor
+   * cohort is shadow-disabled. A @1.3 host running that path answers
+   * `updateOperation: {kind:"none"}` (it read the record; there is none) AND
+   * `updateProgress: {state:"updating"}` at the same time, and only this field
+   * lets the projector tell that host apart from a genuinely quiet one.
+   *
+   * `null` when the peer reported nothing in that field.
    */
   readonly coarseProgress: HostStatusUpdateProgress | null;
+  /**
+   * What the install and staged RECORDS say about a parked legacy update
+   * (`legacy-update-facts.ts`), derived by the caller from
+   * `host.getInstallationInfo` beside this same `host.status` read.
+   *
+   * The legacy updater WITHDRAWS its marker when a busy host makes it stop, so
+   * for the two parks it can leave behind — bytes installed but not running,
+   * bytes staged and waiting — the coarse field says nothing and these facts
+   * are the only signal. Consulted after the coarse marker and before `idle`.
+   *
+   * `null` when the caller had no installation read to derive from: the
+   * borrowed fleet leg, the landing banner (which keeps its own desktop-status
+   * debt arm), and a surface whose installation query has not answered. Like
+   * every other `null` on this record it means "not observed", never "no
+   * park".
+   */
+  readonly legacyFacts: LegacyUpdateFacts | null;
 }
 
-/** What the durable record on this machine establishes for the host-down window. */
+/**
+ * What the DURABLE RECORD on this machine establishes, for the host-down
+ * window (Ticket 07 §5.2.7).
+ *
+ * ## Why this is a second arm rather than a synthesized `operation`
+ *
+ * A `host.status` operation carries `liveness`, `execution`, busy counts and an
+ * error — facts only a RUNNING host can report. The record establishes none of
+ * them. Building an `operation` here would mean inventing those fields, and an
+ * invented `liveness` is the difference between "an update is running" and "a
+ * file says an update was running": exactly the fabrication the module header
+ * forbids. So the arm carries only what the record actually says, and the
+ * projector has a branch that knows it cannot ask liveness questions of it.
+ *
+ * ## What it is NOT
+ *
+ * Not a substitute for a live read. A fresh wire observation always outranks
+ * it ({@link preferLiveOverRecord}), because a running host reporting on itself
+ * is strictly better evidence than a file describing what it last wrote.
+ */
 export interface FleetUpdateRecordObservation {
   readonly hostId: string;
-  /** Discriminant. Never one of {@link FleetUpdateSource} - no live read happened. */
+  /** Discriminant. Never one of {@link FleetUpdateSource} — no live read happened. */
   readonly source: "durable-record";
   readonly observedAtMs: number;
   readonly attemptId: string;
@@ -53,7 +123,14 @@ export interface FleetUpdateRecordObservation {
   readonly phase: HostUpdateAttemptPhase;
 }
 
-/** Everything the projector accepts. */
+/**
+ * Everything the projector accepts.
+ *
+ * Discriminated on `source`, and the record arm's literal is deliberately
+ * OUTSIDE `FleetUpdateSource` so the two can never be confused by a widening
+ * of that union — a new live source is still a live source, and adding one
+ * must not silently make it record-derived.
+ */
 export type FleetUpdateObservation =
   | FleetUpdateWireObservation
   | FleetUpdateRecordObservation;
@@ -66,13 +143,23 @@ export function isRecordObservation(
 }
 
 /**
- * Measured progress, with the three quantities kept INDEPENDENT because the wire makes them independent: `percent`, `bytes` and `totalBytes` are each separately nullable, and a host that streams an unsized body reports bytes with no percentage at all.
+ * Measured progress, with the three quantities kept INDEPENDENT because the
+ * wire makes them independent: `percent`, `bytes` and `totalBytes` are each
+ * separately nullable, and a host that streams an unsized body reports bytes
+ * with no percentage at all.
+ *
+ * `indeterminate` therefore still carries its counters. The first shape of this
+ * type dropped them — it treated "no percentage" as "nothing measured" — which
+ * silently discarded a real `80 MB of 200 MB` and left the surface with an
+ * anonymous moving bar. The bar's determinacy and the byte detail are two
+ * different questions, and the contract asks for "real percentage/bytes when
+ * known", not for one gated on the other.
  */
 export type FleetUpdateProgress =
   | { readonly kind: "none" }
   /**
-   * Running, and the host cannot express it as a fraction.
-   * The BAR renders indeterminate; any counters here are still true and still rendered.
+   * Running, and the host cannot express it as a fraction. The BAR renders
+   * indeterminate; any counters here are still true and still rendered.
    */
   | {
       readonly kind: "indeterminate";
@@ -88,15 +175,19 @@ export type FleetUpdateProgress =
 
 export type FleetUpdateViewKind =
   /**
-   * We do not know.
-   * Covers a pre-1.3 peer, a stale or missing poll, and a lost session.
+   * We do not know. Covers a pre-1.3 peer, a stale or missing poll, and a lost
+   * session. NEVER collapses into `idle` or `failed`.
    */
   | "unknown"
   /** Read cleanly; this host has no attempt. */
   | "idle"
   /**
-   * An update is in flight and the host can say nothing finer than that.
-   * The legacy `traycer host update` path reports through the coarse `updateProgress` marker alone, which has no phase, no target and no percentage - so this kind exists for exactly that signal, and a surface renders it as a generic, indeterminate "Updating host".
+   * An update is in flight and the host can say nothing finer than that. The
+   * legacy `traycer host update` path reports through the coarse
+   * `updateProgress` marker alone, which has no phase, no target and no
+   * percentage — so this kind exists for exactly that signal, and a surface
+   * renders it as a generic, indeterminate "Updating host". A live phase from
+   * the attempt record always outranks it.
    */
   | "updating"
   | "downloading"
@@ -119,18 +210,51 @@ export interface FleetUpdateView {
   readonly targetVersion: string | null;
   readonly progress: FleetUpdateProgress;
   /**
-   * True when the view describes evidence we could not refresh - a stale poll, or a live phase whose liveness the host could not establish.
+   * True when the view describes evidence we could not refresh — a stale poll,
+   * or a live phase whose liveness the host could not establish.
+   *
+   * Surfaces MUST qualify a view carrying this ("last seen …") rather than
+   * presenting it as current. It is deliberately separate from `kind`: a
+   * `downloading` that has gone stale is still the last thing we knew, and
+   * throwing that away would replace a qualified truth with nothing.
    */
   readonly qualified: boolean;
   /**
-   * The phase we last actually OBSERVED, when `kind` has since decayed to `unknown` - and `null` in every other case.
+   * The phase we last actually OBSERVED, when `kind` has since decayed to
+   * `unknown` — and `null` in every other case.
+   *
+   * The invariant, which is what makes this safe to add beside `kind`:
+   * **`lastKnownKind !== null` implies `kind === "unknown"`.** It is never a
+   * second opinion about the present; it is the only opinion about the past,
+   * and it exists because the two were previously the same field and the past
+   * lost.
+   *
+   * Staleness used to overwrite the observed phase with `unknown` and drop it,
+   * while the comment beside that line promised a surface could still say "last
+   * seen preparing". Nothing could: the phase was gone by the time any consumer
+   * saw the view, so an offline row rendered a blank badge and the banner the
+   * generic "Update state unknown" — the required qualified state was not merely
+   * unrendered, it was unrepresentable.
+   *
+   * WHAT THIS MUST NOT DO. Every gate and every cadence decision reads `kind`,
+   * which is `unknown`, so a retained phase can neither hold a lifecycle gate
+   * nor earn the active poll. That is not an accident of the current consumers —
+   * it is the point. Reintroducing the lock through a retained `downloading`
+   * would be the stale-gate defect a second time, arriving through the fix for
+   * a different one.
+   *
+   * Surfaces MUST qualify it explicitly ("last seen …"). Rendering it bare is
+   * indistinguishable from claiming it is current.
    */
   readonly lastKnownKind: FleetUpdateViewKind | null;
   /** When {@link lastKnownKind} was observed. `null` whenever that is. */
   readonly lastObservedAtMs: number | null;
   /**
-   * Live work blocking the update, from the SAME read as the phase.
-   * `null` means the host did not report a count - never a fabricated zero.
+   * Live work blocking the update, from the SAME read as the phase. `null`
+   * means the host did not report a count — never a fabricated zero.
+   *
+   * Non-null with a positive count is what entitles a surface to show
+   * **Force restart…**.
    */
   readonly blockingSessionCount: number | null;
   readonly blockingBreakdown: HostBusyBreakdown | null;
@@ -138,7 +262,16 @@ export interface FleetUpdateView {
   readonly errorMessage: string | null;
 }
 
-/** "We know nothing", as a value. */
+/**
+ * "We know nothing", as a value.
+ *
+ * Exported so no caller has to hand-write this literal. Two already did, and a
+ * hand-written copy is a maintenance trap with a delay fuse: adding
+ * `lastKnownKind`/`lastObservedAtMs` to {@link FleetUpdateView} would have
+ * broken each copy in a different file, and the tempting fix at each site is to
+ * paste the missing fields rather than to notice there should only ever have
+ * been one of these.
+ */
 export const UNKNOWN_FLEET_UPDATE_VIEW: FleetUpdateView = {
   kind: "unknown",
   attemptId: null,
@@ -156,11 +289,42 @@ export interface FleetUpdateViewInput {
   /** `null` when nothing has been observed for this host yet. */
   readonly observation: FleetUpdateObservation | null;
   readonly nowMs: number;
-  /** Whether this client currently has a live route to the host. */
+  /**
+   * Whether this client currently has a live route to the host.
+   *
+   * Used for exactly one thing: telling `restarting` from `reconnecting`. The
+   * host says `restarting` — that is its phase — and a client that has since
+   * lost the connection is the only party that can observe the *reconnect*
+   * half. A client that never saw the restart shows generic offline/unknown
+   * instead, which is the accepted cost of having no cloud progress journal.
+   */
   readonly connected: boolean;
 }
 
-/** Projects an observation into the one view every surface renders from. */
+/**
+ * Projects an observation into the one view every surface renders from.
+ *
+ * The order of the guards is the contract, so it is worth reading as a
+ * sequence rather than as a switch:
+ *
+ * 1. **No observation at all** → `unknown`. A cache-cold client knows nothing.
+ * 2. **Stale observation** → `unknown`, but *qualified* and carrying the last
+ *    phase, so a surface can say "last seen downloading" rather than going
+ *    blank. A missed poll is not a state change on the host.
+ * 3. **`operation === null`** → the coarse `updateProgress` view when the peer
+ *    reported one, else the record-derived park ({@link legacyFactsView}),
+ *    else `unknown`. This is the one that is easy to get
+ *    wrong and expensive when wrong: for a REMOTE host on a per-host `manual`
+ *    update policy this is potentially the indefinite steady state, not an
+ *    upgrade transient. Reading it as "no update in progress" would show those
+ *    users nothing during a real update, for as long as their host stayed on
+ *    `@1.2`.
+ * 4. **`kind: "none"`** → the coarse marker, else the record-derived park,
+ *    else `idle`. The host looked and there is nothing.
+ * 5. **`kind: "unavailable"`** → `unavailable`. Fail-closed evidence stays
+ *    distinct from both "no attempt" and "failed".
+ * 6. **`kind: "attempt"`** → liveness first, then phase.
+ */
 export function projectFleetUpdateView(
   input: FleetUpdateViewInput,
 ): FleetUpdateView {
@@ -169,7 +333,32 @@ export function projectFleetUpdateView(
     return UNKNOWN_FLEET_UPDATE_VIEW;
   }
 
-  // Host-down window: handled before the wire arms because it answers a different question with different evidence, and the guards below all presuppose a peer that spoke.
+  // THE HOST-DOWN WINDOW (Ticket 07 §5.2.7). Handled before the wire arms
+  // because it answers a different question with different evidence, and the
+  // guards below all presuppose a peer that spoke.
+  //
+  // The record establishes that an attempt EXISTS and what phase it last
+  // reached. It establishes nothing about whether anything is still working on
+  // it — no liveness, no execution, no busy counts. So this projects the
+  // qualified-stale shape and NOT a live phase:
+  //
+  //   kind: "unknown"        - every gate and every cadence decision reads
+  //                            `kind`, and a host we cannot reach must hold no
+  //                            gate and earn no active poll.
+  //   lastKnownKind: <phase> - the phase is still the last thing we knew, and
+  //                            throwing it away would replace a qualified
+  //                            truth with nothing.
+  //
+  // That is exactly the distinction §5.2.7 asks for: "attempt progressing" is a
+  // live `kind`, "attempt exists, host unreachable" is `unknown` + a retained
+  // phase, so a surface renders "last seen preparing v2.0.0" rather than either
+  // a bare offline badge or a false claim of progress.
+  //
+  // `connected: false` is passed deliberately rather than threading
+  // `input.connected`: the only phase whose rendering depends on the client's
+  // vantage is `restarting`, and reading a record because the host is down IS
+  // the disconnected vantage. Passing `true` here would render `restarting`
+  // for a host that is not answering.
   if (isRecordObservation(observation)) {
     return {
       ...UNKNOWN_FLEET_UPDATE_VIEW,
@@ -183,22 +372,71 @@ export function projectFleetUpdateView(
   const stale = nowMs > observation.freshUntilMs;
   const operation = observation.operation;
 
-  // THE PEER SAID NOTHING.
-  // Kept as its own branch, above and separate from `kind: "none"`, and deliberately NOT merged with it - the two look alike (both are "no attempt to show") and mean opposite things:
+  // THE PEER SAID NOTHING. Kept as its own branch, above and separate from
+  // `kind: "none"`, and deliberately NOT merged with it — the two look alike
+  // (both are "no attempt to show") and mean opposite things:
+  //
+  //   null        -> this peer is pre-@1.3. It cannot tell us about attempts at
+  //                  all. It may well be updating right now.
+  //   kind:"none" -> this peer CAN tell us, looked, and there is nothing.
+  //
+  // Collapsing them renders a mid-update remote host as "up to date". That is
+  // not a hypothetical: for a remote host on a per-host `manual` update policy
+  // administered from another machine, `null` is potentially the INDEFINITE
+  // steady state rather than an upgrade transient, so the wrong answer would
+  // persist for as long as that host stayed on @1.2.
+  //
+  // Written as two independent early returns rather than one guard with an
+  // inner ternary so that no single edit — a "simplification", a merged
+  // condition — can silently turn the first into the second.
   if (operation === null) {
-    // A pre-@1.3 peer cannot report an attempt, but it CAN report the coarse `updateProgress` marker (`host.status@1.1`), and for that cohort the marker is the only update signal there is.
+    // A pre-@1.3 peer cannot report an attempt, but it CAN report the coarse
+    // `updateProgress` marker (`host.status@1.1`), and for that cohort the
+    // marker is the only update signal there is. Consulted first: without it
+    // the landing banner and the host badges hid a live or failed legacy
+    // update on exactly the hosts that could say nothing finer. Only when the
+    // peer reported no marker either does this fall through to `unknown` -
+    // never `idle`, for the reasons above.
     const coarseView = coarseProgressView(observation, stale);
     if (coarseView !== null) return coarseView;
+    // Same order as the `none` arm below: a park the RECORDS describe is
+    // rendered for this cohort too, because a pre-@1.3 host's legacy updater
+    // parks in exactly the same way as a current one's.
+    const parkedView = legacyFactsView(observation, stale);
+    if (parkedView !== null) return parkedView;
     return UNKNOWN_FLEET_UPDATE_VIEW;
   }
 
   if (operation.kind === "none") {
-    // "No attempt record" is NOT "no update".
-    // The shipped legacy update path (`traycer host update`, every host while the executor cohort is shadow -disabled) writes no schema-v2 record at all; it reports through the coarse `updateProgress` marker, and a @1.3 host on that path answers `{kind:"none"}`.
+    // "No attempt record" is NOT "no update". The shipped legacy update path
+    // (`traycer host update`, every host while the executor cohort is shadow
+    // -disabled) writes no schema-v2 record at all; it reports through the
+    // coarse `updateProgress` marker, and a @1.3 host on that path answers
+    // `{kind:"none"}` here while `updateProgress` says `updating`. Reading
+    // the attempt alone rendered a live download → swap → restart as "Host is
+    // up to date" — on the very Overview whose Update now had just started it
+    // — which is the incident this branch was rewritten for. The coarse
+    // marker is consulted FIRST, and only its absence means quiet.
     const coarseView = coarseProgressView(observation, stale);
     if (coarseView !== null) return coarseView;
-    // A stale read of a quiet host is still unknown rather than idle: the absence of an attempt was true when we looked, and we have since stopped looking.
-    // Claiming "up to date" from a reading we cannot refresh is the same class of error as claiming an update is running from one.
+    // Then the parks the marker CANNOT carry. The legacy updater withdraws
+    // its marker when a busy host makes it stop, leaving either bytes
+    // installed under a host still running the old version, or a stage
+    // waiting for the host to go idle. Both are visible in the install and
+    // staged records and nowhere else, and reading the marker alone rendered
+    // them as "Host is up to date" - on an Overview whose header said rc.2
+    // and whose Installation card said rc.3.
+    const parkedView = legacyFactsView(observation, stale);
+    if (parkedView !== null) return parkedView;
+    // A stale read of a quiet host is still unknown rather than idle: the
+    // absence of an attempt was true when we looked, and we have since stopped
+    // looking. Claiming "up to date" from a reading we cannot refresh is the
+    // same class of error as claiming an update is running from one.
+    //
+    // The retained phase is `idle` because that IS what we last saw, and the
+    // offline row in the experience contract wants exactly that ("last known
+    // version; live update state unknown"). Whether a surface says so is the
+    // surface's call — this layer's job is not to throw the fact away.
     if (stale) {
       return {
         ...UNKNOWN_FLEET_UPDATE_VIEW,
@@ -210,8 +448,10 @@ export function projectFleetUpdateView(
   }
 
   if (operation.kind === "unavailable") {
-    // Deliberately NOT downgraded by staleness.
-    // This is a durable fact about a file on that host, not a live reading: a corrupt record does not repair itself because our poll lapsed, and hiding it behind `unknown` would take the repair path off the screen.
+    // Deliberately NOT downgraded by staleness. This is a durable fact about a
+    // file on that host, not a live reading: a corrupt record does not repair
+    // itself because our poll lapsed, and hiding it behind `unknown` would take
+    // the repair path off the screen.
     return {
       ...UNKNOWN_FLEET_UPDATE_VIEW,
       kind: "unavailable",
@@ -236,8 +476,12 @@ export function projectFleetUpdateView(
   } satisfies Pick<FleetUpdateView, "lastKnownKind" | "lastObservedAtMs">;
 
   if (stale) {
-    // The last phase, explicitly qualified, and now actually CARRIED rather than described in a comment.
-    // `kind` decays to `unknown` - every gate and every cadence decision reads it, and both must treat this host as one we know nothing current about - while `lastKnownKind` keeps the phase so a surface can say "last seen preparing v1.2.3" instead of dropping to.
+    // The last phase, explicitly qualified, and now actually CARRIED rather
+    // than described in a comment. `kind` decays to `unknown` — every gate and
+    // every cadence decision reads it, and both must treat this host as one we
+    // know nothing current about — while `lastKnownKind` keeps the phase so a
+    // surface can say "last seen preparing v1.2.3" instead of dropping to a
+    // bare "offline" that loses everything we knew.
     return {
       ...base,
       kind: "unknown",
@@ -248,10 +492,11 @@ export function projectFleetUpdateView(
   }
 
   // Liveness is the host's read-side conclusion joining the attempt lock's
-  // holder, and a client cannot re-derive it - so it outranks the phase.
+  // holder, and a client cannot re-derive it — so it outranks the phase.
   if (operation.liveness === "interrupted") {
-    // The ONLY route to `failed` that the phase alone does not carry: a non-terminal, non-parked attempt with positive proof its executor is gone.
-    // `indeterminate` deliberately does not reach here.
+    // The ONLY route to `failed` that the phase alone does not carry: a
+    // non-terminal, non-parked attempt with positive proof its executor is
+    // gone. `indeterminate` deliberately does not reach here.
     return {
       ...base,
       ...noRetainedPhase,
@@ -266,17 +511,35 @@ export function projectFleetUpdateView(
     ...noRetainedPhase,
     kind: phaseKind(operation.phase, input.connected),
   };
-  // `indeterminate` means the host could not establish whether the executor is alive.
-  // The phase is still the best thing we have, so it is shown - and qualified, so no surface presents it as confirmed-live.
+  // `indeterminate` means the host could not establish whether the executor is
+  // alive. The phase is still the best thing we have, so it is shown — and
+  // qualified, so no surface presents it as confirmed-live.
+  //
+  // No retained phase here even though this view IS qualified: `kind` is the
+  // live phase, so there is nothing in the past that `kind` is not already
+  // saying. `lastKnownKind` is populated only where `kind` decayed to
+  // `unknown` — that is the invariant the field's doc states.
   return { ...view, qualified: operation.liveness === "indeterminate" };
 }
 
 /**
- * What the coarse `updateProgress` marker says, as a view kind - or `null` when it says nothing, which is the only case that may fall through to `idle`.
+ * What the coarse `updateProgress` marker says, as a view kind — or `null`
+ * when it says nothing, which is the only case that may fall through to `idle`.
+ *
+ * `updating` is the marker's whole vocabulary for "in flight": the legacy
+ * updater sets it before the download and clears it after the post-restart
+ * health probe, so it covers every phase without naming one. `failed` carries
+ * the cause the updater terminated the marker with — the health-check failure
+ * that used to be invisible on a @1.3 peer, because the Overview only read the
+ * coarse field for peers that could not report an attempt.
  */
 /**
- * The view the coarse `updateProgress` marker projects on its own, or `null` when the peer reported no marker.
- * Shared by the two arms that have no attempt to read - a pre-@1.3 peer (`operation === null`) and a @1.3 peer with no record (`kind: "none"`) - so the two cannot drift on how the legacy path's only signal is rendered.
+ * The view the coarse `updateProgress` marker projects on its own, or `null`
+ * when the peer reported no marker. Shared by the two arms that have no
+ * attempt to read - a pre-@1.3 peer (`operation === null`) and a @1.3 peer
+ * with no record (`kind: "none"`) - so the two cannot drift on how the legacy
+ * path's only signal is rendered. A live phase from an attempt record always
+ * outranks it; neither caller reaches here with one.
  */
 function coarseProgressView(
   observation: FleetUpdateWireObservation,
@@ -296,12 +559,84 @@ function coarseProgressView(
     ...UNKNOWN_FLEET_UPDATE_VIEW,
     kind: coarse.kind,
     qualified: false,
-    // Indeterminate, never `none`: the marker proves motion and nothing about how far along it is, and a surface draws that as a moving bar rather than as an operation with no progress to show.
+    // Indeterminate, never `none`: the marker proves motion and nothing
+    // about how far along it is, and a surface draws that as a moving bar
+    // rather than as an operation with no progress to show.
     progress:
       coarse.kind === "updating"
         ? { kind: "indeterminate", bytes: null, totalBytes: null }
         : { kind: "none" },
     errorMessage: coarse.errorMessage,
+  };
+}
+
+/**
+ * The view a parked legacy update projects from the RECORDS, or `null` when
+ * the caller derived no park (or had nothing to derive from).
+ *
+ * The two kinds already exist for the schema-v2 attempt's own parks and carry
+ * exactly the right copy, gates and cadence: `waiting-to-activate` ("Update
+ * installed — restart host to finish") and `waiting-for-work` ("Update
+ * waits for N sessions to finish", with **Force** when the count is
+ * positive). Neither holds the lifecycle gate nor earns the fast poll — a park
+ * can sit for days, and the restart it waits for must stay pressable.
+ *
+ * Debt outranks the staged wait when both hold (rc.3 installed, rc.4 staged,
+ * rc.2 running and busy): the restart is the smaller, always-available step,
+ * and the stage is applied by the next run once the host is idle anyway.
+ *
+ * Consulted AFTER the coarse marker on purpose. A live `updating` means an
+ * updater is working right now and its park, if any, is still ahead of it; a
+ * retained `failed` is real evidence about the last run that a derived park
+ * must not paper over — the Overview keeps the failure text and offers
+ * Restart from the debt fact directly, off the view kind.
+ */
+function legacyPark(facts: LegacyUpdateFacts): {
+  readonly kind: "waiting-to-activate" | "waiting-for-work";
+  readonly targetVersion: string;
+  readonly blockingSessionCount: number | null;
+} | null {
+  // Debt outranks a staged wait: the installed bytes are the nearer fact,
+  // and a restart resolves the debt before any stage can matter.
+  if (facts.activationDebt !== null) {
+    return {
+      kind: "waiting-to-activate",
+      targetVersion: facts.activationDebt.installedVersion,
+      blockingSessionCount: null,
+    };
+  }
+  if (facts.stagedWait !== null) {
+    return {
+      kind: "waiting-for-work",
+      targetVersion: facts.stagedWait.stagedVersion,
+      blockingSessionCount: facts.stagedWait.blockingSessionCount,
+    };
+  }
+  return null;
+}
+
+function legacyFactsView(
+  observation: FleetUpdateWireObservation,
+  stale: boolean,
+): FleetUpdateView | null {
+  const facts = observation.legacyFacts;
+  if (facts === null) return null;
+  const park = legacyPark(facts);
+  if (park === null) return null;
+  if (stale) {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      targetVersion: park.targetVersion,
+      lastKnownKind: park.kind,
+      lastObservedAtMs: observation.observedAtMs,
+    };
+  }
+  return {
+    ...UNKNOWN_FLEET_UPDATE_VIEW,
+    kind: park.kind,
+    targetVersion: park.targetVersion,
+    blockingSessionCount: park.blockingSessionCount,
+    qualified: false,
   };
 }
 
@@ -320,7 +655,17 @@ function coarseKind(coarse: HostStatusUpdateProgress | null): {
   };
 }
 
-/** Whether a view has nothing a person needs to see about an update. */
+/**
+ * Whether a view has nothing a person needs to see about an update.
+ *
+ * `idle` is a fresh read with no attempt; `unknown` with no retained phase (or
+ * a retained `idle`) is a host we cannot currently ask and last saw quiet.
+ * Neither is a claim about the catalog — "Host is up to date" is a sentence
+ * about VERSIONS, which this projection knows nothing about — so a surface that
+ * also renders the catalog's own answer ("v2.0.0 is available.") must not put
+ * this view beside it. The landing banner and the Overview both hide on this
+ * predicate; it lives here so they cannot drift on where "quiet" begins.
+ */
 export function isQuietUpdateView(view: FleetUpdateView): boolean {
   if (view.kind === "idle") return true;
   if (view.kind !== "unknown") return false;
@@ -332,8 +677,12 @@ export function isQuietUpdateView(view: FleetUpdateView): boolean {
 }
 
 /**
- * The ONE phase -> kind mapping.
- * Both observation arms call it.
+ * The ONE phase -> kind mapping. Both observation arms call it.
+ *
+ * Takes the phase rather than the operation precisely so the record arm can
+ * reach it: a second copy of this switch is the duplicated-policy class this
+ * epic keeps paying for, and here it would mean the banner and the badge could
+ * disagree about what `restarting` looks like.
  */
 function phaseKind(
   phase: HostUpdateAttemptPhase,
@@ -351,8 +700,10 @@ function phaseKind(
     case "waiting-to-activate":
       return "waiting-to-activate";
     case "restarting":
-      // The one place the client's own vantage changes the answer.
-      // Same host phase, two honest renderings: still connected means the restart has been promised but not yet taken the connection down; connection lost means we are waiting for it to come back.
+      // The one place the client's own vantage changes the answer. Same host
+      // phase, two honest renderings: still connected means the restart has
+      // been promised but not yet taken the connection down; connection lost
+      // means we are waiting for it to come back.
       return connected ? "restarting" : "reconnecting";
     case "verifying":
       return "verifying";
@@ -361,8 +712,10 @@ function phaseKind(
     case "failed":
       return "failed";
     case "superseded":
-      // A superseded attempt is terminal bookkeeping, not something a person needs to act on: a NEWER attempt replaced it, and that attempt is what the record now describes.
-      // Showing it would put a dead target on screen beside the live one.
+      // A superseded attempt is terminal bookkeeping, not something a person
+      // needs to act on: a NEWER attempt replaced it, and that attempt is what
+      // the record now describes. Showing it would put a dead target on screen
+      // beside the live one.
       return "idle";
   }
 }
@@ -370,17 +723,23 @@ function phaseKind(
 function projectProgress(
   operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>,
 ): FleetUpdateProgress {
-  // Parked and terminal attempts are not making progress, so they carry none -
+  // Parked and terminal attempts are not making progress, so they carry none —
   // a bar frozen at 40% under "Waiting for work" reads as a stall.
   if (operation.execution !== "active") return { kind: "none" };
   const progress = operation.progress;
-  // Read ONCE, above the percentage branch, and carried into both arms.
-  // The three fields are independently nullable on the wire, so "no percentage" says nothing about whether bytes were measured - reading the counters inside the determinate arm only, as this did, threw away a complete `80 MB of 200 MB` because the host could.
+  // Read ONCE, above the percentage branch, and carried into both arms. The
+  // three fields are independently nullable on the wire, so "no percentage"
+  // says nothing about whether bytes were measured — reading the counters
+  // inside the determinate arm only, as this did, threw away a complete
+  // `80 MB of 200 MB` because the host could not also express it as a
+  // fraction.
   const bytes = progress?.bytes ?? null;
   const totalBytes = progress?.totalBytes ?? null;
   if (progress === null || progress.percent === null) {
-    // Active with nothing measured is explicitly INDETERMINATE, never 0%.
-    // A zero-width determinate bar and an unmeasured one look identical for the first instant and then diverge into a lie.
+    // Active with nothing measured is explicitly INDETERMINATE, never 0%. A
+    // zero-width determinate bar and an unmeasured one look identical for the
+    // first instant and then diverge into a lie. That is about the BAR; the
+    // counters ride along and are rendered beside it.
     return { kind: "indeterminate", bytes, totalBytes };
   }
   return {
@@ -396,7 +755,19 @@ function clampPercent(percent: number): number {
   return Math.max(0, Math.min(100, percent));
 }
 
-/** Whether this view entitles a surface to offer **Force restart…**. */
+/**
+ * Whether this view entitles a surface to offer **Force restart…**.
+ *
+ * Two conditions, both required. The attempt must be parked on live work
+ * (`waiting-for-work`), and the host must have REPORTED a positive count from
+ * the same read. A `null` count is not zero and not "probably fine": it means
+ * no live source, and offering to end work we cannot count is how a button
+ * promises "ends 2 sessions" and ends five.
+ *
+ * This never gates the host's own Restart control. Per the ticket's standing
+ * rule, update state is not a host-action mutex — the overflow Restart stays
+ * available whatever this returns.
+ */
 export function offersForceRestart(view: FleetUpdateView): boolean {
   return (
     view.kind === "waiting-for-work" &&
@@ -406,8 +777,48 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
 }
 
 /**
- * Hold page-wide lifecycle controls only while execution is active; parked, terminal, `unknown`, and coarse `updating` fail open.
- * Does not gate starting a conflicting update (that is the host contender boundary).
+ * Whether an update is genuinely EXECUTING right now — the only thing that may
+ * hold a page-wide lifecycle gate.
+ *
+ * This exists because the coarse `updateProgress` field cannot answer it, and
+ * the difference is a shipped-defect-sized gap. Ticket 04's derivation maps a
+ * PARKED attempt (`waiting-for-work`, `waiting-to-activate`) to
+ * `{state:"updating"}` — correctly, for its own purpose: bytes or an activation
+ * really are still pending, and calling it `failed` would be worse. But a
+ * consumer that reads "updating" as "a mutation is in flight, lock the page"
+ * then locks it for the entire life of the park, and `waiting-to-activate` is
+ * designed to survive a reboot and sit for a week.
+ *
+ * The result would be the exact inversion the ticket forbids twice: a parked
+ * update disabling Restart, Diagnostics and the service verbs — while the
+ * restart it is waiting for is the user's only way out. A banner may inform and
+ * may offer **Force restart…**; it may never be the thing standing between a
+ * person and their host.
+ *
+ * So: `execution === "active"` only. Parked is not executing. Terminal is not
+ * executing. `unknown` is not executing either — and that last one is a
+ * deliberate fail-OPEN rather than fail-closed, which is worth stating because
+ * it inverts this codebase's usual instinct. The risk of leaving controls live
+ * during an unobserved update is a refused or queued mutation; the risk of
+ * locking them on a stale reading is a host nobody can recover, indefinitely,
+ * with no way to clear it. Only the second is unrecoverable, so `unknown`
+ * leaves the controls alone.
+ *
+ * Note what this does NOT gate: starting a conflicting UPDATE. A parked attempt
+ * absolutely should stop a second install being launched over it — that is the
+ * contender boundary's job on the host, and it refuses with `already-updating`.
+ * This predicate is only about the surrounding lifecycle controls.
+ *
+ * `updating` — the coarse `updateProgress` marker projected beside a `none`
+ * attempt — is deliberately in the fail-open arm with `unknown`, for the same
+ * reason `unknown` is. The marker is a file the legacy updater writes before
+ * it starts and deletes when it finishes; it carries no liveness, and a host
+ * keeps serving a fresh `{state:"updating"}` for as long as that file exists,
+ * which after an updater crash or hang is forever. A gate held by it would be
+ * the unrecoverable case above with a different name: Restart, Diagnostics
+ * and the service verbs disabled indefinitely by an update nobody is running.
+ * The marker informs (a card, a moving bar); it never stands between a
+ * person and their host.
  */
 export function holdsLifecycleGate(view: FleetUpdateView): boolean {
   switch (view.kind) {
@@ -430,7 +841,22 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
   }
 }
 
-/** Whether this host is running an operation worth polling at the fast cadence. */
+/**
+ * Whether this host is running an operation worth polling at the fast cadence.
+ *
+ * Only a genuinely ACTIVE, unqualified operation earns ~2s. A parked attempt
+ * can sit for a week (`waiting-to-activate` survives a reboot by design), a
+ * terminal one is retained for seven days, and a qualified one is evidence we
+ * already know we cannot refresh — none of those justify polling a host every
+ * two seconds, and doing so would be the retry storm §6 forbids.
+ *
+ * The coarse `updating` kind does not earn it either, and for the same
+ * reason it does not hold the lifecycle gate: the marker proves a file
+ * exists, not that anything is moving, and a marker left behind by a crashed
+ * updater would otherwise keep one host on the 2s cadence for as long as any
+ * surface observing it stays mounted. The `host.status` 10s baseline still
+ * shows the card within one poll of a real legacy update.
+ */
 export function warrantsFastPoll(view: FleetUpdateView): boolean {
   if (view.qualified) return false;
   switch (view.kind) {
@@ -453,14 +879,30 @@ export function warrantsFastPoll(view: FleetUpdateView): boolean {
   }
 }
 
-/** Precedence between a live read and the durable record. */
+/**
+ * Precedence between a live read and the durable record (Ticket 07 §5.2.7).
+ *
+ * A FRESH wire observation always wins: a running host reporting on itself is
+ * strictly better evidence than a file describing what it last wrote, and the
+ * record arm exists for the host-down window only.
+ *
+ * Once the wire read has gone stale the record is better — it was read from
+ * this machine's disk just now, so it is a current reading of a durable fact,
+ * where the stale wire observation is an old reading of a live one.
+ *
+ * Deliberately NOT expressed as "whichever was observed most recently". That
+ * rule looks equivalent and is not: the record is re-read on every tick, so its
+ * `observedAtMs` is always newer, and a recency comparison would let it
+ * outrank a perfectly good live read and permanently suppress real progress.
+ */
 export function preferLiveOverRecord(
   wire: FleetUpdateWireObservation | null,
   record: FleetUpdateRecordObservation | null,
   nowMs: number,
 ): FleetUpdateObservation | null {
   if (wire !== null && nowMs <= wire.freshUntilMs) return wire;
-  // Stale or absent wire.
-  // The record fills the window when there is one; when there is not, the stale wire is retained rather than dropped, because its own stale arm still carries `lastKnownKind`.
+  // Stale or absent wire. The record fills the window when there is one; when
+  // there is not, the stale wire is retained rather than dropped, because its
+  // own stale arm still carries `lastKnownKind`.
   return record ?? wire;
 }

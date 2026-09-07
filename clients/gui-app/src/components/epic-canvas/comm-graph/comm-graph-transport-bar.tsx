@@ -1,6 +1,26 @@
 /**
- * IT OWNS THE CURSOR, and it is the only thing that does.
- * SEEKING HAS A KEYBOARD PATH, and not only for accessibility: pointer seeking needs a laid-out track (`getBoundingClientRect`), which jsdom does not provide, so the arrow-key path is also the one an integrated test can drive against the real store.
+ * The media-player transport docked under the graph: play/pause, speed, and a
+ * scrubber whose track carries one marker per captured event.
+ *
+ * IT OWNS THE CURSOR, and it is the only thing that does. The sidebar panel that
+ * used to own playback is gone; the per-epic cursor store survived it, so the
+ * graph still remembers where it was left when the tile is closed and reopened.
+ *
+ * THE TRACK IS THE LOG. Markers are the events themselves, one per row, at their
+ * own timestamps - not buckets, not a sample. Crowding IS the information: a
+ * burst of traffic should look like a burst.
+ *
+ * LIVE IS THE RIGHT EDGE, not a mode. `cursor === null` puts the playhead at the
+ * end of everything captured and lets new rows extend the track under it;
+ * scrubbing back sets a cursor and detaches, exactly like the old scroller
+ * detach did; scrubbing (or playing) to the end re-attaches. There is no
+ * separate "live" rendering path that could disagree with the replayed one.
+ *
+ * SEEKING HAS A KEYBOARD PATH, and not only for accessibility: pointer seeking
+ * needs a laid-out track (`getBoundingClientRect`), which jsdom does not
+ * provide, so the arrow-key path is also the one an integrated test can drive
+ * against the real store. All the positional math lives in
+ * `lib/comm-graph/comm-graph-transport.ts` where it can be tested on numbers.
  */
 import {
   useCallback,
@@ -34,8 +54,9 @@ const MARKER_PREVIEW_MAX_CHARS = 120;
 export interface CommGraphTransportBarProps {
   readonly epicId: string;
   /**
-   * The FULL merged array, not the as-of prefix: the track spans everything captured, and the playhead moves across it.
-   * Handing this the projection would shrink the track every time the user scrubbed back.
+   * The FULL merged array, not the as-of prefix: the track spans everything
+   * captured, and the playhead moves across it. Handing this the projection
+   * would shrink the track every time the user scrubbed back.
    */
   readonly events: ReadonlyArray<CommGraphEvent>;
 }
@@ -111,38 +132,22 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
         onSeekToFraction={seekToFraction}
       />
 
-      <Button
-        type="button"
-        size="xs"
-        variant="ghost"
-        aria-pressed={transport.following}
-        data-testid="comm-graph-transport-follow-live"
-        data-following={transport.following ? "true" : "false"}
-        onClick={transport.followLive}
-        className={cn(
-          "shrink-0",
-          transport.following
-            ? "bg-primary/5 text-primary"
-            : "text-muted-foreground",
-        )}
-      >
-        <LivePulse
-          size="xs"
-          tone={transport.following ? "active" : "idle"}
-          ariaLabel={
-            transport.following ? "Following live" : "Detached from live"
-          }
-          className={undefined}
-        />
-        {transport.following ? "Live" : "Follow live"}
-      </Button>
+      {/*
+        WITH NOTHING CAPTURED THERE IS NO LIVE BADGE either: "Live" next to an
+        empty track reads as a feed that is stuck, when the truth is that there
+        has been nothing to feed. The track itself says so.
+      */}
+      {events.length === 0 ? null : (
+        <CommGraphFollowLiveButton transport={transport} />
+      )}
     </div>
   );
 }
 
 /**
- * The scrubber itself.
- * Split out so the bar stays a layout shell and the track's one real subtlety - what it means when there is nothing to scrub - lives in one place.
+ * The scrubber itself. Split out so the bar stays a layout shell and the track's
+ * one real subtlety - what it means when there is nothing to scrub - lives in
+ * one place.
  */
 function CommGraphTransportTrack(props: {
   readonly transport: CommGraphTransport;
@@ -159,7 +164,9 @@ function CommGraphTransportTrack(props: {
     const track = trackRef.current;
     if (track === null) return null;
     const rect = track.getBoundingClientRect();
-    // jsdom (and a track that has not been laid out yet) reports zero width; dividing by it would seek to NaN, so a pointer seek simply does not happen until there is a real track to seek along.
+    // jsdom (and a track that has not been laid out yet) reports zero width;
+    // dividing by it would seek to NaN, so a pointer seek simply does not
+    // happen until there is a real track to seek along.
     if (rect.width <= 0) return null;
     return (clientX - rect.left) / rect.width;
   }, []);
@@ -212,33 +219,27 @@ function CommGraphTransportTrack(props: {
     [events, transport],
   );
 
+  // After the hooks, so the two renderings share one hook order.
+  if (!hasEvents)
+    return <CommGraphEmptyTrack following={transport.following} />;
+
   return (
-    /*
-     * WITH NOTHING CAPTURED THERE IS NO SLIDER, not a slider that reports nonsense.
-     * An empty epic has no positions to be at, so declaring `min=0 max=0 valuenow=-1` would put a focusable control in the tab order that announces a value outside its own range and moves nowhere when driven.
-     */
     <div
       ref={trackRef}
-      role={hasEvents ? "slider" : undefined}
-      tabIndex={hasEvents ? 0 : undefined}
-      aria-label={hasEvents ? "Event timeline" : undefined}
-      aria-disabled={hasEvents ? undefined : true}
-      aria-valuemin={hasEvents ? 0 : undefined}
-      aria-valuemax={hasEvents ? events.length - 1 : undefined}
-      aria-valuenow={hasEvents ? transport.cursorIndex : undefined}
-      aria-valuetext={hasEvents ? trackValueText(transport) : undefined}
+      role="slider"
+      tabIndex={0}
+      aria-label="Event timeline"
+      aria-valuemin={0}
+      aria-valuemax={events.length - 1}
+      aria-valuenow={transport.cursorIndex}
+      aria-valuetext={trackValueText(transport)}
       data-testid="comm-graph-transport-track"
       data-following={transport.following ? "true" : "false"}
-      data-empty={hasEvents ? "false" : "true"}
-      className={cn(
-        "relative h-6 min-w-0 flex-1 rounded-sm bg-muted/40",
-        hasEvents
-          ? "cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          : "cursor-default opacity-60",
-      )}
-      onPointerDown={hasEvents ? handlePointerDown : undefined}
-      onPointerMove={hasEvents ? handlePointerMove : undefined}
-      onKeyDown={hasEvents ? handleKeyDown : undefined}
+      data-empty="false"
+      className="relative h-6 min-w-0 flex-1 cursor-pointer rounded-sm bg-muted/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onKeyDown={handleKeyDown}
     >
       {/* Elapsed fill: everything the graph is currently showing. */}
       <div
@@ -269,15 +270,94 @@ function CommGraphTransportTrack(props: {
           />
         </TooltipWrapper>
       ))}
-      {!hasEvents ? null : (
-        <div
-          aria-hidden
-          data-testid="comm-graph-transport-playhead"
-          className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-primary"
-          style={{ left: `${playhead * 100}%` }}
-        />
-      )}
+      <div
+        aria-hidden
+        data-testid="comm-graph-transport-playhead"
+        className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-primary"
+        style={{ left: `${playhead * 100}%` }}
+      />
     </div>
+  );
+}
+
+/**
+ * WITH NOTHING CAPTURED THERE IS NO SLIDER, not a slider that reports
+ * nonsense. An empty epic has no positions to be at, so declaring
+ * `min=0 max=0 valuenow=-1` would put a focusable control in the tab order
+ * that announces a value outside its own range and moves nowhere when driven.
+ *
+ * The empty track SAYS it is empty instead. A blank bar beside a disabled play
+ * button reads as a control that is broken; a word in its place reads as a log
+ * that has nothing in it yet - which is the only thing that is true. Short and
+ * literal: created rows are events too, so this is not "no messages".
+ */
+function CommGraphEmptyTrack(props: { readonly following: boolean }) {
+  return (
+    <div
+      aria-disabled
+      data-testid="comm-graph-transport-track"
+      data-following={props.following ? "true" : "false"}
+      data-empty="true"
+      className="relative flex h-6 min-w-0 flex-1 cursor-default items-center justify-center rounded-sm bg-muted/40"
+    >
+      <span
+        data-testid="comm-graph-transport-empty"
+        className="text-ui-xs text-muted-foreground"
+      >
+        No events yet
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The Live badge. A TOGGLE, not a one-way door: pressed while detached it
+ * re-attaches and remembers where you were; pressed again while live it takes
+ * you back there. With nothing to go back to it is a plain "Live".
+ */
+function CommGraphFollowLiveButton(props: {
+  readonly transport: CommGraphTransport;
+}) {
+  const { transport } = props;
+  const canReturn = transport.following && transport.returnCursor !== null;
+  const button = (
+    <Button
+      type="button"
+      size="xs"
+      variant="ghost"
+      aria-pressed={transport.following}
+      data-testid="comm-graph-transport-follow-live"
+      data-following={transport.following ? "true" : "false"}
+      data-can-return={canReturn ? "true" : "false"}
+      onClick={canReturn ? transport.returnToReplay : transport.followLive}
+      className={cn(
+        "shrink-0",
+        transport.following
+          ? "bg-primary/5 text-primary"
+          : "text-muted-foreground",
+      )}
+    >
+      <LivePulse
+        size="xs"
+        tone={transport.following ? "active" : "idle"}
+        ariaLabel={
+          transport.following ? "Following live" : "Detached from live"
+        }
+        className={undefined}
+      />
+      {transport.following ? "Live" : "Follow live"}
+    </Button>
+  );
+  if (!canReturn) return button;
+  return (
+    <TooltipWrapper
+      label="Back to replay position"
+      side="top"
+      sideOffset={4}
+      align="center"
+    >
+      {button}
+    </TooltipWrapper>
   );
 }
 

@@ -1,6 +1,23 @@
 /**
- * The manager is a plain object rather than a hook-per-host because the host set is data-driven (one subscription per host the epic's agents live on) and hooks cannot be opened in a loop.
- * It is also SHARED, not owned by this hook: the Communication panel and the graph tile both call this, and both must see the same event array.
+ * React binding for the comm-graph per-host fan-in.
+ *
+ * The manager is a plain object rather than a hook-per-host because the host set
+ * is data-driven (one subscription per host the epic's agents live on) and hooks
+ * cannot be opened in a loop.
+ *
+ * It is also SHARED, not owned by this hook: the Communication panel and the
+ * graph tile both call this, and both must see the same event array. The
+ * registry hands back the epic's single manager and counts claims, so one
+ * surface open means one subscription and both open still means one. Releasing
+ * DETACHES rather than disposes, which keeps events, cursors and the per-host
+ * snapshot boundaries - so reopening a surface resumes instead of re-pulling,
+ * and history does not re-flash as if it had just arrived.
+ *
+ * THE CLAIM CARRIES THIS SURFACE'S OPENER. `useDurableStreamTransportFactory`
+ * reads its dependencies through a ref that THIS component's effect refreshes,
+ * so the opener goes stale the moment this component unmounts. Handing it over
+ * with the claim - and taking it back on release - is what stops a retained
+ * manager from redialing through a dead surface's frozen refs.
  */
 import {
   useEffect,
@@ -61,9 +78,12 @@ const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
 export function useCommGraphSnapshot(
   epicId: string,
   hostIds: ReadonlyArray<string>,
+  tabHostId: string | null,
 ): CommGraphSnapshot {
   const hostDirectory = useHostDirectoryList();
-  // Stable for this component's lifetime, and reads every host dependency live on each dial - but only while this component is mounted to keep refreshing them, which is why the claim below hands it back on unmount.
+  // Stable for this component's lifetime, and reads every host dependency live
+  // on each dial - but only while this component is mounted to keep refreshing
+  // them, which is why the claim below hands it back on unmount.
   const openTransport = useDurableStreamTransportFactory();
 
   const localOpenerOverride = getCommGraphSubscriptionOpenerOverride();
@@ -82,12 +102,17 @@ export function useCommGraphSnapshot(
     [cloudOpenerOverride, localOpenerOverride, openTransport],
   );
 
-  // This surface's claim identity, stable for its lifetime.
-  // An object rather than the opener itself: a test override hands every surface the SAME opener function, and two surfaces must still count as two claims.
+  // This surface's claim identity, stable for its lifetime. An object rather
+  // than the opener itself: a test override hands every surface the SAME opener
+  // function, and two surfaces must still count as two claims. Held in state
+  // rather than a ref because the effect below closes over it, and a ref may
+  // not be read during render.
   const [claim] = useState<object>(() => ({}));
   const [cloudClaim] = useState<object>(() => ({}));
 
-  // Resolving the manager is claim-free and idempotent, so it is safe here: `useSyncExternalStore` needs it during render, and a StrictMode double render must not double-claim.
+  // Resolving the manager is claim-free and idempotent, so it is safe here:
+  // `useSyncExternalStore` needs it during render, and a StrictMode double
+  // render must not double-claim.
   const manager = useMemo(
     () => getCommGraphSubscriptionManager(epicId),
     [epicId],
@@ -97,8 +122,16 @@ export function useCommGraphSnapshot(
     [epicId],
   );
 
-  // Relay choice never becomes row identity; the host's availability frame is the sole plane verdict.
-  // Relay dialability depends on the pull-only session cache, so the directory query alone cannot see a session dying or appearing under an `offline`/plan-restricted entry.
+  // Any signed-in host may relay the cloud feed. Origin hosts can all be
+  // offline (or absent for legacy agents), but the cloud view remains
+  // available through another host in the user's directory. Relay choice
+  // never becomes row identity; the host's availability frame is the sole
+  // plane verdict.
+  // Relay dialability depends on the pull-only session cache, so the
+  // directory query alone cannot see a session dying or appearing under an
+  // `offline`/plan-restricted entry. This subscription re-renders on a readiness
+  // flip, which recomputes the two memos below and reconciles the new relay
+  // set and readiness keys into the cloud manager as one update.
   const directoryHostIdsForReadiness = useMemo(
     () => (hostDirectory.data ?? []).map((entry) => entry.hostId),
     [hostDirectory.data],
@@ -106,23 +139,46 @@ export function useCommGraphSnapshot(
   const hasReadySessionFor = useRemoteSessionsPollReadiness(
     directoryHostIdsForReadiness,
   );
+  // The TAB's host relays the feed, then everyone else in ID order as failover.
+  //
+  // Every dialable host relays the same rows, so the choice decides only which
+  // link the epic's whole cloud feed rides - and the epic tab is already riding
+  // one. Sorting by ID alone handed the feed to whichever host ID sorted first,
+  // which on an account with several hosts is an unrelated machine. Preferring
+  // the LOCAL host was rejected for the same reason in reverse: on mobile there
+  // is no local host at all, and the feed has to work through the remote host
+  // the tab was opened on like any other.
+  //
+  // `tabHostId` is the Epic SESSION's host (`useEpicSessionHostId`), not the
+  // tile's own `hostId` - this tile is the one kind with no host binding, and
+  // its ref carries an inert placeholder. `null` (no session host yet), or a
+  // tab host the directory cannot dial, leaves the plain ID order below; a tab
+  // host that arrives later just reorders, and a reorder never closes a healthy
+  // incumbent (`reconcileRelays`).
   const relayHostIds = useMemo(() => {
-    const directoryHostIds = hostDirectory.data
+    const dialableHostIds = hostDirectory.data
       ?.filter(
         (entry) =>
           dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
           null,
       )
       .map((entry) => entry.hostId);
-    return Array.from(
-      new Set(
-        directoryHostIds === undefined || directoryHostIds.length === 0
-          ? hostIds
-          : directoryHostIds,
-      ),
-    ).sort();
-  }, [hasReadySessionFor, hostDirectory.data, hostIds]);
-  // Keep that transport identity separately so a retained cloud manager can retry a prior dial/compatibility failure for the same host ID, without reopening on an equivalent directory re-emit.
+    if (dialableHostIds === undefined || dialableHostIds.length === 0) {
+      return Array.from(new Set(hostIds)).sort();
+    }
+    const orderedHostIds = Array.from(new Set(dialableHostIds)).sort();
+    if (tabHostId === null || !orderedHostIds.includes(tabHostId)) {
+      return orderedHostIds;
+    }
+    return [
+      tabHostId,
+      ...orderedHostIds.filter((hostId) => hostId !== tabHostId),
+    ];
+  }, [hasReadySessionFor, hostDirectory.data, hostIds, tabHostId]);
+  // The ID set does not change when a host publishes its endpoint late or
+  // upgrades in place. Keep that transport identity separately so a retained
+  // cloud manager can retry a prior dial/compatibility failure for the same
+  // host ID, without reopening on an equivalent directory re-emit.
   const relayReadinessKeys = useMemo(() => {
     const entriesByHostId = new Map(
       hostDirectory.data?.map((entry) => [entry.hostId, entry]),
@@ -139,14 +195,19 @@ export function useCommGraphSnapshot(
             hostTransportKeyFor(entry, hasReadySessionFor(hostId)) ??
               [
                 entry.hostId,
-                // This arm runs only when the transport refuses the entry, so the coarse bit is constant here and carries no information; the REASON does.
-                // A relay that goes `plan-restricted` → confirmed `offline` must clear the dial/compatibility verdict it retained under the other reason, and comparing the coarse bit would not notice.
+                // Derivation, not the coarse bit. This arm runs only when the
+                // transport refuses the entry, so the coarse bit is constant
+                // here and carries no information; the REASON does. A relay
+                // that goes `plan-restricted` → confirmed `offline` must clear
+                // the dial/compatibility verdict it retained under the other
+                // reason, and comparing the coarse bit would not notice.
                 hostUnavailability(entry) ?? "",
                 entry.version ?? "",
                 entry.websocketUrl ?? "",
               ].join("\u0000"),
-            // A remote host can be re-enrolled without changing its ID, endpoint, or version.
-            // That rotates its Noise key and must clear this relay's retained verdict without redialing other relays.
+            // A remote host can be re-enrolled without changing its ID,
+            // endpoint, or version. That rotates its Noise key and must clear
+            // this relay's retained verdict without redialing other relays.
             isRemoteHostDirectoryEntry(entry) ? entry.publicKey : "",
           ].join("\u0000"),
         ] as const;
@@ -154,7 +215,9 @@ export function useCommGraphSnapshot(
     );
   }, [hasReadySessionFor, hostDirectory.data, relayHostIds]);
 
-  // Read through a ref so acquiring does not re-run (and re-claim) every time the host set changes - the claim only needs the set that is current at the moment it attaches.
+  // Read through a ref so acquiring does not re-run (and re-claim) every time
+  // the host set changes - the claim only needs the set that is current at the
+  // moment it attaches.
   const hostIdsRef = useRef(hostIds);
   useEffect(() => {
     hostIdsRef.current = hostIds;
@@ -164,9 +227,17 @@ export function useCommGraphSnapshot(
     relayHostIdsRef.current = relayHostIds;
   }, [relayHostIds]);
 
+  // ONE effect for both halves of a directory update, and BEFORE the claim
+  // below, so a manager never opens against half-installed state. The two
+  // memos are recomputed by the same render and describe the same directory;
+  // pushing them through separate setters let each one dial on the other
+  // half's stale value.
   useEffect(() => {
-    cloudManager.setRelayReadinessKeys(relayReadinessKeys);
-  }, [cloudManager, relayReadinessKeys]);
+    cloudManager.reconcileRelays({
+      hostIds: relayHostIds,
+      readinessKeys: relayReadinessKeys,
+    });
+  }, [cloudManager, relayHostIds, relayReadinessKeys]);
 
   useEffect(() => {
     acquireCommGraphCloudSubscription(
@@ -179,10 +250,6 @@ export function useCommGraphSnapshot(
       releaseCommGraphCloudSubscription(epicId, cloudClaim);
     };
   }, [cloudClaim, cloudManager, cloudOpener, epicId]);
-
-  useEffect(() => {
-    cloudManager.setRelayHostIds(relayHostIds);
-  }, [cloudManager, relayHostIds]);
 
   useEffect(() => {
     cloudManager.setOriginHostIds(hostIds);
@@ -206,14 +273,18 @@ export function useCommGraphSnapshot(
 
   useEffect(() => {
     if (cloudAvailability !== "available") return;
-    // Availability, the bounded initial snapshot, and caught-up progress are distinct wire frames.
-    // Preserve a held local cursor until the relay says every row through the initial cloud head has been accounted for.
+    // Availability, the bounded initial snapshot, and caught-up progress are
+    // distinct wire frames. Preserve a held local cursor until the relay says
+    // every row through the initial cloud head has been accounted for. The
+    // explicit signal also covers terminal rows skipped as unrepresentable.
     if (!cloudHistoryCaughtUp) return;
     reconcileCommGraphCloudAuthorityCursor(epicId, cloudSnapshot.events);
   }, [cloudAvailability, cloudHistoryCaughtUp, cloudSnapshot.events, epicId]);
 
   // The CLAIM is an effect, so its cleanup balances a StrictMode double-invoke.
-  // The host set goes in WITH it so a retained manager's stale desired set is replaced BEFORE the sockets open, rather than dialing a departed host for a beat.
+  // The host set goes in WITH it so a retained manager's stale desired set is
+  // replaced BEFORE the sockets open, rather than dialing a departed host for a
+  // beat. Later host-set changes are the effect below.
   useEffect(() => {
     if (cloudAvailability === "available") return;
     acquireCommGraphSubscription(epicId, claim, opener, hostIdsRef.current);

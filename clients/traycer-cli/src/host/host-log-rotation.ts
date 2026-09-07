@@ -3,7 +3,7 @@ import { rename, rm, stat } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
 import { hostLogBackupPath, hostLogPath } from "../store/paths";
-import { readHostPidMetadata } from "./pid-metadata";
+import { publishedHostProcessGone, readHostPidMetadata } from "./pid-metadata";
 
 /** Rotate `host.log` once per generation. Do not interpolate this path into other logs. */
 
@@ -103,14 +103,12 @@ async function rotate(
 async function hostIsLive(environment: Environment): Promise<boolean> {
   const metadata = await readHostPidMetadata(environment);
   if (metadata === null) return false;
-  try {
-    // Signal 0 performs the permission/existence check without delivering a
-    // signal: it throws ESRCH when no such process exists.
-    process.kill(metadata.pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  // Liveness and identity: a stopped host's pid recycled onto an unrelated
+  // process is not a host holding this log's fd, and skipping the rotation
+  // for it would let an oversized log of a stopped host grow unbounded. A
+  // record this cannot prove gone (no stamp, a refused probe) keeps the
+  // skip - the safe direction for a live host's session.
+  return !publishedHostProcessGone(metadata);
 }
 
 /** Rotate `host.log` to `host.log.1` when it has grown past {@link MAX_HOST_LOG_BYTES}. Called on the host-start path BEFORE the append fd is opened, so growth is bounded across restarts and a start under the cap keeps appending to the same file - two consecutive starts still land in one log, which is what makes a restart's markers readable in context. */

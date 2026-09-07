@@ -735,6 +735,7 @@ function toolSegment(
     error: null,
     agentMessageSend: null,
     managedCommand: null,
+    agentMessageReceipt: null,
     isStreaming: false,
     endState: null,
     stopped: false,

@@ -188,6 +188,7 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
         args.controller,
         args.label,
         { force: args.force },
+        null,
       ),
     relaunch: (stopped) =>
       relaunchHostAfterRestartWithAttempt(

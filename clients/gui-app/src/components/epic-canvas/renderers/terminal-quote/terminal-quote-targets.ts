@@ -1,18 +1,11 @@
-import { displayTitle } from "@/lib/display-title";
+import {
+  resolveQuoteChatTargets,
+  type QuoteChatTarget,
+  type QuoteChatTargetsInput,
+} from "@/components/epic-canvas/renderers/chat-target-menu/quote-chat-targets";
 import type { ChatsSlice } from "@/stores/epics/open-epic/types";
 
-export interface TerminalQuoteChatTarget {
-  readonly chatId: string;
-  readonly title: string;
-  /** Already tiled in the terminal's own view tab - listed ahead of the rest. */
-  readonly isOpen: boolean;
-  /** The chat the user last focused a composer in. Marked, never reordered. */
-  readonly isLastFocused: boolean;
-  /**
-   * Marked, never reordered or dropped - the chat is real and the user knows it is there, so the roster owes them the row and the reason rather than a silent omission.
-   */
-  readonly isOnOtherHost: boolean;
-}
+export type TerminalQuoteChatTarget = QuoteChatTarget;
 
 export interface TerminalQuoteChatTargetsInput {
   /** Every chat in the Task, in the order the chats sidebar lists them. */
@@ -26,30 +19,21 @@ export interface TerminalQuoteChatTargetsInput {
 }
 
 /**
- * Everything else follows in the exact order the sidebar shows it, so the two lists never disagree about where a chat sits; recency is deliberately NOT the rule here, because during a long agent turn the most recently updated chat is just whichever agent streamed last.
- * Archived chats are excluded: they are hidden from the sidebar, so offering one here would send a message somewhere the user cannot see it.
+ * The chats a terminal selection can be sent to. The terminal is local to the
+ * tile's host, so its agent has no way to resolve a chip naming it from a chat
+ * bound elsewhere; the shared resolver marks those rows. Everything else - the
+ * two bands, sidebar order, archived exclusion - is the shared rule, see
+ * `resolveQuoteChatTargets`.
  */
 export function resolveTerminalQuoteChatTargets(
   input: TerminalQuoteChatTargetsInput,
 ): ReadonlyArray<TerminalQuoteChatTarget> {
-  const rows = input.orderedChatIds.flatMap((chatId) => {
-    if (!Object.hasOwn(input.chats.byId, chatId)) return [];
-    const chat = input.chats.byId[chatId];
-    if (chat.archivedAt !== null) return [];
-    return [
-      {
-        chatId: chat.id,
-        // Addressed as the durable Agent, matching every other chat surface.
-        title: displayTitle(chat.title, "agent"),
-        isOpen: input.openChatIds.has(chat.id),
-        isLastFocused: chat.id === input.lastFocusedChatId,
-        isOnOtherHost:
-          chat.hostId !== null && chat.hostId !== input.terminalHostId,
-      },
-    ];
-  });
-  return [
-    ...rows.filter((row) => row.isOpen),
-    ...rows.filter((row) => !row.isOpen),
-  ];
+  const shared: QuoteChatTargetsInput = {
+    orderedChatIds: input.orderedChatIds,
+    chats: input.chats,
+    openChatIds: input.openChatIds,
+    lastFocusedChatId: input.lastFocusedChatId,
+    sourceHostId: input.terminalHostId,
+  };
+  return resolveQuoteChatTargets(shared);
 }

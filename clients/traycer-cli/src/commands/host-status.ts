@@ -6,11 +6,11 @@ import {
   type BootstrapPhase,
 } from "../host/bootstrap-log";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { bootstrapLogPath } from "../store/paths";
-import { isProcessAlive } from "../store/cli-lock";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
@@ -24,12 +24,35 @@ interface HostStatusOutput {
   readonly bootstrapMarkers: readonly BootstrapLogEntry[];
   readonly bootstrapLogPath: string;
   readonly bootstrapLogTail: string;
-  // Always `null`, and kept only so the payload shape does not change for callers that already parse it.
-  // See the OBSERVATIONAL note below for why there is no decision left to report; `commands/login.ts` carries the same pinned-null field for the same reason.
+  // Always `null`, and kept only so the payload shape does not change for
+  // callers that already parse it. See the OBSERVATIONAL note below for why
+  // there is no decision left to report; `commands/login.ts` carries the same
+  // pinned-null field for the same reason.
   readonly bootstrap: null;
 }
 
-// Observational. Must not start, stop, or install a host.
+// Runner-aware `traycer host status` - reads pid metadata, bootstrap
+// markers, and the log tail.
+//
+// OBSERVATIONAL, AND THAT IS THE CONTRACT. This command used to call
+// `maybeAutoBootstrap` first, so asking a clean machine for its status could
+// download a host, register an OS service, and start it - none of which the
+// help ("Show host status (pid, websocket URL, recent activity)") promised,
+// and none of which a reader of a *status* command can be expected to want.
+// The audit filed that as CLI-001. Provisioning now lives only in the
+// commands that say they provision: `host ensure` (convergent
+// install/register/start), `host install`, and `host service install`.
+// `traycer login` had already dropped its own auto-bootstrap call for the
+// same reason; this removes the last one.
+//
+// Nothing here writes: the three reads below touch pid.json and
+// bootstrap.log and nothing else, so `host status` is safe to poll, safe in
+// CI, and safe on a machine whose host is deliberately uninstalled.
+//
+// JSON mode emits the runner's NDJSON envelope; the legacy `--json`
+// pretty-print is replaced by the runner's `{ type:"result", status:"ok",
+// data: ... }` line so Desktop can parse it through `runTraycerCliJson`.
+// Free-form human text is never mixed into the JSON stream.
 export const hostStatusCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
@@ -40,10 +63,16 @@ export const hostStatusCommand: CommandFn = async (
     BOOTSTRAP_LOG_TAIL_LINES,
   );
 
+  // `running` must reflect process liveness, not merely the presence of a
+  // pid.json - a stopped/crashed host can leave a stale record behind, and a
+  // recycled pid a live-looking one; `publishedHostProcessGone` reads the
+  // record's creation stamp for the second case. (service status reads the
+  // same predicate; this keeps host status consistent and makes `host stop`
+  // observable.)
+  const running =
+    pidMetadata !== null && !publishedHostProcessGone(pidMetadata);
   const output: HostStatusOutput = {
-    // `running` must reflect process liveness, not merely the presence of a pid.json - a stopped/crashed host can leave a stale record behind.
-    // (service status already checks isProcessAlive; this keeps host status consistent and makes `host stop` observable.)
-    running: pidMetadata !== null && isProcessAlive(pidMetadata.pid),
+    running,
     pidMetadata,
     bootstrapMarkers: markers,
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),
@@ -92,10 +121,16 @@ function renderHumanStatus(
     const rows: [string, string][] = [
       ["Log", tildePath(output.bootstrapLogPath)],
     ];
-    // A non-null pidMetadata with a dead pid means the host exited (e.g. after `host stop` or a crash) but its pid.json was left behind.
-    // Surface it as stale rather than silently reporting "running" off a dead record.
+    // A non-null pidMetadata in this branch means the host exited (e.g.
+    // after `host stop` or a crash) and left its pid.json behind, or the pid
+    // that record names is live and belongs to an unrelated process the OS
+    // handed the recycled number to. Surface it as stale rather than
+    // silently reporting "running" off a record that identifies no host.
     if (output.pidMetadata !== null) {
-      rows.push(["Stale pid", `${output.pidMetadata.pid} (not alive)`]);
+      rows.push([
+        "Stale pid",
+        `${output.pidMetadata.pid} (gone, or now another process)`,
+      ]);
     }
     if (last !== undefined) {
       rows.push(["Last phase", phaseLabel(last, c)]);
@@ -104,8 +139,11 @@ function renderHumanStatus(
     lines.push(...kvBlock(c, rows));
   }
 
-  // Reading a status is no longer what starts a host (CLI-001), so the not-running branch has to SAY what does.
-  // Without this the command is observational and unhelpful in the same breath: it reports a stopped host and leaves the reader with no next move, which is precisely the dead end the implicit bootstrap used to paper over.
+  // Reading a status is no longer what starts a host (CLI-001), so the
+  // not-running branch has to SAY what does. Without this the command is
+  // observational and unhelpful in the same breath: it reports a stopped host
+  // and leaves the reader with no next move, which is precisely the dead end
+  // the implicit bootstrap used to paper over.
   if (!output.running) {
     lines.push("");
     lines.push(

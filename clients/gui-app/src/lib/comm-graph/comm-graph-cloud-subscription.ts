@@ -26,6 +26,12 @@ export function selectCommGraphAuthoritativeSnapshot(
   return availability === "available" ? cloud : local;
 }
 
+/** The two halves of one directory update, installed together. */
+export interface CommGraphRelayReconciliation {
+  readonly hostIds: ReadonlyArray<string>;
+  readonly readinessKeys: ReadonlyMap<string, string>;
+}
+
 export interface CommGraphCloudSubscriptionHandlers {
   readonly onAvailability: (availability: "available") => void;
   readonly onSnapshot: (
@@ -58,8 +64,9 @@ export type CommGraphCloudSubscriptionOpener = (
 ) => CommGraphCloudSubscriptionHandle;
 
 /**
- * One retained cloud-authoritative feed per epic.
- * Relay hosts are transport choices only: changing one never changes the graph authority, event set, or compound cursor.
+ * One retained cloud-authoritative feed per epic. Relay hosts are transport
+ * choices only: changing one never changes the graph authority, event set, or
+ * compound cursor.
  */
 export class CommGraphCloudSubscriptionManager {
   private readonly epicId: string;
@@ -107,23 +114,9 @@ export class CommGraphCloudSubscriptionManager {
   setRelayHostIds(hostIds: ReadonlyArray<string>): void {
     if (this.disposed) return;
     const next = Array.from(new Set(hostIds));
-    if (
-      next.length === this.relayHostIds.length &&
-      next.every((hostId, index) => hostId === this.relayHostIds[index])
-    ) {
-      return;
-    }
+    if (sameOrderedHostIds(next, this.relayHostIds)) return;
     this.relayHostIds = next;
-    this.rejectedRelayHostIds = new Set(
-      Array.from(this.rejectedRelayHostIds).filter((hostId) =>
-        next.includes(hostId),
-      ),
-    );
-    this.unsupportedRelayHostIds = new Set(
-      Array.from(this.unsupportedRelayHostIds).filter((hostId) =>
-        next.includes(hostId),
-      ),
-    );
+    this.retainVerdictsForListedHosts(next);
     if (this.relayHostId !== null && next.includes(this.relayHostId)) {
       this.scheduleReconnectingFailover(this.relayHostId);
       return;
@@ -134,29 +127,25 @@ export class CommGraphCloudSubscriptionManager {
   }
 
   /**
-   * Clears retained dial verdicts when the directory changes the transport identity of a relay without changing its host ID.
-   * This lets a host that published late, restarted, or upgraded get another cloud-feed attempt.
+   * Clears retained dial verdicts when the directory changes the transport
+   * identity of a relay without changing its host ID. This lets a host that
+   * published late, restarted, or upgraded get another cloud-feed attempt.
    */
   setRelayReadinessKeys(readinessKeys: ReadonlyMap<string, string>): void {
     if (this.disposed) return;
-    const changedHostIds = new Set<string>();
-    for (const hostId of new Set([
-      ...this.relayReadinessKeys.keys(),
-      ...readinessKeys.keys(),
-    ])) {
-      if (this.relayReadinessKeys.get(hostId) !== readinessKeys.get(hostId)) {
-        changedHostIds.add(hostId);
-      }
-    }
+    const changedHostIds = changedReadinessHostIds(
+      this.relayReadinessKeys,
+      readinessKeys,
+    );
     if (changedHostIds.size === 0) return;
     this.relayReadinessKeys = new Map(readinessKeys);
     if (!this.attached) return;
-    for (const hostId of changedHostIds) {
-      this.rejectedRelayHostIds.delete(hostId);
-      this.unsupportedRelayHostIds.delete(hostId);
-    }
-    // A re-enrollment can keep the same host ID while rotating the relay's transport identity.
-    // Reopen an active stream as well as retrying failed candidates so it renegotiates with the new key rather than retaining a stale authenticated channel.
+    this.clearVerdictsFor(changedHostIds);
+    // A re-enrollment can keep the same host ID while rotating the relay's
+    // transport identity. Reopen an active stream as well as retrying failed
+    // candidates so it renegotiates with the new key rather than retaining a
+    // stale authenticated channel. An unrelated host's directory update must
+    // not interrupt a healthy relay.
     if (this.relayHostId !== null && changedHostIds.has(this.relayHostId)) {
       this.closeCurrent();
       this.openNextRelay();
@@ -169,15 +158,78 @@ export class CommGraphCloudSubscriptionManager {
     this.publish();
   }
 
+  /**
+   * Installs a relay list and its readiness keys as ONE update, with every
+   * dial-affecting side effect deferred until both are installed.
+   *
+   * The two setters above are each a complete update on their own - they close
+   * and reopen synchronously - so pushing the two halves of a single directory
+   * change through them in sequence makes the manager act on half-installed
+   * state twice: the first call decides against the other half's stale value,
+   * and a terminal verdict the opener reports SYNCHRONOUSLY during that open
+   * (the replay `openNextRelay` guards below) is then wiped by the second
+   * call's readiness sweep, so the relay it just refused becomes a candidate
+   * again. Both are artifacts of the split, not decisions anyone made. They
+   * stay because the registry's acquire path and the manager suites still push
+   * one half at a time.
+   *
+   * Every verdict edit here therefore happens BEFORE any open, which is what
+   * makes a verdict produced during this reconcile survive it.
+   */
+  reconcileRelays(reconciliation: CommGraphRelayReconciliation): void {
+    if (this.disposed) return;
+    const nextHostIds = Array.from(new Set(reconciliation.hostIds));
+    const hostIdsUnchanged = sameOrderedHostIds(nextHostIds, this.relayHostIds);
+    const changedHostIds = changedReadinessHostIds(
+      this.relayReadinessKeys,
+      reconciliation.readinessKeys,
+    );
+    // The conjunction of the two setters' own no-op guards. The hook rebuilds
+    // both memos by identity on every directory re-emit, and an update that
+    // moves neither value is one neither setter would have acted on.
+    if (hostIdsUnchanged && changedHostIds.size === 0) return;
+
+    this.relayHostIds = nextHostIds;
+    this.relayReadinessKeys = new Map(reconciliation.readinessKeys);
+    // Retry the hosts whose transport identity moved, then drop the verdicts
+    // of hosts that are no longer candidates at all. Clearing while detached
+    // is inert rather than a widening: `attach` discards both sets wholesale.
+    this.clearVerdictsFor(changedHostIds);
+    this.retainVerdictsForListedHosts(nextHostIds);
+
+    // One decision for the incumbent. Relay preference applies at SELECTION:
+    // a healthy relay is not torn down because a higher-priority candidate
+    // appeared ahead of it, nor because an unrelated host's readiness moved.
+    // Only its OWN transport identity changing, or its removal from the list,
+    // reopens - and the reopen then picks up the new order. `openNextRelay`
+    // no-ops while a handle is held, so the single call below is the whole
+    // decision: reopen after a close, open when nothing is held, keep
+    // otherwise.
+    const incumbentHostId = this.relayHostId;
+    if (
+      incumbentHostId !== null &&
+      (!nextHostIds.includes(incumbentHostId) ||
+        changedHostIds.has(incumbentHostId))
+    ) {
+      this.closeCurrent();
+    }
+    this.openNextRelay();
+
+    // An incumbent that has been `reconnecting` with nowhere to fail over arms
+    // no deadline, so a newly listed alternative - or one whose `unsupported`
+    // verdict the readiness change above just cleared - has to be able to arm
+    // the timer that was previously ineligible. The call preserves an
+    // already-armed deadline, so a pure reorder never restarts the budget.
+    if (this.relayHostId !== null) {
+      this.scheduleReconnectingFailover(this.relayHostId);
+    }
+    this.publish();
+  }
+
   setOriginHostIds(hostIds: ReadonlyArray<string>): void {
     if (this.disposed) return;
     const next = Array.from(new Set(hostIds));
-    if (
-      next.length === this.originHostIds.length &&
-      next.every((hostId, index) => hostId === this.originHostIds[index])
-    ) {
-      return;
-    }
+    if (sameOrderedHostIds(next, this.originHostIds)) return;
     this.originHostIds = next;
     this.publish();
   }
@@ -185,8 +237,9 @@ export class CommGraphCloudSubscriptionManager {
   attach(): void {
     if (this.disposed || this.attached) return;
     this.attached = true;
-    // Unsupported and failed are verdicts for a single retained dial cycle, not permanent facts about a host.
-    // A close/reopen must retry the current set so a restarted or upgraded host can become the cloud relay.
+    // Unsupported and failed are verdicts for a single retained dial cycle,
+    // not permanent facts about a host. A close/reopen must retry the current
+    // set so a restarted or upgraded host can become the cloud relay.
     this.rejectedRelayHostIds.clear();
     this.unsupportedRelayHostIds.clear();
     this.openNextRelay();
@@ -196,8 +249,9 @@ export class CommGraphCloudSubscriptionManager {
     if (!this.attached) return;
     this.attached = false;
     this.closeCurrent();
-    // A later attach opens a new stream whose first snapshot is backlog learned while this surface was absent.
-    // Retain rows/cursor, but start a fresh arrival boundary so that backlog cannot pulse as live activity.
+    // A later attach opens a new stream whose first snapshot is backlog learned
+    // while this surface was absent. Retain rows/cursor, but start a fresh
+    // arrival boundary so that backlog cannot pulse as live activity.
     this.historyBoundary = null;
     this.historyBoundaryInitialized = false;
     this.historyCaughtUp = false;
@@ -250,6 +304,32 @@ export class CommGraphCloudSubscriptionManager {
 
   isDisposed(): boolean {
     return this.disposed;
+  }
+
+  /**
+   * Retries the hosts whose transport identity moved. Both verdicts are
+   * per-dial-cycle judgements about a specific transport, so a host that
+   * published late, restarted, upgraded or was re-enrolled gets another turn.
+   */
+  private clearVerdictsFor(hostIds: ReadonlySet<string>): void {
+    for (const hostId of hostIds) {
+      this.rejectedRelayHostIds.delete(hostId);
+      this.unsupportedRelayHostIds.delete(hostId);
+    }
+  }
+
+  /** Drops the verdicts of hosts that are no longer candidates at all. */
+  private retainVerdictsForListedHosts(hostIds: ReadonlyArray<string>): void {
+    this.rejectedRelayHostIds = new Set(
+      Array.from(this.rejectedRelayHostIds).filter((hostId) =>
+        hostIds.includes(hostId),
+      ),
+    );
+    this.unsupportedRelayHostIds = new Set(
+      Array.from(this.unsupportedRelayHostIds).filter((hostId) =>
+        hostIds.includes(hostId),
+      ),
+    );
   }
 
   private openNextRelay(): void {
@@ -305,8 +385,9 @@ export class CommGraphCloudSubscriptionManager {
           },
         },
       });
-      // A LogicalStream can replay a terminal status while the opener is still returning.
-      // That status may synchronously fail over to another relay, whose handle must not be overwritten by this stale one.
+      // A LogicalStream can replay a terminal status while the opener is
+      // still returning. That status may synchronously fail over to another
+      // relay, whose handle must not be overwritten by this stale one.
       if (isCurrent()) {
         this.handle = handle;
       } else {
@@ -314,8 +395,10 @@ export class CommGraphCloudSubscriptionManager {
       }
     } catch (cause) {
       this.relayStatus = "failed";
-      // A synchronous dial failure has no handle to emit an `unreachable` status.
-      // Reject this candidate ourselves before continuing through the remaining scoped relays; otherwise the unchanged relay set would keep the manager wedged on this null-handle host indefinitely.
+      // A synchronous dial failure has no handle to emit an `unreachable`
+      // status. Reject this candidate ourselves before continuing through the
+      // remaining scoped relays; otherwise the unchanged relay set would keep
+      // the manager wedged on this null-handle host indefinitely.
       this.rejectedRelayHostIds.add(hostId);
       this.relayHostId = null;
       appLogger.error(
@@ -475,8 +558,12 @@ export class CommGraphCloudSubscriptionManager {
       }
       this.rejectedRelayHostIds.add(hostId);
       this.closeCurrent();
-      // Once every candidate in this dial cycle has timed out, begin another bounded cycle.
-      // Earlier reconnecting/unreachable relays may have recovered while the later candidates were being tried; retaining all rejection marks would otherwise leave the cloud-authoritative graph stale forever.
+      // Once every candidate in this dial cycle has timed out, begin another
+      // bounded cycle. Earlier reconnecting/unreachable relays may have
+      // recovered while the later candidates were being tried; retaining all
+      // rejection marks would otherwise leave the cloud-authoritative graph
+      // stale forever. An explicit `unsupported` verdict remains sticky for
+      // this attachment and is never retried by the timeout cycle.
       if (
         this.relayHostIds.every((candidate) =>
           this.rejectedRelayHostIds.has(candidate),
@@ -541,6 +628,38 @@ export class CommGraphCloudSubscriptionManager {
     };
     for (const listener of Array.from(this.listeners)) listener();
   }
+}
+
+/**
+ * ORDERED identity, deliberately not set identity: a pure reorder IS a change
+ * to these callers, because the list is a preference order and its head is the
+ * next candidate `openNextRelay` picks. Comparing as sets would let a reorder
+ * take an early return and never reach the incumbent decision.
+ */
+function sameOrderedHostIds(
+  left: ReadonlyArray<string>,
+  right: ReadonlyArray<string>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((hostId, index) => hostId === right[index])
+  );
+}
+
+/**
+ * The hosts whose readiness key moved, taken over the UNION of both maps - so
+ * a host that appears and one that disappears each count as changed, not just
+ * the ones present in both.
+ */
+function changedReadinessHostIds(
+  previous: ReadonlyMap<string, string>,
+  next: ReadonlyMap<string, string>,
+): Set<string> {
+  const changed = new Set<string>();
+  for (const hostId of new Set([...previous.keys(), ...next.keys()])) {
+    if (previous.get(hostId) !== next.get(hostId)) changed.add(hostId);
+  }
+  return changed;
 }
 
 function normalizeCloudEvent(
