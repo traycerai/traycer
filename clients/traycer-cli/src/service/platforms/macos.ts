@@ -2610,6 +2610,20 @@ const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
 const DESKTOP_APP_BUNDLE_ID = "ai.traycer.desktop";
 
 /**
+ * The plist's `ThrottleInterval`, in SECONDS, and the reason it is a named
+ * export rather than an inline literal in the template below.
+ *
+ * launchd will not respawn this agent more often than this, so it is the
+ * earliest a `KeepAlive` relaunch can possibly reappear - which every caller
+ * that avoids `kickstart -k` already reasons about (see `registerService` and
+ * the eviction repair), and which the host-update verify leg must wait out
+ * before it may conclude that a failed service start means the host is never
+ * coming back. Two places deriving that bound from one number cannot drift;
+ * two places writing `10` can, and silently.
+ */
+export const LAUNCHD_THROTTLE_INTERVAL_SECONDS = 10;
+
+/**
  * The PATH to bake into the host's LaunchAgent. launchd would otherwise
  * give the host a bare PATH that can't see provider CLIs installed via
  * nvm/Homebrew/asdf/etc. `host install` is normally invoked from the
@@ -2674,7 +2688,7 @@ ${programArgsXml}
     <true/>
   </dict>
   <key>ThrottleInterval</key>
-  <integer>10</integer>
+  <integer>${LAUNCHD_THROTTLE_INTERVAL_SECONDS}</integer>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>SoftResourceLimits</key>

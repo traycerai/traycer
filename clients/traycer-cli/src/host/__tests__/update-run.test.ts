@@ -393,7 +393,12 @@ import {
   decodeUpdateDispatchAck,
   updateDispatchAckPath,
 } from "@traycer/protocol/config/host-update-ack";
-import { runHostUpdate, type HostUpdateRunArgs } from "../update-run";
+import {
+  runHostUpdate,
+  verifyBudgetFor,
+  type HostUpdateRunArgs,
+} from "../update-run";
+import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../../service/platforms/macos";
 import { buildHostUpdateCommand } from "../../commands/host-update";
 import { buildProgram } from "../../index";
 import { verifyHostUpdateAttempt } from "../update-verify";
@@ -834,6 +839,20 @@ function appliedOutcome(previousVersion: string, version: string) {
     },
     postSwapError: null,
   };
+}
+
+/**
+ * The same applied outcome, carrying the installer's post-swap service-start
+ * error (Q6 / Mac item 6). A sibling rather than a parameter on
+ * `appliedOutcome` so no existing caller changes, and so the one thing this
+ * fixture varies is named at its call site.
+ */
+function appliedOutcomeWithStartError(
+  previousVersion: string,
+  version: string,
+  postSwapError: string,
+) {
+  return { ...appliedOutcome(previousVersion, version), postSwapError };
 }
 
 const progress = (stage: string, percent: number | null): ProgressInfo => ({
@@ -1331,6 +1350,96 @@ describe("runHostUpdate - bound intents", () => {
     // stops it, and the exit code does not pretend otherwise.
     expect(phaseTrace()).not.toContain("verifying");
     expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+  });
+
+  it("Q10: continue takes the target from the RECORD, with no --version at all", async () => {
+    // Linux E6L recovery matrix. `--intent continue --expect-attempt <id>`
+    // without `--version` exited 1 `E_INVALID_ARGUMENT` from plan resolution,
+    // before any record was read - demanding a target the named attempt
+    // already carries, three lines above the `parkNeedsTransfer` read that
+    // opens the very same file.
+    // Falsification (the ablation): restore the `versionRequest === null`
+    // throw at the head of the `continue` arm and this reddens.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: null,
+    });
+
+    // Resumed the park's own work, at the park's own target.
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect(phaseTrace()).toEqual([
+      "preparing",
+      "applying",
+      "restarting",
+      "verifying",
+    ]);
+    // Still the park's bytes: deriving the target must not turn a resume into
+    // a fresh resolution.
+    expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+  });
+
+  it("Q10: an explicit --version that disagrees with the attempt is a NAMED refusal", async () => {
+    // Checked rather than trusted. Preferring either value silently would
+    // resume work under a confirmation made for the other version.
+    // Falsification (the ablation): return `bound.targetVersion` without the
+    // comparison and this reddens.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+
+    const failure = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: "3.0.0",
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      details: { attemptId, targetVersion: "2.0.0", versionRequest: "3.0.0" },
+    });
+    // Named on both sides, so the reader can tell which one they got wrong.
+    const message = (failure as { message: string }).message;
+    expect(message).toContain("3.0.0");
+    expect(message).toContain(attemptId);
+    expect(message).toContain("2.0.0");
+    // Refused BEFORE anything was claimed: the park is untouched.
+    const record = await readRecord();
+    expect(record?.attemptId).toBe(attemptId);
+    expect(record?.execution).toBe("parked");
+  });
+
+  it("Q10: a missing record with no --version says WHICH attempt is gone", async () => {
+    // The third case. There is genuinely no target to derive - no record, no
+    // argument - so it stays `E_INVALID_ARGUMENT`, but it now names the
+    // attempt instead of demanding a flag that would not have helped.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+
+    const failure = await runUpdate({
+      intent: "continue",
+      expectAttempt: "attempt-that-never-existed",
+      versionRequest: null,
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      details: { expectAttempt: "attempt-that-never-existed" },
+    });
+    expect((failure as { message: string }).message).toContain(
+      "attempt-that-never-existed",
+    );
+    expect(await readRecord()).toBeNull();
   });
 
   it("continue names an attempt that is gone: released refused-attempt-gone, nothing claimed", async () => {
@@ -3153,6 +3262,66 @@ describe("ported: update-progress marker (T16)", () => {
       ENVIRONMENT,
       expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
     );
+  });
+
+  it("Q6: the same is true when the failure is named `service-start-failed`", async () => {
+    // The twin of the pin above, and the reason it exists: Q6 splits the
+    // record's error code out of `verify-timeout`, and `failed()` keys its
+    // UNCONDITIONAL stamp on that exact string. Extending the message without
+    // extending the predicate would have silently made this failure
+    // SUPPRESSIBLE - by the very `pid.json` reading the comment above explains
+    // is not evidence of health - which is a behaviour change hiding inside
+    // what reads as an observability improvement.
+    // Falsification (the ablation): drop `|| code === "service-start-failed"`
+    // from `unconditional` and this reddens on the marker never being written,
+    // while the `verify-timeout` pin above stays green.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.createUpdateProgressMarkerIfAbsent.mockResolvedValueOnce("failed");
+    mocks.observeAttemptRecoveryEvidence.mockImplementation(async () => {
+      const observation = observationOfWorld();
+      return {
+        ...observation,
+        evidence: {
+          ...observation.evidence,
+          running: { kind: "unreadable" as const },
+        },
+      };
+    });
+    mocks.applyHostWithAttempt.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        const previous = world.installedVersion ?? "1.0.0";
+        options.onProgress(progress("service-stop", null));
+        await options.hooks.beforeSwapCommit();
+        await seedInstalled("2.0.0");
+        await seedStaged(null);
+        await options.hooks.afterSwap();
+        world.runningVersion = "2.0.0";
+        return appliedOutcomeWithStartError(
+          previous,
+          "2.0.0",
+          "E_SERVICE_CONTROL_FAILED",
+        );
+      },
+    );
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    // Same cell as the pin above: `targetObservedRunning` answers YES.
+    expect(world.runningVersion).toBe("2.0.0");
+    expect((await requireRecord()).error).toMatchObject({
+      code: "service-start-failed",
+    });
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      targetVersion: "2.0.0",
+    });
   });
 
   it("the same verification timeout WITH an own marker stamps over it by CAS", async () => {
@@ -6056,6 +6225,29 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     );
   }
 
+  /** As above, but the post-swap service start ERRORED (Q6). */
+  function applyWithStartErrorThenLeaveWorld(
+    after: () => void,
+    postSwapError: string,
+  ): void {
+    mocks.applyHostWithAttempt.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        const previous = world.installedVersion ?? "1.0.0";
+        options.onProgress(progress("service-stop", null));
+        await options.hooks.beforeSwapCommit();
+        await seedInstalled("2.0.0");
+        await seedStaged(null);
+        await options.hooks.afterSwap();
+        after();
+        return appliedOutcomeWithStartError(previous, "2.0.0", postSwapError);
+      },
+    );
+  }
+
   it.each([
     [
       "the pid names no live process",
@@ -6122,6 +6314,87 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     },
   );
 
+  it("Q6: says the SERVICE START failed, rather than reporting it as a health timeout", async () => {
+    // Mac item 6 / F-mac-1. `applyHostWithAttempt` returned
+    // `postSwapError` 65 ms after the swap - the service start had errored -
+    // and the run spent the whole verify budget and then reported "did not
+    // become healthy at that version". The probe's token is TRUE and useless:
+    // a refused start and a sick host look identical to it (no process, no
+    // RPC), and their remedies are different. The operator was never told the
+    // start failed.
+    // Falsification (the ablation): collapse the message back to the single
+    // `postSwapError === null` arm, and/or restore `code: "verify-timeout"`
+    // unconditionally - this reddens while every E13 row above stays green.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyWithStartErrorThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "pid-metadata-absent";
+    }, "E_SERVICE_CONTROL_FAILED: launchctl kickstart exited 5");
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      details: {
+        diagnosis: "pid-metadata-absent",
+        // Carried structurally too, not only inside the prose.
+        postSwapError: "E_SERVICE_CONTROL_FAILED: launchctl kickstart exited 5",
+      },
+    });
+    const message = (failure as { message: string }).message;
+    // The start failure, the remedy, and - still - the probe token, because
+    // the reader who needs the token has nowhere else to get it.
+    expect(message).toContain("the service start failed");
+    expect(message).toContain(
+      "E_SERVICE_CONTROL_FAILED: launchctl kickstart exited 5",
+    );
+    expect(message).toContain("traycer host service install");
+    expect(message).toContain("pid-metadata-absent");
+    // The bytes ARE committed - `applyHost` does not roll back - and a message
+    // that let the operator think otherwise would send them to reinstall.
+    expect(message).toContain("committed");
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("failed");
+    expect(record.error).toMatchObject({
+      // A DIFFERENT code from a health timeout, so a support reader can sort
+      // the two without parsing prose.
+      code: "service-start-failed",
+      phase: "verifying",
+      message,
+    });
+  });
+
+  it("Q6: a health timeout with NO start error is unchanged", async () => {
+    // The control for the row above: the split must not rewrite the ordinary
+    // verify-timeout, whose code `failed()` keys its unconditional marker
+    // stamp on.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "pid-metadata-absent";
+    });
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      message:
+        "host update: applied 2.0.0 but the host did not become healthy at that version: pid-metadata-absent",
+      details: { diagnosis: "pid-metadata-absent", postSwapError: null },
+    });
+    const record = await requireRecord();
+    expect(record.error).toMatchObject({ code: "verify-timeout" });
+  });
+
   it("names the INSTALLED leg when that is the one that disagrees", async () => {
     // The premise before the symptom: a running host cannot be serving what
     // the record does not say is placed, so reporting the process would send
@@ -6143,5 +6416,43 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
       details: { diagnosis: "install-record-absent" },
     });
+  });
+});
+
+describe("verifyBudgetFor (Q6)", () => {
+  // Pure, so the BUDGET CHOICE is pinned without a wall clock. The behaviour
+  // it encodes cannot otherwise be tested cheaply: proving the shortening
+  // through `runHostUpdate` would mean actually waiting out a budget.
+  it("leaves the ordinary budget alone", () => {
+    expect(verifyBudgetFor(null, null)).toBe(45_000);
+  });
+
+  it("shortens the wait when the START itself errored", () => {
+    const shortened = verifyBudgetFor("E_SERVICE_CONTROL_FAILED", null);
+    // Actually shortened - the whole point of the change.
+    expect(shortened).toBeLessThan(45_000);
+    // Not zero, and not merely non-zero: it must OUTLAST launchd's respawn
+    // throttle. `KeepAlive{SuccessfulExit:false}` is one of the two worlds in
+    // which a refused start still yields a healthy host, and launchd will not
+    // relaunch before `ThrottleInterval` elapses - so a budget at or below it
+    // would expire at the exact moment the host first becomes possible, and
+    // report a failure against the slowest LEGITIMATE recovery. Cold review
+    // found this: the first cut was 10 s against a 10 s throttle.
+    expect(shortened).toBeGreaterThan(
+      LAUNCHD_THROTTLE_INTERVAL_SECONDS * 1_000,
+    );
+  });
+
+  it("treats a caller override as a CEILING, not a replacement", () => {
+    // Both directions matter. A suite pinning a LONG budget must not thereby
+    // re-acquire the 45 s wait this exists to cut...
+    expect(verifyBudgetFor("E_SERVICE_CONTROL_FAILED", 60_000)).toBe(
+      verifyBudgetFor("E_SERVICE_CONTROL_FAILED", null),
+    );
+    // ...and a suite pinning a SHORT one must keep it, or every existing
+    // fast-budget test silently starts waiting ten seconds.
+    expect(verifyBudgetFor("E_SERVICE_CONTROL_FAILED", 50)).toBe(50);
+    // With no start error the override is simply authoritative.
+    expect(verifyBudgetFor(null, 60_000)).toBe(60_000);
   });
 });

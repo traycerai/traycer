@@ -50,6 +50,7 @@ import { assertHostNotBusy } from "./busy-check";
 import { readHostPidMetadata } from "./pid-metadata";
 import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import { hostHomeDir } from "../store/paths";
+import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../service/platforms/macos";
 import {
   installDispatchAckStamper,
   type DispatchAckStamper,
@@ -255,6 +256,56 @@ const CONTENDER_POLL_INTERVAL_MS = 100;
 /** The evidence loop's own budget, matching the health probe it replaces. */
 const VERIFY_BUDGET_MS = 45_000;
 const VERIFY_POLL_INTERVAL_MS = 500;
+
+/**
+ * The budget when the post-swap service start ITSELF errored (Mac item 6,
+ * Q6/F-mac-1).
+ *
+ * The full budget exists to absorb a start that is slow but PROCEEDING. A start
+ * the service manager refused - `E_SERVICE_CONTROL_FAILED` returned 65 ms after
+ * the swap - is not proceeding. But it is not over either, and the wait is
+ * DERIVED from why:
+ *
+ *  - Something else starts the host. Prompt: nothing is waiting on a
+ *    supervisor handshake.
+ *  - **The manager reported failure and relaunches it anyway.** On macOS this
+ *    is `KeepAlive{SuccessfulExit:false}` and it is NOT prompt - launchd paces
+ *    respawns by `ThrottleInterval`, the same interval every caller here
+ *    already avoids `kickstart -k` for. The host cannot legally reappear before
+ *    it elapses.
+ *
+ * So the floor is the throttle interval, and the budget is that plus a margin
+ * for the process to come up and answer once it is permitted to. A budget AT
+ * the interval would expire at the exact moment the host first becomes
+ * possible, which is the worst place a deadline can sit - it would report a
+ * failure precisely against the slowest legitimate recovery, on the platform
+ * the defect was found on.
+ *
+ * Derived rather than written down twice: the interval is exported from the
+ * plist that sets it, so the two cannot drift.
+ */
+const VERIFY_START_ERROR_MARGIN_MS = 8_000;
+const VERIFY_BUDGET_AFTER_START_ERROR_MS =
+  LAUNCHD_THROTTLE_INTERVAL_SECONDS * 1_000 + VERIFY_START_ERROR_MARGIN_MS;
+
+/**
+ * The verify budget, as a pure function so the choice is testable without a
+ * wall clock.
+ *
+ * `override` is the test/caller pin and stays authoritative, but it is a
+ * CEILING rather than a replacement when the start errored: a suite that pins
+ * a 60 s budget must not thereby re-acquire the 45 s wait this exists to cut,
+ * and one that pins 50 ms must keep its 50 ms.
+ */
+export function verifyBudgetFor(
+  postSwapError: string | null,
+  override: number | null,
+): number {
+  const base = override ?? VERIFY_BUDGET_MS;
+  return postSwapError === null
+    ? base
+    : Math.min(base, VERIFY_BUDGET_AFTER_START_ERROR_MS);
+}
 
 /** Download ticks coalesce below these thresholds (CLI wiring, "One writer"). */
 const PROGRESS_MIN_INTERVAL_MS = 500;
@@ -603,16 +654,7 @@ async function resolvePlan(
   }
 
   if (intent === "continue") {
-    const targetVersion = args.versionRequest;
-    if (targetVersion === null) {
-      throw cliError({
-        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-        message:
-          "host update: --intent continue needs the attempt's target version; pass --version",
-        details: { environment },
-        exitCode: 1,
-      });
-    }
+    const targetVersion = await boundContinueTarget(args);
     return {
       kind: "installer",
       plan: await resolveUpdatePlan({
@@ -707,6 +749,80 @@ async function resolvePlan(
  * this read cannot make sense of, needs no transfer - the selector will refuse
  * it anyway, and reaching the registry to discover that would be worse.
  */
+/**
+ * The target a bound `continue` works toward (Q10, Linux E6L recovery matrix).
+ *
+ * It comes from THE RECORD, because the record is what a bound `continue` is
+ * bound to: `--expect-attempt` already names the attempt, and that attempt
+ * already carries the only target it may legally resume. Demanding `--version`
+ * on top asked the caller to re-supply a fact the CLI was about to read anyway
+ * - `parkNeedsTransfer` opens the same file three lines below - and the
+ * refusal fired in plan resolution, before any record was read, so a recovery
+ * that had everything it needed exited 1 `E_INVALID_ARGUMENT`.
+ *
+ * An explicit `--version` is still honoured, and is checked rather than
+ * trusted: a caller who names a version that is not this attempt's target has
+ * misunderstood which attempt they are resuming, and quietly preferring either
+ * value would resume the wrong work under a confirmation made for the other.
+ * That is a NAMED refusal, not a silent reconciliation.
+ *
+ * ## This guard is the ONLY layer, which is why it is here
+ *
+ * It would be tempting to call it the earlier of two refusals, on the grounds
+ * that `decideAttemptClaim` refuses an identity-bound request whose target
+ * disagrees. It does not, because **the core never sees `--version` on this
+ * path**: `selectBoundResume` reaches `resumeSelection`, which builds the claim
+ * with `targetVersion: record.targetVersion`, so
+ * `request.targetVersion === current.targetVersion` by construction and no
+ * mismatch branch can fire (cold review, Q10).
+ *
+ * There was a second layer before this, just not that one: `--version X`
+ * against a record at Y resumed Y and then tripped the activation arm's
+ * installed-version mismatch - a refusal phrased about installed versions
+ * rather than about having named the wrong attempt. Refusing here is not
+ * duplication; it is the only place that can say what actually went wrong.
+ */
+async function boundContinueTarget(args: HostUpdateRunArgs): Promise<string> {
+  const { environment } = args;
+  const read = await readUpdateAttemptRecord(hostHomeDir(environment));
+  const record = read.kind === "valid" ? read.value : null;
+  const bound =
+    record !== null && record.attemptId === args.expectAttempt ? record : null;
+  if (bound !== null) {
+    if (
+      args.versionRequest !== null &&
+      args.versionRequest !== bound.targetVersion
+    ) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: `host update: --version ${args.versionRequest} does not match attempt ${bound.attemptId}, whose target is ${bound.targetVersion}. Drop --version to continue that attempt, or check which attempt you meant.`,
+        details: {
+          environment,
+          attemptId: bound.attemptId,
+          targetVersion: bound.targetVersion,
+          versionRequest: args.versionRequest,
+        },
+        exitCode: 1,
+      });
+    }
+    return bound.targetVersion;
+  }
+  // No record this intent is bound to. An explicit `--version` still resolves a
+  // plan, and the SELECTOR then answers `refused-attempt-gone` under the lock,
+  // which is the existing and correct path - the record is what decides, and it
+  // must be read under the lock rather than here.
+  if (args.versionRequest !== null) return args.versionRequest;
+  // Nothing names a target: no record to read one from, and no argument. This
+  // is still `E_INVALID_ARGUMENT`, but it now says which attempt could not be
+  // found instead of demanding a flag that would not have helped.
+  throw cliError({
+    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    message: `host update: no attempt ${args.expectAttempt ?? "<none>"} is recorded, so there is no target to continue; pass --version to name one explicitly`,
+    details: { environment, expectAttempt: args.expectAttempt },
+    exitCode: 1,
+  });
+}
+
 async function parkNeedsTransfer(
   environment: Environment,
   expectAttempt: string | null,
@@ -2088,7 +2204,7 @@ async function applyArm(
       exitCode: 1,
     });
   }
-  await verifyUnderClaim(input, writer);
+  await verifyUnderClaim(input, writer, outcome.postSwapError);
   return projectApplied(outcome);
 }
 
@@ -2265,7 +2381,9 @@ async function settleDeliveredByAnotherActor(
       // loop polls a live host and must not hold the mutation boundary while
       // it waits. The PROJECTION is still the record validated above, never a
       // re-read.
-      await verifyUnderClaim(input, writer);
+      // No swap and no service start happened on this settlement - the work
+      // was already delivered - so there is no start error to report.
+      await verifyUnderClaim(input, writer, null);
       return projectNoOp(settled.observed);
     case "delivered-and-running":
     case "left-foreign-runtime":
@@ -2472,7 +2590,7 @@ async function downgradeArm(
       `host update: ${target} was already installed by another actor when the downgrade ran`,
     );
   }
-  await verifyUnderClaim(input, writer);
+  await verifyUnderClaim(input, writer, outcome.postSwapError);
   return projectApplied(outcome);
 }
 
@@ -2613,7 +2731,9 @@ async function activationArm(
       `host update: ${installed.version} was activated by another actor while this update ran`,
     );
   }
-  await verifyUnderClaim(input, writer);
+  // The activation arm gates on `restarted` above rather than on an
+  // installer-reported start error, so it has none to carry.
+  await verifyUnderClaim(input, writer, null);
   // Projected as an UPDATE, not a no-op: `previousVersion` is what was
   // serving, which is what actually happened from the operator's seat. On the
   // `no-live-host` reading there is nothing running to name, so the plan's
@@ -2715,12 +2835,13 @@ async function readClaimRefresh(environment: Environment): Promise<{
 async function verifyUnderClaim(
   input: RunArmInput,
   writer: AttemptRecordWriter,
+  postSwapError: string | null,
 ): Promise<void> {
   const { args } = input;
   await writer.phaseWrite("verifying");
   const home = hostHomeDir(args.environment);
   const target = input.claim.record.targetVersion;
-  const budgetMs = args.verifyBudgetMs ?? VERIFY_BUDGET_MS;
+  const budgetMs = verifyBudgetFor(postSwapError, args.verifyBudgetMs ?? null);
   const pollMs = args.verifyPollIntervalMs ?? VERIFY_POLL_INTERVAL_MS;
   const deadline = Date.now() + budgetMs;
   for (;;) {
@@ -2759,16 +2880,31 @@ async function verifyUnderClaim(
       // are then the same string, with no schema change and nothing to keep
       // in step.
       const diagnosis = verifyDiagnosisToken(observation, target);
-      const message = `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`;
+      // WHAT the operator has to fix, which is not the same question as what
+      // the probe saw (Mac item 6, Q6). A refused service start and a health
+      // timeout look identical in the probe - no host, no RPC - and have
+      // different remedies: `host service install` versus investigating the
+      // host itself. The run knew the start had errored 65 ms after the swap
+      // and said nothing.
+      const message =
+        postSwapError === null
+          ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
+          : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}; run 'traycer host service install' and then 'traycer host service start'. (probe: ${diagnosis})`;
       await writer.fail({
-        code: "verify-timeout",
+        code:
+          postSwapError === null ? "verify-timeout" : "service-start-failed",
         message,
         phase: "verifying",
       });
       throw cliError({
         code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
         message,
-        details: { environment: args.environment, version: target, diagnosis },
+        details: {
+          environment: args.environment,
+          version: target,
+          diagnosis,
+          postSwapError,
+        },
         exitCode: 1,
       });
     }
@@ -3208,6 +3344,38 @@ async function classifyActivationAgainst(
  * comparator for its own question: running-vs-record is a runtime-stamp
  * question, record-vs-target is an artifact one.
  */
+/**
+ * The record error codes whose marker stamp is UNCONDITIONAL.
+ *
+ * A set with a name, rather than a disjunction of literals, because of how the
+ * second member got here. Q6 split `service-start-failed` out of
+ * `verify-timeout` to say WHY a host never came back, and the split silently
+ * changed behaviour: this predicate keyed on the one literal, so the new code
+ * would have become suppressible by the observed-running check - the very
+ * `pid.json` reading the caller's comment explains is not evidence of health.
+ * The ablation for that extension came back GREEN; nothing pinned it.
+ *
+ * Membership is the shared property, not the spelling: **the bytes are
+ * committed and the host did not come back**. Such a failure is disturbed by
+ * construction, so the observed-running suppressions below it - which read a
+ * `pid.json` that a host up but not yet answering already fills in AT the
+ * target - would withhold the only signal a 1.2.x host ever shows for a failed
+ * update. A third code of that class belongs here; adding one elsewhere and
+ * forgetting this line is the trap the name exists to make visible.
+ */
+const UNCONDITIONALLY_STAMPED_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "verify-timeout",
+  "service-start-failed",
+]);
+
+function isUnconditionallyStampedFailure(
+  error: HostUpdateAttemptRecord["error"],
+): boolean {
+  return (
+    error !== null && UNCONDITIONALLY_STAMPED_FAILURE_CODES.has(error.code)
+  );
+}
+
 async function targetObservedRunning(
   environment: Environment,
   targetVersion: string,
@@ -3487,7 +3655,7 @@ function createMarkerMirror(
     //
     // Ownership protection is NOT relaxed: the stamp is still a CAS over this
     // run's own record, or a create into a path that reads EMPTY.
-    const unconditional = record.error?.code === "verify-timeout";
+    const unconditional = isUnconditionallyStampedFailure(record.error);
     if (own === null) {
       // No record of this run's on disk (the entry mirror's primitive
       // answered `failed`). The failure is still this run's to report whenever
