@@ -1190,6 +1190,22 @@ async function dispositionForAttempt(
  * claimant placed, and version equality alone cannot tell this attempt's bytes
  * from a different install that happens to carry the same version.
  *
+ * That refusal is NOT the codebase's single answer to a missing claim, and the
+ * difference is deliberate in all three places. Do not "make them consistent"
+ * without reading why each one differs:
+ *
+ *  | site | missing claim | why |
+ *  | ---- | ------------- | --- |
+ *  | here (parked relaunch) | REFUSE — fails closed | the supervisor is being asked to activate bytes; with no baseline nothing vouches for them |
+ *  | `readClaimRefresh` (Q5, `host/update-run.ts`) | proceed — fails OPEN | it is refreshing a baseline, not authorizing an activation; refusing there would strand attempts over a read |
+ *  | the Q9 active arm | never asks | deliberate: post-swap the record's baseline is STALE, so a claim test there would compare against the pre-swap install and refuse correct relaunches |
+ *
+ * The third column is the one that gets misread. The Q9 arm is not "failing
+ * open" — it does not consult the claim at all, and `RW-Q6` reddens if someone
+ * adds a claim test to it. Q12 does not change this: it made the swap record
+ * the generation it wrote, which fixes what the baseline SAYS, not whether that
+ * arm is entitled to ask.
+ *
  * A park whose baseline could not be REFRESHED is inadmissible for the same
  * reason, and today it is so silently. `readClaimRefresh` returns
  * `refresh: null` when the install record is unreadable at park time, which
