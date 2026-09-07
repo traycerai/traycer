@@ -78,6 +78,7 @@ const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
 export function useCommGraphSnapshot(
   epicId: string,
   hostIds: ReadonlyArray<string>,
+  tabHostId: string | null,
 ): CommGraphSnapshot {
   const hostDirectory = useHostDirectoryList();
   // Stable for this component's lifetime, and reads every host dependency live
@@ -138,32 +139,42 @@ export function useCommGraphSnapshot(
   const hasReadySessionFor = useRemoteSessionsPollReadiness(
     directoryHostIdsForReadiness,
   );
-  // ORDER, not sort. Every dialable host relays the same rows, so the only
-  // thing the choice decides is which link the epic's whole cloud feed rides.
-  // Sorting by ID handed that to whichever host ID happened to sort first, so
-  // an account with one remote host named ahead of this machine relayed every
-  // epic on it through the remote link. The local host is the shorter,
-  // cheaper, always-present path, so it goes first; the rest keep ID order for
-  // a stable candidate sequence.
+  // The TAB's host relays the feed, then everyone else in ID order as failover.
+  //
+  // Every dialable host relays the same rows, so the choice decides only which
+  // link the epic's whole cloud feed rides - and the epic tab is already riding
+  // one. Sorting by ID alone handed the feed to whichever host ID sorted first,
+  // which on an account with several hosts is an unrelated machine. Preferring
+  // the LOCAL host was rejected for the same reason in reverse: on mobile there
+  // is no local host at all, and the feed has to work through the remote host
+  // the tab was opened on like any other.
+  //
+  // `tabHostId` is the Epic SESSION's host (`useEpicSessionHostId`), not the
+  // tile's own `hostId` - this tile is the one kind with no host binding, and
+  // its ref carries an inert placeholder. `null` (no session host yet), or a
+  // tab host the directory cannot dial, leaves the plain ID order below; a tab
+  // host that arrives later just reorders, and a reorder never closes a healthy
+  // incumbent (`reconcileRelays`).
   const relayHostIds = useMemo(() => {
-    const dialableEntries = hostDirectory.data?.filter(
-      (entry) =>
-        dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
-        null,
-    );
-    if (dialableEntries === undefined || dialableEntries.length === 0) {
+    const dialableHostIds = hostDirectory.data
+      ?.filter(
+        (entry) =>
+          dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
+          null,
+      )
+      .map((entry) => entry.hostId);
+    if (dialableHostIds === undefined || dialableHostIds.length === 0) {
       return Array.from(new Set(hostIds)).sort();
     }
-    const localHostIds = dialableEntries
-      .filter((entry) => entry.kind === "local")
-      .map((entry) => entry.hostId)
-      .sort();
-    const otherHostIds = dialableEntries
-      .filter((entry) => entry.kind !== "local")
-      .map((entry) => entry.hostId)
-      .sort();
-    return Array.from(new Set([...localHostIds, ...otherHostIds]));
-  }, [hasReadySessionFor, hostDirectory.data, hostIds]);
+    const orderedHostIds = Array.from(new Set(dialableHostIds)).sort();
+    if (tabHostId === null || !orderedHostIds.includes(tabHostId)) {
+      return orderedHostIds;
+    }
+    return [
+      tabHostId,
+      ...orderedHostIds.filter((hostId) => hostId !== tabHostId),
+    ];
+  }, [hasReadySessionFor, hostDirectory.data, hostIds, tabHostId]);
   // The ID set does not change when a host publishes its endpoint late or
   // upgrades in place. Keep that transport identity separately so a retained
   // cloud manager can retry a prior dial/compatibility failure for the same

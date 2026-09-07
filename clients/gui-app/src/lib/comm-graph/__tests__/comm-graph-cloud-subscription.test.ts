@@ -752,7 +752,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
       ]);
     });
 
-    it("reopens exactly remote then local when the incumbent's own key changes and a local host joins first", () => {
+    it("reopens onto the new first candidate when the incumbent's own key changes", () => {
       const tracked = trackedOpener();
       const manager = new CommGraphCloudSubscriptionManager(
         "epic-1",
@@ -760,32 +760,32 @@ describe("CommGraphCloudSubscriptionManager", () => {
         () => undefined,
       );
       manager.reconcileRelays({
-        hostIds: ["relay-remote"],
-        readinessKeys: new Map([["relay-remote", "available:v1"]]),
+        hostIds: ["relay-incumbent"],
+        readinessKeys: new Map([["relay-incumbent", "available:v1"]]),
       });
       manager.attach();
       expect(tracked.opens.map((request) => request.hostId)).toEqual([
-        "relay-remote",
+        "relay-incumbent",
       ]);
 
       manager.reconcileRelays({
-        hostIds: ["relay-local", "relay-remote"],
+        hostIds: ["relay-ahead", "relay-incumbent"],
         readinessKeys: new Map([
-          ["relay-local", "available:v1"],
-          ["relay-remote", "available:v2"],
+          ["relay-ahead", "available:v1"],
+          ["relay-incumbent", "available:v2"],
         ]),
       });
 
       // Falsification: drop the `changedHostIds.has(incumbentHostId)`
       // disjunct from the incumbent close condition in `reconcileRelays` and
-      // this reddens - the reopen never happens, so relay-local is never
-      // dialed.
+      // this reddens - the reopen never happens, so the new head of the list
+      // (relay-ahead) is never dialed.
       expect(tracked.opens.map((request) => request.hostId)).toEqual([
-        "relay-remote",
-        "relay-local",
+        "relay-incumbent",
+        "relay-ahead",
       ]);
-      expect(tracked.closeSpyFor("relay-remote")).toHaveBeenCalledTimes(1);
-      expect(tracked.closeSpyFor("relay-local")).not.toHaveBeenCalled();
+      expect(tracked.closeSpyFor("relay-incumbent")).toHaveBeenCalledTimes(1);
+      expect(tracked.closeSpyFor("relay-ahead")).not.toHaveBeenCalled();
     });
 
     it("opens exactly one relay - the new first candidate - when the active host is removed and replaced together", () => {

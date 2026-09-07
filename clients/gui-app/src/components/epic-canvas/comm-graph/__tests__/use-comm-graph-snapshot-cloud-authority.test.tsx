@@ -92,7 +92,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
 
     const { result } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["origin-a"]),
+      useCommGraphSnapshot("epic-1", ["origin-a"], null),
     );
     await waitFor(() => expect(localRequests).toHaveLength(1));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
@@ -152,7 +152,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
 
     const { result } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["origin-a"]),
+      useCommGraphSnapshot("epic-1", ["origin-a"], null),
     );
     await waitFor(() => expect(localRequests).toHaveLength(1));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
@@ -203,7 +203,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
 
     const { result } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["origin-a"]),
+      useCommGraphSnapshot("epic-1", ["origin-a"], null),
     );
     await waitFor(() => expect(localRequests).toHaveLength(1));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
@@ -265,7 +265,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
       return { close: vi.fn() };
     });
 
-    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"]));
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
     await waitFor(() => expect(localRequests).toHaveLength(1));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     const localEvent = {
@@ -335,7 +335,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
       return { close: vi.fn() };
     });
 
-    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"]));
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
     await waitFor(() => expect(localRequests).toHaveLength(1));
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     const localCursor = {
@@ -377,7 +377,9 @@ describe("useCommGraphSnapshot cloud authority", () => {
       return { close: vi.fn() };
     });
 
-    renderHook(() => useCommGraphSnapshot("epic-1", ["offline-origin-a"]));
+    renderHook(() =>
+      useCommGraphSnapshot("epic-1", ["offline-origin-a"], null),
+    );
 
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     expect(cloudRequests[0].hostId).toBe("relay-b");
@@ -425,7 +427,9 @@ describe("useCommGraphSnapshot cloud authority", () => {
       return { close: vi.fn() };
     });
 
-    renderHook(() => useCommGraphSnapshot("epic-1", ["offline-origin-a"]));
+    renderHook(() =>
+      useCommGraphSnapshot("epic-1", ["offline-origin-a"], null),
+    );
 
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     expect(cloudRequests[0].hostId).toBe("zzz-available-relay");
@@ -442,7 +446,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
 
     const { rerender } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["relay-a"]),
+      useCommGraphSnapshot("epic-1", ["relay-a"], null),
     );
     expect(cloudRequests).toHaveLength(0);
 
@@ -468,7 +472,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
       directoryEntry("relay-a", { publicKey: "public-key-a" }),
     ];
     const { rerender } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["relay-a"]),
+      useCommGraphSnapshot("epic-1", ["relay-a"], null),
     );
     expect(cloudRequests).toHaveLength(0);
 
@@ -493,7 +497,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
 
     directoryEntries.current = [directoryEntry("relay-a", undefined)];
     const { rerender } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["relay-a"]),
+      useCommGraphSnapshot("epic-1", ["relay-a"], null),
     );
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
 
@@ -507,13 +511,13 @@ describe("useCommGraphSnapshot cloud authority", () => {
     expect(cloudRequests).toHaveLength(1);
   });
 
-  describe("local-first relay ordering", () => {
-    it("prefers a local directory host over a remote one that sorts first", async () => {
-      // "zzz-local" sorts AFTER "aaa-remote" alphabetically, so this only
-      // passes under kind-partitioned ordering, never under a flat `.sort()`.
+  describe("tab-host relay ordering", () => {
+    it("relays through the tab's host even when another directory host sorts first", async () => {
+      // The tab host sorts LAST, so this can only pass if the memo hoists it;
+      // under the plain id order it would dial "aaa-other".
       directoryEntries.current = [
-        directoryEntry("aaa-remote", undefined),
-        directoryEntry("zzz-local", { kind: "local" }),
+        directoryEntry("aaa-other", undefined),
+        directoryEntry("zzz-tab", undefined),
       ];
       __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
       const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
@@ -522,19 +526,18 @@ describe("useCommGraphSnapshot cloud authority", () => {
         return { close: vi.fn() };
       });
 
-      renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"]));
+      renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], "zzz-tab"));
 
       await waitFor(() => expect(cloudRequests).toHaveLength(1));
-      // Falsification: revert the `relayHostIds` memo's `kind === "local"`
-      // partition to a flat `.sort()` over all dialable entries and this
-      // reddens - "aaa-remote" sorts before "zzz-local", so the flat sort
-      // would dial it instead.
-      expect(cloudRequests[0].hostId).toBe("zzz-local");
+      // Falsification: delete the tab-host hoist at the end of the
+      // `relayHostIds` memo (return `orderedHostIds` unconditionally) and this
+      // reddens - "aaa-other" sorts first and would be dialed instead.
+      expect(cloudRequests[0].hostId).toBe("zzz-tab");
     });
 
-    it("falls through to remote relays in id order when no local host is dialable", async () => {
-      // Directory insertion order is "zzz-remote" then "aaa-remote" -
-      // opposite of id order - so this only passes if the memo sorts.
+    it("falls back to id order when the tab host is not a dialable directory entry", async () => {
+      // Insertion order is the reverse of id order, so this also pins the
+      // `.sort()`. The tab host names a machine the directory cannot dial.
       directoryEntries.current = [
         directoryEntry("zzz-remote", undefined),
         directoryEntry("aaa-remote", undefined),
@@ -546,17 +549,94 @@ describe("useCommGraphSnapshot cloud authority", () => {
         return { close: vi.fn() };
       });
 
-      renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"]));
+      renderHook(() =>
+        useCommGraphSnapshot("epic-1", ["origin-a"], "absent-from-directory"),
+      );
 
       await waitFor(() => expect(cloudRequests).toHaveLength(1));
-      // Falsification: delete the `.sort()` off `otherHostIds` in the
-      // `relayHostIds` memo and this reddens - with no local host, directory
-      // insertion order ("zzz-remote" first) would be dialed instead of id
-      // order.
+      // Falsification, two ways: drop the `orderedHostIds.includes(tabHostId)`
+      // guard and the memo prepends a host the directory cannot dial, so
+      // "absent-from-directory" is dialed; or delete the `.sort()` and
+      // insertion order dials "zzz-remote". Either reddens this.
       expect(cloudRequests[0].hostId).toBe("aaa-remote");
     });
 
-    it("resolves a late directory arrival to exactly remote then local, and nothing else", async () => {
+    it("rides a remote tab host when the directory holds no local host at all, and a directory re-emit never closes it", async () => {
+      // The mobile shape: no `kind === "local"` entry exists anywhere, so the
+      // feed has to work through the remote host the tab was opened on.
+      directoryEntries.current = [
+        directoryEntry("aaa-other-remote", undefined),
+        directoryEntry("zzz-tab-remote", undefined),
+      ];
+      __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
+      const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+      const cloudClose = vi.fn();
+      __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+        cloudRequests.push(request);
+        return { close: cloudClose };
+      });
+
+      const { rerender } = renderHook(() =>
+        useCommGraphSnapshot("epic-1", ["origin-a"], "zzz-tab-remote"),
+      );
+      await waitFor(() => expect(cloudRequests).toHaveLength(1));
+      expect(cloudRequests[0].hostId).toBe("zzz-tab-remote");
+      expect(
+        directoryEntries.current.some((entry) => entry.kind === "local"),
+      ).toBe(false);
+
+      // Same directory CONTENT, fresh entry objects - the benign re-emit the
+      // hook sees constantly. Both memos rebuild by identity; nothing may move.
+      directoryEntries.current = [
+        directoryEntry("aaa-other-remote", undefined),
+        directoryEntry("zzz-tab-remote", undefined),
+      ];
+      rerender();
+
+      // Falsification: make `reconcileRelays` close the incumbent
+      // unconditionally (delete its incumbent-close condition) and this
+      // reddens - the healthy remote relay is torn down and redialed by a
+      // re-emit that changed nothing.
+      expect(cloudClose).not.toHaveBeenCalled();
+      expect(cloudRequests).toHaveLength(1);
+    });
+
+    it("keeps a healthy tab-host relay when another candidate joins ahead of the others", async () => {
+      directoryEntries.current = [
+        directoryEntry("mmm-other", undefined),
+        directoryEntry("zzz-tab", undefined),
+      ];
+      __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
+      const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+      const cloudClose = vi.fn();
+      __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+        cloudRequests.push(request);
+        return { close: cloudClose };
+      });
+
+      const { rerender } = renderHook(() =>
+        useCommGraphSnapshot("epic-1", ["origin-a"], "zzz-tab"),
+      );
+      await waitFor(() => expect(cloudRequests).toHaveLength(1));
+      expect(cloudRequests[0].hostId).toBe("zzz-tab");
+
+      // A host that sorts before every other candidate appears. The tab host
+      // stays at the head, and the tail reorders beneath it.
+      directoryEntries.current = [
+        directoryEntry("mmm-other", undefined),
+        directoryEntry("zzz-tab", undefined),
+        directoryEntry("aaa-newcomer", undefined),
+      ];
+      rerender();
+
+      // Falsification: delete the incumbent-close condition in
+      // `reconcileRelays` (always close) and this reddens - a candidate
+      // joining the list would tear down a healthy relay.
+      expect(cloudClose).not.toHaveBeenCalled();
+      expect(cloudRequests).toHaveLength(1);
+    });
+
+    it("resolves a late directory arrival to exactly the origin then the tab host, and nothing else", async () => {
       __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
       const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
       __setCommGraphCloudSubscriptionOpenerForTests((request) => {
@@ -568,33 +648,31 @@ describe("useCommGraphSnapshot cloud authority", () => {
       // hostIds, dialed under a "directory-pending" readiness key.
       directoryEntries.current = [];
       const { rerender } = renderHook(() =>
-        useCommGraphSnapshot("epic-1", ["aaa-remote"]),
+        useCommGraphSnapshot("epic-1", ["aaa-origin"], "zzz-tab"),
       );
       await waitFor(() => expect(cloudRequests).toHaveLength(1));
-      expect(cloudRequests[0].hostId).toBe("aaa-remote");
+      expect(cloudRequests[0].hostId).toBe("aaa-origin");
 
-      // The directory arrives with a dialable local host. "aaa-remote" is
-      // not itself a directory entry, so it drops out of the candidate set
-      // entirely and the incumbent's own readiness key changes
-      // ("directory-pending" -> gone) - reopening onto the new order.
-      directoryEntries.current = [
-        directoryEntry("zzz-local", { kind: "local" }),
-      ];
+      // The directory arrives carrying the tab's host. "aaa-origin" is not a
+      // directory entry, so it leaves the candidate set and the incumbent's
+      // own readiness key changes ("directory-pending" -> gone), reopening
+      // onto the new order.
+      directoryEntries.current = [directoryEntry("zzz-tab", undefined)];
       rerender();
 
       await waitFor(() => expect(cloudRequests).toHaveLength(2));
       // Falsification: split the hook's one `reconcileRelays` effect back
       // into the two setter effects it supersedes, in the order the hook used
       // to run them (readiness keys, then host ids), and this reddens with
-      // `["aaa-remote", "aaa-remote", "zzz-local"]`. The readiness effect runs
-      // while the host list is still the fallback `["aaa-remote"]`, sees the
+      // `["aaa-origin", "aaa-origin", "zzz-tab"]`. The readiness effect runs
+      // while the host list is still the fallback `["aaa-origin"]`, sees the
       // incumbent's own key change ("directory-pending" -> absent), and
-      // closes and REDIALS aaa-remote before the list effect has replaced it.
+      // closes and REDIALS aaa-origin before the list effect has replaced it.
       // That intermediate open against half-installed state is what the
       // exact-array assertion below refuses.
       expect(cloudRequests.map((request) => request.hostId)).toEqual([
-        "aaa-remote",
-        "zzz-local",
+        "aaa-origin",
+        "zzz-tab",
       ]);
     });
   });
