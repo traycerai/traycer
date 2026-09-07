@@ -438,3 +438,68 @@ describe("describeUpdateOperation — finalizing-record", () => {
     expect(copy.accessibleLabel).toBe(`host-a: ${copy.primary}`);
   });
 });
+
+// Q19/Q23. Pinned at the module that owns the sentence — the card suite pins
+// that the card mounts it, and the banner suite pins the affordances.
+describe("describeUpdateOperation — verification-refused", () => {
+  function refusedView(targetVersion: string | null): FleetUpdateView {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      kind: "verification-refused",
+      qualified: false,
+      attemptId: "attempt-1",
+      targetVersion,
+    };
+  }
+
+  it("names what the host DID, and carries no terminal punctuation", () => {
+    // "Installed", never "Updated": Q11's sentence may claim the update landed
+    // because the version proves it; this one may not.
+    //
+    // UNTERMINATED, and that is the module's convention rather than an
+    // oversight: of the strings this module returns, fourteen end without a
+    // full stop and exactly one — `finalizing-record` — does not. The closest
+    // structural precedent is the floor park, a full sentence with an
+    // affordance tail, also unterminated.
+    //
+    // Reviewer C raised the mixed punctuation here as a nit, then withdrew it
+    // on that count: the finding had compared this string against its two
+    // NAMED neighbours instead of against the whole set, and "match
+    // `finalizing-record`, not `unavailable`" is a choice between neighbours,
+    // not a convention. Adding the period would have moved a conforming string
+    // toward the single deviation.
+    expect(
+      describeUpdateOperation({
+        view: refusedView("2.1.0"),
+        hostName: "host-a",
+        cliFloorBlocked: false,
+      }).primary,
+    ).toBe(
+      "Installed v2.1.0. The host is running but refused Traycer's authenticated check, so the update was not verified — see Diagnostics",
+    );
+  });
+
+  it("drops the version when the host named no target, rather than reading 'v.'", () => {
+    // The `versionLabel(null)` arm. Reviewed by eye and never exercised until
+    // now — the same unexercised-branch shape as `finalizing-record`'s `to`.
+    expect(
+      describeUpdateOperation({
+        view: refusedView(null),
+        hostName: "host-a",
+        cliFloorBlocked: false,
+      }).primary,
+    ).toBe(
+      "Installed. The host is running but refused Traycer's authenticated check, so the update was not verified — see Diagnostics",
+    );
+  });
+
+  it("is announced POLITELY — alert semantics are reserved for `failed`", () => {
+    const copy = describeUpdateOperation({
+      view: refusedView("2.1.0"),
+      hostName: "host-a",
+      cliFloorBlocked: false,
+    });
+    expect(copy.assertive).toBe(false);
+    expect(copy.needsQualifiedMarker).toBe(false);
+  });
+});
