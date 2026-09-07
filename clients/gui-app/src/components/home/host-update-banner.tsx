@@ -740,7 +740,16 @@ function OperationContent(props: OperationContentProps) {
           copy already ends "see Diagnostics" and until now named a place with
           no way to get to it.
         */}
-        {view.kind === "failed" || view.kind === "unavailable" ? (
+        {/*
+          `verification-refused` joins the two states that point here, and it is
+          the reason it is not on the Retry gate above: a host that refused the
+          authenticated check will refuse it again, so a Retry would be a button
+          whose only outcome is the same refusal. Diagnostics is the one
+          affordance, and the sentence ends by naming it.
+        */}
+        {view.kind === "failed" ||
+        view.kind === "unavailable" ||
+        view.kind === "verification-refused" ? (
           <Button
             type="button"
             size="sm"

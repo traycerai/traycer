@@ -346,6 +346,25 @@ export type FleetUpdateViewKind =
    * concludes the record.
    */
   | "finalizing-record"
+  /**
+   * The host came up and ANSWERED — with a refusal. Bytes are installed at the
+   * target, the process is serving, and it rejected the CLI's authenticated
+   * check, so verification never completed (Q19: two consecutive
+   * UNAUTHORIZED/FORBIDDEN frames end the verify loop and stamp a terminal
+   * record with code `host-refuses-rpc`).
+   *
+   * Distinct from all three of its neighbours, and each distinction is load-
+   * bearing. Not `complete`: nothing was verified. Not `finalizing-record`:
+   * that kind ASSERTS the update landed and says only the record is open,
+   * whereas landing is exactly what could not be established here. Not
+   * `failed`: a refusal is an answer from a running host, and dressing it in
+   * the destructive treatment is the Q11 defect arriving through a second
+   * door.
+   *
+   * Diagnostic and repairable, like `unavailable`, and carries that kind's
+   * affordance set rather than the failure arm's.
+   */
+  | "verification-refused"
   /** Fail-closed record evidence. Diagnostic and repairable, NOT a failure. */
   | "unavailable";
 
@@ -924,6 +943,36 @@ function attemptOperationView(input: {
     };
   }
 
+  // Q19/Q23 — ABOVE the liveness arm, and the order is the point.
+  //
+  // A terminal `failed` record whose code says the host REFUSED the CLI's
+  // authenticated check. What is known: bytes installed at the target, the
+  // host came up and answered (a refusal is an answer), verification did not
+  // complete. So it is neither `complete` nor `failed`, and it must not reach
+  // Q11's state-derived route below either — `finalizing-record` asserts the
+  // update LANDED and says only the record is open, which is precisely the
+  // thing that could not be established here.
+  //
+  // Ordering it first makes that independent of how the two predicates happen
+  // to be written. `concludesAsFinalizingRecord` already refuses a `failed`
+  // phase, so today the routes cannot collide whatever their order — but that
+  // is a property of one predicate's phase set, not a guarantee, and the phase
+  // set is exactly the kind of thing a later change widens. Deciding by
+  // position costs nothing and cannot be widened out of.
+  //
+  // Rendering by CODE is right HERE and was not available to Q11: this is a
+  // terminal record carrying a named code that means one thing. Q11 had to be
+  // derived from state because the path that needed a code could not write
+  // one at all.
+  if (refusesAuthenticatedCheck(operation)) {
+    return {
+      ...base,
+      ...noRetainedPhase,
+      kind: "verification-refused",
+      qualified: false,
+    };
+  }
+
   // Liveness is the host's read-side conclusion joining the attempt lock's
   // holder, and a client cannot re-derive it — so it outranks the phase.
   if (operation.liveness === "interrupted") {
@@ -1009,6 +1058,35 @@ function attemptOperationView(input: {
  */
 const FINALIZING_RECORD_PHASES: ReadonlySet<HostUpdateAttemptPhase> =
   new Set<HostUpdateAttemptPhase>(["verifying"]);
+
+/**
+ * The record code Q19 stamps when the freshly started target host answers the
+ * verify leg's authenticated RPC with two consecutive UNAUTHORIZED/FORBIDDEN
+ * frames.
+ *
+ * A string literal rather than an import: the CLI's
+ * `UNCONDITIONALLY_STAMPED_FAILURE_CODES` lives in a package the renderer
+ * cannot reach, and the value crosses as record data on the `host.status`
+ * mirror regardless. Matching it here is reading the wire, the same way
+ * `narrowPhase` reads a phase off an IPC payload rather than trusting the
+ * declared type.
+ */
+const HOST_REFUSES_RPC_CODE = "host-refuses-rpc";
+
+/**
+ * Whether this terminal record says the host refused the authenticated check.
+ *
+ * Both halves are required. The PHASE guard is not ceremony: a code is only
+ * meaningful on a record that actually concluded, and reading one off a
+ * non-terminal record would let a mid-flight attempt that happens to carry a
+ * stale error jump to a terminal rendering.
+ */
+function refusesAuthenticatedCheck(
+  operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>,
+): boolean {
+  if (operation.phase !== "failed") return false;
+  return operation.error?.code === HOST_REFUSES_RPC_CODE;
+}
 
 /**
  * Whether a dead executor left behind a SUCCESS rather than a failure.
@@ -1241,26 +1319,27 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * machine for as long as an unconcluded record sits on disk — which is until
  * the next update RUN, not until any timer expires, and possibly never.
  */
+const HOLDS_LIFECYCLE_GATE: Record<FleetUpdateViewKind, boolean> = {
+  downloading: true,
+  preparing: true,
+  applying: true,
+  restarting: true,
+  verifying: true,
+  updating: false,
+  reconnecting: false,
+  "waiting-for-work": false,
+  "waiting-to-activate": false,
+  complete: false,
+  failed: false,
+  "finalizing-record": false,
+  "verification-refused": false,
+  unavailable: false,
+  idle: false,
+  unknown: false,
+};
+
 export function holdsLifecycleGate(view: FleetUpdateView): boolean {
-  switch (view.kind) {
-    case "downloading":
-    case "preparing":
-    case "applying":
-    case "restarting":
-    case "verifying":
-      return true;
-    case "updating":
-    case "reconnecting":
-    case "waiting-for-work":
-    case "waiting-to-activate":
-    case "complete":
-    case "failed":
-    case "finalizing-record":
-    case "unavailable":
-    case "idle":
-    case "unknown":
-      return false;
-  }
+  return HOLDS_LIFECYCLE_GATE[view.kind];
 }
 
 /**
@@ -1297,26 +1376,27 @@ export function warrantsFastPoll(view: FleetUpdateView): boolean {
  * a {@link FleetUpdateViewKind} still fails the BUILD until someone decides
  * what cadence it earns.
  */
+const WARRANTS_FAST_POLL: Record<FleetUpdateViewKind, boolean> = {
+  downloading: true,
+  preparing: true,
+  applying: true,
+  restarting: true,
+  reconnecting: true,
+  verifying: true,
+  updating: false,
+  unknown: false,
+  idle: false,
+  "waiting-for-work": false,
+  "waiting-to-activate": false,
+  complete: false,
+  failed: false,
+  "finalizing-record": false,
+  "verification-refused": false,
+  unavailable: false,
+};
+
 function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
-  switch (kind) {
-    case "downloading":
-    case "preparing":
-    case "applying":
-    case "restarting":
-    case "reconnecting":
-    case "verifying":
-      return true;
-    case "updating":
-    case "unknown":
-    case "idle":
-    case "waiting-for-work":
-    case "waiting-to-activate":
-    case "complete":
-    case "failed":
-    case "finalizing-record":
-    case "unavailable":
-      return false;
-  }
+  return WARRANTS_FAST_POLL[kind];
 }
 
 /**

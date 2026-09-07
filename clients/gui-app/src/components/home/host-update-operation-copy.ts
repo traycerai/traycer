@@ -109,22 +109,129 @@ function primarySentence(
 }
 
 /**
- * One phase, in words — taking the kind as an ARGUMENT rather than reading
- * `view.kind`, which is what lets the retained-phase sentence above reuse this
- * table instead of growing a parallel one. A second table is how "Downloading
- * update" and "last seen downloading" end up disagreeing about a version suffix.
- */
-/**
- * Every phase that names a version uses this, and it is empty when the host did
- * not report one — a sentence must never read "Downloading update to v".
+ * The bare version label, ` v<target>`, or "" when the host reported none.
  *
- * Hoisted out of {@link phaseSentence} rather than inlined there so the switch
- * below stays within the complexity budget as the kind union grows; it was
- * always a single expression with a single reason.
+ * Separate from {@link versionSuffix} because two sentences want the version
+ * WITHOUT the preposition: "Installed v2.1.0", never "Installed to v2.1.0".
+ */
+function versionLabel(target: string | null): string {
+  return target === null ? "" : ` v${target}`;
+}
+
+/**
+ * Every phase that names a version as a destination uses this, and it is empty
+ * when the host did not report one — a sentence must never read "Downloading
+ * update to v".
  */
 function versionSuffix(target: string | null): string {
-  return target === null ? "" : ` to v${target}`;
+  return target === null ? "" : ` to${versionLabel(target)}`;
 }
+
+/**
+ * One phase's sentence, keyed by kind.
+ *
+ * A TABLE rather than a switch, and the switch is what it replaced. A
+ * `Record<FleetUpdateViewKind, …>` keeps exactly the exhaustiveness the switch
+ * gave — a new kind is a missing key and a type error — while costing no
+ * cyclomatic budget. The switch had spent all of it: oxlint caps a function at
+ * 16 and a switch spends one per arm, so the sixteenth view kind put this
+ * function over on its own. Same construct the two badge tables and the two
+ * gate tables now use, and the same one `STATUS_WORD` has always used.
+ *
+ * Each arm still takes the kind as data rather than reading `view.kind`, which
+ * is what lets the retained-phase sentence reuse this table instead of growing
+ * a parallel one. A second table is how "Downloading update" and "last seen
+ * downloading" end up disagreeing about a version suffix.
+ */
+interface PhaseSentenceContext {
+  readonly view: FleetUpdateView;
+  readonly cliFloorBlocked: boolean;
+  /** `view.targetVersion`, hoisted because most arms need it. */
+  readonly target: string | null;
+  /** ` to v<target>`, or "" when the host reported no target. */
+  readonly to: string;
+}
+
+const PHASE_SENTENCE: Record<
+  FleetUpdateViewKind,
+  (context: PhaseSentenceContext) => string
+> = {
+  // The coarse marker's whole vocabulary: in flight, phase unknown. Never
+  // narrower than that — "Installing" during a three-minute download reads as
+  // a stall, and the marker cannot tell the two apart.
+  updating: ({ to }) => `Updating host${to}`,
+  downloading: ({ to }) => `Downloading update${to}`,
+  preparing: ({ to }) => `Preparing update${to}`,
+  applying: ({ to }) => `Installing update${to}`,
+  "waiting-for-work": ({ view, cliFloorBlocked }) =>
+    waitingForWorkSentence(view.blockingSessionCount, cliFloorBlocked),
+  // The plan names this string explicitly (§3.1): a parked activation must NOT
+  // keep saying "Updating". It is placed, it is waiting for a restart, and the
+  // host is still serving in the meantime.
+  "waiting-to-activate": () => "Update installed — restart host to finish",
+  restarting: ({ to }) => `Restarting host${to}`,
+  reconnecting: () => "Waiting for host to reconnect",
+  verifying: ({ to }) => `Verifying updated host${to}`,
+  complete: ({ target }) => completeSentence(target),
+  failed: ({ view }) => failedSentence(view.errorMessage),
+  // The success first, because the ORDER is the message: the update landed, and
+  // the leftover is bookkeeping. Leading with the bookkeeping would read as a
+  // qualification on the success.
+  //
+  // A STATE, not an action. This was "Finalizing the update record." —
+  // present-continuous, and wrong, because nothing is in progress: the record is
+  // concluded by the next update RUN, so no work is happening on this host and
+  // the card has no expiry of its own. (`complete` retires when the record goes
+  // terminal and the host moves to `idle`; this kind is DEFINED by a record that
+  // has not concluded.) A card with no Retry, no Diagnostics, no poll and no
+  // affordance could therefore carry a claim of ongoing work indefinitely — the
+  // one sentence on it that gets falser the longer it is shown.
+  //
+  // The closing clause is what makes the fact bearable: naming the record is
+  // right (it is why `traycer host update` just exited non-zero, and a bare
+  // "Updated" would leave that contradiction unexplained), but "still open"
+  // alone is jargon on a surface offering nothing to do about it. Saying what
+  // closes it says nothing is owed of the reader.
+  //
+  // Deliberately true in both worlds: today nothing on this host ever concludes
+  // the record, and once the host reconciler closes that gap the state becomes
+  // transient. This sentence survives that change; a present-continuous one
+  // would only have become correct by accident.
+  //
+  // `to` already collapses to "" for an unreported target, so a host that named
+  // no version reads "Updated. The update record is still open; …" rather than
+  // "Updated to v.".
+  "finalizing-record": ({ to }) =>
+    `Updated${to}. The update record is still open; the next update reconciles it.`,
+  // "Installed", not "Updated": the bytes are placed at the target and the host
+  // is serving, but nothing verified that it is serving THEM. Q11's sentence may
+  // claim the update landed because the version proves it; this one may not, and
+  // the two must not converge in wording.
+  //
+  // A refusal is an ANSWER, so this is not "unreachable" either — naming what
+  // the host did ("refused Traycer's authenticated check") is the whole
+  // diagnostic value, and it is what tells a reader this is a credential or
+  // permission problem rather than a broken update.
+  //
+  // Ends at the affordance, like `unavailable` below and the floor park above:
+  // the card offers Diagnostics and the panel carries the detail. Naming a
+  // terminal command here as well would be two remedies for one blocker — the
+  // layered narration this page keeps deleting.
+  //
+  // `versionLabel`, not `to`: this sentence reads "Installed v2.1.0", never
+  // "Installed to v2.1.0".
+  "verification-refused": ({ target }) =>
+    `Installed${versionLabel(target)}. The host is running but refused Traycer's authenticated check, so the update was not verified — see Diagnostics`,
+  // Deliberately not "failed". The record could not be read; the update may be
+  // fine. This wording points at the repair path Diagnostics offers.
+  unavailable: () => "Update status unavailable — see Diagnostics",
+  // Unreachable through `primarySentence`, which handles `unknown` above so it
+  // can consult the retained phase. Kept because the table is exhaustive, and a
+  // retained `unknown` — a host we never learned anything about — must still
+  // produce a sentence.
+  unknown: () => "Update state unknown",
+  idle: () => "Host is up to date",
+};
 
 function phaseSentence(
   kind: FleetUpdateViewKind,
@@ -132,79 +239,12 @@ function phaseSentence(
   cliFloorBlocked: boolean,
 ): string {
   const target = view.targetVersion;
-  const to = versionSuffix(target);
-  switch (kind) {
-    case "updating":
-      // The coarse marker's whole vocabulary: in flight, phase unknown. Never
-      // narrower than that — "Installing" during a three-minute download reads
-      // as a stall, and the marker cannot tell the two apart.
-      return `Updating host${to}`;
-    case "downloading":
-      return `Downloading update${to}`;
-    case "preparing":
-      return `Preparing update${to}`;
-    case "applying":
-      return `Installing update${to}`;
-    case "waiting-for-work":
-      return waitingForWorkSentence(view.blockingSessionCount, cliFloorBlocked);
-    case "waiting-to-activate":
-      // The plan names this string explicitly (§3.1): a parked activation must
-      // NOT keep saying "Updating". It is placed, it is waiting for a restart,
-      // and the host is still serving in the meantime.
-      return "Update installed — restart host to finish";
-    case "restarting":
-      return `Restarting host${to}`;
-    case "reconnecting":
-      return "Waiting for host to reconnect";
-    case "verifying":
-      return `Verifying updated host${to}`;
-    case "complete":
-      return completeSentence(target);
-    case "failed":
-      return failedSentence(view.errorMessage);
-    case "finalizing-record":
-      // The success first, because the ORDER is the message: the update
-      // landed, and the leftover is bookkeeping. Leading with the bookkeeping
-      // would read as a qualification on the success.
-      //
-      // A STATE, not an action. This was "Finalizing the update record." —
-      // present-continuous, and wrong, because nothing is in progress: the
-      // record is concluded by the next update RUN, so no work is happening on
-      // this host and the card has no expiry of its own. (`complete` retires
-      // when the record goes terminal and the host moves to `idle`; this kind
-      // is DEFINED by a record that has not concluded.) A card with no Retry,
-      // no Diagnostics, no poll and no affordance could therefore carry a
-      // claim of ongoing work indefinitely — the one sentence on it that gets
-      // falser the longer it is shown.
-      //
-      // The closing clause is what makes the fact bearable: naming the record
-      // is right (it is why `traycer host update` just exited non-zero, and a
-      // bare "Updated" would leave that contradiction unexplained), but "still
-      // open" alone is jargon on a surface offering nothing to do about it.
-      // Saying what closes it says nothing is owed of the reader.
-      //
-      // Deliberately true in both worlds: today nothing on this host ever
-      // concludes the record, and once the host reconciler closes that gap the
-      // state becomes transient. This sentence survives that change; a
-      // present-continuous one would only have become correct by accident.
-      //
-      // `to` already collapses to "" for an unreported target, so a host that
-      // named no version reads "Updated. The update record is still open; …"
-      // rather than "Updated to v.".
-      return `Updated${to}. The update record is still open; the next update reconciles it.`;
-    case "unavailable":
-      // Deliberately not "failed". The record could not be read; the update may
-      // be fine. This wording points at the repair path Diagnostics offers.
-      return "Update status unavailable — see Diagnostics";
-    case "unknown":
-      // Unreachable through `primarySentence`, which handles `unknown` above so
-      // it can consult the retained phase. Kept as an arm because this switch is
-      // exhaustive over the kind union and a retained `unknown` — a host we
-      // never learned anything about — must still produce a sentence.
-      return "Update state unknown";
-    case "idle":
-      return "Host is up to date";
-  }
+  return PHASE_SENTENCE[kind]({
+    view,
+    cliFloorBlocked,
+    target,
+    to: versionSuffix(target),
+  });
 }
 
 /**

@@ -744,6 +744,134 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
   });
 });
 
+/**
+ * Q19/Q23: a host that came up and REFUSED the CLI's authenticated check.
+ *
+ * The verify leg takes two consecutive UNAUTHORIZED/FORBIDDEN frames from the
+ * freshly started target host, stops, and stamps a terminal record with code
+ * `host-refuses-rpc`. What is then known: bytes installed at the target, the
+ * host answered (a refusal is an answer), verification never completed.
+ *
+ * Rendering by CODE is right here and was not available to Q11 above: this is a
+ * terminal record carrying a named code that means one thing, where Q11's path
+ * could not write a code at all.
+ */
+describe("projectFleetUpdateView — a host that refused the authenticated check", () => {
+  function refusedAttempt(
+    overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
+  ): HostStatusUpdateOperation {
+    return attemptOperation({
+      phase: "failed",
+      execution: "terminal",
+      liveness: "interrupted",
+      targetVersion: "2.1.0",
+      error: {
+        code: "host-refuses-rpc",
+        message: "the host refused the authenticated check",
+        phase: "verifying",
+      },
+      ...overrides,
+    });
+  }
+
+  it("renders the non-destructive kind, not failed", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({}),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("verification-refused");
+    expect(view.kind).not.toBe("failed");
+    expect(view.qualified).toBe(false);
+    expect(view.targetVersion).toBe("2.1.0");
+  });
+
+  it("a DIFFERENT code on the same terminal record still renders failed", () => {
+    // The discriminator flipped, and nothing else. Without this the route could
+    // be matching on the phase alone and every terminal failure would quietly
+    // lose its failure treatment.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({
+          error: {
+            code: "verify-timeout",
+            message: "did not become healthy",
+            phase: "verifying",
+          },
+        }),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+  });
+
+  it("routes here whether or not the running version matches — it is ORDERED before Q11's state route", () => {
+    // Q11's route is derived from state (`verifying` + version match); this one
+    // is decided by code and sits above it. Both versions are exercised because
+    // the matching one is the case that would collide if the order were ever
+    // inverted, and the non-matching one is the case that must not fall through
+    // to `failed`.
+    //
+    // `concludesAsFinalizingRecord` also refuses a `failed` phase today, so the
+    // routes cannot collide whatever their order — but that is a property of
+    // one predicate's phase set, not a guarantee, and this pins the position
+    // rather than the coincidence.
+    for (const runningVersion of ["2.1.0", "2.0.0"]) {
+      const view = projectFleetUpdateView({
+        observation: observation({
+          operation: refusedAttempt({}),
+          runningVersion,
+        }),
+        nowMs: NOW_MS,
+        connected: true,
+      });
+      expect(view.kind).toBe("verification-refused");
+      expect(view.kind).not.toBe("finalizing-record");
+    }
+  });
+
+  it("a NON-terminal record carrying the code is not this state", () => {
+    // A code is only meaningful on a record that concluded. A mid-flight
+    // attempt holding a stale error must keep rendering its live phase rather
+    // than jumping to a terminal rendering.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({
+          phase: "downloading",
+          execution: "active",
+          liveness: "active",
+        }),
+        runningVersion: "2.0.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("downloading");
+  });
+
+  it("holds no lifecycle gate and earns no fast poll, and is not quiet", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({}),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    // The discriminating fact FIRST — every assertion below is also true of
+    // `failed`, so without this the test passes with the route deleted.
+    expect(view.kind).toBe("verification-refused");
+    expect(holdsLifecycleGate(view)).toBe(false);
+    expect(warrantsFastPoll(view)).toBe(false);
+    expect(isQuietUpdateView(view)).toBe(false);
+  });
+});
+
 describe("projectFleetUpdateView — restarting vs reconnecting", () => {
   it("phase: restarting while still connected projects restarting", () => {
     const view = projectFleetUpdateView({

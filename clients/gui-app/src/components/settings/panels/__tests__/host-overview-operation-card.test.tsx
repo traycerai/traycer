@@ -662,6 +662,57 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
     expect(card.getAttribute("aria-live")).toBe("polite");
   });
 
+  it("Q19: a host-refuses-rpc record renders non-destructively, with no destructive treatment in the DOM", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () =>
+          statusRunning(
+            attemptOperation({
+              phase: "failed",
+              execution: "terminal",
+              liveness: "interrupted",
+              targetVersion: "2.1.0",
+              error: {
+                code: "host-refuses-rpc",
+                message: "the host refused the authenticated check",
+                phase: "verifying",
+              },
+            }),
+            "2.1.0",
+          ),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe(
+        "Installed v2.1.0. The host is running but refused Traycer's authenticated check, so the update was not verified — see Diagnostics",
+      );
+    });
+    // On THIS surface the destructive treatment is the whole of the failure
+    // arm — the Overview card has no Retry and no Diagnostics button, and
+    // `offersForceRestart` is false for a terminal record — so asserting its
+    // absence is asserting the absence of every destructive affordance the card
+    // can express. The banner suite holds the Retry half, which is where a
+    // retry affordance actually exists.
+    expect(card.className).not.toContain("destructive");
+    expect(card.getAttribute("aria-live")).toBe("polite");
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("host-overview-operation-force-restart"),
+    ).toBeNull();
+  });
+
   it("running the OLD version still renders the destructive failure card", async () => {
     // The control, and the half that must not regress: an executor that died
     // in `verifying` on a host still serving the old version IS a failed
