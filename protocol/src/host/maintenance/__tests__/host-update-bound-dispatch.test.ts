@@ -1,5 +1,17 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  hostUpdateBoundDispatchRequestSchema as hostBarrelRequestSchema,
+} from "@traycer/protocol/host/index";
+import {
+  hostUpdateActivateV11 as publicActivateV11,
+  hostUpdateBoundDispatchExpectedIdentitySchema as publicIdentitySchema,
+  hostUpdateBoundDispatchRequestSchema as publicRequestSchema,
+  hostUpdateContinueV11 as publicContinueV11,
+} from "@traycer/protocol/host/maintenance/index";
+import type { HostUpdateBoundDispatchExpectedIdentity } from "@traycer/protocol/host/maintenance/index";
 import {
   hostUpdateActivateUpgradeV10ToV11,
   hostUpdateActivateV10,
@@ -9,6 +21,7 @@ import {
   hostUpdateContinueV11,
 } from "../contracts";
 import {
+  hostUpdateBoundDispatchExpectedIdentitySchema,
   hostUpdateBoundDispatchRequestSchema,
   hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity,
   hostUpdateBoundDispatchResponseSchema,
@@ -228,5 +241,79 @@ describe("hostUpdateBoundDispatchRequestSchema — `expected`", () => {
         expected: null,
       }).success,
     ).toBe(false);
+  });
+});
+
+// The barrel. Every other maintenance name reaches a client through
+// `@traycer/protocol/host/maintenance/index` (and `../index` re-exports that
+// wholesale as `@traycer/protocol/host`); the bound dispatch surface was the
+// one part of `./contracts` and `./schemas` it did not carry, so `expected`
+// was unreachable from the entrypoint its consumers already import.
+describe("the maintenance barrel", () => {
+  it("serves the bound dispatch surface from the entrypoint clients import", () => {
+    // Deliberately the barrel, not `../schemas`: the deep path never broke,
+    // so pinning it would pin the wrong thing.
+    expect(publicRequestSchema).toBe(hostUpdateBoundDispatchRequestSchema);
+    expect(publicIdentitySchema).toBe(
+      hostUpdateBoundDispatchExpectedIdentitySchema,
+    );
+    expect(publicActivateV11).toBe(hostUpdateActivateV11);
+    expect(publicContinueV11).toBe(hostUpdateContinueV11);
+
+    // And one hop further out, through `../index`'s `export *`. Worth its own
+    // assertion because that hop fails SILENTLY: a star re-export drops a name
+    // that collides with another module's rather than erroring, so the two
+    // entrypoints can disagree without anything here failing to compile.
+    expect(hostBarrelRequestSchema).toBe(hostUpdateBoundDispatchRequestSchema);
+
+    // The TYPE too, whose absence sent a consumer to the
+    // `HostUpdateBoundDispatchRequest["expected"]` workaround. Only `compile`
+    // reads this annotation - which is the point, since the missing name
+    // failed at build time and never at run time.
+    const identity: HostUpdateBoundDispatchExpectedIdentity = {
+      generation: 1,
+      sequence: 1,
+    };
+    expect(publicIdentitySchema.parse(identity)).toEqual(identity);
+  });
+
+  // The invariant the barrel's own comment states. Held mechanically because
+  // the failure mode is silent: a name added to `./schemas` and not here is a
+  // working deep import and a build error for everyone on the public path,
+  // and nothing in the package notices until a consumer does.
+  it("re-exports every export of `./contracts` and `./schemas`", () => {
+    const read = (name: string): string =>
+      readFileSync(
+        fileURLToPath(new URL(`../${name}`, import.meta.url)),
+        "utf8",
+      );
+    const barrel = read("index.ts");
+
+    for (const module of ["contracts", "schemas"] as const) {
+      const block = new RegExp(
+        String.raw`export \{([^}]*)\} from "\./${module}";`,
+      ).exec(barrel);
+      expect(block, `no re-export block for ./${module}`).not.toBeNull();
+      const reExported = new Set(
+        (block?.[1] ?? "")
+          .split(",")
+          .map((entry) => entry.replace(/\btype\b/, "").trim())
+          .filter((entry) => entry.length > 0),
+      );
+
+      // Broader than the declaration forms these files use today, so a later
+      // `export interface` is counted rather than quietly exempted.
+      const declared = [
+        ...read(`${module}.ts`).matchAll(
+          /^export (?:declare )?(?:abstract )?(?:const|let|function|type|interface|enum|class) ([A-Za-z0-9_$]+)/gm,
+        ),
+      ].map((match) => match[1]);
+
+      expect(declared.length).toBeGreaterThan(0);
+      expect(
+        declared.filter((name) => !reExported.has(name)),
+        `./${module} exports these, the barrel does not`,
+      ).toEqual([]);
+    }
   });
 });

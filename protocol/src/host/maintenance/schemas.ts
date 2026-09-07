@@ -486,10 +486,18 @@ export type HostUpdateBoundDispatchExpectedIdentity = z.infer<
  * A host that DOES receive one compares it against the record it observes and
  * refuses when the attempt has moved. That refusal rides the existing
  * `dispatch-indeterminate { reason }` arm: `reason` is a free `z.string()` here
- * and a kebab PATTERN in the ACK grammar, so the new
- * `refused-attempt-moved` needs no schema anywhere. The reason vocabulary is
- * the host's (`BOUND_DISPATCH_REASONS`), deliberately — this package never
- * enumerated these reasons and does not start now.
+ * and a kebab PATTERN in the ACK grammar, so the new `refused-attempt-moved`
+ * needs no schema change anywhere.
+ *
+ * The WIRE stays open and must: a host has to be able to report a reason a
+ * client predates, and an enum here would turn "a newer host said something
+ * new" into a parse failure at exactly the moment a user needs telling. What
+ * the package does enumerate is a BUILD-TIME vocabulary, one tuple per wire
+ * field, in `@traycer/protocol/config/host-update-bound-dispatch-reasons`:
+ * `HOST_UPDATE_KNOWN_INDETERMINATE_DISPATCH_REASONS` for this arm — the KNOWN
+ * values of a field that is genuinely open, because one producer generates
+ * them — and `HOST_UPDATE_CLI_FAILED_REASONS`, which is closed, for the other.
+ * A consumer narrows through that module; it never parses against it.
  */
 export const hostUpdateBoundDispatchRequestSchema = z.object({
   attemptId: z.string().min(1),
