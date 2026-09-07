@@ -60,12 +60,22 @@ const MIGRATED_CALLERS: readonly string[] = [
   // discovery scan rather than by anyone reading the diff. This is the exact
   // case cold review B added that scan for, on its first real outing.
   "clients/traycer-cli/src/commands/host-start.ts",
-];
-
-const PENDING_LITERAL_CALLERS: readonly string[] = [
-  // Desktop main's own capture, out of this package's scope.
+  // Desktop main's own capture, migrated with Q7. It is the only caller
+  // outside this package, and the only one whose encoded string is compared
+  // ACROSS A PROCESS BOUNDARY: desktop main reads the fingerprint from disk
+  // and hands it to `host stamp-runtime`, whose CAS recomputes it in the CLI.
+  // A per-site mapping there fails closed and silently - the CAS simply stops
+  // matching - which is why it was the last one worth chasing.
   "clients/desktop/src/electron-main/host/host-state.ts",
 ];
+
+// Empty, and that is the point: every caller in the tree now hands the record
+// through whole. The list stays rather than being deleted with its last entry,
+// because the two directional assertions below are what keep it that way - a
+// new hand-built literal has to be written down HERE to go green, which is a
+// choice someone makes on purpose rather than a check that quietly stopped
+// existing. Adding a site here is admitting a debt, not silencing a test.
+const PENDING_LITERAL_CALLERS: readonly string[] = [];
 
 function sourceOf(repoRelativePath: string): string {
   return readFileSync(join(REPO_ROOT, repoRelativePath), "utf8");
