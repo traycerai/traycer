@@ -17,6 +17,11 @@ import type {
   HostServiceRegisterResponse,
   HostUpdateInstallResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
+// Deep path rather than the barrel: `maintenance/index` re-exports a chosen
+// subset of `schemas.ts` and this type is not in it. Reaching past the barrel
+// for one type is the smaller wrong than widening the barrel from here, which
+// is the protocol's call to make.
+import type { HostUpdateBoundDispatchExpectedIdentity } from "@traycer/protocol/host/maintenance/schemas";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartResponse } from "@traycer/protocol/host/restart/index";
 import { useEffect } from "react";
@@ -769,6 +774,7 @@ export function useHostUpdateActivate(
     mapVariables: (variables) => ({
       attemptId: variables.attemptId,
       force: variables.force,
+      ...expectedIdentityPayload(variables.expected),
     }),
     options: boundDispatchOptions(client, queryClient, incarnation),
   });
@@ -805,6 +811,7 @@ export function useHostUpdateContinue(
     mapVariables: (variables) => ({
       attemptId: variables.attemptId,
       force: variables.force,
+      ...expectedIdentityPayload(variables.expected),
     }),
     options: boundDispatchOptions(client, queryClient, incarnation),
   });
@@ -876,6 +883,29 @@ function boundDispatchOptions(
 export interface BoundDispatchVariables {
   readonly attemptId: string;
   readonly force: boolean;
+  /**
+   * The attempt position the caller observed, or `null` when it observed none.
+   *
+   * `null` becomes an ABSENT key, never `{generation: 0}` or a placeholder:
+   * the wire field is optional precisely so that absence can mean "this caller
+   * did not say", and a synthesised value would tell the host that a position
+   * was observed when none was.
+   */
+  readonly expected: HostUpdateBoundDispatchExpectedIdentity | null;
+}
+
+/**
+ * The request's optional `expected`, spread into a payload.
+ *
+ * A helper rather than two inline ternaries because both bound methods must
+ * make the same choice, and the choice is the one thing about this field that
+ * is easy to get wrong: an omitted key and a present-but-empty one are
+ * different requests to the host.
+ */
+function expectedIdentityPayload(
+  expected: HostUpdateBoundDispatchExpectedIdentity | null,
+): { readonly expected?: HostUpdateBoundDispatchExpectedIdentity } {
+  return expected === null ? {} : { expected };
 }
 
 /**

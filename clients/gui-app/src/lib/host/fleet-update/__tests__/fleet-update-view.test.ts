@@ -2280,3 +2280,92 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
     expect(isQuietUpdateView(view)).toBe(false);
   });
 });
+
+/**
+ * P1 window A: the view carries WHICH POSITION of the attempt it describes.
+ *
+ * The bound dispatch sends this as `expected` so the host can refuse a Force
+ * that names a park the user was never shown. The renderer had been truncating
+ * the ordering key exactly as the wire request did — `attemptId` and neither of
+ * `generation`/`sequence` — so the request could not have carried it even once
+ * the protocol gained the field.
+ *
+ * ## Why the pairing is pinned rather than the null arm
+ *
+ * The brief asked for a row where an observation with NO identity sends no
+ * `expected`. Through the panel that state does not exist: `deriveAttemptControl`
+ * returns no offer unless `view.attemptId !== null`, and every site that builds
+ * a view sets the two together — so a null position never reaches a dispatch.
+ * Pinning "no identity → no key" through the UI would therefore be a row whose
+ * premise cannot occur, which is the mistitled-unreachable-state trap this file
+ * has already been corrected for once.
+ *
+ * What IS falsifiable is the invariant the unreachability rests on. Pinned at
+ * all three sites that build a view, because "they are set together" is only
+ * true if it is true at each of them.
+ */
+describe("projectFleetUpdateView — the attempt position travels with the attempt id", () => {
+  it("carries the wire leg's own position, not a default", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({ generation: 3, sequence: 9 }),
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+
+    expect(view.attemptId).toBe("attempt-1");
+    expect(view.attemptPosition).toEqual({ generation: 3, sequence: 9 });
+  });
+
+  it("carries the record leg's own position, not a default", () => {
+    const view = projectFleetUpdateView({
+      observation: recordObservation({ generation: 5, sequence: 2 }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+
+    expect(view.attemptId).toBe("attempt-1");
+    expect(view.attemptPosition).toEqual({ generation: 5, sequence: 2 });
+  });
+
+  it("names a position exactly when it names an attempt, on every leg", () => {
+    const views: ReadonlyArray<{
+      readonly label: string;
+      readonly view: FleetUpdateView;
+    }> = [
+      { label: "the unknown constant", view: UNKNOWN_FLEET_UPDATE_VIEW },
+      {
+        label: "the wire leg",
+        view: projectFleetUpdateView({
+          observation: observation({}),
+          nowMs: NOW_MS,
+          connected: true,
+        }),
+      },
+      {
+        label: "the record leg",
+        view: projectFleetUpdateView({
+          observation: recordObservation({}),
+          nowMs: NOW_MS,
+          connected: true,
+        }),
+      },
+      {
+        label: "an operation naming no attempt",
+        view: projectFleetUpdateView({
+          observation: observation({ operation: { kind: "none" } }),
+          nowMs: NOW_MS,
+          connected: true,
+        }),
+      },
+    ];
+
+    for (const row of views) {
+      expect(
+        { [row.label]: row.view.attemptPosition === null },
+        `${row.label}: position and id must agree`,
+      ).toEqual({ [row.label]: row.view.attemptId === null });
+    }
+  });
+});

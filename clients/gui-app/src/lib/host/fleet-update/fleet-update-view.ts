@@ -369,10 +369,50 @@ export type FleetUpdateViewKind =
   /** Fail-closed record evidence. Diagnostic and repairable, NOT a failure. */
   | "unavailable";
 
+/**
+ * WHERE in an attempt's history an observation sat — the two thirds of the
+ * ordering key that are not the attempt's id.
+ *
+ * `host.status` calls `attemptId + generation + sequence` "the ordering key, in
+ * full" (`protocol/src/host/status/contracts.ts`), and this view had been
+ * carrying only the id. That was not a smaller version of the same fact: an
+ * attempt can advance and park AGAIN under one id, so a view holding the id
+ * alone cannot say which park it described. Keeping the pair here is what lets
+ * a bound dispatch name the position the user was actually shown.
+ *
+ * Deliberately NOT merged into a single triple with `attemptId`. The id answers
+ * "which attempt" and is what every existing consumer wants; the pair answers
+ * "which position of it" and has exactly one consumer. Merging them would put
+ * the id in two places on one object.
+ */
+export interface FleetUpdateAttemptPosition {
+  readonly generation: number;
+  readonly sequence: number;
+}
+
+/**
+ * The one place this pair is minted, so the two observation legs and the
+ * staleness comparison cannot drift into three spellings of it.
+ */
+function attemptPositionOf(source: FleetUpdateAttemptPosition): {
+  readonly generation: number;
+  readonly sequence: number;
+} {
+  return { generation: source.generation, sequence: source.sequence };
+}
+
 export interface FleetUpdateView {
   readonly kind: FleetUpdateViewKind;
   /** The attempt this view describes, when there is one to name. */
   readonly attemptId: string | null;
+  /**
+   * Which position of {@link FleetUpdateView.attemptId} this view describes.
+   *
+   * `null` exactly when `attemptId` is: a view with no attempt has no position
+   * in one. The two are set together at every site that builds a view, which is
+   * what a consumer reading both is entitled to assume.
+   */
+  readonly attemptPosition: FleetUpdateAttemptPosition | null;
   readonly targetVersion: string | null;
   readonly progress: FleetUpdateProgress;
   /**
@@ -441,6 +481,7 @@ export interface FleetUpdateView {
 export const UNKNOWN_FLEET_UPDATE_VIEW: FleetUpdateView = {
   kind: "unknown",
   attemptId: null,
+  attemptPosition: null,
   targetVersion: null,
   progress: { kind: "none" },
   qualified: true,
@@ -671,6 +712,7 @@ function recordObservationView(
 ): FleetUpdateView {
   const identity = {
     attemptId: observation.attemptId,
+    attemptPosition: attemptPositionOf(observation),
     targetVersion: observation.targetVersion,
   };
   if (
@@ -914,6 +956,7 @@ function attemptOperationView(input: {
 
   const base = {
     attemptId: operation.attemptId,
+    attemptPosition: attemptPositionOf(operation),
     targetVersion: operation.targetVersion,
     progress: projectProgress(operation),
     blockingSessionCount: operation.busySessionCount,
@@ -1499,11 +1542,7 @@ function wireAttemptPosition(wire: FleetUpdateWireObservation): {
 } | null {
   const operation = wire.operation;
   if (operation === null || operation.kind !== "attempt") return null;
-  return {
-    attemptId: operation.attemptId,
-    generation: operation.generation,
-    sequence: operation.sequence,
-  };
+  return { attemptId: operation.attemptId, ...attemptPositionOf(operation) };
 }
 
 /** Lexicographic on `(generation, sequence)`; equality is NOT behind. */

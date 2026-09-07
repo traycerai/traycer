@@ -391,7 +391,18 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
     // Force from THIS reopened dialog dispatches the bound activate.
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
-      expect(activateCalls).toEqual([{ attemptId: "a1", force: true }]);
+      expect(activateCalls).toEqual([
+        // `sequence: 4`, not the `1` this attempt was `preparing` at: the
+        // dialog was opened from the PARKED frame, and the position sent is
+        // the one the confirmation was rendered from. That the two differ in
+        // this fixture is what makes the assertion meaningful — a payload
+        // built from the first frame seen, or from a default, reads `1`.
+        {
+          attemptId: "a1",
+          force: true,
+          expected: { generation: 1, sequence: 4 },
+        },
+      ]);
     });
   });
 });
@@ -886,7 +897,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
 });
 
 describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i), and a stage-less waiting-for-work Force (j)", () => {
-  it("(i) the dialog's Force dispatches host.update.activate {attemptId: a1, force: true} even though the catalog lacks the attempt's target version", async () => {
+  it("(i) the dialog's Force dispatches host.update.activate carrying the OBSERVED attempt position, even though the catalog lacks the attempt's target version", async () => {
     const activateCalls: unknown[] = [];
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -901,6 +912,14 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
           updateProgress: null,
           busyBreakdown: null,
           updateOperation: attempt({
+            // Deliberately NOT the fixture default of 1/1. `expected` must be
+            // the position this page OBSERVED, and an assertion against 1/1
+            // would pass equally against a hardcoded default or a value
+            // synthesised at the dispatch site — the two failures this field
+            // exists to prevent. Distinct numbers are what make the assertion
+            // below evidence of provenance rather than of shape.
+            generation: 4,
+            sequence: 7,
             phase: "waiting-to-activate",
             execution: "parked",
             targetVersion: "1.6.0",
@@ -945,7 +964,13 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
 
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
-      expect(activateCalls).toEqual([{ attemptId: "a1", force: true }]);
+      expect(activateCalls).toEqual([
+        {
+          attemptId: "a1",
+          force: true,
+          expected: { generation: 4, sequence: 7 },
+        },
+      ]);
     });
   });
 
@@ -1006,7 +1031,13 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
     await screen.findByTestId("host-busy-force-defer-dialog");
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
-      expect(continueCalls).toEqual([{ attemptId: "a1", force: true }]);
+      expect(continueCalls).toEqual([
+        {
+          attemptId: "a1",
+          force: true,
+          expected: { generation: 1, sequence: 1 },
+        },
+      ]);
     });
   });
 });
@@ -1349,16 +1380,20 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
    * closure, plus at most one clause.
    *
    * WHAT THE SUFFIXED HALF OF THIS TABLE IS. It tests the DECISION FUNCTION,
-   * not a census of what hosts emit. Only `nothing-to-do` is producible
-   * suffixed today: the suffix rides the selector's reason on a `released`
-   * outcome, and the other five bases are minted on paths that structurally
-   * refuse it (the `recovered-*` pair is projected from a `terminalized`
-   * segment, which is the other outcome kind; the `refused-*` three are minted
-   * under conditions that are the negation of the gate that appends). That
-   * census is the CLI's, at `44d4b9615` — it is not a promise about a host,
-   * and the grammar permits the suffix on any base, which is why every base is
-   * pinned. Do not read these rows as evidence that those declines arrive
-   * suffixed in production.
+   * not a census of what hosts emit.
+   *
+   * The suffix is appended by ONE gate on the decline path, and which bases can
+   * pass that gate is a property of the PRODUCER, not of the grammar. That
+   * property moves: `refused-attempt-moved` can pass the gate as this is
+   * written and cannot once the bound-identity guard widens, because the
+   * widened guard fires exactly when that reason is minted. A comment counting
+   * today's passers would be false twice inside one round — and false at the
+   * moment this branch merges, since the commit that falsifies it is picked
+   * directly beneath this one.
+   *
+   * So these rows test the decision function against the GRAMMAR, which permits
+   * the suffix on any base. They are not a census, and a row is not evidence
+   * that a producer emits that form.
    *
    * Same distinction the null-target rows in `host-update-operation-copy` had
    * to be retitled for: a pin can have correct coverage and a false
@@ -1399,13 +1434,25 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
         clauseOnSuffix: true,
       },
       {
+        // Its OWN sentence, not HOST_CHANGED. Two producers mean different
+        // things by this reason — the host, an undecodable record; the CLI,
+        // three consent failures — and "the host changed" is false of all
+        // three of the latter.
         base: "refused-unverifiable",
-        lead: HOST_CHANGED,
+        lead: "host-a could not verify this request against the update record, so nothing was started.",
         clauseOnSuffix: true,
       },
       {
         base: "refused-install-changed",
         lead: HOST_CHANGED,
+        clauseOnSuffix: true,
+      },
+      {
+        // P1 window A's answer at the binding site: the attempt is present and
+        // is the one named, but its POSITION moved. Its own sentence, because
+        // the only correct response differs — look again, rather than retry.
+        base: "refused-attempt-moved",
+        lead: "The update moved on while you were deciding, so host-a did not act on it. Re-read the confirmation and confirm again.",
         clauseOnSuffix: true,
       },
     ];

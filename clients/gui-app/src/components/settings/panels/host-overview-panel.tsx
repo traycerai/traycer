@@ -87,6 +87,7 @@ import {
   offersForceRestart,
   UNKNOWN_FLEET_UPDATE_VIEW,
   type FleetUpdateObservation,
+  type FleetUpdateAttemptPosition,
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 import { projectLocalUpdate } from "@/lib/host/fleet-update/local-update-projection";
@@ -1938,6 +1939,12 @@ export function HostOverviewPanel(props: {
           dispatch({
             attemptId: boundOffer.attemptId,
             force: true,
+            // The position the OFFER was built from, which is the park whose
+            // busy-session count the user just read. Not re-read from the live
+            // view: the attempt can advance and park again while this dialog is
+            // open, and re-reading here would send the position of a park the
+            // user never saw — the exact substitution this field exists to stop.
+            expected: boundOffer.attemptPosition,
             targetVersion: boundOffer.targetVersion,
             onSettled: () => setBoundOffer(null),
           });
@@ -2027,6 +2034,16 @@ export function HostOverviewPanel(props: {
 interface BoundDispatchOffer {
   readonly intent: "activate" | "continue";
   readonly attemptId: string;
+  /**
+   * The position of the attempt this confirmation was rendered FROM — the
+   * park whose busy-session count the sentence below is about.
+   *
+   * Carried because the dispatch it authorizes has to name it. The attempt can
+   * advance and park again while the dialog is open, and the id alone still
+   * matches, so without this the host cannot tell "resume the park the user
+   * agreed to" from "resume whatever is parked now".
+   */
+  readonly attemptPosition: FleetUpdateAttemptPosition | null;
   readonly targetVersion: string | null;
   readonly blockingSessionCount: number | null;
 }
@@ -2070,6 +2087,11 @@ function deriveActivationAutoOpen(input: {
   return {
     intent: "activate",
     attemptId: dispatch.attemptId,
+    // From the VIEW, not the dispatch slot: the slot records which attempt this
+    // page was granted and has no position in it. The guard above has already
+    // proven the two name the same attempt, so the view is the only source here
+    // that knows WHICH PARK of it the user is about to be shown.
+    attemptPosition: view.attemptPosition,
     targetVersion: view.targetVersion,
     blockingSessionCount: view.blockingSessionCount,
   };
@@ -2129,6 +2151,7 @@ function deriveAttemptControl(input: {
   if (attemptId === null) return null;
   const identity = {
     attemptId,
+    attemptPosition: view.attemptPosition,
     targetVersion: view.targetVersion,
     blockingSessionCount: view.blockingSessionCount,
   };

@@ -52,6 +52,7 @@ import {
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { FleetUpdateAttemptPosition } from "@/lib/host/fleet-update/fleet-update-view";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 /**
@@ -653,7 +654,11 @@ function useBoundUpdateDispatches(input: {
   ): void => {
     input.beforeDispatch();
     mutation.mutate(
-      { attemptId: variables.attemptId, force: variables.force },
+      {
+        attemptId: variables.attemptId,
+        force: variables.force,
+        expected: variables.expected,
+      },
       {
         onSettled: () => variables.onSettled(),
         onSuccess: (response) => {
@@ -701,10 +706,31 @@ export interface HostOverviewUpdatesSummary {
  * `targetVersion` is for COPY only and is deliberately not sent: the operation
  * comes from the record's own continuation, and a version on the wire would be
  * a second copy of a fact the record owns — one a stale UI could get wrong.
+ *
+ * ## Why `expected` is not that second copy
+ *
+ * That argument stands, and it does not reach this field. A version is a fact
+ * about the world, and a stale one makes the host do the WRONG THING. A
+ * position is a cursor into the record's own history whose only use is to be
+ * compared for equality, and a stale one produces a REFUSAL. They fail in
+ * opposite directions, which is why one is withheld here and the other is sent.
+ *
+ * `null` means this view named no attempt position, and it is sent as an ABSENT
+ * key rather than a synthesised one. Absence is the legacy signal — a client
+ * that predates the field cannot send it, and a `@1.0` peer parses with a
+ * schema where it does not exist — so "the caller did not say" has to stay
+ * distinguishable from "the caller says any position will do". Filling in a
+ * position this page did not observe would be an affirmative claim from a
+ * client that observed nothing, which is the one thing this field must never be.
  */
 export interface BoundDispatchInput {
   readonly attemptId: string;
   readonly force: boolean;
+  /**
+   * Which position of {@link BoundDispatchInput.attemptId} the user was shown.
+   * Sent, unlike `targetVersion` — see the note above.
+   */
+  readonly expected: FleetUpdateAttemptPosition | null;
   /** The attempt's target, when the view named one. Toast copy only. */
   readonly targetVersion: string | null;
   readonly onSettled: () => void;
@@ -1583,6 +1609,10 @@ function describeIndeterminateDispatch(
   // generator imports the same constant, and a local copy of either the literal
   // or the strip is how a build and a strip drift apart.
   const base = reason === null ? null : baseDispatchAckReason(reason);
+  // An INSTALL-path reason, and only that: the bound verbs never mint it. So it
+  // sits outside the known bound-dispatch vocabulary by design, and its absence
+  // from that tuple is not a coverage gap. This function serves both call sites,
+  // which is why the arm lives here rather than beside the bound ones.
   if (base === "nothing-to-do") {
     return withStaleClosure(`${hostName} is already up to date.`, reason);
   }
@@ -1590,27 +1620,69 @@ function describeIndeterminateDispatch(
   // about a record being concluded, so appending "a stranded update record was
   // also closed" narrates one event as two — the boundary the ruling drew.
   //
-  // Unreachable today rather than merely unused: the recovery reasons are
-  // projected from a terminalized segment and are never a SELECTOR reason, and
-  // the suffix is applied to the selector's reason (a08004f6's topology
-  // answer). Kept because it is a rule about the GRAMMAR, which permits the
-  // suffix on any base — so a topology change lands correctly instead of
-  // shipping the double narration.
+  // These two reasons ARE reachable here, including through a bound verb —
+  // `selectBoundResume`'s non-parked arm reaches `interruptedResume` under
+  // `reselect`. What they cannot arrive as is SUFFIXED, and the reason is that
+  // their producer returns DIRECTLY rather than routing through the decline
+  // path that appends the suffix.
+  //
+  // Explicitly NOT "they ride the `terminalized` outcome kind and the suffix
+  // rides `released`". That was the mechanism first recorded here and it is
+  // false: under `reselect` — which is what `runHostUpdate` passes — the
+  // recovery returns `released` too, the same kind the close path produces. The
+  // conclusion survived the correction; the reason did not, and a wrong reason
+  // on a right entry is the worse defect, because it reads as verified and the
+  // next person extends it.
+  //
+  // The clause rule is a rule about the GRAMMAR, which permits the suffix on
+  // any base, so it holds however the producers move.
   if (base === "recovered-complete") return "The last update already finished.";
   // The record's own failure arrives on the next `host.status` frame and the
   // operation card states it; this only says which run it is about.
   if (base === "recovered-failed") return "The last update failed.";
+  // The attempt is PRESENT and is the one named — what moved is its position.
+  // Deliberately not folded into `refused-attempt-gone`: that one says "there is
+  // nothing here to act on", this one says "what is here is not what you were
+  // shown", and the only correct response is to look again.
+  //
+  // The sentence carries the whole instruction because there is no dialog left
+  // to carry it: the confirmation closes on the answer, whatever the answer is.
+  // Reopening it automatically would be worse than saying nothing — it would
+  // put a fresh confirmation on screen populated from a record the user has not
+  // read, which is the same consent defect one turn later and is exactly what
+  // sending `expected` exists to prevent.
+  if (base === "refused-attempt-moved") {
+    return withStaleClosure(
+      `The update moved on while you were deciding, so ${hostName} did not act on it. Re-read the confirmation and confirm again.`,
+      reason,
+    );
+  }
   if (
     base === "refused-attempt-gone" ||
-    base === "refused-unverifiable" ||
-    // No producer after this plan — a moved install record on a park is written
-    // `failed {install-changed}` and arrives as the record's own failure — but
-    // the reason stays in the grammar, so the arm stays here rather than
-    // falling through to a sentence that would misdescribe it.
+    // No producer mints this literal — a moved install record on a park is
+    // written `failed {install-changed}` and arrives as the record's own
+    // failure. Kept as a defensive arm rather than deleted: it is a value the
+    // generated `refused-<code>` grammar can still express, and a sentence that
+    // misdescribes it is worse than one that does not.
     base === "refused-install-changed"
   ) {
     return withStaleClosure(
       "The host changed while the update was being prepared. Try again.",
+      reason,
+    );
+  }
+  // NOT the sentence above, though it shipped sharing it. This reason has two
+  // producers that mean different things: the host mints it when the attempt
+  // record cannot be decoded, and the CLI mints it for consent failures — a
+  // park with no claim, a target that is not an upgrade, a downgrade with
+  // neither `allowDowngrade` nor strict-upgrade set. "The host changed" is true
+  // of the first and false of all three of the second, so it told most of this
+  // reason's arrivals something that had not happened. The wording has to be
+  // true of every producer, which means naming the check that failed rather
+  // than a cause it does not know.
+  if (base === "refused-unverifiable") {
+    return withStaleClosure(
+      `${hostName} could not verify this request against the update record, so nothing was started.`,
       reason,
     );
   }
