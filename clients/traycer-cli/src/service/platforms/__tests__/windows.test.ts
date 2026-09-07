@@ -656,6 +656,64 @@ describe("Windows service stale host cleanup", () => {
     expect(killedPids(calls)).toEqual([401, 402]);
   });
 
+  it("Q13/Q26: the post-swap relaunch is the CLI's own /Run - Windows never waits on the task to restart it", async () => {
+    // The Windows lane measured that a non-zero supervisor exit propagates to
+    // `LastTaskResult` and that `RestartOnFailure` NEVER fires on it (it
+    // covers the task failing to LAUNCH, not the action returning non-zero),
+    // and that `LogonTrigger` is the only trigger. So on Windows a supervisor
+    // that exits - 0 or 77 - is not coming back on its own until next logon.
+    //
+    // This pin is what makes that survivable for the normal update flow:
+    // `relaunchAfterRestart` is the CLI issuing `schtasks /Run` itself. The
+    // exit code is diagnostic on this platform, never the relaunch signal, so
+    // Q13's `RESTART_OWED_EXIT_CODE` changes what `LastTaskResult` records and
+    // changes nothing about who restarts the host.
+    //
+    // What it does NOT establish is the Q13 outage itself: if the CLI dies
+    // between the stop and this call, nothing on Windows relaunches. That gap
+    // is real, is unchanged by Q13 (whose verb change shipped for Linux
+    // only), and is tracked separately - it is not what this pin covers.
+    // The subject is WHICH COMMAND the CLI issues, not whether the host then
+    // comes up: start verification is a separate contract with its own rows.
+    // So the evidence reader is stubbed to find nothing on a short budget and
+    // the resulting verification failure is tolerated - what must hold is
+    // that a `/Run` was issued at all.
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+    const { runner, calls } = convergingTableRunner([]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    try {
+      await controller
+        .relaunchAfterRestart(serviceLabelFor("staging"), {
+          forcedRecycle: false,
+        })
+        .catch(() => undefined);
+
+      expect(
+        calls.some(
+          (call) =>
+            call.command === "schtasks" &&
+            call.args[0] === "/Run" &&
+            call.args.includes("\\Traycer\\Host-Staging"),
+        ),
+      ).toBe(true);
+      // And never `/End` - the relaunch half must not re-enter the stop half.
+      expect(
+        calls.some(
+          (call) => call.command === "schtasks" && call.args[0] === "/End",
+        ),
+      ).toBe(false);
+    } finally {
+      setWindowsStartEvidenceDepsForTests(null);
+    }
+  });
+
   it("kills exactly the scan-verified pids when the scan covers the recorded pid", async () => {
     mocks.readHostPidMetadata.mockResolvedValue({
       pid: 401,
