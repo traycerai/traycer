@@ -536,6 +536,24 @@ function parseAttemptFields(
   // Recovery provenance describes an exceptional terminal conclusion. A
   // partial/crashed writer must not be able to leave it attached to a live
   // segment and make that look like a claimed recovery.
+  //
+  // THIS GATE IS THE STATEMENT OF INTENT, NOT THE ENFORCEMENT - today.
+  // `parseRecovery` closes `outcome` over exactly
+  // `complete | failed | superseded`, and the outcome-must-match-phase check
+  // immediately below rejects each of those against every phase but its own
+  // namesake - all three of which are terminal. So no input this schema admits
+  // can be rejected here and survive there: deleting this gate alone changes
+  // nothing observable, and no honest test can pin it (established by
+  // ablation; see the note above `describe("recovery provenance")` in
+  // `__tests__/host-update-attempt.test.ts`).
+  //
+  // Keep it. It becomes load-bearing the moment either fact changes - a fourth
+  // `outcome`, or an outcome that legitimately maps to a non-terminal phase.
+  //
+  // THE UNSAFE EDIT IS THE REVERSE ONE: deleting the outcome-match check below
+  // because this gate appears to cover the case. It does not. That check is
+  // what actually rejects a recovery whose outcome disagrees with the phase it
+  // is attached to, and it is the only thing that does.
   if (recovery !== undefined && executionForPhase(phase) !== "terminal") {
     return null;
   }
