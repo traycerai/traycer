@@ -7436,6 +7436,49 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     expect(record.error).toMatchObject({ code: "verify-timeout" });
   });
 
+  it("Q1: the verify leg's stamp policy is derived from the TARGET, not from the host it finds", async () => {
+    // The leg half of Q1. `update-executor.test.ts` pins the terminal write
+    // end to end through the real reader; this suite MOCKS the reader, so what
+    // it can prove - and the only place that proves it - is which policy the
+    // leg computed and handed over.
+    //
+    // Below the floor: `version-only`. The target is 1.2.0, which no released
+    // host stamps.
+    await seedInstalled("1.0.0");
+    world.latest = "1.2.0";
+    world.runningVersion = "1.2.0";
+    world.identityCompared = false;
+
+    await runUpdate({});
+
+    const policies = mocks.observeAttemptRecoveryEvidence.mock.calls.map(
+      (call) => call[2],
+    );
+    expect(policies.length).toBeGreaterThan(0);
+    expect(new Set(policies)).toEqual(new Set(["version-only"]));
+    // Ablation: hard-code `"identity-required"` at the leg's
+    // `observeAttemptRecoveryEvidence` call and this reddens while the
+    // above-floor row below stays green.
+  });
+
+  it("Q1 CONTROL: an ABOVE-floor target keeps identity-required, whatever the host reports", async () => {
+    // The gate is on the target, so the same healthy host verified strictly
+    // here and permissively above. Without this row, "derived from the target"
+    // is indistinguishable from "always permissive".
+    await seedInstalled("1.0.0");
+    world.latest = "2.0.0";
+    world.runningVersion = "2.0.0";
+    world.identityCompared = false;
+
+    await runUpdate({});
+
+    const policies = mocks.observeAttemptRecoveryEvidence.mock.calls.map(
+      (call) => call[2],
+    );
+    expect(policies.length).toBeGreaterThan(0);
+    expect(new Set(policies)).toEqual(new Set(["identity-required"]));
+  });
+
   it("names the INSTALLED leg when that is the one that disagrees", async () => {
     // The premise before the symptom: a running host cannot be serving what
     // the record does not say is placed, so reporting the process would send

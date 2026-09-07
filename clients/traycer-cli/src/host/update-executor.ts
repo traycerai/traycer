@@ -7,6 +7,8 @@ import {
   type AttemptClaimDecision,
   type AttemptClaimRefresh,
   type AttemptCommitOutcome,
+  decideHostStampPolicy,
+  HOST_START_STAMP_FLOOR,
   type AttemptClaimRequest,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRead,
@@ -384,14 +386,29 @@ async function completeAttemptExecutorSegment(
   ) {
     return { kind: "rejected", reason: "intent-not-legal", canonical };
   }
+  // Q1, and note where the target comes from: the CANONICAL record this
+  // function just read under its own lock, never a caller's argument.
+  //
+  // This is the terminal write for an ordinary successful run - not a recovery
+  // path - and it re-observes the same host the verify leg just polled. If it
+  // decided strictly on its own, a pre-stamp host accepted through the
+  // fallback would be refused `intent-not-legal` here and surface as a
+  // verify-timeout: Q1 moved from the poll loop to the commit, and worse than
+  // the original because by then the host is demonstrably healthy.
+  //
+  // Deriving it here rather than accepting it as a parameter is what keeps the
+  // terminal write's strictness out of a caller's hands. The two decisions
+  // still agree because both read the same target - the leg from the claim, and
+  // this from the record under the lock, which is the authority - so there is
+  // one answer per host rather than two that can drift.
+  const stampPolicy = decideHostStampPolicy(
+    canonical.value.targetVersion,
+    HOST_START_STAMP_FLOOR,
+  );
   const observation = await observeAttemptRecoveryEvidence(
     options.environment,
     home,
-    // The recovery path is not a verify leg and has no target version of its
-    // own to gate on: it reconciles whatever the crashed run left behind, so
-    // it takes the STRONG rule unconditionally. Q1's fallback belongs to the
-    // segment that knows which version it was asked to install.
-    "identity-required",
+    stampPolicy,
   );
   const evidence = observation.evidence;
   if (

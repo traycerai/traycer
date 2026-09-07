@@ -3055,6 +3055,23 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     hostHomeDir: string,
     version: string,
   ): Promise<void> {
+    await seedGenuineVerifiedProofWithStamp(
+      hostHomeDir,
+      version,
+      "linux:boot-a 4242",
+    );
+  }
+
+  /**
+   * The same genuine fixture, with the #1763 start stamp as a parameter.
+   * `null` models every host released through 1.3.0-rc.3 - none of them write
+   * it - which is the population Q1 is about.
+   */
+  async function seedGenuineVerifiedProofWithStamp(
+    hostHomeDir: string,
+    version: string,
+    processStartIdentity: string | null,
+  ): Promise<void> {
     currentHome.value = hostHomeDir;
     const installDir = paths.hostInstallDir("production");
     await mkdir(installDir, { recursive: true });
@@ -3089,7 +3106,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
         version,
         websocketUrl: "ws://127.0.0.1:58036/rpc",
         startedAt: "2026-01-01T00:00:00.000Z",
-        processStartIdentity: "linux:boot-a 4242",
+        processStartIdentity,
       }),
       "utf8",
     );
@@ -3121,6 +3138,85 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     if (outcome.result.kind === "committed") {
       expect(outcome.result.record.phase).toBe("complete");
     }
+  });
+
+  it("Q1 END TO END: the terminal write COMMITS for a below-floor target whose host carries no start stamp", async () => {
+    // The row the whole Q1 remedy exists for, and the one that catches the
+    // half nobody looks at. Fixing only the verify leg's poll loop leaves this
+    // write deciding strictly on its own, so a healthy pre-stamp host polls
+    // green and is then refused `intent-not-legal` at the commit - reported to
+    // the user as a verify-timeout on a machine that is up and serving.
+    //
+    // 1.2.3 is below `HOST_START_STAMP_FLOOR`, and no host at that version
+    // writes `processStartIdentity`. This is Linux E8v leg 1 in miniature.
+    const hostHomeDir = await freshHome();
+    await seedGenuineVerifiedProofWithStamp(hostHomeDir, "1.2.3", null);
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-q1-prestamp",
+      NO_UPDATE_EXECUTOR_FAULTS,
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.result.kind).toBe("committed");
+    if (outcome.result.kind === "committed") {
+      expect(outcome.result.record.phase).toBe("complete");
+    }
+    // The identity verdict was never consulted: there was no stamp to consult
+    // it with. Distinguishes "skipped a check it could not make" from "made it
+    // and ignored the answer".
+    expect(rpcMocks.identityVerdict).not.toHaveBeenCalled();
+    // Ablation: hard-code `"identity-required"` at this function's
+    // `observeAttemptRecoveryEvidence` call and this row reddens as
+    // `rejected`/`intent-not-legal` while every other terminal-write test
+    // stays green - which is exactly how the gap survived being written.
+  });
+
+  it("CONTROL: an AT-floor target whose host carries no stamp is still REJECTED at the terminal write", async () => {
+    // The gate is on the TARGET, so a post-floor host that fails to write the
+    // stamp is a real fault and must still fail. Without this row the fix
+    // above is indistinguishable from "stop checking identity".
+    const hostHomeDir = await freshHome();
+    await seedGenuineVerifiedProofWithStamp(hostHomeDir, "1.4.2", null);
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-q1-postfloor",
+      NO_UPDATE_EXECUTOR_FAULTS,
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.result.kind).toBe("rejected");
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") expect(onDisk.value.phase).toBe("verifying");
+  });
+
+  it("CONTROL: a below-floor target whose host DOES carry a stamp still has its identity compared", async () => {
+    // Fallback, not blanket, proven at the terminal write too: the policy is
+    // permissive for this target, and the stamp is still consulted because it
+    // exists. A recycled pid on such a host is therefore still caught here.
+    const hostHomeDir = await freshHome();
+    await seedGenuineVerifiedProofWithStamp(
+      hostHomeDir,
+      "1.2.3",
+      "linux:boot-a 4242",
+    );
+    rpcMocks.identityVerdict.mockResolvedValue("mismatch");
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-q1-recycled",
+      NO_UPDATE_EXECUTOR_FAULTS,
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.result.kind).toBe("rejected");
+    expect(rpcMocks.identityVerdict).toHaveBeenCalled();
   });
 
   it("the legal preparing/applying/restarting/verifying advances bump sequence past the claimed identity, yet zero-argument complete() still commits - it re-derives the current verifying identity from the canonical read rather than reusing the stale claim", async () => {

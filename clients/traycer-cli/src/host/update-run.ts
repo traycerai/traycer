@@ -21,6 +21,8 @@ import {
   type HostUpdateAttemptRecord,
   type HostUpdateTrigger,
   type UpdateMutationCapability,
+  decideHostStampPolicy,
+  HOST_START_STAMP_FLOOR,
 } from "@traycer-clients/shared/host-update";
 import { installHostDowngradeInSegment } from "../commands/host-update-downgrade";
 import type { ApplyHostOutcome } from "../installer/apply";
@@ -3144,6 +3146,16 @@ async function verifyUnderClaim(
   await writer.phaseWrite("verifying", null);
   const home = hostHomeDir(args.environment);
   const target = input.claim.record.targetVersion;
+  // Q1: decided ONCE, from the target this run was asked to install, and used
+  // for both reads below - the poll and the completion's own re-observation.
+  // One decision, one host, one answer: the alternative is two opinions that
+  // can disagree, which is exactly how a healthy pre-stamp host ends up
+  // polling green and then being refused at the commit.
+  const stampPolicy = decideHostStampPolicy(target, HOST_START_STAMP_FLOOR);
+  // ASSEMBLY MERGE: Q1 wrote `args.verifyBudgetMs ?? VERIFY_BUDGET_MS` here
+  // because that is what its base had. Q6 replaced that expression with
+  // `verifyBudgetFor`, which gives a start-error failure its own shorter
+  // budget; the two changes are on different axes and Q6's line is kept.
   const budgetMs = verifyBudgetFor(postSwapError, args.verifyBudgetMs ?? null);
   const pollMs = args.verifyPollIntervalMs ?? VERIFY_POLL_INTERVAL_MS;
   const deadline = Date.now() + budgetMs;
@@ -3152,9 +3164,7 @@ async function verifyUnderClaim(
     const observation = await observeAttemptRecoveryEvidence(
       args.environment,
       home,
-      // Q1 step 3 replaces this constant with the target-gated policy. Strict
-      // here keeps this commit behaviour-identical to the one before it.
-      "identity-required",
+      stampPolicy,
     );
     const { installed, running } = observation.evidence;
     if (
@@ -3275,6 +3285,9 @@ async function verifyUnderClaim(
     }
     await delay(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
+  // No argument: the completion derives its own policy from the canonical
+  // record under its lock, so the terminal write's strictness is never a
+  // caller's to choose. Both decisions read the same target, so they agree.
   const committed = await input.complete();
   if (committed.kind !== "committed") {
     // The update WORKED. Reaching this line is only possible past the loop's
