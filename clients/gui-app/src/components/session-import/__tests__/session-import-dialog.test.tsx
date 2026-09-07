@@ -16,7 +16,10 @@ import type {
 } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
+import {
+  StreamRuntimeContext,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
@@ -229,18 +232,15 @@ function renderDialog(props: {
   readonly onClose: (() => void) | undefined;
 }) {
   return renderUi(
-    <SessionImportDialog
-      onClose={props.onClose ?? (() => undefined)}
-      initialHostId={props.initialHostId}
-    />,
+    <StreamRuntimeContext.Provider
+      value={streamBindingFor(hostsMock.activeHostId ?? "host-a")}
+    >
+      <SessionImportDialog
+        onClose={props.onClose ?? (() => undefined)}
+        initialHostId={props.initialHostId}
+      />
+    </StreamRuntimeContext.Provider>,
     { wrapper: WithTestQueryClient },
-  );
-}
-
-function pickHost(hostId: string): void {
-  fireEvent.click(screen.getByTestId("settings-host-switcher"));
-  fireEvent.click(
-    screen.getByTestId(`settings-host-switcher-option-${hostId}`),
   );
 }
 
@@ -267,7 +267,7 @@ describe("<SessionImportDialog />", () => {
     cleanup();
   });
 
-  it("renders the picker strip and the wizard, and scans immediately, when opened with no pick on a two-host account", () => {
+  it("renders the wizard and scans immediately without a host picker", () => {
     hostsMock.hosts = [
       { hostId: "host-a", connectable: true },
       { hostId: "host-b", connectable: true },
@@ -275,12 +275,12 @@ describe("<SessionImportDialog />", () => {
 
     renderDialog({ initialHostId: null, onClose: undefined });
 
-    expect(screen.getByTestId("session-import-host-picker-row")).not.toBeNull();
+    expect(screen.queryByTestId("session-import-host-picker-row")).toBeNull();
     expect(screen.getByTestId("session-import-wizard-stub")).not.toBeNull();
     expect(lastScanCall()).toBe(true);
   });
 
-  it("starts the scope selection on the initialHostId when it names a host other than the active one", () => {
+  it("starts the fixed scope on initialHostId when it names a host other than the active one", () => {
     hostsMock.hosts = [
       { hostId: "host-a", connectable: true },
       { hostId: "host-b", connectable: true },
@@ -290,12 +290,10 @@ describe("<SessionImportDialog />", () => {
     renderDialog({ initialHostId: "host-b", onClose: undefined });
 
     expect(hostScopeCallsMock.scopedHostIds[0]).toBe("host-b");
-    expect(screen.getByTestId("settings-host-switcher").textContent).toContain(
-      "host-b",
-    );
+    expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
   });
 
-  it("withholds the wizard and shows the connecting notice for the new host while the stream still names the previous one", async () => {
+  it("withholds the wizard and shows the connecting notice while the fixed host stream catches up", async () => {
     hostsMock.hosts = [
       { hostId: "host-a", connectable: true },
       { hostId: "host-b", connectable: true },
@@ -305,10 +303,7 @@ describe("<SessionImportDialog />", () => {
     // dialog that opened following the active host with no transport of its own.
     streamOnHostMock.hostId = null;
 
-    renderDialog({ initialHostId: null, onClose: undefined });
-    expect(screen.getByTestId("session-import-wizard-stub")).not.toBeNull();
-
-    pickHost("host-b");
+    renderDialog({ initialHostId: "host-b", onClose: undefined });
 
     await waitFor(() => {
       expect(screen.getByTestId("host-scope-connecting")).not.toBeNull();
@@ -320,7 +315,7 @@ describe("<SessionImportDialog />", () => {
     expect(lastScanCall()).toBe(false);
   });
 
-  it("returns the wizard and resumes the active scan once the stream binding names the picked host", async () => {
+  it("returns the wizard and resumes the scan once the fixed host stream catches up", async () => {
     hostsMock.hosts = [
       { hostId: "host-a", connectable: true },
       { hostId: "host-b", connectable: true },
@@ -328,15 +323,16 @@ describe("<SessionImportDialog />", () => {
     hostsMock.activeHostId = "host-a";
     streamOnHostMock.hostId = null;
 
-    const view = renderDialog({ initialHostId: null, onClose: undefined });
-    pickHost("host-b");
+    const view = renderDialog({ initialHostId: "host-b", onClose: undefined });
     await waitFor(() => {
       expect(screen.getByTestId("host-scope-connecting")).not.toBeNull();
     });
 
     streamOnHostMock.hostId = "host-b";
     view.rerender(
-      <SessionImportDialog onClose={() => undefined} initialHostId={null} />,
+      <StreamRuntimeContext.Provider value={streamBindingFor("host-a")}>
+        <SessionImportDialog onClose={() => undefined} initialHostId="host-b" />
+      </StreamRuntimeContext.Provider>,
     );
 
     await waitFor(() => {
@@ -381,7 +377,7 @@ describe("<SessionImportDialog />", () => {
     expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
   });
 
-  it('shows "<host> can\'t import sessions" and stops scanning for a ready host whose client does not support session import', async () => {
+  it('shows "<host> can\'t import sessions" and stops scanning for a ready fixed host whose client does not support session import', async () => {
     hostsMock.hosts = [
       { hostId: "host-a", connectable: true },
       { hostId: "host-b", connectable: true },
@@ -390,8 +386,7 @@ describe("<SessionImportDialog />", () => {
     streamOnHostMock.hostId = "host-b";
     scanSupportedMock.value = false;
 
-    renderDialog({ initialHostId: null, onClose: undefined });
-    pickHost("host-b");
+    renderDialog({ initialHostId: "host-b", onClose: undefined });
 
     await waitFor(() => {
       expect(
@@ -411,23 +406,23 @@ describe("<SessionImportDialog />", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("passes every non-connectable host to the switcher as refused, disabling its row", () => {
+  it("captures the ambient host once when no initial host is supplied", () => {
     hostsMock.hosts = [
       { hostId: "host-a", connectable: true },
       { hostId: "host-b", connectable: false },
     ];
     hostsMock.activeHostId = "host-a";
 
-    renderDialog({ initialHostId: null, onClose: undefined });
+    const view = renderDialog({ initialHostId: null, onClose: undefined });
+    expect(hostScopeCallsMock.scopedHostIds[0]).toBe("host-a");
 
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    const refusedRow = screen.getByTestId(
-      "settings-host-switcher-option-host-b",
+    hostsMock.activeHostId = "host-b";
+    view.rerender(
+      <StreamRuntimeContext.Provider value={streamBindingFor("host-b")}>
+        <SessionImportDialog onClose={() => undefined} initialHostId={null} />
+      </StreamRuntimeContext.Provider>,
     );
-    expect(refusedRow.getAttribute("aria-disabled")).toBe("true");
-    const connectableRow = screen.getByTestId(
-      "settings-host-switcher-option-host-a",
-    );
-    expect(connectableRow.getAttribute("aria-disabled")).not.toBe("true");
+    expect(hostScopeCallsMock.scopedHostIds.at(-1)).toBe("host-a");
+    expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
   });
 });
