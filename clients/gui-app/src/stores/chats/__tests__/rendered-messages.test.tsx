@@ -1549,6 +1549,57 @@ describe("useRenderedMessages", () => {
     ]);
   });
 
+  it("carries a non-null agentMessageReceipt through to the projected tool segment", () => {
+    const agentMessageSend = {
+      receiverAgentId: "agent-receiver-1",
+      message: "ping",
+      responseId: null,
+      expectReply: false,
+    };
+    const agentMessageReceipt = {
+      receiverAgentId: "agent-receiver-1",
+      messageId: "agent-msg-receipt-1",
+    };
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "tool-1",
+          toolName: "traycer_a2a/traycer_send_message",
+          ...toolCallInputFields("traycer_a2a/traycer_send_message", {
+            toAgentId: "agent-receiver-1",
+            message: "ping",
+          }),
+          error: null,
+          agentMessageSend,
+          managedCommand: null,
+          agentMessageReceipt,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+          imageResults: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
+
+    const tool = (result.current[0]?.segments ?? []).find(
+      (segment): segment is ToolSegment => segment.kind === "tool",
+    );
+
+    expect(tool?.agentMessageReceipt).toEqual(agentMessageReceipt);
+    expect(tool?.agentMessageSend).toEqual(agentMessageSend);
+  });
+
   it("drops a resume trigger whose blockId is the immediately preceding tool segment", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
