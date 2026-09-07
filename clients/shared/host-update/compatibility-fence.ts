@@ -1,5 +1,9 @@
 import { compareHostVersions } from "../host-version/compare-host-versions";
 import {
+  nonReleaseIdentityKind,
+  type NonReleaseIdentityKind,
+} from "../host-version/non-release-identity";
+import {
   isTerminalPhase,
   type HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
@@ -143,8 +147,28 @@ export type CompatibilityRefusalReason =
   | "cli-version-incomparable"
   | "desktop-version-incomparable";
 
+/**
+ * A non-release build admitted without an ordering comparison, recorded so the
+ * waiver is evidence rather than silence.
+ *
+ * Every admit carries this list, EMPTY when both actors were really compared.
+ * Recording positively rather than "present only when waived" is deliberate
+ * and is the same rule Ticket 07's `verification` key settled on: a field that
+ * exists only in the exceptional case makes absence load-bearing, and then a
+ * writer that forgets is indistinguishable from one that had nothing to say.
+ */
+export interface NonReleaseAdmission {
+  readonly actor: "cli" | "desktop";
+  readonly version: string;
+  readonly identity: NonReleaseIdentityKind;
+}
+
 export type CompatibilityFenceVerdict =
-  | { readonly kind: "admit" }
+  | {
+      readonly kind: "admit";
+      /** Empty when every actor was ordered against its floor. */
+      readonly waived: readonly NonReleaseAdmission[];
+    }
   | { readonly kind: "refuse"; readonly reason: CompatibilityRefusalReason };
 
 export interface CompatibilityFenceInput {
@@ -178,21 +202,83 @@ export function decideCompatibilityFence(
   ) {
     return { kind: "refuse", reason: "floor-unpinned" };
   }
-  const desktop = compareHostVersions(input.desktopVersion, floors.desktop);
-  if (!desktop.comparable) {
-    return { kind: "refuse", reason: "desktop-version-incomparable" };
+  const waived: NonReleaseAdmission[] = [];
+  const desktop = actorVerdict(
+    "desktop",
+    input.desktopVersion,
+    floors.desktop,
+    waived,
+  );
+  if (desktop !== null) return desktop;
+  if (input.installedCliVersion !== null) {
+    const cli = actorVerdict(
+      "cli",
+      input.installedCliVersion,
+      floors.cli,
+      waived,
+    );
+    if (cli !== null) return cli;
   }
-  if (desktop.ordering === "less") {
-    return { kind: "refuse", reason: "desktop-below-floor" };
+  return { kind: "admit", waived };
+}
+
+/**
+ * One actor against its floor: a refusal, or `null` meaning "this actor is
+ * fine" — having appended a waiver to `waived` if it was admitted without a
+ * comparison.
+ *
+ * ## The two non-release branches, which are NOT one branch
+ *
+ * A naive fence handles "incomparable" and believes it has covered dev and
+ * staging builds. It has not, and the gap is silent:
+ *
+ *  - `staging.<epoch>.<sha>` and `local-<basename>-<stamp>` are not SemVer at
+ *    all, so they land on INCOMPARABLE;
+ *  - `0.0.0-local` **is** valid SemVer and sorts below every release, so it
+ *    lands on BELOW-FLOOR — a different arm, which an incomparable-only rule
+ *    never reaches.
+ *
+ * Both are builds of a lock-aware tree by construction, and both must be
+ * admitted, or the fence refuses the staging builds the cutover matrix itself
+ * runs on — a red matrix caused by the fix. So the recognizer runs FIRST, over
+ * an enumerated set of shapes, ahead of both arms.
+ *
+ * Enumerated rather than "anything unparseable", because `"banana"`,
+ * `"1.2"` and a truncated string are also unparseable and are evidence of
+ * corruption, not of a dev build. Those still refuse. This mirrors
+ * `evaluateHostClientFloor`, which exempts `LOCAL_CLI_VERSION` **by name**
+ * with its own `unreleased-cli` verdict for exactly this reason — "so the
+ * exemption cannot widen". Same constant, same discipline, and the two now
+ * import one definition of the string.
+ */
+function actorVerdict(
+  actor: "cli" | "desktop",
+  version: string,
+  floor: string,
+  waived: NonReleaseAdmission[],
+): CompatibilityFenceVerdict | null {
+  const identity = nonReleaseIdentityKind(version);
+  if (identity !== null) {
+    waived.push({ actor, version, identity });
+    return null;
   }
-  if (input.installedCliVersion === null) return { kind: "admit" };
-  const cli = compareHostVersions(input.installedCliVersion, floors.cli);
-  if (!cli.comparable) {
-    return { kind: "refuse", reason: "cli-version-incomparable" };
+  const comparison = compareHostVersions(version, floor);
+  if (!comparison.comparable) {
+    return {
+      kind: "refuse",
+      reason:
+        actor === "cli"
+          ? "cli-version-incomparable"
+          : "desktop-version-incomparable",
+    };
   }
-  return cli.ordering === "less"
-    ? { kind: "refuse", reason: "cli-below-floor" }
-    : { kind: "admit" };
+  if (comparison.ordering === "less") {
+    return {
+      kind: "refuse",
+      reason: actor === "cli" ? "cli-below-floor" : "desktop-below-floor",
+    };
+  }
+  return null;
 }
 
 /**

@@ -185,6 +185,7 @@ export {
 } from "./compatibility-fence";
 export type {
   CompatibilityFenceInput,
+  NonReleaseAdmission,
   CompatibilityFloors,
   CompatibilityFenceVerdict,
   CompatibilityRefusalReason,

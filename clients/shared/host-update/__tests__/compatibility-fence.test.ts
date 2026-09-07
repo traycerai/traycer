@@ -11,6 +11,10 @@ import {
   resolveCohortPolicy,
   type CompatibilityFloors,
 } from "../compatibility-fence";
+import {
+  LOCAL_BUILD_VERSION,
+  nonReleaseIdentityKind,
+} from "../../host-version/non-release-identity";
 
 // Direct unit suite for Ticket 07's compatibility fence.
 
@@ -45,7 +49,7 @@ describe("compatibility fence — the SHIPPED floors", () => {
         { installedCliVersion: "9.9.9", desktopVersion: "9.9.9" },
         SHIPPED_COMPATIBILITY_FLOORS,
       ),
-    ).toEqual({ kind: "admit" });
+    ).toEqual({ kind: "admit", waived: [] });
   });
 
   it("the sentinel still refuses first when a NEWLY added floor carries it", () => {
@@ -120,6 +124,137 @@ describe("compatibility fence — the SHIPPED floors", () => {
   });
 });
 
+describe("compatibility fence — non-release build identities", () => {
+  const LOCAL_INSTALL = "local-traycer-host.tar.gz-2026-09-07T19-30-00-000Z";
+  const STAGING = "staging.1783550586518.bb8c937d9";
+
+  it.each([
+    // TWO BRANCHES, not one, and this is the whole finding. A rule that only
+    // handles "incomparable" identities covers the first two rows and misses
+    // the third entirely, because `0.0.0-local` IS valid SemVer and sorts
+    // below every release - so it lands on `cli-below-floor`, a different arm.
+    // A dev CLI would then be refused by a fence that believed it had handled
+    // dev builds.
+    ["staging build (incomparable)", STAGING, "staging-build"],
+    ["local install (incomparable)", LOCAL_INSTALL, "local-install"],
+    [
+      "unreleased build (comparable, BELOW the floor)",
+      "0.0.0-local",
+      "local-build",
+    ],
+  ] as const)(
+    "admits a %s CLI with a recorded waiver rather than refusing it",
+    (_label, installedCliVersion, identity) => {
+      expect(
+        decideCompatibilityFence(
+          { installedCliVersion, desktopVersion: "1.4.2" },
+          SHIPPED_COMPATIBILITY_FLOORS,
+        ),
+      ).toEqual({
+        kind: "admit",
+        waived: [{ actor: "cli", version: installedCliVersion, identity }],
+      });
+    },
+  );
+
+  it.each([
+    ["staging build (incomparable)", STAGING, "staging-build"],
+    [
+      "unreleased build (comparable, BELOW the floor)",
+      "0.0.0-local",
+      "local-build",
+    ],
+  ] as const)(
+    "admits a %s DESKTOP with a recorded waiver - the matrix's own builds run here",
+    (_label, desktopVersion, identity) => {
+      expect(
+        decideCompatibilityFence(
+          { installedCliVersion: "1.4.2", desktopVersion },
+          SHIPPED_COMPATIBILITY_FLOORS,
+        ),
+      ).toEqual({
+        kind: "admit",
+        waived: [{ actor: "desktop", version: desktopVersion, identity }],
+      });
+    },
+  );
+
+  it("records BOTH actors when both are non-release, in desktop-then-cli order", () => {
+    expect(
+      decideCompatibilityFence(
+        { installedCliVersion: "0.0.0-local", desktopVersion: STAGING },
+        SHIPPED_COMPATIBILITY_FLOORS,
+      ),
+    ).toEqual({
+      kind: "admit",
+      waived: [
+        { actor: "desktop", version: STAGING, identity: "staging-build" },
+        { actor: "cli", version: "0.0.0-local", identity: "local-build" },
+      ],
+    });
+  });
+
+  it("a fully released pair is admitted with an EMPTY waiver list, never a missing one", () => {
+    // The waiver is recorded positively on every admit, so "nothing was
+    // waived" and "nobody looked" are different values rather than the same
+    // absence. Same rule Ticket 07's `verification` key settled on.
+    const verdict = decideCompatibilityFence(
+      { installedCliVersion: "1.4.2", desktopVersion: "1.4.2" },
+      SHIPPED_COMPATIBILITY_FLOORS,
+    );
+    expect(verdict).toEqual({ kind: "admit", waived: [] });
+    if (verdict.kind !== "admit") return;
+    expect(Array.isArray(verdict.waived)).toBe(true);
+  });
+
+  it.each([
+    // MALFORMED IS NOT A DEV BUILD. The waiver is an enumerated recognizer,
+    // not "anything unparseable" - these are evidence of corruption or a typo
+    // and must keep refusing, or a truncated version string becomes the way to
+    // disable the fence.
+    ["banana"],
+    ["1.2"],
+    [""],
+    ["staging"],
+    ["staging.notanepoch.abc1234"],
+    ["local-dev"],
+    ["local-"],
+  ] as const)(
+    "still refuses the malformed identity '%s' rather than waiving it",
+    (installedCliVersion) => {
+      expect(
+        decideCompatibilityFence(
+          { installedCliVersion, desktopVersion: "1.4.2" },
+          SHIPPED_COMPATIBILITY_FLOORS,
+        ),
+      ).toEqual({ kind: "refuse", reason: "cli-version-incomparable" });
+    },
+  );
+
+  it("a NEAR MISS of the dev string is refused as below-floor, not waived - the by-name exemption cannot widen", () => {
+    // `0.0.0-locale` is valid SemVer and sorts below the floor, so it does not
+    // even reach the incomparable arm. It is the exact shape a by-name
+    // exemption is meant to keep out: a real version that merely looks like
+    // the dev one. Refused as below-floor, which is the honest answer.
+    expect(
+      decideCompatibilityFence(
+        { installedCliVersion: "0.0.0-locale", desktopVersion: "1.4.2" },
+        SHIPPED_COMPATIBILITY_FLOORS,
+      ),
+    ).toEqual({ kind: "refuse", reason: "cli-below-floor" });
+    expect(nonReleaseIdentityKind("0.0.0-locale")).toBeNull();
+  });
+
+  it("the local-build waiver names the SAME string evaluateHostClientFloor exempts", () => {
+    // `evaluateHostClientFloor` exempts `LOCAL_CLI_VERSION` BY NAME so the
+    // exemption "cannot widen". The fence needs the identical string or a dev
+    // build passes one policy and fails the other, which is worse than either
+    // answer alone. One definition, imported by both.
+    expect(LOCAL_BUILD_VERSION).toBe("0.0.0-local");
+    expect(nonReleaseIdentityKind(LOCAL_BUILD_VERSION)).toBe("local-build");
+  });
+});
+
 describe("compatibility fence — the preventive matrix, floors pinned", () => {
   it("admits a fully lock-aware machine", () => {
     expect(
@@ -127,7 +262,7 @@ describe("compatibility fence — the preventive matrix, floors pinned", () => {
         { installedCliVersion: "1.3.0", desktopVersion: "1.3.0" },
         PINNED,
       ),
-    ).toEqual({ kind: "admit" });
+    ).toEqual({ kind: "admit", waived: [] });
   });
 
   it("refuses an installed CLI below the floor", () => {
@@ -159,7 +294,7 @@ describe("compatibility fence — the preventive matrix, floors pinned", () => {
         { installedCliVersion: null, desktopVersion: "1.3.0" },
         PINNED,
       ),
-    ).toEqual({ kind: "admit" });
+    ).toEqual({ kind: "admit", waived: [] });
   });
 
   it.each([
@@ -192,7 +327,7 @@ describe("compatibility fence — the preventive matrix, floors pinned", () => {
         { installedCliVersion: "1.3.0", desktopVersion: "1.3.0" },
         { cli: "1.3.0", desktop: "1.3.0" },
       ),
-    ).toEqual({ kind: "admit" });
+    ).toEqual({ kind: "admit", waived: [] });
     // Stated separately because off-by-one on a floor is silent: a strict
     // `>` would refuse the very release that introduced lock-awareness.
     expect(

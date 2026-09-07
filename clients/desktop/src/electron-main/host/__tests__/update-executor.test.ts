@@ -92,6 +92,7 @@ interface DepsOverrides {
   ) => Promise<DesktopActivationCycleOutcome>;
   readonly clearTombstone?: DesktopActivationDeps["clearTombstone"];
   readonly faults?: DesktopActivationDeps["faults"];
+  readonly readCompatibilityIdentities?: DesktopActivationDeps["readCompatibilityIdentities"];
 }
 
 function baseDeps(
@@ -102,6 +103,13 @@ function baseDeps(
   return {
     layout,
     substrate: "smappservice",
+    // A fully released pair by default, so the compatibility fence admits and
+    // every existing case exercises what it was written for. The fence's own
+    // matrix lives in `compatibility-fence.test.ts`; the rows here pin only
+    // that this entry point CONSULTS it and where.
+    readCompatibilityIdentities:
+      overrides.readCompatibilityIdentities ??
+      (async () => ({ installedCliVersion: "9.9.9", desktopVersion: "9.9.9" })),
     contender: {
       hostHomeDir: layout.rootDir,
       lockPath,
@@ -300,6 +308,92 @@ describe("runDesktopActivationSegment - cohort gate", () => {
       baseDeps(layout, join(layout.rootDir, "cli-lock"), {}),
     );
     expect(outcome).toEqual({ kind: "rejected", reason: "cohort-disabled" });
+  });
+
+  it("consults the compatibility fence for a NEW attempt and rejects a below-floor CLI by name", async () => {
+    // The cohort must be ELIGIBLE or its own gate answers first and the fence
+    // is never reached - which would make this pass vacuously.
+    eligibleCohort();
+    const layout = await freshLayout();
+    let reads = 0;
+    const outcome = await runDesktopActivationSegment(
+      activateRequest(
+        { attemptId: "no-such-attempt", generation: 1, sequence: 1 },
+        {},
+      ),
+      baseDeps(layout, join(layout.rootDir, "cli-lock"), {
+        readCompatibilityIdentities: async () => {
+          reads += 1;
+          // A pre-cutover CLI installed beside a current Desktop: the single
+          // combination the fence exists for.
+          return { installedCliVersion: "1.1.8", desktopVersion: "1.4.2" };
+        },
+      }),
+    );
+
+    expect(outcome).toEqual({
+      kind: "rejected",
+      reason: "fence-cli-below-floor",
+    });
+    expect(reads).toBe(1);
+  });
+
+  it.each([
+    // Both non-release branches, at the wired seam rather than only in the
+    // fence's own unit matrix: `staging.*` reaches the INCOMPARABLE arm and
+    // `0.0.0-local` reaches the COMPARABLE-BELOW arm, and a fence that
+    // handled only the first would refuse every dev Desktop here.
+    ["staging desktop", "staging.1783550586518.bb8c937d9"],
+    ["unreleased desktop", "0.0.0-local"],
+  ] as const)(
+    "admits a %s past the fence instead of rejecting it - the matrix's own builds run through this seam",
+    async (_label, desktopVersion) => {
+      eligibleCohort();
+      const layout = await freshLayout();
+      const outcome = await runDesktopActivationSegment(
+        activateRequest(
+          { attemptId: "no-such-attempt", generation: 1, sequence: 1 },
+          {},
+        ),
+        baseDeps(layout, join(layout.rootDir, "cli-lock"), {
+          readCompatibilityIdentities: async () => ({
+            installedCliVersion: null,
+            desktopVersion,
+          }),
+        }),
+      );
+
+      // Past the fence. It then fails to claim a nonexistent attempt, which is
+      // the point: any outcome EXCEPT a `fence-*` rejection proves admission,
+      // and asserting the downstream failure would pin an unrelated mechanism.
+      expect(outcome.kind === "rejected" ? outcome.reason : "").not.toMatch(
+        /^fence-/,
+      );
+    },
+  );
+
+  it("does NOT consult the fence for an already-ADOPTED continuation - it stops new attempts, it does not strand one", async () => {
+    // The same ruled property the cohort gate has, and it has to hold for the
+    // fence too or a floor change would strand parked bytes on every machine
+    // with an old CLI beside it.
+    eligibleCohort();
+    const layout = await freshLayout();
+    const identity = await seedParkedAttempt(layout, {});
+    let reads = 0;
+    const outcome = await runDesktopActivationSegment(
+      activateRequest(identity, {}),
+      baseDeps(layout, join(layout.rootDir, "cli-lock"), {
+        readCompatibilityIdentities: async () => {
+          reads += 1;
+          return { installedCliVersion: "1.0.0", desktopVersion: "1.0.0" };
+        },
+      }),
+    );
+
+    expect(reads).toBe(0);
+    expect(outcome.kind === "rejected" ? outcome.reason : "").not.toMatch(
+      /^fence-/,
+    );
   });
 
   it("does NOT reject an already-ADOPTED activation continuation, even under the shipped disabled cohort", async () => {

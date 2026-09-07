@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { app } from "electron";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -14,7 +15,7 @@ import {
   type ParkedRegistrationTakeover,
   type RegisterHostLoginItemResult,
 } from "../app/host-login-item";
-import { resolveBundledCliPath } from "../cli/cli-discovery";
+import { readCliManifest, resolveBundledCliPath } from "../cli/cli-discovery";
 import {
   runBundledTraycerCliJson,
   streamBundledTraycerCliJson,
@@ -4319,6 +4320,17 @@ export class HostController {
       {
         layout: this.layout,
         substrate: owner.substrate,
+        // Read at the decision rather than captured earlier: the CLI install
+        // manifest is on disk and can move under a long-lived controller.
+        // `null` when no CLI is installed beside this host, which the fence
+        // ADMITS by documented asymmetry - this signal detects an old
+        // *installed* CLI and is structurally silent about one invoked from
+        // elsewhere on `PATH`, so refusing on absence would only refuse
+        // machines that have no CLI at all.
+        readCompatibilityIdentities: async () => ({
+          installedCliVersion: (await readCliManifest())?.version ?? null,
+          desktopVersion: app.getVersion(),
+        }),
         contender: {
           hostHomeDir: this.layout.rootDir,
           lockPath: this.lockPath,
