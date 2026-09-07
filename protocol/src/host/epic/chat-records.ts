@@ -21,6 +21,8 @@ const textFrameFields = {
   hasBinaryPayload: z.literal(false),
 } as const;
 
+const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 /**
  * The epic's chat RECORDS, as its serving host's chat registry holds them.
  *
@@ -117,12 +119,14 @@ export type ChatRecordOrigin = z.infer<typeof chatRecordOriginSchema>;
  * ONE row shape, shared by the list read below and by the delta stream's
  * `upsert` frame, deliberately: the host applies its inbox to SQLite and then
  * pushes the same rows to its clients, so a poll and a push that disagreed
- * about the shape would be a bug with two places to fix. Both surfaces are
- * unreleased today, so sharing costs nothing. Once EITHER ships, this const is
- * frozen for that surface and the next field forks a versioned copy
- * (`chatRecordSummarySchemaV11`, the `hostNotificationEntrySchemaV21` pattern)
- * rather than being edited in place - a shared builder must never silently
- * rewrite a released shape.
+ * about the shape would be a bug with two places to fix.
+ *
+ * BOTH surfaces have now shipped (`epic.listChatRecords@1.0`,
+ * `host.chatRecords.subscribe@1.0`-`@1.2`), so this const is FROZEN: it is the
+ * pre-`head` row those released minors promised, and editing it in place would
+ * silently rewrite four released shapes at once. The live row is
+ * {@link chatRecordSummarySchemaV11} below; every further field goes there (or
+ * onto the next fork), never here.
  */
 export const chatRecordSummarySchema = z.object({
   chatId: z.string().min(1),
@@ -209,11 +213,85 @@ export const chatRecordSummarySchema = z.object({
 });
 export type ChatRecordSummary = z.infer<typeof chatRecordSummarySchema>;
 
+/**
+ * FROZEN. `epic.listChatRecords@1.0` and `host.chatRecords.subscribe@1.0`
+ * through `@1.2` serve exactly this response / carry exactly this row.
+ */
 export const listChatRecordsResponseSchema = z.object({
   chats: z.array(chatRecordSummarySchema),
 });
 export type ListChatRecordsResponse = z.infer<
   typeof listChatRecordsResponseSchema
+>;
+
+/**
+ * The chat's CLOUD PUBLICATION stamp, as the record row carries it.
+ *
+ * Restated here rather than imported from the internal `@traycerai/common`
+ * chat schemas: this package is the OSS client<->host contract and may not
+ * depend on an internal one. The same three fields the cloud row holds, and
+ * the same meanings - it IS that stamp, replicated into the host's record
+ * table by the inbox and pushed on to clients.
+ *
+ * ## Why all three fields, when only one is read for freshness
+ *
+ * `headSha256` is the digest of the head document's exact bytes, and it is the
+ * only field a consumer keys a re-read on: it changes exactly when the
+ * published transcript changes, so it is a cache key that cannot produce a
+ * false hit. `publishedAt` is the ORDERING fact - server-monotonic, clamped
+ * inside the CAS so it strictly rises under the row lock - and it is what lets
+ * a consumer merge a head independently of `revision`, which orders METADATA
+ * and nothing else. `throughRecordSeq` is display/diagnostic only: two forked
+ * histories both number their turns, so ordering by it would permit exactly the
+ * overwrite the digest exists to refuse (the same warning
+ * `cloudChatSummarySchema` carries).
+ */
+export const chatRecordHeadStampSchema = z.object({
+  /** Digest of the head document's exact bytes. The freshness key. */
+  headSha256: sha256HexSchema,
+  /** Sequence the head was pinned at. A projection - never an ordering fact. */
+  throughRecordSeq: z.number().int().nonnegative(),
+  /** Server-monotonic publication time. The head's ONLY ordering fact. */
+  publishedAt: z.number(),
+});
+export type ChatRecordHeadStamp = z.infer<typeof chatRecordHeadStampSchema>;
+
+/**
+ * The LIVE chat record row: the frozen row above plus the publication head.
+ *
+ * Serves `epic.listChatRecords@1.1` and `host.chatRecords.subscribe@1.3`.
+ * `.extend()`ed off {@link chatRecordSummarySchema} rather than hand-copied
+ * BECAUSE that const is frozen (the `tuiAgentRecordSummaryV11Schema` idiom, one
+ * file over): the derivation runs from the released shape into the new one, so
+ * nothing can flow the other way and rewrite a shipped line. The hand-copy
+ * discipline `chatRunSettingsSchemaV10` follows is the opposite direction -
+ * pinning a frozen copy of a schema that is still LIVE - and does not apply.
+ *
+ * ## `head` is optional AND nullable, and the two absences are not the same
+ *
+ * `null` is the host's positive statement that the row has no publication to
+ * point at: an own row (this host's live chat - the tile never reads a copy of
+ * something it is already serving), or a foreign row whose owner has never
+ * published. ABSENT is the wire's older story - a `@1.0`/`@1.2` peer's row
+ * upgraded onto this shape, which never carried the field at all. Consumers
+ * collapse the two (`record.head ?? null`); the schema keeps them apart so an
+ * upgrade path is never forced to put an affirmative "no head" claim in an
+ * older peer's mouth.
+ *
+ * The optionality is also what makes this a MINOR: an added key on a
+ * non-strict object is stripped by an older peer's schema, so the row still
+ * projects onto every released minor.
+ */
+export const chatRecordSummarySchemaV11 = chatRecordSummarySchema.extend({
+  head: chatRecordHeadStampSchema.nullable().optional(),
+});
+export type ChatRecordSummaryV11 = z.infer<typeof chatRecordSummarySchemaV11>;
+
+export const listChatRecordsResponseSchemaV11 = z.object({
+  chats: z.array(chatRecordSummarySchemaV11),
+});
+export type ListChatRecordsResponseV11 = z.infer<
+  typeof listChatRecordsResponseSchemaV11
 >;
 
 /**
@@ -640,6 +718,70 @@ export type HostChatRecordsSubscribeServerFrameV12 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV12
 >;
 
+// ─── `host.chatRecords.subscribe@1.3` - the publication head on the row ─────
+//
+// The live-sync half of the published-copy tile: a foreign row's `upsert` now
+// carries the chat's cloud head stamp, so a viewer holding a published COPY
+// learns that a new turn was published instead of reading the cloud once per
+// tile mount. Frame KINDS are unchanged from `@1.2`; what grows is the row the
+// chat `upsert` carries.
+//
+// `@1.0`-`@1.2` stay installed and FROZEN on the pre-`head` row, and the gate
+// is the negotiated version exactly as it is for the `@1.1` kinds and the
+// `@1.2` cloud arm. An older subscriber's schema would strip `head` anyway -
+// this is an added key on a non-strict object, not a new frame kind - so the
+// freeze here is about what the CONTRACT promised, not about a parse that
+// would fail.
+//
+// Every arm is restated rather than spread from the frozen `@1.0` set: that
+// set embeds the pre-`head` `chatRecordSummarySchema` in its `upsert`, which
+// is precisely the arm this minor grows.
+export const hostChatRecordsSubscribeServerFrameSchemaV13 = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("upsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: chatRecordSummarySchemaV11,
+    }),
+    z.object({
+      kind: z.literal("remove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    // Unchanged from `@1.2`, restated for the same reason its own `tuiRemove`
+    // was: a frozen union declared above must not take a reference to a const
+    // introduced below it.
+    z.object({
+      kind: z.literal("tuiUpsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: tuiAgentRecordSummaryV12Schema,
+    }),
+    z.object({
+      kind: z.literal("tuiRemove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+  ])
+  .superRefine(refineChatUpsertEnvelope)
+  .superRefine(refineTuiUpsertEnvelope);
+export type HostChatRecordsSubscribeServerFrameV13 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV13
+>;
+
 export const hostChatRecordsSubscribeClientFrameSchemaV10 =
   z.discriminatedUnion("kind", [
     z.object({
@@ -672,5 +814,13 @@ export const hostChatRecordsSubscribeV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV12,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});
+
+export const hostChatRecordsSubscribeV13 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV13,
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });

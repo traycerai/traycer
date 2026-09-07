@@ -12,8 +12,9 @@ import type {
   EpicMigrationPhase,
 } from "@traycer/protocol/host/epic/subscribe";
 import type {
+  ChatRecordHeadStamp,
   ChatRecordRemovalReason,
-  ChatRecordSummary,
+  ChatRecordSummaryV11,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
@@ -60,6 +61,13 @@ import {
   EMPTY_PROJECTED_SLICES,
   EMPTY_TERMINAL_AGENTS_SLICE,
 } from "./types";
+import {
+  EMPTY_CHAT_RECORD_HEADS,
+  chatRecordHeadsEq,
+  chatRecordHeadsFromRows,
+  chatRecordKey,
+  mergeChatRecordRow,
+} from "./chat-record-head";
 import {
   chatRecordsSlice,
   chatSlicesEq,
@@ -333,6 +341,22 @@ export interface OpenEpicState {
    */
   readonly chatRecords: ChatsSlice;
   /**
+   * The cloud publication HEAD each retained record row carries, keyed by
+   * `chatRecordKey(ownerUserId, chatId)` (see `./chat-record-head.ts`). Rows
+   * with no publication - and every row from a host that predates
+   * `epic.listChatRecords@1.1` / `host.chatRecords.subscribe@1.3` - are
+   * absent.
+   *
+   * Held BESIDE {@link OpenEpicState.chatRecords} rather than on
+   * `ChatProjection`: the projection is keyed on `chatId` alone and filtered
+   * to the signed-in owner, and the head is read for a collaborator's chat
+   * too (the published-copy tile keys its cloud read on it). Its own slot
+   * also means a head-only change - a turn published, nothing renamed - is
+   * published without re-projecting the epic, and re-renders only the
+   * subscribers keyed on that stamp. Read through `useEpicChatRecordHead`.
+   */
+  readonly chatRecordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
+  /**
    * Whether `epic.listChatRecords` has produced an answer this session.
    * Missing rows are not deletion evidence until this is true. Transient
    * failures leave it false; `E_HOST_UNSUPPORTED` marks it true because an
@@ -546,7 +570,7 @@ export interface OpenEpicState {
    * `chats` identical to the doc projection.
    */
   applyChatRecords: (
-    records: readonly ChatRecordSummary[],
+    records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -567,12 +591,13 @@ export interface OpenEpicState {
    * nothing else, and a delta lost to a disconnect is repaired by the next
    * 20s list read.
    *
-   * `upsert` is REVISION-GUARDED: `revision` is per-chat monotonic and the only
-   * ordering fact on a row, so a delta whose revision does not strictly exceed
-   * the one already held is dropped. That is what makes replayed, reordered and
-   * duplicated frames harmless without any merge logic. `remove` carries no
-   * revision and needs none - it applies unconditionally and idempotently, and
-   * is remembered in {@link OpenEpicState.chatRetractions}.
+   * `upsert` is a TWO-FACT merge (`mergeChatRecordRow`): metadata is ordered
+   * by the per-chat monotonic `revision`, the publication `head` by its own
+   * server-monotonic `publishedAt`, and the row is written when either
+   * advances - a delta that advances neither is a replay, a reorder or a
+   * duplicate and is dropped, which is what keeps those harmless. `remove`
+   * carries no ordering fact and needs none - it applies unconditionally and
+   * idempotently, and is remembered in {@link OpenEpicState.chatRetractions}.
    *
    * Callers must route by `delta.epicId` before calling: the subscription is
    * host-scoped and covers every open epic, and this store is one of them.
@@ -1981,9 +2006,15 @@ export function createOpenEpicStore(
    * revision is sync bookkeeping and nothing that renders should be able to
    * read it.
    */
-  const chatRecordRows = new Map<string, ChatRecordSummary>();
-  const recordKey = (ownerUserId: string, chatId: string): string =>
-    `${ownerUserId}\u001f${chatId}`;
+  const chatRecordRows = new Map<string, ChatRecordSummaryV11>();
+  const recordKey = chatRecordKey;
+  /**
+   * The publication heads last PUBLISHED off {@link chatRecordRows} - the
+   * closure twin of `state.chatRecordHeads`, held here for the same reason
+   * `chatRecords` is: the change gate compares against it inside a `set`
+   * computation.
+   */
+  let chatRecordHeads = EMPTY_CHAT_RECORD_HEADS;
   /**
    * See `OpenEpicState.chatRetractions` - absorbing for the session's life.
    *
@@ -2554,7 +2585,7 @@ export function createOpenEpicStore(
           // marks must be captured while the row exists, and this is the one
           // seam every chat-record write flows through.
           markRegistryBackedMutations();
-          const visible: ChatRecordSummary[] = [];
+          const visible: ChatRecordSummaryV11[] = [];
           for (const row of chatRecordRows.values()) {
             if (!isChatVisibleToUser(row.ownerUserId, currentUserId)) continue;
             visible.push(row);
@@ -2569,15 +2600,39 @@ export function createOpenEpicStore(
             currentUserId,
           );
           const nextSlice = next.allIds.length === 0 ? EMPTY_CHATS_SLICE : next;
-          if (extra === null && chatSlicesEq(chatRecords, nextSlice)) return;
+          // The publication heads, over EVERY retained row (no owner filter -
+          // see `OpenEpicState.chatRecordHeads`). Gated on their own equality
+          // so an unchanged table keeps its identity.
+          const nextHeads = chatRecordHeadsFromRows(chatRecordRows.values());
+          const headsChanged = !chatRecordHeadsEq(chatRecordHeads, nextHeads);
+          if (headsChanged) {
+            chatRecordHeads =
+              Object.keys(nextHeads).length === 0
+                ? EMPTY_CHAT_RECORD_HEADS
+                : nextHeads;
+          }
+          const sliceChanged = !chatSlicesEq(chatRecords, nextSlice);
+          if (extra === null && !sliceChanged) {
+            // A head-only change - a turn was published and no metadata
+            // moved. The projection reads nothing off a head, so this
+            // publishes the head table alone: no re-projection, and every
+            // `chats` consumer keeps the identity it holds.
+            if (headsChanged) set({ chatRecordHeads });
+            return;
+          }
           chatRecords = nextSlice;
           set(
             projector.isAttached()
-              ? { chatRecords: nextSlice, ...extra, ...projector.projectFull() }
+              ? {
+                  chatRecords: nextSlice,
+                  chatRecordHeads,
+                  ...extra,
+                  ...projector.projectFull(),
+                }
               : // Nothing attached yet: the records are held, and the
                 // attach-time projection folds them in through the same
                 // getter. Writing EMPTY slices here would erase the store.
-                { chatRecords: nextSlice, ...extra },
+                { chatRecords: nextSlice, chatRecordHeads, ...extra },
           );
         };
 
@@ -3948,6 +4003,7 @@ export function createOpenEpicStore(
           bindingVersion: 0,
           ...EMPTY_PROJECTED_SLICES,
           chatRecords: EMPTY_CHATS_SLICE,
+          chatRecordHeads: EMPTY_CHAT_RECORD_HEADS,
           chatRecordListAuthoritative: false,
           chatRetractions: EMPTY_CHAT_RETRACTIONS,
           tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
@@ -4069,7 +4125,7 @@ export function createOpenEpicStore(
 
           applyChatRecords: (records, issuedAtSeq) => {
             if (disposed) return;
-            const served = new Map<string, ChatRecordSummary>();
+            const served = new Map<string, ChatRecordSummaryV11>();
             for (const row of records) {
               // A retracted chat never comes back through the poll. The list
               // read is a SNAPSHOT of the host's SQLite and the host applies a
@@ -4100,18 +4156,21 @@ export function createOpenEpicStore(
               // exists - which is what lets a later answer retire a stand-in
               // registered while the row was already held.
               expirePendingChatCreationForRecord(row.ownerUserId, row.chatId);
-              const held = chatRecordRows.get(key);
-              // The same monotonic-`revision` test the delta path applies, in
-              // the same direction: a snapshot row that does not strictly
-              // exceed what is held is an older version of that row, and
-              // overwriting with it would regress a push the client has
+              // The same two-fact merge the delta path applies, in the same
+              // direction: a snapshot row whose metadata does not strictly
+              // exceed what is held (by `revision`) and whose head does not
+              // either (by `publishedAt`) is an older version of that row,
+              // and overwriting with it would regress a push the client has
               // already shown - and, through the optimistic overlay's
               // supersession rule, terminally kill a healthy pending chain
-              // over a read that was merely slow. (No doc-resident carve-out
-              // here, unlike the terminal-agent twin: chat records are
-              // registry-only, so every row carries a real revision.)
-              if (held !== undefined && row.revision <= held.revision) continue;
-              chatRecordRows.set(key, row);
+              // over a read that was merely slow. A snapshot row carrying no
+              // head (a `@1.0` list) never clears a held one. (No
+              // doc-resident carve-out here, unlike the terminal-agent twin:
+              // chat records are registry-only, so every row carries a real
+              // revision.)
+              const merged = mergeChatRecordRow(chatRecordRows.get(key), row);
+              if (merged === null) continue;
+              chatRecordRows.set(key, merged);
               chatIngestSeq += 1;
               chatRowSeq.set(key, chatIngestSeq);
             }
@@ -4169,15 +4228,18 @@ export function createOpenEpicStore(
             // this design - so no later upsert resurrects the row here.
             if (chatRetractions.has(record.chatId)) return;
             const key = recordKey(record.ownerUserId, record.chatId);
-            const held = chatRecordRows.get(key);
-            // The staleness test, and the only ordering fact on a row:
-            // `revision` is per-chat monotonic, so a delta that does not
-            // strictly exceed what is held is a replay, a reorder or a
-            // duplicate. Dropping it is what makes those harmless with no merge
-            // logic anywhere. NOT a timestamp comparison - host clocks skew and
-            // `updatedAt` is display metadata no ordering decision may read.
-            if (held !== undefined && record.revision <= held.revision) return;
-            chatRecordRows.set(key, record);
+            // The staleness test, over the row's TWO ordering facts: metadata
+            // by the per-chat monotonic `revision`, the publication head by
+            // its server-monotonic `publishedAt` (clamped to strictly rise
+            // under the cloud row's lock). A delta that advances neither is a
+            // replay, a reorder or a duplicate, and dropping it is what makes
+            // those harmless. NOT an `updatedAt` comparison - host clocks skew
+            // and that field is display metadata no ordering decision may
+            // read. See `mergeChatRecordRow` for why the two facts merge
+            // independently.
+            const merged = mergeChatRecordRow(chatRecordRows.get(key), record);
+            if (merged === null) return;
+            chatRecordRows.set(key, merged);
             // Past the fence the last snapshot left: an `epic.listChatRecords`
             // answer already in flight cannot carry this row's new version, so
             // its omission - or its stale copy, via the revision test above -

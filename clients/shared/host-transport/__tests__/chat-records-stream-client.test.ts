@@ -12,7 +12,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type {
+  ChatRecordHeadStamp,
+  ChatRecordSummary,
+  ChatRecordSummaryV11,
+} from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
@@ -110,6 +114,24 @@ function row(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     revision: 3,
     visibility: "private",
     origin: "own",
+    ...overrides,
+  };
+}
+
+/** The `@1.3` row - `row()` above plus the optional/nullable `head`. */
+function rowV11(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
+  return { ...row(overrides), ...overrides };
+}
+
+function headStamp(
+  overrides: Partial<ChatRecordHeadStamp>,
+): ChatRecordHeadStamp {
+  return {
+    headSha256: "a".repeat(64),
+    throughRecordSeq: 5,
+    publishedAt: 1_000,
     ...overrides,
   };
 }
@@ -419,6 +441,121 @@ describe("ChatRecordsStreamClient", () => {
     h.session.emitFrame({ kind: "pong", hasBinaryPayload: false });
     expect(h.deltas).toEqual([]);
     h.client.close();
+  });
+
+  describe("the @1.3 chat `head` - parsed by the NEGOTIATED minor, not the newest schema", () => {
+    it("delivers the row's `head` verbatim when the session negotiated @1.3", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 3 };
+      const head = headStamp({ publishedAt: 42 });
+      const record = rowV11({ chatId: "chat-a", revision: 7, head });
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        record,
+      });
+
+      expect(h.deltas).toEqual([{ kind: "upsert", epicId: "epic-1", record }]);
+      const delta = h.deltas[0];
+      if (delta.kind !== "upsert") throw new Error("expected upsert");
+      expect(delta.record.head).toEqual(head);
+      h.client.close();
+    });
+
+    it("STRIPS `head` at @1.2 - the older schema is a plain object that discards the added key", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 2 };
+      const record = rowV11({
+        chatId: "chat-a",
+        revision: 7,
+        head: headStamp({}),
+      });
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        record,
+      });
+
+      expect(h.deltas).toHaveLength(1);
+      const delta = h.deltas[0];
+      if (delta.kind !== "upsert") throw new Error("expected upsert");
+      expect(delta.record).not.toHaveProperty("head");
+      h.client.close();
+    });
+
+    it("STRIPS `head` when the handshake has not settled (negotiated === null) - the conservative @1.1 parse", () => {
+      const h = harness();
+      // `negotiatedSchemaVersion` starts `null` in the harness; asserted here
+      // rather than relied upon, since the whole point is this path.
+      expect(h.session.negotiatedSchemaVersion).toBeNull();
+      const record = rowV11({
+        chatId: "chat-a",
+        revision: 7,
+        head: headStamp({}),
+      });
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        record,
+      });
+
+      expect(h.deltas).toHaveLength(1);
+      const delta = h.deltas[0];
+      if (delta.kind !== "upsert") throw new Error("expected upsert");
+      expect(delta.record).not.toHaveProperty("head");
+      h.client.close();
+    });
+
+    it("passes `head: null` through at @1.3 - the host's positive 'no publication' statement", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 3 };
+      const record = rowV11({ chatId: "chat-a", revision: 7, head: null });
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        record,
+      });
+
+      expect(h.deltas).toEqual([{ kind: "upsert", epicId: "epic-1", record }]);
+      const delta = h.deltas[0];
+      if (delta.kind !== "upsert") throw new Error("expected upsert");
+      expect(delta.record.head).toBeNull();
+      h.client.close();
+    });
+
+    it("drops a frame at @1.3 whose `head` is malformed, instead of guessing at it", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 3 };
+      const record = rowV11({
+        chatId: "chat-a",
+        revision: 7,
+        // Uppercase digest - the sha256 hex schema is `[0-9a-f]{64}`, closed.
+        head: headStamp({ headSha256: "A".repeat(64) }),
+      });
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        record,
+      });
+
+      expect(h.deltas).toEqual([]);
+      h.client.close();
+    });
   });
 
   it("reports connection status and closes its session idempotently", () => {

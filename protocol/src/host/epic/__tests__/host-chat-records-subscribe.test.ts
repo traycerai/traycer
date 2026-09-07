@@ -8,13 +8,16 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   chatRecordSummarySchema,
+  chatRecordSummarySchemaV11,
   hostChatRecordsSubscribeClientFrameSchemaV10,
   hostChatRecordsSubscribeOpenRequestSchemaV10,
   hostChatRecordsSubscribeServerFrameSchemaV10,
   hostChatRecordsSubscribeServerFrameSchemaV11,
   hostChatRecordsSubscribeServerFrameSchemaV12,
+  hostChatRecordsSubscribeServerFrameSchemaV13,
   hostChatRecordsSubscribeV10,
   listChatRecordsResponseSchema,
+  listChatRecordsResponseSchemaV11,
 } from "@traycer/protocol/host/epic/chat-records";
 
 /**
@@ -126,16 +129,16 @@ describe("host.chatRecords.subscribe@1.0 contract", () => {
       major: 1,
       minor: 0,
     });
-    // The manifest names the newest installed minor - @1.2 since `tuiUpsert`
-    // grew the cross-host `origin` row union. @1.0 and @1.1 stay installed
-    // beneath it for clients that negotiated the frozen sets.
+    // The manifest names the newest installed minor - @1.3 since the chat
+    // `upsert` row grew the cloud publication head. @1.0 through @1.2 stay
+    // installed beneath it for clients that negotiated the frozen sets.
     expect(
       buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR)[
         METHOD
       ],
     ).toEqual({
       major: 1,
-      minor: 2,
+      minor: 3,
       supportedMajors: [1],
     });
   });
@@ -414,6 +417,135 @@ describe("host.chatRecords.subscribe@1.2 tuiUpsert frames", () => {
       hostChatRecordsSubscribeServerFrameSchemaV12.safeParse({
         ...ENVELOPE,
         record: { ...CLOUD_RECORD, revision: 8 },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat record head stamp (@1.1 row / @1.3 frames)", () => {
+  const HEAD = {
+    headSha256: "a".repeat(64),
+    throughRecordSeq: 12,
+    publishedAt: 1_753_000_200_000,
+  } as const;
+
+  const FOREIGN_PUBLISHED_ROW = {
+    ...FOREIGN_ARCHIVED_ROW,
+    archived: false,
+    head: HEAD,
+  } as const;
+
+  it("accepts a stamp, an explicit null, and an absent key", () => {
+    // The three states the wire distinguishes: a publication to point at, the
+    // host's positive "there is none" (own rows, and foreign rows never
+    // published), and the older shape an upgraded @1.0 row arrives in.
+    expect(
+      chatRecordSummarySchemaV11.safeParse(FOREIGN_PUBLISHED_ROW).success,
+    ).toBe(true);
+    expect(
+      chatRecordSummarySchemaV11.safeParse({ ...OWN_ROW, head: null }).success,
+    ).toBe(true);
+    expect(chatRecordSummarySchemaV11.safeParse(OWN_ROW).success).toBe(true);
+  });
+
+  it("requires a lowercase hex digest and a non-negative integer seq", () => {
+    for (const head of [
+      { ...HEAD, headSha256: "A".repeat(64) },
+      { ...HEAD, headSha256: "a".repeat(63) },
+      { ...HEAD, throughRecordSeq: -1 },
+      { ...HEAD, throughRecordSeq: 1.5 },
+    ]) {
+      expect(
+        chatRecordSummarySchemaV11.safeParse({ ...OWN_ROW, head }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("strips the head when an older minor reparses the row", () => {
+    // The whole basis on which this ships as a MINOR: the pre-`head` schemas
+    // are plain (non-strict) objects, so a @1.0/@1.2 peer drops the key it
+    // does not know instead of refusing the row.
+    const reparsed = chatRecordSummarySchema.parse(FOREIGN_PUBLISHED_ROW);
+    expect(reparsed).not.toHaveProperty("head");
+
+    const frame = {
+      kind: "upsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: FOREIGN_PUBLISHED_ROW.chatId,
+      revision: FOREIGN_PUBLISHED_ROW.revision,
+      record: FOREIGN_PUBLISHED_ROW,
+    } as const;
+    const reparsedFrame =
+      hostChatRecordsSubscribeServerFrameSchemaV10.parse(frame);
+    expect(reparsedFrame.kind).toBe("upsert");
+    if (reparsedFrame.kind === "upsert") {
+      expect(reparsedFrame.record).not.toHaveProperty("head");
+    }
+
+    // Same fact on the list read, which is the poll that repairs a lost delta.
+    expect(
+      listChatRecordsResponseSchema.parse({ chats: [FOREIGN_PUBLISHED_ROW] })
+        .chats[0],
+    ).not.toHaveProperty("head");
+  });
+
+  it("carries the head through the @1.3 upsert frame and the @1.1 list", () => {
+    const parsed = hostChatRecordsSubscribeServerFrameSchemaV13.parse({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: FOREIGN_PUBLISHED_ROW.chatId,
+      revision: FOREIGN_PUBLISHED_ROW.revision,
+      record: FOREIGN_PUBLISHED_ROW,
+    });
+    expect(parsed.kind).toBe("upsert");
+    if (parsed.kind === "upsert") {
+      expect(parsed.record.head).toEqual(HEAD);
+    }
+
+    expect(
+      listChatRecordsResponseSchemaV11.parse({
+        chats: [FOREIGN_PUBLISHED_ROW],
+      }).chats[0].head,
+    ).toEqual(HEAD);
+  });
+
+  it("keeps every @1.2 frame kind, tuiUpsert row union included", () => {
+    // @1.3 grows one arm's row; it narrows nothing. A @1.2 subscriber's whole
+    // frame vocabulary must still parse here.
+    for (const frame of [
+      {
+        kind: "remove",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: OWN_ROW.chatId,
+        reason: "revoked",
+      },
+      { kind: "pong", hasBinaryPayload: false },
+      {
+        kind: "tuiRemove",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        tuiAgentId: "tui-1",
+        reason: "deleted",
+      },
+    ]) {
+      expect(
+        hostChatRecordsSubscribeServerFrameSchemaV13.safeParse(frame).success,
+      ).toBe(true);
+    }
+  });
+
+  it("still enforces the envelope invariant on the grown row", () => {
+    expect(
+      hostChatRecordsSubscribeServerFrameSchemaV13.safeParse({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "some-other-chat",
+        revision: FOREIGN_PUBLISHED_ROW.revision,
+        record: FOREIGN_PUBLISHED_ROW,
       }).success,
     ).toBe(false);
   });

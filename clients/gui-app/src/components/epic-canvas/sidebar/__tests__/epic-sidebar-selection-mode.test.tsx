@@ -883,6 +883,11 @@ vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({
       snapshotLoaded: testState.snapshotLoaded,
+      // The list's sort-clock override reads the record heads and the chat
+      // projection; these fixtures publish no heads, so the override is
+      // empty and every row sorts by the stamp on its node.
+      chatRecordHeads: {},
+      chats: { byId: {}, allIds: [] },
       artifacts: {
         allIds: testState.records
           .filter((record) => record.type !== "chat")

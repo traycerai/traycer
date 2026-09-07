@@ -487,6 +487,9 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
         emitFilter: ARTIFACTS_TREE_FILTER,
         visibleIds,
         comparator,
+        // Artifacts carry no replicated stamp, so there is no better clock
+        // than the projection's own.
+        clock: null,
       }),
     [rootIds, expandedIds, tree, visibleIds, comparator],
   );

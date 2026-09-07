@@ -13,7 +13,11 @@
 import { createContext, use, useMemo } from "react";
 import { useChildIds, useEpicTreeIndex } from "@/lib/epic-selectors";
 import type { TreeNode } from "@/stores/epics/open-epic/types";
-import { sortNodeIds, type NodeComparator } from "@/lib/epic-sort";
+import {
+  sortNodeIdsWithClock,
+  type NodeComparator,
+  type NodeSortClock,
+} from "@/lib/epic-sort";
 
 type PanelTreeFilter = (type: string | null | undefined) => boolean;
 
@@ -34,6 +38,21 @@ export const SidebarSortContext = createContext<NodeComparator | null>(null);
 
 function useSidebarComparator(): NodeComparator | null {
   return use(SidebarSortContext);
+}
+
+/**
+ * The per-node content clock the panel's sort reads in place of a node's
+ * `updatedAt` (see `NodeSortClock`), or `null` when the panel has none - the
+ * artifact panel, whose nodes carry no replicated stamp. Published by the
+ * panel body beside {@link SidebarSortContext} so a nested child list sorts by
+ * the same clock the root list and the row's idle-time chip do.
+ */
+export const SidebarSortClockContext = createContext<NodeSortClock | null>(
+  null,
+);
+
+function useSidebarSortClock(): NodeSortClock | null {
+  return use(SidebarSortClockContext);
 }
 
 /**
@@ -76,6 +95,7 @@ export function useFilteredPanelChildIds(
   const childIds = useChildIds(parentId);
   const visibleIds = useSidebarVisibleIds();
   const comparator = useSidebarComparator();
+  const clock = useSidebarSortClock();
   return useMemo(() => {
     if (childIds.length === 0) return childIds;
     const filtered = childIds.filter((childId) => {
@@ -85,9 +105,10 @@ export function useFilteredPanelChildIds(
       return true;
     });
     // `childIds` arrive in projector (default) order; re-sort only when the
-    // panel has a non-default mode (`comparator !== null`).
-    return sortNodeIds(filtered, tree.nodeById, comparator);
-  }, [childIds, tree, treeFilter, visibleIds, comparator]);
+    // panel has a non-default mode (`comparator !== null`) or the clock
+    // corrects one of these siblings' stamps.
+    return sortNodeIdsWithClock(filtered, tree.nodeById, comparator, clock);
+  }, [childIds, tree, treeFilter, visibleIds, comparator, clock]);
 }
 
 /**

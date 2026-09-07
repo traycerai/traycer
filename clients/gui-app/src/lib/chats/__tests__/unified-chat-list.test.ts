@@ -2,14 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { SortableNode } from "@/lib/epic-sort";
 import {
+  chatListLastActiveAtByKey,
+  localChatLastActiveAtById,
   chatRowLastActiveAt,
   cloudChatLastActiveAt,
   cloudChatRowKey,
+  cloudChatRowLastActiveAt,
   indexOwnCloudChatsByLocalId,
   localChatRowKey,
   mergeChatListEntries,
   selectUnfoldedCloudChats,
 } from "@/lib/chats/unified-chat-list";
+import { chatRecordKey } from "@/stores/epics/open-epic/chat-record-head";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
 
 /**
  * The fold and the interleave, driven by the geometry that motivated them.
@@ -119,6 +124,7 @@ describe("chatRowLastActiveAt", () => {
         ownerHostId: LOCAL_HOST,
         sessionHostId: LOCAL_HOST,
         cloudChat: LOCAL_BACKUP_ROW,
+        recordHeadPublishedAt: null,
       }),
     ).toBe(900);
   });
@@ -130,8 +136,60 @@ describe("chatRowLastActiveAt", () => {
         ownerHostId: OTHER_HOST,
         sessionHostId: LOCAL_HOST,
         cloudChat: INCUMBENT_ROW,
+        recordHeadPublishedAt: null,
       }),
     ).toBe(300);
+  });
+
+  it("prefers the record head over a cloud row's own `publishedAt` for a foreign row, whenever the head is present", () => {
+    // The head is pushed by the record stream as the owner publishes and is
+    // fresher than the polled cloud list, which can lag it by up to its
+    // stale window - so it wins even when it disagrees with `publishedAt`.
+    expect(
+      chatRowLastActiveAt({
+        recordUpdatedAt: 900,
+        ownerHostId: OTHER_HOST,
+        sessionHostId: LOCAL_HOST,
+        cloudChat: INCUMBENT_ROW, // publishedAt: 300
+        recordHeadPublishedAt: 700,
+      }),
+    ).toBe(700);
+  });
+
+  it("falls back to the cloud row's `publishedAt` for a foreign row with no record head yet", () => {
+    expect(
+      chatRowLastActiveAt({
+        recordUpdatedAt: 900,
+        ownerHostId: OTHER_HOST,
+        sessionHostId: LOCAL_HOST,
+        cloudChat: INCUMBENT_ROW, // publishedAt: 300
+        recordHeadPublishedAt: null,
+      }),
+    ).toBe(300);
+  });
+
+  it("ignores a record head on a NON-foreign row - the serving host's own record time wins regardless", () => {
+    expect(
+      chatRowLastActiveAt({
+        recordUpdatedAt: 900,
+        ownerHostId: LOCAL_HOST,
+        sessionHostId: LOCAL_HOST,
+        cloudChat: LOCAL_BACKUP_ROW,
+        recordHeadPublishedAt: 700,
+      }),
+    ).toBe(900);
+  });
+});
+
+describe("cloudChatRowLastActiveAt", () => {
+  it("prefers the record head when the epic's record table holds one for this identity", () => {
+    expect(cloudChatRowLastActiveAt(INCUMBENT_ROW, 700)).toBe(700);
+  });
+
+  it("falls back to the cloud row's own activity time when there is no record head", () => {
+    expect(cloudChatRowLastActiveAt(INCUMBENT_ROW, null)).toBe(
+      cloudChatLastActiveAt(INCUMBENT_ROW),
+    );
   });
 });
 
@@ -264,6 +322,7 @@ describe("mergeChatListEntries", () => {
       nodeById,
       cloudChats: [INCUMBENT_ROW],
       comparator: null,
+      lastActiveAtByKey: new Map(),
     });
     expect(entries.map((entry) => entry.key)).toEqual([
       localChatRowKey("chat-new"),
@@ -280,6 +339,7 @@ describe("mergeChatListEntries", () => {
       nodeById,
       cloudChats: [],
       comparator: null,
+      lastActiveAtByKey: new Map(),
     });
     expect(entries.map((entry) => entry.key)).toEqual([
       localChatRowKey("chat-new"),
@@ -301,6 +361,7 @@ describe("mergeChatListEntries", () => {
       nodeById,
       cloudChats: [unpublished],
       comparator: null,
+      lastActiveAtByKey: new Map(),
     });
     expect(entries[1].key).toBe(cloudChatRowKey(unpublished.identity));
   });
@@ -313,8 +374,118 @@ describe("mergeChatListEntries", () => {
       nodeById: {},
       cloudChats: [INCUMBENT_ROW],
       comparator: null,
+      lastActiveAtByKey: new Map(),
     });
     expect(entries[0].key).not.toBe(localChatRowKey(WALKTHROUGH));
+  });
+
+  it("reorders a row given a `lastActiveAtByKey` override - a cloud row with a newer override sorts ahead of a local root", () => {
+    // The override carries the SAME value the row's idle-time chip renders,
+    // so the order and the chip must never disagree about which chat moved
+    // last - even when it contradicts the row's own `updatedAt`.
+    const entries = mergeChatListEntries({
+      localRootIds: ["chat-new", "chat-old"],
+      nodeById,
+      cloudChats: [INCUMBENT_ROW], // updatedAt (publishedAt): 300
+      comparator: null,
+      lastActiveAtByKey: new Map([
+        [cloudChatRowKey(INCUMBENT_ROW.identity), 950],
+      ]),
+    });
+    expect(entries.map((entry) => entry.key)).toEqual([
+      cloudChatRowKey(INCUMBENT_ROW.identity),
+      localChatRowKey("chat-new"),
+      localChatRowKey("chat-old"),
+    ]);
+  });
+});
+
+describe("localChatLastActiveAtById / chatListLastActiveAtByKey", () => {
+  function projection(overrides: {
+    readonly id: string;
+    readonly hostId: string | null;
+    readonly userId: string | null;
+    readonly updatedAt: number;
+  }): ChatProjection {
+    return {
+      id: overrides.id,
+      title: overrides.id,
+      parentId: null,
+      createdAt: 1,
+      updatedAt: overrides.updatedAt,
+      userId: overrides.userId,
+      hostId: overrides.hostId,
+      isTitleEditedByUser: false,
+      settings: null,
+      archivedAt: null,
+    };
+  }
+  const HEAD = {
+    headSha256: "a".repeat(64),
+    throughRecordSeq: 3,
+    publishedAt: 950,
+  };
+
+  it("enters a foreign root's record head and a cloud row's, and nothing for a local-host root", () => {
+    // The same rule the chips render: a foreign record's clock is its record
+    // head; a local-host root keeps its own stamp and is simply absent.
+    const recordHeads = {
+      [chatRecordKey(VIEWER, "foreign")]: HEAD,
+      [chatRecordKey(VIEWER, "local")]: HEAD,
+      [chatRecordKey(INCUMBENT_ROW.identity.ownerUserId, WALKTHROUGH)]: HEAD,
+    };
+    const byId = localChatLastActiveAtById({
+      chatsById: {
+        foreign: projection({
+          id: "foreign",
+          hostId: OTHER_HOST,
+          userId: VIEWER,
+          updatedAt: 100,
+        }),
+        local: projection({
+          id: "local",
+          hostId: LOCAL_HOST,
+          userId: VIEWER,
+          updatedAt: 100,
+        }),
+      },
+      recordHeads,
+      sessionHostId: LOCAL_HOST,
+      ownCloudChatByLocalId: new Map(),
+    });
+    expect(byId.get("foreign")).toBe(950);
+    expect(byId.has("local")).toBe(false);
+    const byKey = chatListLastActiveAtByKey({
+      localLastActiveAtById: byId,
+      recordHeads,
+      cloudChats: [INCUMBENT_ROW],
+    });
+    expect(byKey.get(localChatRowKey("foreign"))).toBe(950);
+    expect(byKey.has(localChatRowKey("local"))).toBe(false);
+    expect(byKey.get(cloudChatRowKey(INCUMBENT_ROW.identity))).toBe(950);
+  });
+
+  it("falls back to the folded cloud row for a foreign root without a head, and skips a cloud row without one", () => {
+    const byId = localChatLastActiveAtById({
+      chatsById: {
+        foreign: projection({
+          id: "foreign",
+          hostId: OTHER_HOST,
+          userId: VIEWER,
+          updatedAt: 100,
+        }),
+      },
+      recordHeads: {},
+      sessionHostId: LOCAL_HOST,
+      ownCloudChatByLocalId: new Map([["foreign", INCUMBENT_ROW]]),
+    });
+    const byKey = chatListLastActiveAtByKey({
+      localLastActiveAtById: byId,
+      recordHeads: {},
+      cloudChats: [LOCAL_BACKUP_ROW],
+    });
+    expect(byKey.get(localChatRowKey("foreign"))).toBe(300);
+    expect(byKey.has(cloudChatRowKey(LOCAL_BACKUP_ROW.identity))).toBe(false);
   });
 });
 

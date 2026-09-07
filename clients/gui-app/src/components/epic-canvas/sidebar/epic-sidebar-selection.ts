@@ -17,7 +17,9 @@ import {
   isDefaultSort,
   makeNodeComparator,
   sortNodeIds,
+  sortNodeIdsWithClock,
   type NodeComparator,
+  type NodeSortClock,
 } from "@/lib/epic-sort";
 import { withMemberToggled } from "@/lib/immutable-set";
 import { useChatArchiveSupportState } from "@/hooks/epic/use-chat-archive-support";
@@ -457,6 +459,13 @@ export function collectVisibleSidebarTreeIds(args: {
   readonly emitFilter: SidebarTreeFilterFn;
   readonly visibleIds: ReadonlySet<string> | null;
   readonly comparator: NodeComparator | null;
+  /**
+   * The per-node clock the panel sorts by in place of `updatedAt` (see
+   * `NodeSortClock`), applied at every child level so this walk lists nested
+   * siblings in the order the rendered panel shows them. `null` for a caller
+   * with no such clock.
+   */
+  readonly clock: NodeSortClock | null;
 }): readonly string[] {
   const results: string[] = [];
   const visit = (nodeId: string): void => {
@@ -476,9 +485,12 @@ export function collectVisibleSidebarTreeIds(args: {
       ids.push(childId);
       return ids;
     }, []);
-    sortNodeIds(visibleChildIds, args.tree.nodeById, args.comparator).forEach(
-      visit,
-    );
+    sortNodeIdsWithClock(
+      visibleChildIds,
+      args.tree.nodeById,
+      args.comparator,
+      args.clock,
+    ).forEach(visit);
   };
   args.rootIds.forEach(visit);
   return results;
@@ -527,6 +539,11 @@ export function useSidebarChatOrder(epicId: string): readonly string[] {
       emitFilter: CHAT_NODE_FILTER,
       visibleIds: combineSidebarVisibleIds(null, archiveHiddenIds, tree),
       comparator,
+      // The picker reads the projection's own stamps: it has no cloud list to
+      // fold against, so it carries no publication clock. A foreign chat can
+      // therefore sit one place off the rendered panel here - a departure of
+      // the same kind as the two documented above, not a third rule.
+      clock: null,
     });
   }, [archiveHiddenIds, sort, tree]);
 }

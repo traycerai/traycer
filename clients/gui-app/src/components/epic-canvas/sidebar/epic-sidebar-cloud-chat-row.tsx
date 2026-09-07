@@ -7,7 +7,9 @@ import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { cloudChatRowLastActiveAt } from "@/lib/chats/unified-chat-list";
 import {
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
@@ -77,6 +79,16 @@ export function EpicSidebarCloudChatRow(
   // not be answering yet, and the tile this ref opens binds that id for life.
   // The OWNING host below is metadata.
   const readingHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The record row's publication head for this identity, when the epic's
+  // record table holds one: pushed as the owner publishes, so it moves the
+  // idle-time chip ahead of the polled cloud list's `publishedAt`. The same
+  // value the tree sorts this row by (`lastActiveAtByKey`), so the chip and
+  // the order agree.
+  const recordHead = useEpicChatRecordHead(
+    props.epicId,
+    chat.identity.ownerUserId,
+    chat.identity.chatId,
+  );
   // The SAME tint rule a local chat row's idle glyph resolves (settings-driven
   // per-type color, muted only when the user turns icon colors off). A
   // hardcoded muted class here made the icon column encode row ORIGIN - local
@@ -261,7 +273,10 @@ export function EpicSidebarCloudChatRow(
             </TooltipWrapper>
           )}
           <CloudRowIdleTime
-            publishedAt={chat.publishedAt ?? chat.metadataUpdatedAt}
+            publishedAt={cloudChatRowLastActiveAt(
+              chat,
+              recordHead?.publishedAt ?? null,
+            )}
           />
         </span>
       </button>

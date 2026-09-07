@@ -165,6 +165,7 @@ function ChatOrderProbe() {
         emitFilter: CHATS_TREE_FILTER,
         visibleIds: combineSidebarVisibleIds(null, archiveHiddenIds, tree),
         comparator: null,
+        clock: null,
       }),
     [archiveHiddenIds, tree],
   );

@@ -366,7 +366,9 @@ import {
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicFetchArtifactAttachmentV10,
+  epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsV10,
+  epicListChatRecordsV11,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsUpgradeV10ToV20,
   epicGetChatRunSettingsV10,
@@ -590,6 +592,7 @@ import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
   hostChatRecordsSubscribeV12,
+  hostChatRecordsSubscribeV13,
 } from "@traycer/protocol/host/epic/chat-records";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
@@ -6625,13 +6628,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // client talking to a host without it runs doc-only - the record table it
   // already had before the single-write pivot - so the degrade arm needs no
   // surface of its own, only the absence of the union.
+  // @1.1 adds the cloud publication head to each row - the freshness fact the
+  // published-copy tile keys its re-read on. One optional nested key under
+  // `chats[]`, which an older peer's schema strips, so the additivity check
+  // admits it as a MINOR; @1.0 stays installed on the frozen pre-`head`
+  // response and its rows upgrade with the key absent.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicListChatRecordsV11,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8983,9 +8995,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // owned by ANOTHER of the viewer's hosts can be pushed. @1.1 stays installed
   // and FROZEN on its registry-shaped row; the host gates the narrow `cloud`
   // arm on the negotiated version exactly as it gates the @1.1 kinds.
+  // @1.3 keeps all five frame kinds and grows the row the chat `upsert`
+  // carries by the chat's cloud publication head - the live-sync half of the
+  // published-copy tile. @1.0-@1.2 stay installed and FROZEN on the
+  // pre-`head` row; the host gates emission on the negotiated version.
   "host.chatRecords.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
@@ -8995,6 +9011,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: hostChatRecordsSubscribeV12,
+        },
+        3: {
+          contract: hostChatRecordsSubscribeV13,
         },
       },
     },

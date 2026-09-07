@@ -1,9 +1,10 @@
 import {
   hostChatRecordsSubscribeServerFrameSchemaV11,
   hostChatRecordsSubscribeServerFrameSchemaV12,
+  hostChatRecordsSubscribeServerFrameSchemaV13,
   type ChatRecordRemovalReason,
-  type ChatRecordSummary,
-  type HostChatRecordsSubscribeServerFrameV12,
+  type ChatRecordSummaryV11,
+  type HostChatRecordsSubscribeServerFrameV13,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -30,12 +31,18 @@ export type ChatRecordDelta =
       readonly kind: "upsert";
       readonly epicId: string;
       /**
-       * The row, complete. Its own `revision` is the ordering fact - the frame
-       * envelope repeats it, and the contract's invariant is that the two are
-       * equal, so carrying only one of them here removes the possibility of a
-       * consumer guarding on the copy the host did not mean.
+       * The row, complete. Its own `revision` is the METADATA ordering fact -
+       * the frame envelope repeats it, and the contract's invariant is that
+       * the two are equal, so carrying only one of them here removes the
+       * possibility of a consumer guarding on the copy the host did not mean.
+       *
+       * The `@1.1` row shape, so a `@1.3` session's `head` (the chat's cloud
+       * publication stamp, ordered by its own `publishedAt`) reaches the
+       * consumer. On an older negotiated minor the key is simply absent - the
+       * host never sent it and the older schema would strip it anyway - which
+       * consumers collapse with `head ?? null`.
        */
-      readonly record: ChatRecordSummary;
+      readonly record: ChatRecordSummaryV11;
     }
   | {
       readonly kind: "remove";
@@ -74,10 +81,11 @@ export type TuiAgentRecordDelta =
     };
 
 /**
- * Everything `host.chatRecords.subscribe@1.2` can deliver. An older host
+ * Everything `host.chatRecords.subscribe@1.3` can deliver. An older host
  * negotiates down and simply never sends what its minor did not have: @1.0
  * omits the terminal-agent kinds entirely, @1.1 sends them for its OWN rows
- * only and never for a cross-host replica.
+ * only and never for a cross-host replica, and @1.0-@1.2 carry no `head` on
+ * the chat `upsert` row.
  */
 export type ChatRecordsStreamDelta = ChatRecordDelta | TuiAgentRecordDelta;
 
@@ -135,7 +143,7 @@ export interface ChatRecordsStreamClientOptions {
  * next poll rather than on a replay no host retains a log to serve.
  */
 /**
- * An `@1.1` frame in the shape the `@1.2` consumer below reads.
+ * An `@1.1` frame in the shape the `@1.3` consumer below reads.
  *
  * Only `tuiUpsert` needs anything: its row is the frozen registry shape, and
  * the current row is a union tagged by `origin`. The fill is EXACT rather than
@@ -148,13 +156,16 @@ export interface ChatRecordsStreamClientOptions {
  *    no registry row to emit from and reaches a client through
  *    `epic.listTuiAgents` alone, never through this stream.
  *
- * Every other frame kind is byte-identical across the two minors and passes
- * through untouched.
+ * Every other frame kind is byte-identical across the minors and passes
+ * through untouched. The chat `upsert` row's `@1.3` `head` is an OPTIONAL key,
+ * so a `@1.1`/`@1.2` row is already a valid `@1.3` row with the key absent -
+ * no fill is needed there, and none would be honest (an older host never said
+ * whether the chat has a publication).
  */
 type ParsedFrame =
   | {
       readonly success: true;
-      readonly data: HostChatRecordsSubscribeServerFrameV12;
+      readonly data: HostChatRecordsSubscribeServerFrameV13;
     }
   | { readonly success: false };
 
@@ -171,6 +182,22 @@ function parseV11Frame(envelope: StreamFrameEnvelope): ParsedFrame {
       record: { ...frame.record, docResident: false, origin: "registry" },
     },
   };
+}
+
+function parseNegotiatedFrame(
+  negotiated: { readonly major: number; readonly minor: number } | null,
+  envelope: StreamFrameEnvelope,
+): ParsedFrame {
+  if (negotiated === null || negotiated.major !== 1) {
+    return parseV11Frame(envelope);
+  }
+  if (negotiated.minor >= 3) {
+    return hostChatRecordsSubscribeServerFrameSchemaV13.safeParse(envelope);
+  }
+  if (negotiated.minor >= 2) {
+    return hostChatRecordsSubscribeServerFrameSchemaV12.safeParse(envelope);
+  }
+  return parseV11Frame(envelope);
 }
 
 export class ChatRecordsStreamClient {
@@ -216,11 +243,15 @@ export class ChatRecordsStreamClient {
     // then is the conservative choice: an `@1.1` frame is accepted and
     // promoted, and a `@1.2` cloud frame is dropped until the version is known
     // rather than being admitted under a shape nobody has agreed on.
+    //
+    // `@1.3` grows the chat `upsert` row by the cloud publication `head`. The
+    // `@1.2` schema is a plain (non-strict) object and STRIPS that key, so
+    // parsing a `@1.3` session's frames with it would silently discard the
+    // very fact the minor exists to carry - the published-copy tile would
+    // never learn a new turn was published. Same rule as the `tuiUpsert`
+    // regression above: the negotiated minor picks the schema, always.
     const negotiated = this.session.getNegotiatedSchemaVersion();
-    const parsed =
-      negotiated !== null && negotiated.major === 1 && negotiated.minor >= 2
-        ? hostChatRecordsSubscribeServerFrameSchemaV12.safeParse(envelope)
-        : parseV11Frame(envelope);
+    const parsed = parseNegotiatedFrame(negotiated, envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The
     // removal-reason enum is CLOSED for exactly this reason: a widened reason
     // arrives as an unparseable frame, and the poll - which still sees the row

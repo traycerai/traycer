@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -17,7 +17,13 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
  * answer is applied. `null` when no session existed to read at dispatch.
  */
 interface ChatRecordListAnswer {
-  readonly chats: readonly ChatRecordSummary[];
+  /**
+   * The `@1.1` row, so a host that serves the cloud publication `head`
+   * reaches the store with it. A `@1.0` host's rows upgrade with the key
+   * absent, and the store's merge treats that as "nothing to say about the
+   * head" rather than as a retraction.
+   */
+  readonly chats: readonly ChatRecordSummaryV11[];
   readonly issuedAtSeq: number | null;
   /**
    * WHICH store's counter `issuedAtSeq` was read from
