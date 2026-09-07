@@ -6850,6 +6850,16 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       },
       message: expect.stringContaining("REFUSED this client's authenticated"),
     });
+    // The remedy, pinned because the lane proved retrying is futile: the
+    // adopted host id persists on disk across installs and restarts, so this
+    // refusal recurs on every attempt until the host re-enrols. A message that
+    // reads as "transient, try again" would loop the operator forever.
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("does NOT clear by itself"),
+    });
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("re-enrolled"),
+    });
     // NOT `verify-timeout`. Nothing timed out - the leg stopped early because
     // the host gave a definite answer - and a record saying otherwise sends
     // the operator hunting a slow host instead of a rejected client. This is

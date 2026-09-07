@@ -2992,8 +2992,18 @@ async function verifyUnderClaim(
       // nothing timed out - the leg stopped early precisely because the host
       // gave a definite answer - and a record that says otherwise sends the
       // operator to look for a slow host instead of a rejected client.
+      //
+      // The remedy names RE-ENROLMENT rather than a retry, which the lane's
+      // measurement made necessary rather than nice: the rolled-back host
+      // reads a different `host-id` path than the modern one, adopts an id
+      // `enrollment.json` does not name, and that id PERSISTS - one on the
+      // matrix box survived five intervening installs across four hours. So
+      // the refusal is durable, not transient, and an operator told to try
+      // again loops on it forever. `host doctor` is named because it is
+      // observational; `host ensure` is NOT, and would be the wrong pointer -
+      // the "registered" it converges is the OS service, not enrollment.
       const message = refused
-        ? `host update: applied ${target}, and the host is up at its recorded endpoint but REFUSED this client's authenticated call, so the update could not be verified: ${observation.runningRefusal ?? diagnosis}. The bytes ARE committed at ${target}. This is an admission failure, not a slow start - check that the host is provisioned and that this CLI is signed in to the same account.`
+        ? `host update: applied ${target}, and the host is up at its recorded endpoint but REFUSED this client's authenticated call, so the update could not be verified: ${observation.runningRefusal ?? diagnosis}. The bytes ARE committed at ${target}. This is an admission failure, not a slow start, and it does NOT clear by itself: the host has to be re-enrolled before any update can be verified, and every retry until then fails here in the same way. Run 'traycer host doctor' to see the host's enrollment state.`
         : postSwapError === null
           ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
           : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}; run 'traycer host service install' and then 'traycer host service start'. (probe: ${diagnosis})`;
