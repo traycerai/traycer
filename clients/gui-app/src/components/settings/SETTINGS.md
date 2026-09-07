@@ -2367,23 +2367,30 @@ aria-live="polite"` carrying the equivalent text for
       kinds, AFTER the coarse marker and before `idle`, and like every park
       they hold no lifecycle gate and earn no fast poll.
       **A TERMINAL attempt that is not `failed` yields the operation slot to
-      these parks** (D-49): `complete` and `superseded` let the records answer
-      first, so "another actor delivered the version and this host is not
-      running it" - which the executor ends as `superseded` with no error -
-      still renders the debt sentence and its Restart. Reaching that is NOT
+      BOTH of these parks** (D-49): `complete` and `superseded` let the
+      records answer first, so "another actor delivered the version and this
+      host is not running it" - which the executor ends as `superseded` with
+      no error - still renders the debt sentence and its Restart, and a stage
+      that is still waiting still renders its own park and its Force. A
+      terminal attempt does not make a stage stop waiting any more than it
+      makes an install stop needing a restart: the records describe what is
+      still owed, the attempt describes what is over. Reaching that is NOT
       left to the host: whether `projectUpdateOperation` withholds terminal
       records from `host.status` is a projection detail that can change under
       us, and a sentence derived from the RECORDS must be reachable whenever
-      the records say debt. `failed` is excluded, because its cause is the one
-      thing a terminal attempt can say that the records cannot say for it. It
-      is a fall-BACK rather than a substitution: with no park the attempt arm
-      still answers, so `superseded` keeps projecting `idle` and `complete`
-      keeps projecting `complete` - the landing banner's completion
+      the records say a park. `failed` is excluded, because its cause is the
+      one thing a terminal attempt can say that the records cannot say for it.
+      It is a fall-BACK rather than a substitution: with no park the attempt
+      arm still answers, so `superseded` keeps projecting `idle` and
+      `complete` keeps projecting `complete` - the landing banner's completion
       acknowledgement is rendered off that kind, and its leg passes
       `legacyFacts: null`, so a blanket substitution would have deleted that
       surface rather than reordering it. A park outranking a `complete` whose
       records disagree with the running version is deliberate: that IS
-      "delivered, not running it". The card offers
+      "delivered, not running it". The yield sits ABOVE the attempt arm's
+      staleness decay and is not a bypass of it - the park itself decays, so a
+      status read that aged while the installation read stayed healthy renders
+      the park as "last seen", never as live. The card offers
       **Restart** on the debt FACT rather than on the view kind, so a retained
       `failed` marker beside real debt keeps its failure text and still shows
       the way forward, and **Force update…** on a staged wait with a positive
@@ -2522,7 +2529,16 @@ aria-live="polite"` carrying the equivalent text for
       closed by the same render-time rules the staged-wait Force confirm
       takes — the page-wide gate arming for anything but its own dispatch,
       the region retiring, an unusable scope — plus one of its own: the
-      attempt it names no longer being the one on screen. Its confirmation is
+      attempt it names no longer being the one on screen. The auto-open WAITS
+      on the first two rather than firing into them: a shot fired while either
+      holds is closed in the same render pass, before anyone saw it, with
+      `autoOpenedFor` already recorded. Both are transient — the page-wide
+      gate is the accepted dispatch's own latch, and `updates.degrade` is a
+      RECOVERABLE retirement (`check.sticky` is read off the latest answer,
+      `installDiscovered` is cleared by refutation, and the CLI-recovery poll
+      lane re-asks at 5 s so a reinstalled CLI revives the region unprompted).
+      Waiting costs a poll; firing into them costs the shot for the life of
+      the park. Its confirmation is
       the shared `HostBusyForceDeferDialog` with `purpose="update"` on both
       legs, because Force here dispatches a bound UPDATE method even when the
       activation leg's effect is a restart, and with its own heading (an

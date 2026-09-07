@@ -577,7 +577,9 @@ export function useHostServiceDeregister(
           latchStore.releaseDeregisterAccepted(context.hostId);
           return;
         }
-        // THE DISPATCH SLOT'S FOURTH CLEAR (D8): the host service is going
+        // THE DISPATCH SLOT'S DEREGISTER CLEAR (D8) - the second of the two
+        // the status stream cannot express, beside the panel's UNSEEN TTL, and
+        // the fourth of the slot's four in total. The host service is going
         // away, and an update dispatch is a claim about a host that will be
         // there to park. Keeping the slot would mean a re-register of the same
         // `hostId` — the same string, a freshly installed service — inherits an

@@ -829,6 +829,22 @@ function attemptOperationView(input: {
   // OUTRANKING a `complete` is deliberate rather than incidental - a completed
   // attempt whose install record disagrees with the running version is exactly
   // "delivered, not running it", which is the debt.
+  //
+  // BOTH parks, not just the debt one. `legacyPark` answers for the staged
+  // wait too, and it should: a terminal attempt does not make a stage stop
+  // waiting any more than it makes an install stop needing a restart. The
+  // records describe what is still owed; the attempt describes what is over.
+  //
+  // ABOVE the `stale` decay below, which is not the bypass it looks like:
+  // `legacyFactsView` decays on its own `stale` argument and returns the
+  // qualified `unknown` + `lastKnownKind` shape, never a live park. The
+  // reachable case is a STATUS read that aged while the INSTALLATION read
+  // stayed healthy (two independent legs - `legacyFacts` is nulled by
+  // `installationLive`, `stale` comes from the status observation's
+  // `freshUntilMs`), and there the retained phase becomes the park's kind
+  // rather than the attempt's `idle`. That is the same answer the identical
+  // records produce under `{kind:"none"}`, which is the point: the terminal
+  // attempt stops being the thing that decides.
   if (isTerminalPhase(operation.phase) && operation.phase !== "failed") {
     const parkedView = legacyFactsView(observation, stale);
     if (parkedView !== null) return parkedView;

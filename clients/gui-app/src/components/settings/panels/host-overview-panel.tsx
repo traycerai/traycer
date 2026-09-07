@@ -909,7 +909,10 @@ export function HostOverviewPanel(props: {
           },
     );
   }, [scope.hostId, reportedOperation]);
-  // The slot's fourth clear: an acknowledged attempt that no frame ever named.
+  // THE DISPATCH SLOT'S UNSEEN-TTL CLEAR (D8) - the first of the two the
+  // status stream cannot express, beside the deregister clear in
+  // `host-overview-rpc.ts`, and the third of the slot's four in total. An
+  // acknowledged attempt that no frame ever named.
   // The host answered `accepted {id}` and then either never published it or
   // published it while nothing was observing — either way this page is waiting
   // for an ACK it will not recognise, and an owned dispatch nothing can spend
@@ -1115,10 +1118,10 @@ export function HostOverviewPanel(props: {
   // again at Force below), but a region that has learned this host cannot be
   // updated at all — externally managed, an unsupported install method — has
   // learned it about the attempt too, and the card that opened this offer is
-  // no longer on screen to withdraw it. This ALSO closes the one-shot
-  // auto-open's window: the rule runs before the open below, so an offer
-  // armed in that pass is cleared in the adjust-during-render re-run before
-  // anything commits, and the one shot is spent rather than left waiting.
+  // no longer on screen to withdraw it. This rule runs BEFORE the auto-open
+  // below and would close an offer armed in the same pass, which is exactly
+  // why the auto-open waits on `updates.degrade` as well as on the page-wide
+  // gate — see `gateArmed` there.
   if (boundOffer !== null && updates.degrade !== null) {
     setBoundOffer(null);
   }
@@ -1150,13 +1153,24 @@ export function HostOverviewPanel(props: {
   const autoOpen = deriveActivationAutoOpen({
     usable,
     // WAIT, do not skip. The one-shot spends itself when it fires, and the
-    // stale-open rule above would close a dialog opened while the page-wide
-    // gate is armed — in the same render pass, before anyone saw it, with
-    // `autoOpenedFor` already recorded. The ordinary sequence runs straight
-    // into that: an accepted dispatch's own latch is still held when its first
-    // frames arrive. Holding off until the gate clears costs a poll and keeps
-    // the one shot.
-    gateArmed: anyPending,
+    // close rules above would shut a dialog opened while either of them holds
+    // — in the same render pass, before anyone saw it, with `autoOpenedFor`
+    // already recorded. Holding off costs a poll and keeps the one shot.
+    //
+    // BOTH conditions, because both are transient. The page-wide gate is the
+    // ordinary sequence: an accepted dispatch's own latch is still held when
+    // its first frames arrive. `updates.degrade` is the same shape and reads
+    // as if it were not — it is a RECOVERABLE retirement, not a verdict.
+    // `check.sticky` is derived from the latest answer rather than latched
+    // (`host-overview-updates-state.ts`), `installDiscovered` is cleared by
+    // `checkRefutesDiscoveredRefusal`, and `UPDATE_CHECK_CLI_RECOVERY_POLL_LANE`
+    // re-asks at 5 s backing off to 60 s precisely so a reinstalled CLI
+    // revives the region unprompted. So the realistic sequence is: this page
+    // dispatches, a `host.update.check` poll answers `cli-unavailable`
+    // mid-flight, the attempt parks, the first `seen` frame arrives, and
+    // without this the one shot is spent on a dialog closed in the same pass
+    // for a retirement that ends a few seconds later.
+    gateArmed: anyPending || updates.degrade !== null,
     supported: updates.activate !== null,
     dispatch: updateDispatch,
     incarnation,

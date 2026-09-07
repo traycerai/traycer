@@ -1771,4 +1771,69 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
     });
     expect(view.kind).toBe("waiting-to-activate");
   });
+
+  it("(H2) the STAGED WAIT park reaches the fall-back too - it is the record parks, plural", () => {
+    // `legacyPark` answers for both parks, and D-49's decision is about the
+    // record parks rather than about the debt one: a terminal attempt does
+    // not make a stage stop waiting any more than it makes an install stop
+    // needing a restart. Falsification: narrow the fall-back to
+    // `facts.activationDebt !== null` and this reddens while pin (1) stays
+    // green — which is exactly the asymmetry cold review C flagged as
+    // unpinned.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "superseded",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: {
+          activationDebt: null,
+          stagedWait: { stagedVersion: "2.2.0", blockingSessionCount: 2 },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-for-work");
+    expect(view.targetVersion).toBe("2.2.0");
+    expect(view.blockingSessionCount).toBe(2);
+    expect(view.qualified).toBe(false);
+  });
+
+  it("(H3) a STALE terminal attempt with debt retains the PARK's phase, qualified - never a live park", () => {
+    // The fall-back sits above the attempt arm's `stale` decay, which is not
+    // a bypass: `legacyFactsView` decays on its own `stale` argument, so what
+    // comes back is the qualified `unknown` + `lastKnownKind` shape. The
+    // reachable shape is a status read that aged while the installation read
+    // stayed healthy — two independent legs — and there the retained phase
+    // becomes the park's rather than the attempt's `idle`, which is the same
+    // answer these records give under `{kind:"none"}`.
+    //
+    // Falsification: move the fall-back below the `stale` branch and the
+    // retained kind reverts to `idle` (`phaseKind("superseded")`), taking the
+    // park's target version with it.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "superseded",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: {
+          activationDebt: { installedVersion: "2.1.0" },
+          stagedWait: null,
+        },
+      }),
+      // One millisecond past the fresh window: stale by the observation's own
+      // rule, with the facts still carried.
+      nowMs: FRESH_UNTIL_MS + 1,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("2.1.0");
+    // Retained, not live: no surface may present this as a current park.
+    expect(isQuietUpdateView(view)).toBe(false);
+  });
 });

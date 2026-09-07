@@ -1654,3 +1654,119 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
     expect(continueDialog.textContent).toContain(PROMISE);
   });
 });
+
+/**
+ * H1 (cold review C, round 3): the region-retire close must not SPEND the
+ * one-shot auto-open.
+ *
+ * The close rule and the auto-open resolve the same question forty lines
+ * apart, and `updates.degrade` is recoverable — `check.sticky` is derived from
+ * the latest answer, `installDiscovered` is cleared by refutation, and
+ * `UPDATE_CHECK_CLI_RECOVERY_POLL_LANE` re-asks at 5 s so a reinstalled CLI
+ * revives the region unprompted. So a retirement that lasts a few seconds was
+ * consuming a one-shot that exists for the life of the park.
+ */
+describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend the one-shot (H1)", () => {
+  it("an owned park that arrives while the region is retired auto-opens when the region recovers, and exactly once", async () => {
+    // Falsification: restore `gateArmed: anyPending` at
+    // `host-overview-panel.tsx`'s `deriveActivationAutoOpen` call and the
+    // first `findByTestId` below times out — the dialog was armed and closed
+    // in the same render pass while `cli-unavailable` held, `autoOpenedFor`
+    // was recorded, and the recovery finds the shot already spent.
+    const FIXED_INCARNATION = "fixed-incarnation-h1";
+    vi.spyOn(latchStoreModule, "newOverviewIncarnation").mockReturnValue(
+      FIXED_INCARNATION,
+    );
+    // The slot's own half of "otherwise qualifying", set up directly against
+    // the store as pin (g) does: this page dispatched a1, and the host has
+    // published it at least once (`seen`).
+    useHostServiceWriteLatchStore.getState().armUpdateDispatch("host-a", {
+      attemptId: "a1",
+      incarnation: FIXED_INCARNATION,
+    });
+    useHostServiceWriteLatchStore
+      .getState()
+      .observeUpdateDispatchFrame("host-a", {
+        attemptId: "a1",
+        terminal: false,
+      });
+
+    // The RECOVERABLE retirement, through the path the review names: one
+    // `cli-unavailable` check answer retires the region (`check.sticky`), and
+    // the next `ok` answer un-retires it. Nothing else about the fixture
+    // changes across the transition.
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.5.0",
+          protocolVersion: { major: 1, minor: 3 },
+          busy: false,
+          busySessionCount: 2,
+          updateProgress: null,
+          busyBreakdown: null,
+          updateOperation: attempt({
+            attemptId: "a1",
+            phase: "waiting-to-activate",
+            execution: "parked",
+            targetVersion: "1.6.0",
+            busySessionCount: 2,
+          }),
+          updateTransaction: {
+            recordSchemaVersion: 2 as const,
+            authority: "attempt" as const,
+          },
+        }),
+        "host.update.check": () => {
+          checkCalls += 1;
+          if (checkCalls === 1) {
+            return { outcome: "cli-unavailable" as const };
+          }
+          return {
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: updateCheckManifest("1.6.0"),
+          };
+        },
+      },
+    });
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const panel = renderPanel();
+
+    // The park is on screen and the region is retired, so nothing has opened.
+    await screen.findByTestId("host-overview-operation-card");
+    await waitFor(() => expect(checkCalls).toBeGreaterThan(0));
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+
+    // The region recovers: the next check answers `ok`, `check.sticky` clears,
+    // and the one shot — held rather than spent — fires.
+    await act(async () => {
+      await panel.queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope("host-a", "host.update.check"),
+      });
+    });
+    const dialog = await screen.findByTestId("host-busy-force-defer-dialog");
+    expect(dialog.textContent).toContain("Restart to finish the update");
+
+    // EXACTLY once: Defer records the shot, and a further recovery pass must
+    // not re-open it. This is the half that keeps the fix from turning the
+    // one-shot into a modal that returns on every poll.
+    fireEvent.click(screen.getByTestId("host-busy-defer"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+    await act(async () => {
+      await panel.queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope("host-a", "host.update.check"),
+      });
+    });
+    panel.rerender(panelElement(panel.queryClient));
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+  });
+});
