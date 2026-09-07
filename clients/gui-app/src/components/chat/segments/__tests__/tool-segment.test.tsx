@@ -13,6 +13,10 @@ import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-
 import { ToolSegment } from "@/components/chat/segments/tool-segment";
 import { useSetA2ASendOpen } from "@/stores/chats/a2a-open-store-context";
 import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
+import {
   useChatCollapsibleTileInstanceId,
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
@@ -69,6 +73,14 @@ vi.mock("@/lib/epic-selectors", () => ({
         hostId: "host-1",
       };
     }
+    if (referenceId === "agent-receiver-tui-1") {
+      return {
+        id: "agent-receiver-tui-1",
+        title: "Receiver Terminal Agent",
+        hostId: "host-1",
+        harnessId: "claude",
+      };
+    }
     return null;
   },
   useOpenEpicId: () => "epic-1",
@@ -118,6 +130,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
   afterEach(() => {
     useToolOpenStore.getState().reset("default");
     tileNavigationMocks.openTile.mockClear();
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     cleanup();
   });
 
@@ -141,6 +154,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           expectReply: true,
         }}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -195,6 +209,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
             expectReply: true,
           }}
           managedCommand={null}
+          agentMessageReceipt={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -234,6 +249,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
             expectReply: true,
           }}
           managedCommand={null}
+          agentMessageReceipt={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -266,6 +282,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -297,6 +314,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           expectReply: false,
         }}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -331,6 +349,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           expectReply: false,
         }}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -363,6 +382,166 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
       source: "direct_ui",
     });
   });
+
+  it("parks a transcript jump for the receiver when agentMessageReceipt matches the receiver node", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-with-receipt"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        })}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={{
+          receiverAgentId: "agent-receiver-1",
+          messageId: "receiver-message-1",
+        }}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Receiver Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: expect.objectContaining({
+          id: "agent-receiver-1",
+          type: "chat",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+      }),
+    );
+    const key = chatTranscriptJumpKey("host-1", "agent-receiver-1");
+    const parked = useChatTranscriptJumpStore.getState().requestsByChatId[key];
+    expect(parked?.target).toEqual({
+      kind: "message",
+      messageId: "receiver-message-1",
+    });
+  });
+
+  it("does not park a transcript jump when agentMessageReceipt is null", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-no-receipt"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        })}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Receiver Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: expect.objectContaining({
+          id: "agent-receiver-1",
+          type: "chat",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+      }),
+    );
+    const key = chatTranscriptJumpKey("host-1", "agent-receiver-1");
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).toBeUndefined();
+  });
+
+  it("does not park a transcript jump for a terminal-agent (TUI) receiver", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-tui-receiver"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-tui-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        })}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-tui-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={{
+          receiverAgentId: "agent-receiver-tui-1",
+          messageId: "receiver-message-1",
+        }}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Receiver Terminal Agent" }),
+    );
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: expect.objectContaining({
+          id: "agent-receiver-tui-1",
+          type: "terminal-agent",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+      }),
+    );
+    const key = chatTranscriptJumpKey("host-1", "agent-receiver-tui-1");
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).toBeUndefined();
+  });
 });
 
 describe("<ToolSegment /> input rendering", () => {
@@ -384,6 +563,7 @@ describe("<ToolSegment /> input rendering", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -417,6 +597,7 @@ describe("<ToolSegment /> input rendering", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -449,6 +630,7 @@ describe("<ToolSegment /> input rendering", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -482,6 +664,7 @@ describe("<ToolSegment /> input rendering", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -513,6 +696,7 @@ describe("<ToolSegment /> input rendering", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -543,6 +727,7 @@ describe("<ToolSegment /> input rendering", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -581,6 +766,7 @@ describe("<ToolSegment /> input rendering", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -612,6 +798,7 @@ describe("<ToolSegment /> input rendering", () => {
         error="stopped: user requested stop"
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -645,6 +832,7 @@ describe("<ToolSegment /> input rendering", () => {
         error="Monitor deadline exceeded"
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped
@@ -686,6 +874,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -721,6 +910,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -771,6 +961,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -815,6 +1006,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -843,6 +1035,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState="interrupted"
         stopped={false}
@@ -865,6 +1058,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         error={null}
         agentMessageSend={null}
         managedCommand={null}
+        agentMessageReceipt={null}
         isStreaming={false}
         endState="superseded"
         stopped={false}
