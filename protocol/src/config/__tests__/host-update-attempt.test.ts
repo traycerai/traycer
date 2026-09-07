@@ -10,9 +10,30 @@ import { decodeHostUpdateAttempt } from "../host-update-attempt";
 // `@traycer-clients/shared/host-update`.
 //
 // Scope is deliberately narrow: `claim`, `recovery`, the forward-compat
-// asymmetry between them, unknown-key tolerance, and the never-CORRUPT
-// boundary. Everything else about this decoder (identity/ordering,
-// counter-overflow rejection, the base field grammar) is out of scope here.
+// asymmetry between them, unknown-key tolerance, and the corrupt verdict.
+// Everything else about this decoder (identity/ordering, counter-overflow
+// rejection, the base field grammar) is out of scope here.
+//
+// The corrupt verdict is deliberately NOT pinned as one blanket rule. There
+// are (at least) three distinct answers an optional/unrecognized key can get,
+// and this file only has evidence for two of them:
+//
+//   (a) an unrecognized TOP-LEVEL key           -> ignored, record stays valid
+//   (b) a recognized key with a MALFORMED value -> corrupt (this is `recovery`
+//       and `claim` specifically - see "the corrupt verdict" describe below)
+//   (c) a recognized key, well-formed, but naming a variant this build has
+//       never heard of (e.g. an unfamiliar enum-like `mode`) -> the key is
+//       DROPPED and the record stays valid, because that is the whole point
+//       of adding it without a schema bump: an older build must still read a
+//       record a newer one wrote.
+//
+// (c) is a real shape a future additive key can legitimately take, and does
+// NOT apply to `recovery` or `claim` today (both are exact: malformed is
+// always corrupt for them). Nothing here generalizes "malformed known key ⇒
+// corrupt" across every optional key, and no shared/table-driven helper below
+// spans multiple keys under that rule - a future key that answers (c) instead
+// of (b) should be able to add its own describe block without unpicking this
+// one.
 
 const bytes = (text: string): DurableBytes => ({ kind: "bytes", text });
 
@@ -262,9 +283,16 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
     });
   });
 
-  // ---- never-CORRUPT: which inputs do, which realistic ones must not ------
+  // ---- the corrupt verdict for `recovery` and `claim`: exact, not lenient --
+  //
+  // This block pins case (b) from the header comment - a malformed value on
+  // a recognized key is corrupt - for the two keys this file owns. It is NOT
+  // a decoder-wide rule: a future additive key may legitimately choose case
+  // (c) instead (well-formed-but-unfamiliar -> dropped, stays valid), and
+  // that would be a different, equally correct guarantee belonging to that
+  // key's own tests, not a violation of anything pinned here.
 
-  describe("the corrupt verdict: precise, not a catch-all", () => {
+  describe("the corrupt verdict for recovery and claim specifically", () => {
     it("reports corrupt for unparseable JSON, the one input with no shape to inspect at all", () => {
       expect(decodeHostUpdateAttempt(bytes("{not json"))).toEqual({
         kind: "corrupt",
