@@ -174,6 +174,8 @@ export type {
 // Desktop consume ONE definition of the floors rather than each keeping a copy.
 export {
   COMPATIBILITY_FLOOR_UNPINNED,
+  FIRST_LOCK_AWARE_RELEASE,
+  HOST_START_STAMP_FLOOR,
   LOCK_AWARE_CLI_FLOOR,
   LOCK_AWARE_DESKTOP_FLOOR,
   SHIPPED_COMPATIBILITY_FLOORS,

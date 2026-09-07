@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   COMPATIBILITY_FLOOR_UNPINNED,
+  FIRST_LOCK_AWARE_RELEASE,
+  HOST_START_STAMP_FLOOR,
   LOCK_AWARE_CLI_FLOOR,
   LOCK_AWARE_DESKTOP_FLOOR,
   SHIPPED_COMPATIBILITY_FLOORS,
@@ -16,21 +18,92 @@ import {
 const PINNED: CompatibilityFloors = { cli: "1.3.0", desktop: "1.3.0" };
 
 describe("compatibility fence — the SHIPPED floors", () => {
-  it("both floors ship UNPINNED, and the fence refuses while they are", () => {
-    // This pins the deviation from the plan's "land with the current dev
-    // version" wording, and the reason for it. A dev version is BELOW every
-    // real release, so an unpinned floor would admit the whole fleet including
-    // the lock-blind binaries the fence exists to refuse - and forgetting the
-    // re-pin would be silent and fleet-wide. Refusing instead makes that
-    // mistake loud.
-    expect(LOCK_AWARE_CLI_FLOOR).toBe(COMPATIBILITY_FLOOR_UNPINNED);
-    expect(LOCK_AWARE_DESKTOP_FLOOR).toBe(COMPATIBILITY_FLOOR_UNPINNED);
+  it("every floor is PINNED to the one derived release, and no floor still carries the sentinel", () => {
+    // The re-pin the sentinel's docblock demanded. One number, three names:
+    // CLI, Desktop and the host start-stamp floor Ticket 07's verify leg
+    // reads. Asserting each against the shared constant rather than against a
+    // literal is deliberate - a literal here would be a fourth place the
+    // number lives, which is the thing this shape exists to prevent.
+    expect(LOCK_AWARE_CLI_FLOOR).toBe(FIRST_LOCK_AWARE_RELEASE);
+    expect(LOCK_AWARE_DESKTOP_FLOOR).toBe(FIRST_LOCK_AWARE_RELEASE);
+    expect(HOST_START_STAMP_FLOOR).toBe(FIRST_LOCK_AWARE_RELEASE);
+    expect(FIRST_LOCK_AWARE_RELEASE).not.toBe(COMPATIBILITY_FLOOR_UNPINNED);
+    expect(SHIPPED_COMPATIBILITY_FLOORS).toEqual({
+      cli: FIRST_LOCK_AWARE_RELEASE,
+      desktop: FIRST_LOCK_AWARE_RELEASE,
+    });
+  });
+
+  it("admits a machine at the shipped floors rather than refusing floor-unpinned", () => {
+    // The half of the sequencing caveat this commit is responsible for.
+    // Pinning while `decideCompatibilityFence` stays unwired changes nothing
+    // observable; wiring it while a floor held the sentinel would refuse
+    // EVERYTHING. This asserts the shipped floors no longer produce that
+    // verdict, so the wiring commit lands on floors that can admit.
     expect(
       decideCompatibilityFence(
         { installedCliVersion: "9.9.9", desktopVersion: "9.9.9" },
         SHIPPED_COMPATIBILITY_FLOORS,
       ),
+    ).toEqual({ kind: "admit" });
+  });
+
+  it("the sentinel still refuses first when a NEWLY added floor carries it", () => {
+    // The fail-closed property is not retired by the re-pin - it is what any
+    // floor added later inherits before somebody derives its number.
+    expect(
+      decideCompatibilityFence(
+        { installedCliVersion: "9.9.9", desktopVersion: "9.9.9" },
+        {
+          cli: COMPATIBILITY_FLOOR_UNPINNED,
+          desktop: FIRST_LOCK_AWARE_RELEASE,
+        },
+      ),
     ).toEqual({ kind: "refuse", reason: "floor-unpinned" });
+  });
+
+  it.each([
+    // The whole point of pinning at the rc rather than at 1.3.0: rc.1/2/3 all
+    // ship the lock protocol, so a `1.3.0` floor would refuse three lock-aware
+    // releases. Prereleases sort below their release, which is what makes the
+    // rc pin admit them.
+    ["1.3.0-rc.1", "admit"],
+    ["1.3.0-rc.2", "admit"],
+    ["1.3.0-rc.3", "admit"],
+    ["1.3.0", "admit"],
+    ["1.4.2", "admit"],
+    // Every pre-cutover line the audit enumerates. These are the lock-blind
+    // binaries the fence exists for.
+    ["1.2.0", "refuse"],
+    ["1.1.11", "refuse"],
+    ["1.1.8", "refuse"],
+    ["1.1.5", "refuse"],
+    ["1.0.0", "refuse"],
+  ] as const)(
+    "orders a %s CLI against the shipped floor as %s",
+    (installedCliVersion, expected) => {
+      const verdict = decideCompatibilityFence(
+        { installedCliVersion, desktopVersion: "1.4.2" },
+        SHIPPED_COMPATIBILITY_FLOORS,
+      );
+      expect(verdict.kind).toBe(expected);
+      if (verdict.kind === "refuse") {
+        expect(verdict.reason).toBe("cli-below-floor");
+      }
+    },
+  );
+
+  it("a 1.3.0 floor would have refused the three lock-aware rcs - the counterfactual the rc pin exists to avoid", () => {
+    // Stated as a test rather than a comment so the reason for the rc suffix
+    // cannot be optimised away by someone "tidying" the floor to 1.3.0.
+    for (const rc of ["1.3.0-rc.1", "1.3.0-rc.2", "1.3.0-rc.3"]) {
+      expect(
+        decideCompatibilityFence(
+          { installedCliVersion: rc, desktopVersion: "1.4.2" },
+          { cli: "1.3.0", desktop: "1.3.0" },
+        ),
+      ).toEqual({ kind: "refuse", reason: "cli-below-floor" });
+    }
   });
 
   it("an unpinned floor refuses even a fleet that would otherwise pass", () => {

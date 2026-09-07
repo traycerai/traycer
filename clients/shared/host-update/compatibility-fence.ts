@@ -43,22 +43,69 @@ import {
  * then be silent and fleet-wide. With this sentinel, forgetting it refuses
  * everything instead: loud, local, and impossible to mistake for working.
  *
- * That is a deliberate deviation from the plan's wording, flagged as one. It
- * costs nothing today — both cohort gates are statically disabled, so no
- * fence verdict is consulted before cutover — and it converts the one mistake
- * nobody would notice into the one mistake nobody can miss.
+ * That is a deliberate deviation from the plan's wording, flagged as one, and
+ * it converts the one mistake nobody would notice into the one mistake nobody
+ * can miss.
  *
- * ⚠️ RELEASE CUT MUST RE-PIN BOTH FLOORS. The concrete version is assigned on
- * the ticket's release-checklist artifact, which carries this as a gate. Do
- * not invent a number here.
+ * ## The floors are now PINNED — this sentinel is no longer what ships
+ *
+ * The original text argued the sentinel "costs nothing today — both cohort
+ * gates are statically disabled, so no fence verdict is consulted before
+ * cutover". **That premise is false and was the reason to pin.**
+ * `decideUpdateExecutorCohort` returns `{kind: "eligible"}` unconditionally
+ * for every platform, so the gates are not disabled — they are OPEN, and the
+ * fence that was meant to narrow them was unreachable.
+ *
+ * The sentinel survives as the value a NEW floor gets before it is derived,
+ * and `decideCompatibilityFence` still refuses on it first, so the fail-closed
+ * property is intact for anything added later.
  */
 export const COMPATIBILITY_FLOOR_UNPINNED = "0.0.0-unpinned-at-release-cut";
 
+/**
+ * The release at which every actor in this repository became lock-aware.
+ *
+ * ONE number, three names below. The number is not invented here — it is
+ * derived from the tags and recorded on the plan's release checklist
+ * (`flip-and-rollout/index.md`, "Release checklist"), which carries the
+ * evidence: `protocol/src/config/host-update-attempt-paths.ts`, the module
+ * that defines `update-attempt.json` and the attempt lock filename, first
+ * exists at `cli-v1.3.0-rc.1` and `host-v1.3.0-rc.1` and is absent at every
+ * 1.2.0 tag; `clients/desktop/src/electron-main/host/` contains no
+ * `update-*` or `contender` module at all at `desktop-v1.2.0`, and
+ * `update-executor.ts`, `update-mutation.ts`, `update-contender.ts` and
+ * `update-executor-cohort.ts` all appear together at `desktop-v1.3.0-rc.1`.
+ *
+ * ## Why `1.3.0-rc.1` and not `1.3.0`
+ *
+ * rc.1, rc.2 and rc.3 all ship the lock protocol. A `1.3.0` floor would refuse
+ * three releases that are lock-aware — the exact opposite of what the floor is
+ * for. `compareHostVersions` implements SemVer prerelease ordering
+ * (`1.3.0-rc.1 < 1.3.0`), so pinning at the rc admits the rc's and everything
+ * after, and refuses 1.2.0 and below. Measured, not assumed; the matrix is
+ * pinned in `compatibility-fence.test.ts`.
+ */
+export const FIRST_LOCK_AWARE_RELEASE = "1.3.0-rc.1";
+
 /** Minimum CLI version that participates in the contender lock protocol. */
-export const LOCK_AWARE_CLI_FLOOR: string = COMPATIBILITY_FLOOR_UNPINNED;
+export const LOCK_AWARE_CLI_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
 
 /** Minimum Desktop version whose mutation lane writes a schema-v2 record. */
-export const LOCK_AWARE_DESKTOP_FLOOR: string = COMPATIBILITY_FLOOR_UNPINNED;
+export const LOCK_AWARE_DESKTOP_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
+
+/**
+ * Minimum HOST version whose `pid.json` carries `processStartIdentity`, read
+ * by Ticket 07's verify-leg fallback (Q1).
+ *
+ * A third NAME rather than a reuse of `LOCK_AWARE_CLI_FLOOR`, though the
+ * number is the same one: that floor is about a CLI, this is about the host
+ * BINARY, and the host ships from a different repository. The day those
+ * numbers diverge, a host predicate reading the CLI floor would be wrong
+ * silently — and a reader who met `LOCK_AWARE_CLI_FLOOR` inside a verify leg
+ * comparing a host version would reasonably think it a bug. Same number, three
+ * actors, one place to change it.
+ */
+export const HOST_START_STAMP_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
 
 export interface CompatibilityFloors {
   readonly cli: string;
