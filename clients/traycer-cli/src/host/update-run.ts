@@ -1421,9 +1421,11 @@ class AttemptRecordWriter {
    * Making the parameter required rather than defaulted means each of the
    * call sites below states which it is. Eight of the ten genuinely carry -
    * they advance within one installed state and have nothing new to say - and
-   * that is now visible instead of inherited. (The count read "six of the
-   * nine" and was simply miscounted; it is ten sites on BOTH lineages, so
-   * this is a correction rather than something the merge moved.)
+   * that is now visible instead of inherited. Only the two arms that actually
+   * swap refresh. (The count read "six of the nine" and was simply
+   * miscounted; it is ten sites on BOTH lineages, so this is a correction
+   * rather than something the merge moved. Both branches caught it
+   * independently.)
    *
    * A `null` here is NOT evidence that nothing changed: `generationWrittenBySwap`
    * also returns `null` when the install record cannot be read, which is why

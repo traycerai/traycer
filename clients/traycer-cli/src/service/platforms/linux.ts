@@ -61,7 +61,8 @@ export function createLinuxController(
     // No longer `stopService` (Q13). A restart's stop must not disarm the
     // service manager, and `systemctl stop` does exactly that - see
     // `stopForRestartService`.
-    stopForRestart: (label) => stopForRestartService(label, run),
+    stopForRestart: (label, options) =>
+      stopForRestartService(label, run, options.force),
     // Consumes `forcedRecycle`, and must (cold review B). A plain
     // `systemctl --user start` no-ops against a unit systemd still considers
     // active - the SAME no-op `forcedRecycle` was invented to name on macOS.
@@ -359,6 +360,7 @@ function restartStopGraces(): {
 async function stopForRestartService(
   label: ServiceLabel,
   run: ProcessRunner,
+  force: boolean,
 ): Promise<RestartStop> {
   const graces = restartStopGraces();
   // BEFORE the signal. Captured afterwards, this would read whatever the
@@ -370,12 +372,29 @@ async function stopForRestartService(
     return { forcedRecycle: false };
   }
   await killUnit(label, run, "SIGKILL");
-  return {
-    forcedRecycle: !(await waitForSignalledHostGone(
-      signalled,
-      graces.sigkillMs,
-    )),
-  };
+  if (await waitForSignalledHostGone(signalled, graces.sigkillMs)) {
+    return { forcedRecycle: false };
+  }
+  // The signalled instance could not be proven gone through the unit's own
+  // cgroup. For an ordinary restart that is simply `forcedRecycle`: the
+  // relaunch recycles instead of starting, and the update proceeds.
+  //
+  // `--force` promises more than that, and Q13's first cut silently dropped
+  // the promise. This function replaced `stopService(label, run,
+  // options.force, "restart")`, and the replacement took no `force` at all -
+  // so `host restart --force` on Linux stopped escalating to the published
+  // host and stopped REPORTING a stop that had not taken effect. A hung host
+  // is not "unprovable, carry on"; it is a forced stop that failed, and the
+  // caller asked to be told.
+  //
+  // So the last escalation is restored, with the operation carried through
+  // so the message names `host restart --force` rather than `host stop
+  // --force`. It reaches the host process directly, outside the unit's
+  // cgroup, which is the one place left that a unit-scoped kill cannot.
+  if (force) {
+    await finishForcedStopForPublishedHost(label, "restart");
+  }
+  return { forcedRecycle: true };
 }
 
 async function killUnit(

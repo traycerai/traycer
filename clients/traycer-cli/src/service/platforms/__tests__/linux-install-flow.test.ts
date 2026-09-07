@@ -769,5 +769,35 @@ describe("linux service stop --force", () => {
       });
       expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "restart");
     });
+
+    it("a NON-force stopForRestart never escalates to the published host", async () => {
+      // The twin of the row above, and the reason the row above is not enough
+      // on its own.
+      //
+      // Q13 rewrote `stopForRestart` to signal the unit instead of stopping
+      // it, and the rewrite took no `force` parameter at all - so `host
+      // restart --force` silently stopped escalating and stopped reporting a
+      // forced stop that had not taken effect. One assertion that force DOES
+      // escalate would have caught that. It would not catch the opposite
+      // regression: wiring the escalation unconditionally, which would reach
+      // for the published host on every ordinary update restart - and with
+      // the manager left armed, `pid.json` by then may name the REPLACEMENT
+      // systemd has already started, not the instance we signalled.
+      //
+      // So the gate is pinned from both sides. Unprovable-and-not-forced is
+      // `forcedRecycle: true` and nothing more; the relaunch recycles, which
+      // is what actually repairs it.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      const stopped = await createLinuxController(
+        settledRunner(),
+      ).stopForRestart(label, { force: false });
+
+      expect(stopped).toEqual({ forcedRecycle: true });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
   });
 });

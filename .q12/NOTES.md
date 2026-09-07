@@ -30,8 +30,10 @@ install.)
 ## The design
 
 `phaseWrite`'s second parameter is **required**, not defaulted — AGENTS.md bans
-optional params, and here that ban pays: six of the nine call sites pass `null`,
-and each is now a stated decision rather than an inherited one.
+optional params, and here that ban pays: **eight of the ten** call sites pass
+`null`, and each is now a stated decision rather than an inherited one. (I first
+wrote "six of the nine" — wrong in both numerator and denominator, caught by
+ea8ce20c at the merge. Only the two arms that actually swap refresh.)
 
 Only **two** arms actually swap:
 
