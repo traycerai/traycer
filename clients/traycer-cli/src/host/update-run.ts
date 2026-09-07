@@ -2908,20 +2908,23 @@ async function readClaimRefresh(environment: Environment): Promise<{
  * no coordination subsystem at all, so telling its operator to re-enrol names a
  * plane that does not exist on their machine.
  *
- * The era is stated as a BRACKET, deliberately, because a tighter number was
- * asserted and retracted: `traycer-host/src/coordination` is absent at
- * `host-v1.1.10` and present at `host-v1.2.0-rc.1`, and nothing between those
- * two is established from source. (The retracted claim named 1.1.12, which is
- * not a release at all - no such tag exists. It came from a check whose failure
- * mode against a non-resolving tag was indistinguishable from its success
- * value.) `host-v1.1.11` is the same commit as `host-v1.1.10` in OSS - an
- * identical tree, verified here - which is why 1.1.11 behaves like 1.1.10 in
- * the field, but the coordination path lives outside this repository so that
- * identity is evidence rather than proof.
+ * The era, as far as it is PROVEN: `traycer-host/src/coordination` is absent
+ * through 1.1.11 and present at `host-v1.2.0-rc.1`. 1.1.11 is the interesting
+ * one and it was settled the long way round - the GitHub release's
+ * `release-provenance.json` names its internal build sha (`5b45e06a60`,
+ * `host-v1.1.10` plus one temp-dir fix), and the path is absent at that sha
+ * with the ref verified. 1.1.12 does not exist as a release at all.
+ *
+ * That history is worth keeping in one line, because two earlier answers here
+ * were wrong in opposite directions: first a too-wide "1.1.9-1.1.12", from a
+ * check whose failure mode against a non-resolving tag was indistinguishable
+ * from its success value; then a too-cautious bracket that called 1.1.11
+ * unestablished, when it was only unestablished *by tag* - the release simply
+ * had to be identified by its build sha rather than by a ref.
  *
  * None of which this predicate depends on, and that is the point of writing it
- * this way: it keys on what a refusal PROVES, never on a version. A bracket
- * that later moves cannot make it wrong.
+ * this way: it keys on what a refusal PROVES, never on a version. An era that
+ * moves in either direction cannot make it wrong.
  *
  * Matching host TEXT is not something this file does elsewhere and it is worth
  * saying why it is acceptable here: the string steers one sentence of prose and

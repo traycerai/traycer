@@ -6979,11 +6979,12 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       // the operator's machine. And for hosts that DO have one, the Q18 host
       // fix stops the refusal occurring.
       //
-      // The era is a BRACKET on purpose - absent at `host-v1.1.10`, present at
-      // `host-v1.2.0-rc.1`, nothing in between established from source. An
-      // earlier version of this comment said "1.1.9-1.1.12", which named a
-      // version that is not a release. These rows do not care: the gate keys on
-      // what the refusal PROVES, so a bracket that moves cannot redden them.
+      // The era, proven: the coordination path is absent through 1.1.11 (its
+      // release provenance names build sha `5b45e06a60`, and the path is
+      // absent there) and present at `host-v1.2.0-rc.1`. Two earlier versions
+      // of this comment were wrong in opposite directions - one too wide, one
+      // too cautious. These rows never cared: the gate keys on what the refusal
+      // PROVES, so no movement of the era can redden them.
       //
       // So the sentence may only claim a credential plane when the refusal
       // proves one answered - a key set was consulted - and must otherwise say
