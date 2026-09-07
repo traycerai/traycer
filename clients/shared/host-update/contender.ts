@@ -1325,43 +1325,41 @@ async function supervisorRelaunchDisposition(
  * ## The identity test differs from the parked arm's, and must
  *
  * The parked arm proves the install is the attempt's own by matching the
- * claim baseline, which `parkForActivation` refreshed at the park. No such
- * baseline is GUARANTEED here, and the reason changed under Q12.
+ * claim baseline, which `parkForActivation` refreshed at the park. This arm
+ * cannot lean on the same thing - but the reason has NARROWED rather than
+ * gone away, and the paragraph that used to say "nothing refreshes it across
+ * `applying -> restarting`" is no longer true as written.
  *
- * Q12 (`377e882df`) landed the mitigation this paragraph used to await:
- * `phaseWrite` now takes a required `claimRefresh`, and `applyArm` /
- * `downgradeArm` refresh across `applying -> restarting`. A post-Q12
- * apply-born record DOES carry the post-swap install identity, so the blanket
- * claim - "the claim still names the PRE-swap install" - is no longer true of
- * records this build writes.
+ * Q12 made the swap record what it installed: `phaseWrite` took a required
+ * `claimRefresh`, and `applyArm` / `downgradeArm` refresh the baseline across
+ * that edge. A record written by a current CLI, whose claim exists and whose
+ * post-swap read succeeded, does now carry a baseline naming its own install.
  *
- * The comparison still cannot become unconditional, for two reasons Q12 does
- * not reach:
+ * The comparison still cannot become unconditional here, because three kinds
+ * of record reaching this arm carry a PRE-swap baseline and are
+ * indistinguishable from one another at the record:
  *
- *  - a PRE-Q12 record carries a pre-swap baseline and always will; nothing
- *    rewrites history.
- *  - a CLAIM-LESS record is never refreshed at all - `refreshedClaimBaseline`
- *    ignores a refresh with no prior claim, deliberately: a legacy
- *    continuation cannot gain an authorization nobody granted.
+ *  - the claim PREDATES Q12 - an attempt started by an older CLI;
+ *  - there is NO claim - `refreshedClaimBaseline` ignores a refresh with no
+ *    prior claim, because a legacy continuation cannot gain an authorization
+ *    nobody ever granted it;
+ *  - Q12 RAN AND ITS READ FAILED - `generationWrittenBySwap` fails open, so an
+ *    unreadable install record at `afterSwap` leaves the prior baseline
+ *    standing, and no reader can tell that from the first case.
  *
- * Comparing generations unconditionally would refuse both, the E6L wedge among
- * them. So target-version equality still carries this arm alone, and it
- * remains knowingly weaker than the parked one: a foreign install landing the
- * same version is admitted as if it were this attempt's. What changed is the
- * RESIDUAL, not the trade - it is now exactly "the claim predates Q12, or
- * there is no claim", rather than every post-swap record.
+ * Comparing generations against any of those refuses a genuine post-swap
+ * record - the E6L wedge above all. `installedByThisAttempt` in
+ * `host/update-run.ts` forgives exactly this staleness on the executor side,
+ * and must stay for exactly these cases.
  *
- * The Q5 cross-reference survives with one clause changed:
- * `installedByThisAttempt` (`host/update-run.ts`) is now BYPASSED for a
- * post-Q12 record rather than contradicted by one - `revalidateInstallIdentity`
- * compares version and generation, and the refreshed baseline satisfies both,
- * so the primary check succeeds and the forgiveness clause is never reached.
- * It must STAY for pre-Q12 records, and for post-Q12 records whose swap-time
- * refresh could not read the install; its own docblock carries that argument.
- *
+ * So the target-version equality carries it alone, and this arm remains
+ * knowingly weaker than the parked one: a foreign install that happens to
+ * land the same version is admitted as if it were this attempt's. Only the
+ * residual moved - it is no longer "nothing records the generation the swap
+ * wrote" but "the claim predates Q12, or there is none, or its read failed".
  * What is admitted is still a complete, signed install of the version this
- * record is trying to reach, being started on a machine whose supervisor asked
- * for a host; the alternative is leaving that machine down.
+ * record is trying to reach, being started on a machine whose supervisor
+ * asked for a host; the alternative is leaving that machine down.
  */
 async function supervisorRelaunchOverActive(
   record: HostUpdateAttemptRecord,
