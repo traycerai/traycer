@@ -1645,7 +1645,34 @@ export async function runHostStart(
         const retryableServiceRefusal =
           serviceStarted && admission.kind === "busy";
         if (retryableServiceRefusal) {
-          logger.warn(
+          // INFO, not WARN. This is a routine, expected, self-healing
+          // condition: a supervisor arrived while an update segment held the
+          // attempt lock, and the exit code is how it hands itself back to the
+          // manager to try again. Nothing is wrong and nobody needs to act.
+          //
+          // The cadence this used to have is what made the level wrong. Under
+          // `waitMs: 0` a single healthy update produced roughly a dozen of
+          // these - one per `RestartSec` for the length of the segment - and a
+          // dozen WARN lines per update is a support-report problem on its
+          // own. The wait removed the volume rather than the line: a
+          // supervisor now sits out the segment and is refused only if the
+          // segment outlasts `SUPERVISOR_ADMISSION_WAIT_MS`, so an ordinary
+          // update logs none of these at all and a slow download logs about
+          // one a minute.
+          //
+          // Deliberately NOT deduplicated to DEBUG after the first line per
+          // attempt id. Each refusal is a separate short-lived process that
+          // logs once and exits, so "first for this attempt" is not
+          // in-process state - it would need a cross-process marker written on
+          // an error path purely to decide a log level, and the bootstrap
+          // markers cannot carry it (see the incumbent-decline comment above:
+          // their phases all describe a spawn attempt, and this is a refusal).
+          // Once the storm is gone the tier is not worth that.
+          //
+          // Keyed by attempt id and environment, and the `busy` reason string
+          // is a fixed literal - no account, user, or install identifiers
+          // reach an INFO+ line here.
+          logger.info(
             "Host supervisor exiting non-zero so the service manager retries",
             { environment: opts.environment, attemptId, reason },
           );

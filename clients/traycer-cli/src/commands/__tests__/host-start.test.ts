@@ -3910,6 +3910,52 @@ describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it i
     expect(recorded.spawnCalls).toHaveLength(0);
   });
 
+  it("Q13: the busy refusal is an INFO keyed by attempt id, carrying no account identifiers", async () => {
+    // Two requirements in one line, both from the support-report side.
+    //
+    // LEVEL. A supervisor that arrives while an update segment holds the
+    // attempt lock is not an error - the non-zero exit IS the recovery, and
+    // the manager retries on its own. It was a WARN because under `waitMs: 0`
+    // it fired roughly a dozen times per healthy update, which reads like a
+    // fault when a dozen of them land in a log. The wait removed the volume;
+    // this drops the level to match what the line actually reports.
+    //
+    // FIELDS. INFO and above must stay free of account and user identifiers,
+    // so the line is keyed by attempt id and environment. `reason` is pinned
+    // as the fixed `busy` literal rather than merely "present": it is built by
+    // `describeHostStartAdmission`, and the neighbouring arms in that switch
+    // DO interpolate record contents, so a future arm folded into this branch
+    // is the realistic way an identifier reaches this line.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => busy,
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          refused,
+        ),
+      recorded,
+    );
+
+    const retryLine = recorded.loggerInfos.find((entry) =>
+      entry.message.includes("so the service manager retries"),
+    );
+    expect(retryLine).toBeDefined();
+    expect(retryLine?.fields.attemptId).toBeTypeOf("string");
+    expect(retryLine?.fields.environment).toBe("production");
+    expect(retryLine?.fields.reason).toBe(
+      "another update execution segment currently owns the restart boundary",
+    );
+  });
+
   it("INTERACTIVE launch + busy -> still exit 0, unchanged", async () => {
     // The scoping half. An interactive or Desktop-driven start has a caller
     // watching that can decide for itself, so its exit semantics must not move;

@@ -176,7 +176,7 @@ such rather than left to be mistaken for live protection.
   that list. **When `bafc226ec` lands I must delete those four entries or the
   assertion reddens** — deliberately, so the debt cannot be paid and left
   recorded.
-- **Q11 changed an assumption Q12 was going to lean on.** A refused *completion*
+- **Q11 changed an assumption Q12 was going to lean on.** A refused _completion_
   write over a verified-healthy host now writes NOTHING and throws
   `E_HOST_UPDATE_RECORD_NOT_CONCLUDED`, so "a run that threw past the claim
   leaves a terminal record" has an exception. And the reconciler that concludes
