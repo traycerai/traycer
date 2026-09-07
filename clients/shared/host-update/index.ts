@@ -16,6 +16,7 @@ export type {
   HostUpdateAttemptContinuation,
   HostUpdateAttemptError,
   HostUpdateAttemptExecution,
+  HostUpdateAttemptVerification,
   HostUpdateAttemptIdentity,
   HostUpdateAttemptPhase,
   HostUpdateAttemptProgress,

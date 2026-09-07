@@ -26,6 +26,7 @@ import {
   type HostUpdateAttemptRead,
   type HostUpdateAttemptRecord,
   type UpdateMutationCapability,
+  HOST_START_STAMP_FLOOR,
 } from "@traycer-clients/shared/host-update";
 import { commitExecutorAttemptMutation } from "@traycer-clients/shared/host-update/contender";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
@@ -1140,6 +1141,7 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
           progress: null,
           error: null,
           claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:01:00.000Z",
         },
       },
@@ -1730,6 +1732,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
           progress: null,
           error: null,
           claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:01:00.000Z",
         },
       },
@@ -3012,6 +3015,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
             progress: null,
             error: null,
             claimRefresh: null,
+            verification: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         },
@@ -3163,6 +3167,15 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     expect(outcome.result.kind).toBe("committed");
     if (outcome.result.kind === "committed") {
       expect(outcome.result.record.phase).toBe("complete");
+      // And the record SAYS it verified weakly. Without this the fix would be
+      // silent: a machine verified through the fallback would be
+      // indistinguishable from one verified fully, which is the property the
+      // positive-write key exists to remove.
+      expect(outcome.result.record.verification).toEqual({
+        mode: "version-only",
+        reason: "pid-start-stamp-missing",
+        floor: HOST_START_STAMP_FLOOR,
+      });
     }
     // The identity verdict was never consulted: there was no stamp to consult
     // it with. Distinguishes "skipped a check it could not make" from "made it
@@ -3172,6 +3185,34 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     // `observeAttemptRecoveryEvidence` call and this row reddens as
     // `rejected`/`intent-not-legal` while every other terminal-write test
     // stays green - which is exactly how the gap survived being written.
+  });
+
+  it("CONTROL: a below-floor target whose host HAS a stamp records `identity`, not `version-only`", async () => {
+    // The record reports what the run DID, never what its policy allowed. This
+    // target is below the floor, so the fallback was permitted - and unused,
+    // because the stamp was there. A record that said `version-only` here
+    // would overstate the weakness and make the field useless for deciding
+    // which machines actually need re-verifying.
+    const hostHomeDir = await freshHome();
+    await seedGenuineVerifiedProofWithStamp(
+      hostHomeDir,
+      "1.2.3",
+      "linux:boot-a 4242",
+    );
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-q1-belowfloor-stamped",
+      NO_UPDATE_EXECUTOR_FAULTS,
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.result.kind).toBe("committed");
+    if (outcome.result.kind === "committed") {
+      expect(outcome.result.record.verification).toEqual({ mode: "identity" });
+    }
+    expect(rpcMocks.identityVerdict).toHaveBeenCalled();
   });
 
   it("CONTROL: an AT-floor target whose host carries no stamp is still REJECTED at the terminal write", async () => {

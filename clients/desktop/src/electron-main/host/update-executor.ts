@@ -669,6 +669,7 @@ async function terminalize(
       // lock, so it has nothing to refresh a baseline with - and a terminal
       // write is not the place to restate one anyway.
       claimRefresh: null,
+      verification: null,
       nowIso: deps.nowIso(),
     },
   });
@@ -706,6 +707,7 @@ async function advance(
       // the install tree is still the one the claim was made against, and this
       // executor reads no install record at all.
       claimRefresh: null,
+      verification: null,
       nowIso: deps.nowIso(),
     },
   });

@@ -38,6 +38,7 @@ import {
   type HostUpdateAttemptClaimBaseline,
   type HostUpdateAttemptContinuation,
   type HostUpdateAttemptError,
+  type HostUpdateAttemptVerification,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptPhase,
   type HostUpdateAttemptProgress,
@@ -655,6 +656,9 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
   const claimRefresh = normalizeClaimRefresh(
     dataProperty(value, "claimRefresh"),
   );
+  const verification = normalizeVerification(
+    dataProperty(value, "verification"),
+  );
   if (
     typeof phase !== "string" ||
     !PHASES.has(phase) ||
@@ -664,7 +668,8 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
     nowIso === null ||
     progress === "invalid" ||
     error === "invalid" ||
-    claimRefresh === "invalid"
+    claimRefresh === "invalid" ||
+    verification === "invalid"
   ) {
     return null;
   }
@@ -674,8 +679,38 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
     progress,
     error,
     claimRefresh,
+    verification,
     nowIso,
   };
+}
+
+/**
+ * Normalize the completion verification an advance carries (Q1).
+ *
+ * `null` is the ordinary case - every advance except the terminal completion.
+ * Anything present must be exactly one of the two known shapes, on the same
+ * terms as `normalizeClaimRefresh`: this value lands on a durable record that
+ * a decoder validates, so accepting a half-shape here would push a CORRUPT
+ * record onto disk rather than reject the intent that asked for it.
+ *
+ * This normalizer is NOT what stops a caller fabricating a verification. Two
+ * other things do, and both are structural: a public intent cannot carry a
+ * `complete` phase at all (`PublicAttemptMutationIntent` excludes it by type),
+ * and `advanceAttempt` refuses a verification on any other phase. What reaches
+ * here from the executor came off a sealed, single-use proof.
+ */
+function normalizeVerification(
+  value: unknown,
+): HostUpdateAttemptVerification | null | "invalid" {
+  if (value === null || value === undefined) return null;
+  if (!isSerializableInputObject(value)) return "invalid";
+  const mode = dataProperty(value, "mode");
+  if (mode === "identity") return { mode: "identity" };
+  if (mode !== "version-only") return "invalid";
+  const reason = dataProperty(value, "reason");
+  const floor = nonEmptyString(dataProperty(value, "floor"));
+  if (reason !== "pid-start-stamp-missing" || floor === null) return "invalid";
+  return { mode: "version-only", reason: "pid-start-stamp-missing", floor };
 }
 
 function normalizeRecoveryArtifactEvidence(

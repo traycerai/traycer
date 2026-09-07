@@ -1396,6 +1396,7 @@ class AttemptRecordWriter {
           progress: queued,
           error: null,
           claimRefresh: null,
+          verification: null,
           nowIso: new Date().toISOString(),
         });
       } catch (err) {
@@ -1443,6 +1444,7 @@ class AttemptRecordWriter {
       progress: null,
       error: null,
       claimRefresh,
+      verification: null,
       nowIso: new Date().toISOString(),
     });
   }
@@ -1457,6 +1459,7 @@ class AttemptRecordWriter {
       progress: null,
       error: null,
       claimRefresh: refresh,
+      verification: null,
       nowIso: new Date().toISOString(),
     });
   }
@@ -1472,6 +1475,7 @@ class AttemptRecordWriter {
       progress: null,
       error,
       claimRefresh: null,
+      verification: null,
       nowIso: new Date().toISOString(),
     });
   }
@@ -1503,6 +1507,7 @@ class AttemptRecordWriter {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: new Date().toISOString(),
     });
   }

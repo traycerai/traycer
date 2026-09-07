@@ -9,6 +9,7 @@ import {
   type AttemptCommitOutcome,
   decideHostStampPolicy,
   HOST_START_STAMP_FLOOR,
+  type HostUpdateAttemptVerification,
   type AttemptClaimRequest,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRead,
@@ -368,6 +369,7 @@ async function completeAttemptExecutorSegment(
     readonly targetVersion: string;
     readonly runningVersion: string;
     readonly runningOwner: "host-home-bound";
+    readonly verification: HostUpdateAttemptVerification;
     readonly nowIso: string;
   }) => Promise<AttemptCommitOutcome>,
 ): Promise<AttemptCommitOutcome> {
@@ -430,6 +432,18 @@ async function completeAttemptExecutorSegment(
     targetVersion: canonical.value.targetVersion,
     runningVersion: evidence.running.version,
     runningOwner: "host-home-bound",
+    // Derived from what the observation REPORTS it did, never from the policy
+    // that authorised it. The two differ exactly where it matters: a
+    // below-floor target whose host turned out to carry a stamp is verified
+    // through identity, and records `identity`. So `version-only` on a record
+    // means the fallback actually ran, not that it was merely permitted.
+    verification: observation.identityCompared
+      ? { mode: "identity" }
+      : {
+          mode: "version-only",
+          reason: "pid-start-stamp-missing",
+          floor: HOST_START_STAMP_FLOOR,
+        },
     nowIso,
   });
   if (outcome.kind === "committed") await faults.hit("after-terminal-write");
@@ -1118,6 +1132,7 @@ async function parkResumedActivation(
         // terminalize that park `failed {install-changed}` for a mismatch its
         // own successful apply caused.
         claimRefresh: claimRefreshFrom(observed),
+        verification: null,
         nowIso: options.nowIso(),
       },
     },

@@ -192,6 +192,7 @@ async function seedParkedAttempt(
             progress: null,
             error: null,
             claimRefresh: null,
+            verification: null,
             nowIso: "2025-12-31T00:01:00.000Z",
           },
         },

@@ -136,6 +136,7 @@ describe("decideAttemptClaim - create", () => {
         progress: null,
         error: null,
         claimRefresh: null,
+        verification: null,
         nowIso: "2026-01-01T00:11:00.000Z",
       },
     );
@@ -943,6 +944,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         progress: null,
         error: null,
         claimRefresh: null,
+        verification: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome).toEqual({ kind: "rejected", reason });
@@ -962,6 +964,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         progress: null,
         error: null,
         claimRefresh: null,
+        verification: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome.kind).toBe("advanced");
@@ -983,6 +986,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(reparking.kind).toBe("advanced");
@@ -994,6 +998,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:06:00.000Z",
     });
     expect(restarting.kind).toBe("advanced");
@@ -1008,6 +1013,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         progress: null,
         error: null,
         claimRefresh: null,
+        verification: null,
         nowIso: "2026-01-01T00:07:00.000Z",
       },
     );
@@ -1028,6 +1034,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1049,6 +1056,7 @@ describe("advanceAttempt", () => {
         progress: null,
         error: null,
         claimRefresh: null,
+        verification: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -1066,6 +1074,7 @@ describe("advanceAttempt", () => {
         progress: null,
         error: null,
         claimRefresh: null,
+        verification: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -1086,6 +1095,7 @@ describe("advanceAttempt", () => {
         progress: null,
         error: null,
         claimRefresh: null,
+        verification: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -1100,6 +1110,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "terminal" });
@@ -1123,6 +1134,7 @@ describe("advanceAttempt", () => {
         progress: null,
         error: null,
         claimRefresh: null,
+        verification: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome).toEqual({ kind: "rejected", reason: "not-active" });
@@ -1141,6 +1153,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1161,6 +1174,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1181,6 +1195,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1201,6 +1216,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1221,6 +1237,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1241,6 +1258,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1262,6 +1280,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: { code: "restart-failed", message: "boom", phase: "restarting" },
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1279,6 +1298,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "counter-exhausted" });
@@ -1292,6 +1312,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "illegal-phase" });
@@ -1307,6 +1328,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1324,6 +1346,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:06:00.000Z",
     });
     expect(nonTerminal.kind).toBe("advanced");
@@ -1337,6 +1360,7 @@ describe("advanceAttempt", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:07:00.000Z",
     });
     expect(terminal.kind).toBe("advanced");
@@ -1375,6 +1399,7 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
         installGeneration: "gen-refreshed",
         stageFingerprint: "fp-refreshed",
       },
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1399,6 +1424,7 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
       progress: null,
       error: null,
       claimRefresh: null,
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1419,6 +1445,7 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
         installGeneration: "gen-a",
         stageFingerprint: null,
       },
+      verification: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1446,6 +1473,9 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
       continuation: null,
       progress: null,
       error: null,
+      // Q1's field, required on every advance; a `restarting` advance records
+      // no verification.
+      verification: null,
       claimRefresh: {
         installedVersion: "2.0.0",
         installGeneration: "gen-written-by-the-swap",
@@ -1478,6 +1508,9 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
       continuation: null,
       progress: null,
       error: null,
+      // Q1's field, required on every advance; a `restarting` advance records
+      // no verification.
+      verification: null,
       claimRefresh: {
         installedVersion: "2.0.0",
         installGeneration: "gen-written-by-the-swap",

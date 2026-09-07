@@ -10,6 +10,7 @@ import {
   type PublicAttemptMutationIntent,
 } from "./store";
 import type { HostUpdateAttemptRead } from "./decode";
+import type { HostUpdateAttemptVerification } from "./record";
 import {
   acquireUpdateAttemptLock,
   probeAttemptHolder,
@@ -176,6 +177,18 @@ interface ExecutorCompletionObservation {
   readonly targetVersion: string;
   readonly runningVersion: string;
   readonly runningOwner: "host-home-bound";
+  /**
+   * How the live verifier actually proved this host (Q1), carried on the
+   * SEALED proof rather than reconstructed at the write.
+   *
+   * It travels here for the same reason every other fact on this observation
+   * does: the verifier derived it under the inner CLI lock, and a value
+   * re-derived at the durable edge would be a second opinion about a host
+   * nobody is looking at any more. It is not normalizable from a serialized
+   * intent either - see `normalizeAdvance` - so an intent that arrived as data
+   * cannot claim a verification it never performed.
+   */
+  readonly verification: HostUpdateAttemptVerification;
   readonly nowIso: string;
 }
 
@@ -585,6 +598,10 @@ async function commitVerifiedExecutorCompletion(
         // The attempt is over: there is no later resume for a baseline to
         // authorize, so this write carries whatever the record already had.
         claimRefresh: null,
+        // The one advance that carries a verification. It came off the sealed
+        // proof, so it is what the live verifier observed and not what any
+        // caller asked for.
+        verification: evidence.verification,
         nowIso: evidence.nowIso,
       },
     },

@@ -12,6 +12,7 @@ import {
   type HostUpdateAttemptContinuation,
   type HostUpdateAttemptError,
   type HostUpdateAttemptIdentity,
+  type HostUpdateAttemptVerification,
   type HostUpdateAttemptPhase,
   type HostUpdateAttemptProgress,
   type HostUpdateAttemptRecovery,
@@ -1046,6 +1047,17 @@ export interface AttemptAdvance {
    * A park may refresh or carry. It may never drop.
    */
   readonly claimRefresh: AttemptClaimRefresh | null;
+  /**
+   * How the verify leg proved the host, or `null` for every advance that is
+   * not the terminal completion (Q1).
+   *
+   * REQUIRED rather than optional, deliberately. The record's `verification`
+   * is written positively so that its ABSENCE means "a writer that predates
+   * the key" and never "verified fully"; a field that a caller could simply
+   * omit here would put that guarantee back at the mercy of care. Required, an
+   * author has to write `null`, and the compiler enumerates every site.
+   */
+  readonly verification: HostUpdateAttemptVerification | null;
   readonly nowIso: string;
 }
 
@@ -1082,6 +1094,9 @@ export type AttemptAdvanceRejection =
   // next state: a resumed apply has not written `applying` yet, or an
   // activation segment has skipped its restart boundary.
   | "continuation-phase-order"
+  // A verification describes how the verify leg CONCLUDED, so it is legal on
+  // exactly one advance: the terminal completion (Q1).
+  | "verification-not-on-completion"
   | "counter-exhausted";
 
 export type AttemptAdvanceOutcome =
@@ -1146,6 +1161,15 @@ export function advanceAttempt(
     return { kind: "rejected", reason: "counter-exhausted" };
   }
 
+  // A verification describes how the verify leg CONCLUDED, so it belongs to
+  // exactly one advance: the terminal completion. Refused rather than ignored
+  // on any other phase - the record decoder treats a verification on a live
+  // phase as CORRUPT, so silently carrying one here would let a caller put an
+  // unreadable record on disk. Rejecting the intent keeps the failure at the
+  // boundary that can still answer for it.
+  if (advance.verification !== null && advance.phase !== "complete") {
+    return { kind: "rejected", reason: "verification-not-on-completion" };
+  }
   const execution = executionForPhase(advance.phase);
   const refreshed = refreshedClaimBaseline(current, advance.claimRefresh);
   return {
@@ -1162,6 +1186,12 @@ export function advanceAttempt(
       continuation: advance.continuation,
       progress: advance.progress,
       error: advance.error,
+      // Written only where the advance carries one - the terminal completion.
+      // Spread rather than assigned so a `null` leaves whatever `...current`
+      // had, which is what makes a non-terminal advance unable to erase it.
+      ...(advance.verification === null
+        ? {}
+        : { verification: advance.verification }),
       updatedAt: advance.nowIso,
       // Stamped once, when the attempt actually ends. Timestamps are display
       // and staleness inputs only (§1.3) - never ordering - so this is the

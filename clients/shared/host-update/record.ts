@@ -32,6 +32,7 @@ export type {
   HostUpdateAttemptRecovery,
   HostUpdateAttemptRecoveryArtifactLeg,
   HostUpdateAttemptRecoveryRunningLeg,
+  HostUpdateAttemptVerification,
   HostUpdateAttemptRecord,
   HostUpdateTrigger,
 } from "@traycer/protocol/config/host-update-attempt";

@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { HostUpdateAttemptVerification } from "../record";
 import {
   __resetHeldInProcessForTest,
   isUpdateAttemptLockHeldInProcess,
@@ -1313,6 +1314,10 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
         progress: null,
         error: null,
         claimRefresh: null,
+        // Q1's field, required on every advance. `null` here: this row is
+        // about the claim refresh, and a `restarting` advance records no
+        // verification.
+        verification: null,
         nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toEqual({ kind: "rejected", reason: "continuation-phase-order" });
@@ -1686,6 +1691,7 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
               progress: null,
               error: null,
               claimRefresh: null,
+              verification: null,
               nowIso: "2026-01-01T00:05:00.000Z",
             },
           });
@@ -1729,6 +1735,7 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
             progress: null,
             error: null,
             claimRefresh: null,
+            verification: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         });
@@ -1934,6 +1941,7 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
             progress: null,
             error: null,
             claimRefresh: null,
+            verification: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         },
@@ -1963,6 +1971,7 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
     readonly targetVersion: string;
     readonly runningVersion: string;
     readonly runningOwner: "host-home-bound";
+    readonly verification: HostUpdateAttemptVerification;
     readonly nowIso: string;
   }
 
@@ -1985,6 +1994,7 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
       targetVersion: "1.2.3",
       runningVersion: "1.2.3",
       runningOwner: "host-home-bound",
+      verification: { mode: "identity" },
       nowIso: "2026-01-01T00:06:00.000Z",
       ...overrides,
     };
