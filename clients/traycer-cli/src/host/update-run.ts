@@ -759,7 +759,11 @@ async function selectClaim(
   if (current.kind !== "valid" && current.kind !== "absent") {
     // The executor's own decision surface refuses this too; saying so here
     // keeps the release reason inside the ACK's grammar.
-    return { kind: "release", reason: "record-fail-closed" };
+    return {
+      kind: "release",
+      boundAttemptId: args.expectAttempt,
+      reason: "record-fail-closed",
+    };
   }
   const record =
     current.kind === "valid" && current.value.execution !== "terminal"
@@ -784,7 +788,7 @@ async function selectClaim(
       // the next `host update` naming THAT target; a plain up-to-date run
       // supersedes neither.
       await readInstalledUnderLock(args.environment, input.selection);
-      return { kind: "release", reason: "nothing-to-do" };
+      return { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
     }
     // Another target and real work to do: `start` for the plan's target, which
     // the core turns into supersede-then-create.
@@ -817,7 +821,7 @@ async function startSelection(
     // legacy `applyAndProjectLegacy` does when the record is GONE: the shell
     // must never report "already up to date" for a host with no install.
     await readInstalledUnderLock(args.environment, selection);
-    return { kind: "release", reason: "nothing-to-do" };
+    return { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
   }
   const identity = plan.plan.identity;
   return {
@@ -870,7 +874,7 @@ async function selectDebtStart(
     // two reads: the legacy no-ops on anything but `debt` / `no-live-host`.
     // No stale-`failed` clear - the legacy clears only when the PRE-lock
     // reading was `activated`, and this run's was `debt`.
-    return { kind: "release", reason: "nothing-to-do" };
+    return { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
   }
   selection.debtReading = reading.kind;
   selection.underLockRunningVersion =
@@ -935,7 +939,11 @@ async function selectBoundResume(
 ): Promise<ExecutorClaimSelection> {
   const expect = input.args.expectAttempt;
   if (record === null || expect === null || record.attemptId !== expect) {
-    return { kind: "release", reason: "refused-attempt-gone" };
+    return {
+      kind: "release",
+      boundAttemptId: expect,
+      reason: "refused-attempt-gone",
+    };
   }
   if (record.execution !== "parked") {
     // PRESENT, and therefore not GONE (Linux E6L, Q5 defect 2).
@@ -961,7 +969,11 @@ async function selectBoundResume(
     return interruptedResume(input, record, intent);
   }
   if (intent === "activate" && record.phase !== "waiting-to-activate") {
-    return { kind: "release", reason: "refused-attempt-gone" };
+    return {
+      kind: "release",
+      boundAttemptId: expect,
+      reason: "refused-attempt-gone",
+    };
   }
   const baseline = record.claim;
   if (record.phase === "waiting-to-activate") {
@@ -969,7 +981,11 @@ async function selectBoundResume(
     // activation park. A claim-less one is unverifiable (D19, 01's ignore
     // rule) - version ordering cannot establish an earlier authorization.
     if (baseline === undefined) {
-      return { kind: "release", reason: "refused-unverifiable" };
+      return {
+        kind: "release",
+        boundAttemptId: expect,
+        reason: "refused-unverifiable",
+      };
     }
     return resumeSelection(input, record);
   }
@@ -981,7 +997,11 @@ async function selectBoundResume(
     input.selection.installedUnderLock = installed;
     return strictlyNewer(record.targetVersion, installed.version)
       ? resumeSelection(input, record)
-      : { kind: "release", reason: "refused-unverifiable" };
+      : {
+          kind: "release",
+          boundAttemptId: expect,
+          reason: "refused-unverifiable",
+        };
   }
   // The ordering operand is the PARK's baseline, never the live install
   // record: this is a CONSENT check (was this park an upgrade, or a downgrade
@@ -995,7 +1015,11 @@ async function selectBoundResume(
     strictlyNewer(record.targetVersion, baseline.installedVersion);
   return consented
     ? resumeSelection(input, record)
-    : { kind: "release", reason: "refused-unverifiable" };
+    : {
+        kind: "release",
+        boundAttemptId: expect,
+        reason: "refused-unverifiable",
+      };
 }
 
 /**

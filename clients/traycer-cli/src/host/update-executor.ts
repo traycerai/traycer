@@ -86,7 +86,19 @@ export type ExecutorClaimRequest = ExecutorClaimRequestBase &
  */
 export type ExecutorClaimSelection =
   | { readonly kind: "claim"; readonly request: ExecutorClaimRequest }
-  | { readonly kind: "release"; readonly reason: string };
+  | {
+      readonly kind: "release";
+      readonly reason: string;
+      /**
+       * The attempt this decline NAMED, or `null` when it named none.
+       *
+       * Required rather than defaulted, so a new release site has to answer the
+       * question instead of inheriting an answer. Nothing consumes it yet; the
+       * executor's stale-attempt close does, and the reason it must be stated
+       * per-site lives there.
+       */
+      readonly boundAttemptId: string | null;
+    };
 
 /**
  * Decide the claim from the record read under the lock.

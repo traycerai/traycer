@@ -1792,7 +1792,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
           pollIntervalMs: 10,
         }),
       );
-      return { kind: "release", reason: "a1-observed" };
+      return { kind: "release", boundAttemptId: null, reason: "a1-observed" };
     };
 
     await runAttemptExecutorSegment(
@@ -1905,6 +1905,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
     let executeCalls = 0;
     const selector: ExecutorClaimSelector = async () => ({
       kind: "release",
+      boundAttemptId: null,
       reason: "nothing-to-do",
     });
 
@@ -2025,7 +2026,11 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
               claim: null,
             },
           }
-        : { kind: "release", reason: "install-changed-under-lock" };
+        : {
+            kind: "release",
+            boundAttemptId: null,
+            reason: "install-changed-under-lock",
+          };
     };
 
     const outcome = await runAttemptExecutorSegment(
@@ -2154,7 +2159,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
         calls += 1;
         return calls === 1
           ? startSelectionFor("9.9.9", "attempt-a7c-b")
-          : { kind: "release", reason: "nothing-to-do" };
+          : { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
       };
 
       const outcome = await runAttemptExecutorSegment(
@@ -2204,7 +2209,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
         calls += 1;
         return calls === 1
           ? startSelectionFor("9.9.9", "attempt-a7f-b")
-          : { kind: "release", reason: "nothing-to-do" };
+          : { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
       };
 
       const outcome = await runAttemptExecutorSegment(
