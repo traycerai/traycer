@@ -5617,6 +5617,12 @@ describe("acceptance: cells with no legacy ancestor", () => {
     //
     // The swap now writes it. So the baseline is already at the target at the
     // moment of the crash, before any recovery has run.
+    //
+    // Read as "the swap recorded what it installed", NOT as an invariant of
+    // post-Q12 records: `generationWrittenBySwap` fails open, so an
+    // unreadable install record at `afterSwap` still leaves a pre-swap
+    // baseline here, indistinguishable from a pre-Q12 write. This fixture has
+    // a readable record; that is why the assertion is safe to make.
     expect(crashed.claim).toMatchObject({ installedVersion: "2.0.0" });
 
     const report = await verifyHostUpdateAttempt(ENVIRONMENT, {

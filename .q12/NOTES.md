@@ -14,8 +14,11 @@ before this reaches anything shared.**
 
 The whole defect was one hard-coded `null`: `phaseWrite` passed
 `claimRefresh: null` unconditionally, so `applying → restarting` — the single
-advance that crosses a change of installed bytes — carried a baseline its own
-swap had just falsified.
+advance that crosses a change of installed bytes — carried a baseline whose
+install GENERATION its own swap had just superseded. (Generation, not
+necessarily version: a same-version re-install mints a new install id, so the
+version can still read correctly while the generation no longer names the live
+install.)
 
 ## Commits
 
@@ -53,11 +56,27 @@ Two thirds of the production change had nothing watching it. Following that up
 found a genuine error rather than a missing test: **the activation arm does not
 swap.** It stops the host and relaunches it onto bytes an earlier segment
 placed, so asking it for "the generation the swap wrote" was a lie about where
-the value came from. Both births of an `activate` continuation already refresh
-the baseline — the busy park via `parkForActivation`, and the recovery resume
-via its own park — so carrying preserves that work instead of re-reading the
-same record to restate it. Reverted to `null`, which removes an unpinnable site
+the value came from. Reverted to `null`, which removes an unpinnable site
 rather than leaving dead defensive code.
+
+**My first comment for that revert was itself wrong, and B caught it.** I wrote
+that "both births of an `activate` continuation refresh the baseline — the busy
+park, and the recovery resume". There is exactly **one** origin:
+
+- `resumedRecord` (`transition.ts:874`) spreads `...record` and never touches
+  `claim`, so a recovery resume **inherits** rather than refreshing;
+- the Desktop verify handoff creates none either and says so at its own
+  `claim: null`, deferring to the executor's recovery park;
+- that park is `parkForActivation` (`update-run.ts:2523`) — one of only two
+  `writer.park` sites in the file, and the only one producing an `activate`
+  continuation.
+
+It is sound by construction rather than ordering luck: `readClaimRefresh` reads
+the install record LIVE under the lock, so park-vs-swap order does not matter.
+
+I had misremembered my own acceptance test as evidence of a second origin,
+because it shows a fresh baseline appearing after `verifyHostUpdateAttempt` —
+but that path routes into the same `parkForActivation`.
 
 The `downgradeArm` genuinely swaps and is now pinned, on the sharpest available
 case: the claim is taken against 2.0.0, the swap installs 1.0.0, and the two
@@ -103,8 +122,27 @@ docblock concurrently is exactly what we agreed to avoid. Told them instead.
 `update-run.test.ts:4549` used to assert a crash at `restarting` left a claim
 naming the **pre-apply** install, commented _"only the refresh the recovery
 park writes makes them equal"_. That was the defect written down as a property.
-The baseline is now already at the target when the crash happens; the recovery
-park's own refresh (`:4563`) still passes, so it is no longer the only source.
+The baseline is now already at the target when the crash happens. The park's
+own refresh (`:4563`) still passes — `parkForActivation` remains an origin, it
+is just no longer the ONLY one.
+
+## Q12 is BEST-EFFORT, and the gap is invisible at the record
+
+`generationWrittenBySwap` returns `null` when the install record cannot be read
+at `afterSwap`, so `phaseWrite("restarting", null)` carries the PRE-swap
+baseline. Such a record is **indistinguishable at the record from one written
+by a pre-Q12 CLI** — no reader can separate "Q12 ran and could not read" from
+"Q12 never ran".
+
+**So a fresh baseline is not an invariant of post-Q12 records**, and nothing may
+be built on treating it as one. What covers the case is unchanged and lives on
+the merged CLI lineage, not in this tree: `installedByThisAttempt`'s forgiveness
+clause in `revalidateInstallIdentity`. That is a second, independent reason it
+must stay — not only for genuinely pre-Q12 records.
+
+Named in the `generationWrittenBySwap` docblock, in `phaseWrite`'s (a `null`
+there is not evidence that nothing changed), and in the acceptance pin's
+comment, so none of the three teaches an invariant that does not hold.
 
 ## Red-watches
 

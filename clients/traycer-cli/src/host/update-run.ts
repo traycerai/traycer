@@ -1407,16 +1407,25 @@ class AttemptRecordWriter {
    *
    * It used to be hard-coded `null` here, which silently made every advance a
    * carry-the-prior-baseline write - including `applying -> restarting`, the
-   * one advance after which the prior baseline is guaranteed to be WRONG. The
-   * swap has just replaced the install tree, so a baseline describing the
-   * pre-swap install survives as the record's account of "what was installed
-   * when this attempt was authorized", and every later reader that compares
-   * against it is comparing against a world that no longer exists.
+   * one advance that crosses a change of installed bytes. The swap has just
+   * replaced the install tree, so a baseline describing the pre-swap install
+   * survives as the record's account of "what was installed when this attempt
+   * was authorized", and a later reader comparing against it is comparing
+   * against a world that no longer exists.
+   *
+   * Stale in the GENERATION specifically. A re-install of the same version
+   * mints a new install id, so the baseline's version may still read
+   * correctly while its generation does not name the live install; do not
+   * read this as "the version is always wrong after a swap".
    *
    * Making the parameter required rather than defaulted means each of the
-   * call sites below states which it is. Most genuinely carry - they advance
-   * within one installed state and have nothing new to say - and that is now
-   * visible instead of inherited.
+   * call sites below states which it is. Six of the nine genuinely carry -
+   * they advance within one installed state and have nothing new to say - and
+   * that is now visible instead of inherited.
+   *
+   * A `null` here is NOT evidence that nothing changed: `generationWrittenBySwap`
+   * also returns `null` when the install record cannot be read, which is why
+   * a fresh baseline is not an invariant of post-Q12 records. See its docblock.
    */
   phaseWrite(
     phase: HostUpdateAttemptPhase,
@@ -2806,11 +2815,24 @@ async function activationArm(
       // The activation arm stops the host and relaunches it onto an install
       // an EARLIER segment already placed, so there is no swap here whose
       // generation could be recorded and `generationWrittenBySwap` would be
-      // a lie about where the value came from. The baseline is already
-      // correct: both births of an `activate` continuation refresh it - the
-      // busy park through `parkForActivation`, and the recovery resume
-      // through its own park - so carrying is what preserves that work
-      // rather than re-reading the same record to restate it.
+      // a lie about where the value came from.
+      //
+      // The baseline reaching this arm has exactly ONE origin:
+      // `parkForActivation`'s `readClaimRefresh`. The recovery resume does
+      // not add a second - `resumedRecord` (`transition.ts:874`) spreads
+      // `...record` and never touches `claim`, so a resume INHERITS whatever
+      // the park wrote. (An earlier version of this comment said both births
+      // refresh; cold review B checked and they do not.) The Desktop verify
+      // handoff creates none either, and says so at its own `claim: null`:
+      // it defers to the executor's recovery park, which is this same
+      // `parkForActivation`.
+      //
+      // That single origin is sound by construction rather than by ordering
+      // luck: `readClaimRefresh` reads the install record LIVE under the
+      // lock, so whatever it records describes the install as it actually is
+      // at park time - it does not matter whether the park happened before or
+      // after any swap. Carrying preserves that read instead of re-deriving
+      // the same answer from the same file.
       await writer.phaseWrite("restarting", null);
       await relaunchHostAfterRestartWithAttempt(
         input.capability,
@@ -2916,29 +2938,53 @@ async function parkForActivation(
 /**
  * The generation the SWAP itself wrote (Q12).
  *
- * Called from `afterSwap`, where `readHostInstallRecord` is guaranteed to
- * return the new tree's record: `atomicSwap` is two renames and the install
- * record lives INSIDE the install directory, so it moves with the tree rather
- * than being rewritten beside it. There is no window here in which the
- * directory is the target's and the record is still the old one.
+ * Called from `afterSwap`, where `readHostInstallRecord` returns the NEW
+ * tree's record: `atomicSwap` is two renames and the install record lives
+ * INSIDE the install directory (`hostInstallRecordPath` joins
+ * `hostInstallDir`), so it moves with the tree rather than being rewritten
+ * beside it, and there is no window in which the directory is the target's
+ * while the record is still the old one. **Citation, not a pin here** - it is
+ * a property of `installer/install.ts`, and nothing in this file would redden
+ * if the record were moved out of the install directory.
  *
  * Why this advance and not the others: every other `phaseWrite` moves within
  * one installed state and has nothing new to say, so carrying the prior
- * baseline is right. `applying -> restarting` is the single advance that
- * crosses a change of installed bytes, and it was carrying a baseline the
- * swap had just falsified.
+ * baseline is right. `applying` is written by `beforeSwapCommit`, when the
+ * baseline still describes the live install; `verifying` sits on the far side
+ * of `restarting` in the same installed state. `applying -> restarting` is
+ * the single advance that crosses a change of installed bytes.
  *
- * Returns `null` when the install record cannot be read, which carries the
- * prior baseline unchanged - the same fail-open choice `readClaimRefresh`
- * makes for a park, and for the same reason: a baseline minted from a read
- * that saw no install record is worse than a stale one.
+ * Precisely: what always goes stale across that edge is the install
+ * GENERATION, not necessarily the version. Re-installing the same version
+ * mints a new install id, so the baseline's version can still read correctly
+ * while its generation no longer names the live install.
  *
- * NOTE the asymmetry this cannot fix. `refreshedClaimBaseline` IGNORES a
- * refresh on a record that carries no claim at all, deliberately - "a legacy
- * continuation cannot gain an authorization nobody ever granted it". So on a
- * claimless record this writes nothing however specific the refresh is, and
- * any consumer relying on the recorded generation has to gate on the claim
- * being present rather than assume this ran.
+ * ## Q12 is BEST-EFFORT, and the gap is invisible at the record
+ *
+ * This returns `null` when the install record cannot be read - the same
+ * fail-open choice `readClaimRefresh` makes for a park, and for the same
+ * reason: a baseline minted from a read that saw no install record is worse
+ * than a stale one.
+ *
+ * But be honest about what that produces. `phaseWrite("restarting", null)`
+ * carries the PRE-swap baseline, so such a record is **indistinguishable at
+ * the record from one written by a pre-Q12 CLI**. No reader can tell "Q12 ran
+ * and could not read" from "Q12 never ran". So nothing may treat a fresh
+ * baseline as an invariant of post-Q12 records.
+ *
+ * What covers that case is unchanged and lives elsewhere:
+ * `installedByThisAttempt`'s forgiveness clause in `revalidateInstallIdentity`
+ * - which is on the merged CLI lineage, NOT in this tree - and it must stay
+ * for exactly this reason as well as for genuinely pre-Q12 records.
+ *
+ * ## The claimless asymmetry this cannot fix either
+ *
+ * `refreshedClaimBaseline` IGNORES a refresh on a record that carries no
+ * claim at all, deliberately - "a legacy continuation cannot gain an
+ * authorization nobody ever granted it". So on a claimless record this writes
+ * nothing however specific the refresh is, and any consumer relying on the
+ * recorded generation has to gate on the claim being present rather than
+ * assume this ran.
  */
 async function generationWrittenBySwap(
   environment: Environment,
