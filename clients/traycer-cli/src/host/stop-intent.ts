@@ -240,11 +240,8 @@ export async function hasActionableStopIntent(
   servedAtStartup: StopIntentIdentity | null,
 ): Promise<boolean> {
   return (
-    (await actionableStopIntentReason(
-      environment,
-      nowMs,
-      servedAtStartup,
-    )) !== null
+    (await actionableStopIntentReason(environment, nowMs, servedAtStartup)) !==
+    null
   );
 }
 

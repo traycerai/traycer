@@ -2800,7 +2800,8 @@ describe("runHostStart - relaunch loop, guards re-checked across the backoff", (
           {
             ...scripted.deps,
             maxRelaunches: 5,
-            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             // The stop happens WHILE we are backing off.
             sleep: async () => {
               stopRequested = true;
@@ -2886,7 +2887,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
             // The install record never comes back, so every attempt fails to
             // resolve a target and the loop keeps retrying.
             readInstallRecord: async () => null,
-            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -2950,7 +2952,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               originalSpawn(command, args, options);
               throw new Error("EBUSY: install swap in progress");
             },
-            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -2991,7 +2994,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               });
               return asChildProcess(child);
             },
-            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -3672,7 +3676,8 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               stopRequested = true;
               return 42;
             },
-            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
           },
         ),
       recorded,
@@ -3713,7 +3718,8 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               if (attempts === 2) stopRequested = true;
               return 42;
             },
-            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
           },
         ),
       recorded,

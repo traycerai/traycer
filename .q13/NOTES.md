@@ -9,7 +9,7 @@ reaches anything shared.**
 The update's pre-swap stop used the service manager's own stop verb. On Linux
 `systemctl --user stop` puts the unit `inactive`, and `Restart=` does not apply
 to a unit stopped that way — this repo already relies on that, in
-`cancelScheduledAutoRestart`, which uses a stop *because* it cancels a
+`cancelScheduledAutoRestart`, which uses a stop _because_ it cancels a
 scheduled relaunch. So the update turned the manager off with the manager's own
 off-switch, and the only thing that turned it back on was the CLI that had just
 promised the restart. Kill that CLI in between and nothing on a CLI-only
@@ -21,13 +21,13 @@ was wrong.
 
 ## Commits
 
-| SHA | What |
-| --- | --- |
-| `42990b536` | clean-exit gate: a `restart` intent → exit 77, four table-driven pins |
-| `52f01ca67` | the waiting supervisor: `waitMs` from a new shared budget leaf |
-| `2bdc33a7e` | the unit-text pin: `RestartSec` vs the start-limit arithmetic, `Type=simple`, no `TimeoutStartSec` |
+| SHA         | What                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| `42990b536` | clean-exit gate: a `restart` intent → exit 77, four table-driven pins                                   |
+| `52f01ca67` | the waiting supervisor: `waitMs` from a new shared budget leaf                                          |
+| `2bdc33a7e` | the unit-text pin: `RestartSec` vs the start-limit arithmetic, `Type=simple`, no `TimeoutStartSec`      |
 | `0e45966de` | the verb change: signal the unit, own the ladder, instance-bound confirmation, `forcedRecycle` inverted |
-| `ea23f8911` | the ordering pin: confirm the instance we SIGNALLED |
+| `ea23f8911` | the ordering pin: confirm the instance we SIGNALLED                                                     |
 
 ## The three pieces, and why each is shaped the way it is
 
@@ -48,21 +48,21 @@ was wrong.
 3. **The stop signals the unit and owns its own ladder.** Confirmation is
    instance-bound, because with the manager armed both obvious alternatives are
    wrong: unit state never settles to `inactive`, and endpoint liveness is
-   answered by the *replacement*.
+   answered by the _replacement_.
 
 ## Per-platform expected behaviour (for the wedge matrix)
 
 Only Linux is implemented. macOS and Windows are written here as the expected
 behaviour the lanes should test against, NOT as claims about current code.
 
-| | Linux (systemd --user) | macOS (launchd) | Windows (Task Scheduler) |
-| --- | --- | --- | --- |
-| stop verb today | `systemctl --user stop` → unit `inactive`, `Restart=` disarmed | `launchctl` stop/bootout — **assumed** to disarm `KeepAlive`; UNVERIFIED | `schtasks /End` — **assumed** to disarm `RestartOnFailure`; UNVERIFIED |
-| stop verb wanted | `systemctl --user kill --signal=SIGTERM` (job stays loaded) | a signal that leaves the job loaded — `launchctl kill TERM <service-target>` | signal the host process, not `/End` on the task |
-| restart trigger | `Restart=on-failure`, `RestartSec=5` | `KeepAlive{SuccessfulExit:false}`, `ThrottleInterval: 10` | `RestartOnFailure`, finite restart COUNT |
-| non-zero exit relaunches? | yes | **yes, already relied on** — `SERVICE_RELAUNCH_BUSY_EXIT_CODE`'s docblock states it | yes, up to the count |
-| start deadline the wait could cross | none (`Type=simple`, no `TimeoutStartSec`) — pinned | none | none (only an execution-time limit, in days) |
-| native pacing | `RestartSec=5` | `ThrottleInterval: 10` — halves the storm | none; the finite count IS the bound, and the happy-path traffic consumes it |
+|                                     | Linux (systemd --user)                                         | macOS (launchd)                                                                     | Windows (Task Scheduler)                                                    |
+| ----------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| stop verb today                     | `systemctl --user stop` → unit `inactive`, `Restart=` disarmed | `launchctl` stop/bootout — **assumed** to disarm `KeepAlive`; UNVERIFIED            | `schtasks /End` — **assumed** to disarm `RestartOnFailure`; UNVERIFIED      |
+| stop verb wanted                    | `systemctl --user kill --signal=SIGTERM` (job stays loaded)    | a signal that leaves the job loaded — `launchctl kill TERM <service-target>`        | signal the host process, not `/End` on the task                             |
+| restart trigger                     | `Restart=on-failure`, `RestartSec=5`                           | `KeepAlive{SuccessfulExit:false}`, `ThrottleInterval: 10`                           | `RestartOnFailure`, finite restart COUNT                                    |
+| non-zero exit relaunches?           | yes                                                            | **yes, already relied on** — `SERVICE_RELAUNCH_BUSY_EXIT_CODE`'s docblock states it | yes, up to the count                                                        |
+| start deadline the wait could cross | none (`Type=simple`, no `TimeoutStartSec`) — pinned            | none                                                                                | none (only an execution-time limit, in days)                                |
+| native pacing                       | `RestartSec=5`                                                 | `ThrottleInterval: 10` — halves the storm                                           | none; the finite count IS the bound, and the happy-path traffic consumes it |
 
 **Windows is the one that needs its own row and its own thinking.** A finite
 restart count is a bound, but the same happy-path retry traffic consumes it, so
@@ -73,30 +73,30 @@ not ship the verb change without it.
 
 ## Cross-package / cross-platform conjunct table
 
-| Conjunct | Authority | Watched by |
-| --- | --- | --- |
-| `systemctl stop` disarms `Restart=` | systemd | **citation only** — but the repo's own `cancelScheduledAutoRestart` depends on it, which is corroboration from a second direction |
-| `systemctl kill` runs no stop job, so `TimeoutStopSec` does not apply | systemd | **citation only**, at the code. The ladder is correct ONLY if this holds |
-| a kickstart of an already-running job no-ops | launchd | **citation only**, and load-bearing in BOTH directions — the hazard behind `forcedRecycle`'s inverted default, and the safety behind Q9's crash-during-activation admit. Cite each from the other |
-| the update's stop announces `restart` | `service/index.ts:518-520` | the four-row exit-code table |
-| `restart` is the only reason promising a comeback | `protocol/config/host-stop-intent.ts:59` | the same table — substituting `install-swap` reddens two rows |
-| `RestartSec` stays outside the default start-limit | the shipped unit | **pinned**, read back off the emitted artifact |
-| no start deadline the wait can cross | the shipped unit / plist / task XML | **pinned for systemd only** (`Type=simple`, no `TimeoutStartSec`) |
-| the plain `host stop` still uses `systemctl stop`, so its 90s default is still live | `linux.ts` | **pinned** — the true proposition, replacing a vacuous "the ladder sits under 90s" |
-| a supervisor that waits re-resolves its target after admission | `host-start.ts:1466` inside the admission callback | **citation at the call site**; the hoist it warns against is a call-site edit |
+| Conjunct                                                                            | Authority                                          | Watched by                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `systemctl stop` disarms `Restart=`                                                 | systemd                                            | **citation only** — but the repo's own `cancelScheduledAutoRestart` depends on it, which is corroboration from a second direction                                                                 |
+| `systemctl kill` runs no stop job, so `TimeoutStopSec` does not apply               | systemd                                            | **citation only**, at the code. The ladder is correct ONLY if this holds                                                                                                                          |
+| a kickstart of an already-running job no-ops                                        | launchd                                            | **citation only**, and load-bearing in BOTH directions — the hazard behind `forcedRecycle`'s inverted default, and the safety behind Q9's crash-during-activation admit. Cite each from the other |
+| the update's stop announces `restart`                                               | `service/index.ts:518-520`                         | the four-row exit-code table                                                                                                                                                                      |
+| `restart` is the only reason promising a comeback                                   | `protocol/config/host-stop-intent.ts:59`           | the same table — substituting `install-swap` reddens two rows                                                                                                                                     |
+| `RestartSec` stays outside the default start-limit                                  | the shipped unit                                   | **pinned**, read back off the emitted artifact                                                                                                                                                    |
+| no start deadline the wait can cross                                                | the shipped unit / plist / task XML                | **pinned for systemd only** (`Type=simple`, no `TimeoutStartSec`)                                                                                                                                 |
+| the plain `host stop` still uses `systemctl stop`, so its 90s default is still live | `linux.ts`                                         | **pinned** — the true proposition, replacing a vacuous "the ladder sits under 90s"                                                                                                                |
+| a supervisor that waits re-resolves its target after admission                      | `host-start.ts:1466` inside the admission callback | **citation at the call site**; the hoist it warns against is a call-site edit                                                                                                                     |
 
 ## Red-watches
 
-| # | Ablation | Reddened |
-| --- | --- | --- |
-| RW-13a | the clean-exit gate removed | the `restart` exit-code row |
-| RW-13b | the gate keyed on `install-swap` | TWO rows — `restart` drops to 0, `install-swap` jumps to 77 |
-| RW-13c | `RestartSec=1` | the unit-arithmetic pin |
-| RW-13d | `TimeoutStartSec=30` added | the same pin, other half |
-| RW-13e | `stopForRestart` reverted to `systemctl stop` | three verb pins |
-| RW-13f | the SIGKILL escalation removed | the escalation pin alone |
-| RW-13g | an unprovable instance treated as gone | the Q14-shape pin alone |
-| RW-13h | the instance captured AFTER the signal | the ordering pin alone |
+| #      | Ablation                                      | Reddened                                                    |
+| ------ | --------------------------------------------- | ----------------------------------------------------------- |
+| RW-13a | the clean-exit gate removed                   | the `restart` exit-code row                                 |
+| RW-13b | the gate keyed on `install-swap`              | TWO rows — `restart` drops to 0, `install-swap` jumps to 77 |
+| RW-13c | `RestartSec=1`                                | the unit-arithmetic pin                                     |
+| RW-13d | `TimeoutStartSec=30` added                    | the same pin, other half                                    |
+| RW-13e | `stopForRestart` reverted to `systemctl stop` | three verb pins                                             |
+| RW-13f | the SIGKILL escalation removed                | the escalation pin alone                                    |
+| RW-13g | an unprovable instance treated as gone        | the Q14-shape pin alone                                     |
+| RW-13h | the instance captured AFTER the signal        | the ordering pin alone                                      |
 
 **RW-13h initially came back GREEN** and that is the finding: the ordering the
 whole confirmation rests on was unpinned, because the mock answered the same

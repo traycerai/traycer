@@ -1469,87 +1469,98 @@ export async function runHostStart(
     // immediately for a stream that is already dead.
     let stderrErroredEarly = false;
     try {
-      const admission = await deps.admitHostStartSpawn(opts, async () => {
-        // Re-resolve the install record under the outer attempt boundary.
-        // This makes every initial, crash, and exit-87 relaunch choose its
-        // executable from a state the same contender just admitted.
-        target = await resolveHostStartTarget(opts, deps);
-        crashReportsDirPath = crashReportsDirFor(target.cwd);
-        preexistingReportNames = new Set(
-          await deps.prepareCrashReportsDir(crashReportsDirPath),
-        );
-        const hostArgs = [
-          ...target.args,
-          "--layer0-attempt-id",
-          attemptId,
-          ...(attemptProbeContext === null
-            ? []
-            : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
-        ] as const;
-        // The `make dev-desktop` host runtime is a `.cmd` wrapper. Resolve
-        // it only after the admitted install-record re-read so a Windows
-        // path with spaces and a just-promoted target stay one invocation.
-        const launch = resolveSpawnInvocation(target.executable, hostArgs);
-        childSpawnedAtMs = Date.now();
-        spawnedWhileAdmitting.child = deps.spawn(launch.command, launch.args, {
-          cwd: target.cwd,
-          env,
-          stdio:
-            attemptProbeContext === null
-              ? ["ignore", logFd, "pipe"]
-              : ["ignore", logFd, "pipe", "pipe"],
-          windowsHide: process.platform === "win32",
-          ...(launch.windowsVerbatimArguments
-            ? { windowsVerbatimArguments: true }
-            : {}),
-        });
-        // Attached SYNCHRONOUSLY, before this callback returns into
-        // admission's remaining awaits — see `recordEnding`'s doc for what an
-        // ending emitted during those awaits used to do.
-        spawnedWhileAdmitting.child.once("error", (cause: Error) =>
-          recordEnding({ kind: "spawn-error", cause }),
-        );
-        spawnedWhileAdmitting.child.once("exit", (code, signal) =>
-          recordEnding({ kind: "exit", code, signal }),
-        );
-        spawnedWhileAdmitting.child.stderr?.on("error", () => {
-          stderrErroredEarly = true;
-        });
-        // The layer0 probe pipe (fd 3, present when this attempt runs
-        // probed) is one more separate emitter with the same unhandled-
-        // `error`-is-a-crash semantics, and its consumer
-        // (`observeProbeStatus`) also attaches only after admission. Inert
-        // rather than recorded: an errored pipe simply never yields a frame,
-        // and `readLayer0Frame` is already bounded, so the observation
-        // degrades to `{ marker: null }` on its own.
-        // `Array.isArray` first: injected test doubles are partial
-        // `ChildProcess` shapes without a `stdio` array, and the type cannot
-        // see that.
-        const stdioStreams = spawnedWhileAdmitting.child.stdio;
-        const layer0Status = Array.isArray(stdioStreams)
-          ? stdioStreams[LAYER0_STATUS_FD]
-          : undefined;
-        if (isReadable(layer0Status)) {
-          layer0Status.on("error", () => undefined);
-        }
-        return spawnedWhileAdmitting.child;
-      }, (standing) => {
-        // The record is left EXACTLY as found - a supervisor holds no
-        // capability that could advance, terminalize or complete one - so this
-        // line is the only trace that the host came up beside an unfinished
-        // update. `leftForRecovery` says so in the payload rather than only in
-        // this comment, because the reader who needs it is a person reading
-        // `cli.log` after an outage, not a person reading this file.
-        logger.info("Host supervisor relaunched beside a durable update attempt", {
-          environment: opts.environment,
-          attemptId: standing.attemptId,
-          phase: standing.phase,
-          execution: standing.execution,
-          continuation: standing.continuation,
-          targetVersion: standing.targetVersion,
-          leftForRecovery: true,
-        });
-      });
+      const admission = await deps.admitHostStartSpawn(
+        opts,
+        async () => {
+          // Re-resolve the install record under the outer attempt boundary.
+          // This makes every initial, crash, and exit-87 relaunch choose its
+          // executable from a state the same contender just admitted.
+          target = await resolveHostStartTarget(opts, deps);
+          crashReportsDirPath = crashReportsDirFor(target.cwd);
+          preexistingReportNames = new Set(
+            await deps.prepareCrashReportsDir(crashReportsDirPath),
+          );
+          const hostArgs = [
+            ...target.args,
+            "--layer0-attempt-id",
+            attemptId,
+            ...(attemptProbeContext === null
+              ? []
+              : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
+          ] as const;
+          // The `make dev-desktop` host runtime is a `.cmd` wrapper. Resolve
+          // it only after the admitted install-record re-read so a Windows
+          // path with spaces and a just-promoted target stay one invocation.
+          const launch = resolveSpawnInvocation(target.executable, hostArgs);
+          childSpawnedAtMs = Date.now();
+          spawnedWhileAdmitting.child = deps.spawn(
+            launch.command,
+            launch.args,
+            {
+              cwd: target.cwd,
+              env,
+              stdio:
+                attemptProbeContext === null
+                  ? ["ignore", logFd, "pipe"]
+                  : ["ignore", logFd, "pipe", "pipe"],
+              windowsHide: process.platform === "win32",
+              ...(launch.windowsVerbatimArguments
+                ? { windowsVerbatimArguments: true }
+                : {}),
+            },
+          );
+          // Attached SYNCHRONOUSLY, before this callback returns into
+          // admission's remaining awaits — see `recordEnding`'s doc for what an
+          // ending emitted during those awaits used to do.
+          spawnedWhileAdmitting.child.once("error", (cause: Error) =>
+            recordEnding({ kind: "spawn-error", cause }),
+          );
+          spawnedWhileAdmitting.child.once("exit", (code, signal) =>
+            recordEnding({ kind: "exit", code, signal }),
+          );
+          spawnedWhileAdmitting.child.stderr?.on("error", () => {
+            stderrErroredEarly = true;
+          });
+          // The layer0 probe pipe (fd 3, present when this attempt runs
+          // probed) is one more separate emitter with the same unhandled-
+          // `error`-is-a-crash semantics, and its consumer
+          // (`observeProbeStatus`) also attaches only after admission. Inert
+          // rather than recorded: an errored pipe simply never yields a frame,
+          // and `readLayer0Frame` is already bounded, so the observation
+          // degrades to `{ marker: null }` on its own.
+          // `Array.isArray` first: injected test doubles are partial
+          // `ChildProcess` shapes without a `stdio` array, and the type cannot
+          // see that.
+          const stdioStreams = spawnedWhileAdmitting.child.stdio;
+          const layer0Status = Array.isArray(stdioStreams)
+            ? stdioStreams[LAYER0_STATUS_FD]
+            : undefined;
+          if (isReadable(layer0Status)) {
+            layer0Status.on("error", () => undefined);
+          }
+          return spawnedWhileAdmitting.child;
+        },
+        (standing) => {
+          // The record is left EXACTLY as found - a supervisor holds no
+          // capability that could advance, terminalize or complete one - so this
+          // line is the only trace that the host came up beside an unfinished
+          // update. `leftForRecovery` says so in the payload rather than only in
+          // this comment, because the reader who needs it is a person reading
+          // `cli.log` after an outage, not a person reading this file.
+          logger.info(
+            "Host supervisor relaunched beside a durable update attempt",
+            {
+              environment: opts.environment,
+              attemptId: standing.attemptId,
+              phase: standing.phase,
+              execution: standing.execution,
+              continuation: standing.continuation,
+              targetVersion: standing.targetVersion,
+              leftForRecovery: true,
+            },
+          );
+        },
+      );
       if (admission.kind !== "ran") {
         // `withUpdateContender` performs a post-callback ownership check. If
         // it detects a loss after `spawn()` synchronously returned, terminate

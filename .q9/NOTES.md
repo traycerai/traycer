@@ -13,14 +13,14 @@ E6L" to "fixes the reboot / manual start path" (see the Linux-lane finding
 below). Anything citing the old shas `45b489909` / `0db667743` / `038b782ed` /
 `8707a3853` is reading the pre-reword branch.
 
-| SHA | What |
-| --- | --- |
-| `e40c0b52a` | the admission change (`contender.ts`, `host-start.ts`, pins) |
-| `96a131ffd` | the INFO line, routed through `onAdmittedBeside` |
-| `b17e55132` | moved a pin that was watching nothing |
+| SHA         | What                                                              |
+| ----------- | ----------------------------------------------------------------- |
+| `e40c0b52a` | the admission change (`contender.ts`, `host-start.ts`, pins)      |
+| `96a131ffd` | the INFO line, routed through `onAdmittedBeside`                  |
+| `b17e55132` | moved a pin that was watching nothing                             |
 | `368a07a30` | pinned the field-observed `restarting`/`continuation: null` shape |
-| `5b59ce157` | this note |
-| `42e67dfa8` | cold review B's dependency pin + the corrected conjunct rows |
+| `5b59ce157` | this note                                                         |
+| `42e67dfa8` | cold review B's dependency pin + the corrected conjunct rows      |
 
 Suites: `shared` contender 89/89, CLI `host-start` + `host-start-adoption`
 107/107, `tsgo --noEmit` clean.
@@ -55,31 +55,31 @@ carving into it: dead by the decoder, but it would have blocked this arm.
 
 ## Cross-package conjunct table
 
-| Conjunct | Authority | Watched by |
-| --- | --- | --- |
-| `restarting`/`verifying` ⇒ the target's bytes are placed, for a `resume-apply` record | `continuationPhaseOrderRejected`, `shared/host-update/transition.ts:1223` | **pinned in-package, behaviourally**: the "Q9 dependency" row in `contender.test.ts`; red-watched by deleting the `resume-apply` arm |
-| ...the same, for a `null`-continuation record | the three `restarting` writers in `cli/host/update-run.ts` (`:1838`, `:2259`, `:2402`) — the core does NOT forbid `preparing`+`null` → `restarting` | **cross-package citation.** The live `installedVersion === targetVersion` read is what actually protects this case |
-| `preparing` + `activate` is the recovery-resume shape | `resumedRecord` / `recoveryContinuation`, `transition.ts` | citation; the production path is exercised by the Q5 pins in `cli/host/__tests__/update-run.test.ts` |
-| the decoder derives `execution` from `phase`, so the removed line was dead | `executionForPhase`, `@traycer/protocol/config/host-update-attempt` | **pinned**: `shared/host-update/__tests__/decode.test.ts:226`; independently ablated (deleting the line left 82/82 green) |
-| `installed === null` is also the swap's absent window | `atomicSwap`'s two renames, `cli/installer/install.ts` | citation + the absent-window pin (RW-Q5) |
-| the claim baseline is STALE post-swap, so no generation test here | `applying → restarting` passes `claimRefresh: null`, `cli/host/update-run.ts` | the generation-drift pin (RW-Q6) |
-| the install-generation string is byte-comparable across producers | `encodeInstallGeneration`, `shared/host-version/install-generation.ts` | pinned by dc84fa8b across five callers in `install-generation.test.ts` |
-| no LIVE executor segment exists when this arm runs | the attempt lock: `withCliAttemptExecutorCompletion` wraps `execute` (`cli/host/update-executor.ts:472`) so a live segment holds it for its whole span, and the supervisor contends with `waitMs: 0` | **structural, not a probe.** `withUpdateContenderInternal` returns `busy` before any disposition is consulted. A `probeAttemptHolder` call inside `dispositionFor` would observe THIS contender and report `holder-live`, refusing everything while looking like a safety check. |
-| `{restarting, verifying}` equals `POST_TOMBSTONE_PHASES` | `shared/host-update/compatibility-fence.ts` | **deliberately NOT shared.** Same membership, opposite polarity (there: cannot walk back to a park, must terminalize). Named as a coincidence, not aliased. |
+| Conjunct                                                                              | Authority                                                                                                                                                                                            | Watched by                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `restarting`/`verifying` ⇒ the target's bytes are placed, for a `resume-apply` record | `continuationPhaseOrderRejected`, `shared/host-update/transition.ts:1223`                                                                                                                            | **pinned in-package, behaviourally**: the "Q9 dependency" row in `contender.test.ts`; red-watched by deleting the `resume-apply` arm                                                                                                                                             |
+| ...the same, for a `null`-continuation record                                         | the three `restarting` writers in `cli/host/update-run.ts` (`:1838`, `:2259`, `:2402`) — the core does NOT forbid `preparing`+`null` → `restarting`                                                  | **cross-package citation.** The live `installedVersion === targetVersion` read is what actually protects this case                                                                                                                                                               |
+| `preparing` + `activate` is the recovery-resume shape                                 | `resumedRecord` / `recoveryContinuation`, `transition.ts`                                                                                                                                            | citation; the production path is exercised by the Q5 pins in `cli/host/__tests__/update-run.test.ts`                                                                                                                                                                             |
+| the decoder derives `execution` from `phase`, so the removed line was dead            | `executionForPhase`, `@traycer/protocol/config/host-update-attempt`                                                                                                                                  | **pinned**: `shared/host-update/__tests__/decode.test.ts:226`; independently ablated (deleting the line left 82/82 green)                                                                                                                                                        |
+| `installed === null` is also the swap's absent window                                 | `atomicSwap`'s two renames, `cli/installer/install.ts`                                                                                                                                               | citation + the absent-window pin (RW-Q5)                                                                                                                                                                                                                                         |
+| the claim baseline is STALE post-swap, so no generation test here                     | `applying → restarting` passes `claimRefresh: null`, `cli/host/update-run.ts`                                                                                                                        | the generation-drift pin (RW-Q6)                                                                                                                                                                                                                                                 |
+| the install-generation string is byte-comparable across producers                     | `encodeInstallGeneration`, `shared/host-version/install-generation.ts`                                                                                                                               | pinned by dc84fa8b across five callers in `install-generation.test.ts`                                                                                                                                                                                                           |
+| no LIVE executor segment exists when this arm runs                                    | the attempt lock: `withCliAttemptExecutorCompletion` wraps `execute` (`cli/host/update-executor.ts:472`) so a live segment holds it for its whole span, and the supervisor contends with `waitMs: 0` | **structural, not a probe.** `withUpdateContenderInternal` returns `busy` before any disposition is consulted. A `probeAttemptHolder` call inside `dispositionFor` would observe THIS contender and report `holder-live`, refusing everything while looking like a safety check. |
+| `{restarting, verifying}` equals `POST_TOMBSTONE_PHASES`                              | `shared/host-update/compatibility-fence.ts`                                                                                                                                                          | **deliberately NOT shared.** Same membership, opposite polarity (there: cannot walk back to a park, must terminalize). Named as a coincidence, not aliased.                                                                                                                      |
 
 ## Red-watches (all run; restored via `git checkout` on COMMITTED files)
 
-| # | Ablation | Reddened |
-| --- | --- | --- |
-| RW-Q1 | `restarting`/`verifying` dropped from the placed set | both admit rows + the three restarting-specific refusal pins (they assert `readerCalls === 1`, so they cannot pass vacuously) |
-| RW-Q2 | `preparing` + `activate` dropped | the `preparing-activate` admit row ALONE |
-| RW-Q3 | the placed-set gate removed (blanket admit) | all five refusal rows |
-| RW-Q4 | target-version equality dropped | the "install is NOT the target" pin alone |
-| RW-Q5 | `installed === null` admitted | the absent-window pin alone |
-| RW-Q6 | the parked arm's claim/generation test applied here too | the generation-drift pin alone |
-| RW-Q7 | the announcement call site removed | the announcement pin |
-| RW-Q8 | the default dep announces with no record standing | the canonical-admission adoption pin |
-| RW-Q9 | the restarting arm keyed on `continuation === "activate"` | both null-continuation field-shape rows |
+| #     | Ablation                                                  | Reddened                                                                                                                      |
+| ----- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| RW-Q1 | `restarting`/`verifying` dropped from the placed set      | both admit rows + the three restarting-specific refusal pins (they assert `readerCalls === 1`, so they cannot pass vacuously) |
+| RW-Q2 | `preparing` + `activate` dropped                          | the `preparing-activate` admit row ALONE                                                                                      |
+| RW-Q3 | the placed-set gate removed (blanket admit)               | all five refusal rows                                                                                                         |
+| RW-Q4 | target-version equality dropped                           | the "install is NOT the target" pin alone                                                                                     |
+| RW-Q5 | `installed === null` admitted                             | the absent-window pin alone                                                                                                   |
+| RW-Q6 | the parked arm's claim/generation test applied here too   | the generation-drift pin alone                                                                                                |
+| RW-Q7 | the announcement call site removed                        | the announcement pin                                                                                                          |
+| RW-Q8 | the default dep announces with no record standing         | the canonical-admission adoption pin                                                                                          |
+| RW-Q9 | the restarting arm keyed on `continuation === "activate"` | both null-continuation field-shape rows                                                                                       |
 
 ## Two process notes worth keeping
 
