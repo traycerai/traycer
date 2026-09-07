@@ -13,6 +13,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
+import {
   useWorktreeAutoCleanupRun,
   useWorktreeAutoCleanupRuns,
 } from "@/hooks/worktree/use-worktree-auto-cleanup";
@@ -59,6 +63,16 @@ export function WorktreeCleanupHistory(props: {
   const [manualExpansion, setManualExpansion] = useState<{
     readonly runId: string | null;
   } | null>(null);
+  // A NEW hint outranks an earlier manual choice: a second notification
+  // clicked while history stays mounted must open the run it names, not keep
+  // whichever row the user last toggled. Adjusted during render (React's
+  // documented way to react to a changing external value) rather than in an
+  // effect, which would paint the stale row first.
+  const [seenFocusedRunId, setSeenFocusedRunId] = useState(focusedRunId);
+  if (focusedRunId !== seenFocusedRunId) {
+    setSeenFocusedRunId(focusedRunId);
+    if (focusedRunId !== null) setManualExpansion(null);
+  }
   const expandedRunId =
     manualExpansion === null ? focusedRunId : manualExpansion.runId;
   // The hint is consumed when this view goes away. Left set, it would silently
@@ -84,16 +98,29 @@ export function WorktreeCleanupHistory(props: {
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <WorktreeCleanupHistoryBody
-          client={client}
-          runs={runs}
-          expandedRunId={expandedRunId}
-          onToggleRun={(runId) => {
-            setManualExpansion({
-              runId: expandedRunId === runId ? null : runId,
-            });
-          }}
-        />
+        {/* Behind the same gate as the inventory: with no client the runs
+            query is simply disabled, which reads as "not pending, no runs" -
+            and an offline or still-connecting host must never be reported as
+            one on which cleanup has never run. */}
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          <WorktreeCleanupHistoryBody
+            client={client}
+            runs={runs}
+            expandedRunId={expandedRunId}
+            onToggleRun={(runId) => {
+              setManualExpansion({
+                runId: expandedRunId === runId ? null : runId,
+              });
+              // The hint is spent once the user takes over, so clicking the
+              // SAME notification again is a visible change (null → id)
+              // rather than a no-op the manual choice would swallow.
+              clearFocusedRun();
+            }}
+          />
+        </HostScopeGate>
       </div>
     </div>
   );

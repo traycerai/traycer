@@ -649,7 +649,13 @@ function AutoCleanupThresholdEditor(props: {
           </p>
         </div>
         <div className="flex max-w-full flex-wrap items-center gap-1.5 max-md:w-full">
-          {AUTO_CLEANUP_DAY_PRESETS.map((days) => (
+          {/* Presets commit without the custom input's validation, so a
+              preset the host's bounds exclude is not offered at all rather
+              than being a button that sends a value the host will refuse. */}
+          {AUTO_CLEANUP_DAY_PRESETS.filter(
+            (days) =>
+              days >= policy.bounds.minDays && days <= policy.bounds.maxDays,
+          ).map((days) => (
             <Button
               key={days}
               type="button"
