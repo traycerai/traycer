@@ -740,6 +740,7 @@ export function ProviderModelProvidersTab(props: {
       ) : null}
 
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={disconnectTarget !== null}
         onOpenChange={(open) => {
           if (!open) setDisconnectTarget(null);

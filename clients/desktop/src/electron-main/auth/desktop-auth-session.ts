@@ -1,24 +1,60 @@
 import { EventEmitter } from "node:events";
 import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
 
+/**
+ * What main HOLDS, as opposed to what a renderer sent: the same snapshot plus
+ * whether main verified the bearer itself (`auth/bearer-verifier.ts`) rather
+ * than taking the renderer's word for it. Only a signed-in session can carry
+ * `verified: true`, and the flag is set by the ONE caller that ran the
+ * verification - it is not a field a renderer can push.
+ *
+ * Consumers that speak FOR the account - the jar plane above all - assert it.
+ */
+export interface VerifiedDesktopAuthSessionSnapshot extends DesktopAuthSessionSnapshot {
+  readonly verified: boolean;
+}
+
 type DesktopAuthSessionListener = (
-  snapshot: DesktopAuthSessionSnapshot,
+  snapshot: VerifiedDesktopAuthSessionSnapshot,
 ) => void;
 
 export class DesktopAuthSession {
   private readonly events = new EventEmitter();
-  private snapshotValue: DesktopAuthSessionSnapshot = {
+  private snapshotValue: VerifiedDesktopAuthSessionSnapshot = {
     status: "signed-out",
     token: null,
     profile: null,
+    verified: false,
   };
 
-  get(): DesktopAuthSessionSnapshot {
+  get(): VerifiedDesktopAuthSessionSnapshot {
     return this.snapshotValue;
   }
 
+  /**
+   * Adopts a session main has NOT authenticated. Nothing that speaks for the
+   * account may rest on one - it is the shape-only trust the jar plane was
+   * found resting on - so the stored snapshot says so.
+   */
   set(snapshot: DesktopAuthSessionSnapshot): void {
-    const normalized = normalizeDesktopAuthSession(snapshot);
+    this.store(snapshot, false);
+  }
+
+  /**
+   * Adopts a session whose bearer main verified itself
+   * (`auth/bearer-verifier.ts`): the signature, the issuer and audience, the
+   * expiry, and the subject against `profile.userId`.
+   */
+  setVerified(snapshot: DesktopAuthSessionSnapshot): void {
+    this.store(snapshot, true);
+  }
+
+  private store(snapshot: DesktopAuthSessionSnapshot, verified: boolean): void {
+    const base = normalizeDesktopAuthSession(snapshot);
+    const normalized: VerifiedDesktopAuthSessionSnapshot = {
+      ...base,
+      verified: base.status === "signed-in" && verified,
+    };
     if (authSessionsEqual(this.snapshotValue, normalized)) {
       return;
     }
@@ -52,12 +88,13 @@ export function normalizeDesktopAuthSession(
 }
 
 function authSessionsEqual(
-  a: DesktopAuthSessionSnapshot,
-  b: DesktopAuthSessionSnapshot,
+  a: VerifiedDesktopAuthSessionSnapshot,
+  b: VerifiedDesktopAuthSessionSnapshot,
 ): boolean {
   return (
     a.status === b.status &&
     a.token === b.token &&
+    a.verified === b.verified &&
     // The canonical id, not just the display fields: two accounts can share
     // an email and a userName, and a switch between them is a change.
     a.profile?.userId === b.profile?.userId &&

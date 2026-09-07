@@ -8,7 +8,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { cn } from "@/lib/utils";
@@ -43,7 +43,7 @@ const UntrustedSvgLightbox = lazy(() =>
 );
 
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openInBrowser = useOpenLinkWithPending();
   const contentRef = useRef<HTMLDivElement>(null);
   const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
@@ -87,8 +87,10 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
         remoteUrl === null
           ? null
           : {
-              pending: openExternalLink.isPending,
-              onOpen: () => openExternalLink.mutate(remoteUrl),
+              pending: openInBrowser.isPending,
+              onOpen: (event) => {
+                void openInBrowser.openLink(remoteUrl, "image", event);
+              },
             }
       }
       onCopy={() => imageAction.mutate("copy")}

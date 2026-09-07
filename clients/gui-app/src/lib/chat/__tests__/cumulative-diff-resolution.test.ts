@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import {
+  contentlessAccumulatedChangePaths,
   fetchableAccumulatedChanges,
   mergeCumulativeDiffs,
 } from "@/lib/chat/cumulative-diff-resolution";
@@ -67,6 +68,44 @@ describe("fetchableAccumulatedChanges", () => {
     // row, and asking would be asking about a change that no longer exists.
     expect(fetchableAccumulatedChanges(["/gone.ts"], [])).toEqual([]);
   });
+
+  // An ASCII-authored PDF is capturable (it IS text), so its row carries a
+  // digest and every other rule here would let it through - downloading a
+  // whole document whose section renders `PDF_FILE_DIFF_COPY` no matter what
+  // the bytes say, and letting one discarded fetch fail the entire bundle.
+  it("does not ask for a PDF, whose section never reads the bytes", () => {
+    expect(
+      fetchableAccumulatedChanges(
+        ["/a.ts", "/docs/report.pdf"],
+        [
+          row({ filePath: "/a.ts", digest: "d-a" }),
+          row({ filePath: "/docs/report.pdf", digest: "d-pdf" }),
+        ],
+      ),
+    ).toEqual([{ filePath: "/a.ts", digest: "d-a" }]);
+  });
+});
+
+describe("contentlessAccumulatedChangePaths", () => {
+  it("names the PDF rows the bundle still has to render", () => {
+    expect(
+      contentlessAccumulatedChangePaths(
+        ["/a.ts", "/docs/report.pdf"],
+        [
+          row({ filePath: "/a.ts", digest: "d-a" }),
+          row({ filePath: "/docs/report.pdf", digest: "d-pdf" }),
+        ],
+      ),
+    ).toEqual(["/docs/report.pdf"]);
+  });
+
+  it("does not name a PDF that has left the accumulated set", () => {
+    // Existence still decides, exactly as it does for every other file type:
+    // a reverted PDF loses its section rather than keeping a placeholder one.
+    expect(contentlessAccumulatedChangePaths(["/docs/report.pdf"], [])).toEqual(
+      [],
+    );
+  });
 });
 
 describe("mergeCumulativeDiffs", () => {
@@ -81,6 +120,7 @@ describe("mergeCumulativeDiffs", () => {
         filePaths: ["/a.ts"],
         inline,
         fetchable: [],
+        contentless: [],
         fetches: [],
         undeliveredPaths: 0,
       }),
@@ -102,6 +142,7 @@ describe("mergeCumulativeDiffs", () => {
         filePaths: ["/a.ts"],
         inline: [],
         fetchable: [],
+        contentless: [],
         fetches: [],
         undeliveredPaths: 2,
       }),
@@ -119,6 +160,7 @@ describe("mergeCumulativeDiffs", () => {
         filePaths: ["/a.ts"],
         inline: [],
         fetchable,
+        contentless: [],
         fetches: [
           {
             isLoading: false,
@@ -144,6 +186,7 @@ describe("mergeCumulativeDiffs", () => {
         filePaths: ["/a.ts"],
         inline: [],
         fetchable,
+        contentless: [],
         fetches: [{ isLoading: true, isError: false, data: undefined }],
         undeliveredPaths: 0,
       }),
@@ -161,6 +204,7 @@ describe("mergeCumulativeDiffs", () => {
         filePaths: ["/a.ts"],
         inline: [],
         fetchable,
+        contentless: [],
         fetches: [{ isLoading: false, isError: false, data: { stale: true } }],
         undeliveredPaths: 0,
       }),
@@ -182,6 +226,7 @@ describe("mergeCumulativeDiffs", () => {
         { filePath: "/a.ts", digest: "d-a" },
         { filePath: "/b.ts", digest: "d-b" },
       ],
+      contentless: [],
       fetches: [
         {
           isLoading: false,
@@ -208,6 +253,7 @@ describe("mergeCumulativeDiffs", () => {
       filePaths: ["/a.ts", "/gone.ts"],
       inline: [],
       fetchable,
+      contentless: [],
       fetches: [
         {
           isLoading: false,
@@ -233,6 +279,7 @@ describe("mergeCumulativeDiffs", () => {
         { filePath: "/a.ts", digest: "d-a" },
         { filePath: "/b.ts", digest: "d-b" },
       ],
+      contentless: [],
       fetches: [
         {
           isLoading: false,
@@ -256,6 +303,7 @@ describe("mergeCumulativeDiffs", () => {
       filePaths: ["/a.ts"],
       inline: [],
       fetchable,
+      contentless: [],
       fetches: [{ isLoading: false, isError: true, data: undefined }],
       undeliveredPaths: 0,
     });
@@ -263,5 +311,49 @@ describe("mergeCumulativeDiffs", () => {
     expect(result.failed).toBe(true);
     expect(result.isLoading).toBe(false);
     expect(result.resolved).toEqual([]);
+  });
+
+  it("keeps a contentless path's section, in the tile's order", () => {
+    const result = mergeCumulativeDiffs({
+      filePaths: ["/docs/report.pdf", "/a.ts"],
+      inline: [],
+      fetchable,
+      contentless: ["/docs/report.pdf"],
+      fetches: [
+        {
+          isLoading: false,
+          isError: false,
+          data: { stale: false, beforeContent: "x\n", afterContent: "y\n" },
+        },
+      ],
+      undeliveredPaths: 0,
+    });
+
+    expect(result.resolved).toEqual([
+      { filePath: "/docs/report.pdf", beforeContent: null, afterContent: null },
+      { filePath: "/a.ts", beforeContent: "x\n", afterContent: "y\n" },
+    ]);
+    expect(result.isLoading).toBe(false);
+  });
+
+  it("renders a bundle of only contentless paths rather than nothing", () => {
+    // Nothing to fetch takes the early return, where a bundle whose every row
+    // is a PDF would otherwise resolve to an empty set - i.e. to the
+    // source-unavailable banner, over files that are all present.
+    const result = mergeCumulativeDiffs({
+      filePaths: ["/docs/a.pdf", "/docs/b.pdf"],
+      inline: [],
+      fetchable: [],
+      contentless: ["/docs/a.pdf", "/docs/b.pdf"],
+      fetches: [],
+      undeliveredPaths: 0,
+    });
+
+    expect(result.resolved.map((entry) => entry.filePath)).toEqual([
+      "/docs/a.pdf",
+      "/docs/b.pdf",
+    ]);
+    expect(result.isLoading).toBe(false);
+    expect(result.failed).toBe(false);
   });
 });

@@ -5,6 +5,13 @@ export {
   setMobileAppPlatform,
 } from "@/lib/mobile-app";
 export {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
+  setRetentionProfile,
+  type RetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
+export { setNativeKeyboardState } from "@/lib/native-keyboard";
+export {
   hostRpcRegistry,
   type HostRpcRegistry,
   type MessengerFactory,

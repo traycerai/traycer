@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import {
   afterEach,
   beforeEach,
@@ -210,6 +211,10 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
   const state = {
     isDirty: true,
     unsyncedQueueSize: 1,
+    // The registry's eligibility key reads all three work fields and the
+    // transport.
+    writeCommands: [],
+    hostTransportStatus: "open",
     snapshotMeta: null,
     discardUnsyncedEdits: () => undefined,
   };
@@ -221,14 +226,23 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
   return {
     epicId,
     userId: null,
-    doc: {} as never,
-    awareness: {} as never,
+    hostId: "test-host",
+    // A production handle has no `doc` / `awareness`: the replica lives on
+    // the worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => false,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
 }
 

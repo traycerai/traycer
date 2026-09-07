@@ -84,6 +84,20 @@ describe("deriveToolInputDetail", () => {
     expect(detail.entries.map((e) => e.key)).toEqual(["file_path"]);
   });
 
+  it("drops the browser REPL's cell source, which is page content and typed secrets", () => {
+    const detail = deriveToolInputDetail("traycer-browser__repl", {
+      title: "sign in",
+      code: "await page.fill('#password', 'hunter2');",
+    });
+    if (detail?.kind !== "fields") throw new Error("expected fields detail");
+    expect(detail.entries.find((e) => e.key === "code")).toBeUndefined();
+    expect(JSON.stringify(detail)).not.toContain("hunter2");
+    // The call is still nameable from what survives.
+    expect(detail.entries.find((e) => e.key === "title")?.value).toBe(
+      "sign in",
+    );
+  });
+
   it("persists a displayed field/command in full (no length cap)", () => {
     const command = `echo ${"a".repeat(5000)}`;
     const detail = deriveToolInputDetail("shell", { command });

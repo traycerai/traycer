@@ -199,4 +199,74 @@ describe("useScreencastTileChrome", () => {
     expect(result.current.controller.url).toBe(INITIAL_URL);
     expect(result.current.controller.addressValue).toBe(INITIAL_URL);
   });
+
+  it("reloads when Enter submits the current URL", () => {
+    const { result, onNavigateUrl, onReload } = renderChrome(
+      idleNav(URL_A),
+      INITIAL_URL,
+    );
+
+    act(() => {
+      result.current.controller.onNavigate(submitEvent());
+    });
+
+    expect(onReload).toHaveBeenCalledOnce();
+    expect(onNavigateUrl).not.toHaveBeenCalled();
+  });
+
+  it("reloads when Enter submits a scheme-less form of the current URL", () => {
+    const { result, onNavigateUrl, onReload } = renderChrome(
+      idleNav(URL_A),
+      INITIAL_URL,
+    );
+
+    act(() => {
+      result.current.onAddressFocusChange(true);
+      result.current.controller.onAddressChange("example.com/a");
+    });
+    act(() => {
+      result.current.controller.onNavigate(submitEvent());
+    });
+
+    expect(onReload).toHaveBeenCalledOnce();
+    expect(onNavigateUrl).not.toHaveBeenCalled();
+  });
+
+  it("selects the registered address field when focus is reported", () => {
+    const { result } = renderChrome(idleNav(URL_A), INITIAL_URL);
+    const input = document.createElement("input");
+    input.value = URL_A;
+    document.body.appendChild(input);
+
+    try {
+      act(() => {
+        result.current.controller.setAddressInput(input);
+      });
+      act(() => {
+        result.current.onAddressFocusChange(true);
+      });
+
+      expect(document.activeElement).toBe(input);
+      expect(input.selectionStart).toBe(0);
+      expect(input.selectionEnd).toBe(URL_A.length);
+
+      input.blur();
+      input.setSelectionRange(3, 3);
+      act(() => {
+        result.current.onAddressFocusChange(false);
+      });
+      act(() => {
+        result.current.controller.onAddressFocusChange(true);
+      });
+
+      expect(document.activeElement).toBe(input);
+      expect(input.selectionStart).toBe(0);
+      expect(input.selectionEnd).toBe(URL_A.length);
+    } finally {
+      act(() => {
+        result.current.controller.setAddressInput(null);
+      });
+      input.remove();
+    }
+  });
 });

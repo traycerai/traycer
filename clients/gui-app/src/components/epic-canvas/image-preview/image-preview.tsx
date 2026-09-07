@@ -20,7 +20,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
-import type { ImageAssetMeta } from "@/hooks/assets/use-image-asset";
+import type { FileAssetMeta } from "@/hooks/assets/use-file-asset";
 import { formatImagePreviewCaption } from "./image-preview-caption";
 import { copyImageToClipboard } from "./image-preview-clipboard";
 import {
@@ -48,10 +48,10 @@ export interface ImagePreviewProps {
   readonly status: ImagePreviewStatus;
   /** Blob URL; non-null only once `status === "ready"`. */
   readonly url: string | null;
-  readonly meta: ImageAssetMeta | null;
+  readonly meta: FileAssetMeta | null;
   /**
    * Whether `url` resolved from the shared asset cache rather than a fresh
-   * stream (`ImageAssetState.servedFromCache`, ticket 07 closing E2E item:
+   * stream (`FileAssetState.servedFromCache`, ticket 07 closing E2E item:
    * a brand-new `<img>` element mounted for a cache hit still reports
    * `complete === false` at layout time even though the bytes are already
    * local - that per-element browser signal can't carry "already resident"
@@ -794,7 +794,7 @@ export function ImagePreview(props: ImagePreviewProps) {
   );
 }
 
-function imagePreviewAspectRatio(meta: ImageAssetMeta | null): number | null {
+function imagePreviewAspectRatio(meta: FileAssetMeta | null): number | null {
   if (meta === null || meta.width === null || meta.height === null) return null;
   if (meta.height <= 0) return null;
   return meta.width / meta.height;

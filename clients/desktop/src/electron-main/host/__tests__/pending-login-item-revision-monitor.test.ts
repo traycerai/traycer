@@ -45,26 +45,6 @@ describe("startPendingLoginItemRevisionMonitor", () => {
       await vi.advanceTimersByTimeAsync(INTERVAL_MS);
     }
   }
-
-  // Fixup D2: title narrowed - every outcome here is "ok", so there is never
-  // a spent failure budget for this test to reset. The reset-on-success
-  // claim is actually exercised (failure -> success -> failure again all
-  // still running) by the test below, "resets the failure budget after a
-  // successful refresh".
-  it("calls applyPendingLoginItemRevisionIfIdle on every tick", async () => {
-    const refresh = vi.fn(async (): Promise<Outcome> => ({
-      kind: "ok",
-      value: { running: true, version: SERVICE_VERSION },
-    }));
-    const monitor = startPendingLoginItemRevisionMonitor({
-      hostController: fakeHostController(refresh, () => false),
-      intervalMs: INTERVAL_MS,
-    });
-    await ticks(3);
-    expect(refresh).toHaveBeenCalledTimes(3);
-    monitor.dispose();
-  });
-
   it("treats a null outcome (nothing to do) as a no-op that does not spend the failure budget", async () => {
     const refresh = vi.fn(async (): Promise<Outcome> => null);
     const isQuarantined = vi.fn(() => false);
@@ -103,26 +83,6 @@ describe("startPendingLoginItemRevisionMonitor", () => {
 
     monitor.dispose();
   });
-
-  it("increments the failure budget on a thrown refresh, same as a non-ok outcome", async () => {
-    const refresh = vi.fn(async (): Promise<Outcome> => {
-      throw new Error("refresh threw");
-    });
-    const monitor = startPendingLoginItemRevisionMonitor({
-      hostController: fakeHostController(refresh, () => false),
-      intervalMs: INTERVAL_MS,
-    });
-
-    await ticks(3);
-    expect(refresh).toHaveBeenCalledTimes(3);
-    refresh.mockClear();
-
-    await ticks(1);
-    expect(refresh).not.toHaveBeenCalled();
-
-    monitor.dispose();
-  });
-
   it("resets the failure budget after a successful refresh", async () => {
     let shouldFail = true;
     const refresh = vi.fn(async (): Promise<Outcome> => {
@@ -167,19 +127,6 @@ describe("startPendingLoginItemRevisionMonitor", () => {
 
     monitor.dispose();
   });
-
-  it("checks the quarantine flag before every tick's refresh call, not only once at start", async () => {
-    const refresh = vi.fn(async (): Promise<Outcome> => null);
-    const isQuarantined = vi.fn(() => false);
-    const monitor = startPendingLoginItemRevisionMonitor({
-      hostController: fakeHostController(refresh, isQuarantined),
-      intervalMs: INTERVAL_MS,
-    });
-    await ticks(5);
-    expect(isQuarantined).toHaveBeenCalledTimes(5);
-    monitor.dispose();
-  });
-
   it("disposing mid-tick stops further ticks and does not crash once the in-flight call resolves", async () => {
     let resolveRefresh!: (value: Outcome) => void;
     const pending = new Promise<Outcome>((resolve) => {

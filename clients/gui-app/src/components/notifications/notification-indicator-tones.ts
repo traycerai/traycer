@@ -112,13 +112,25 @@ export const RESOLVED_INTERVIEW_TONE =
 export const RESOLVED_APPROVAL_TONE =
   NOTIFICATION_STATUS_TONES["approval-resolved"];
 
+/**
+ * An unread failure on a NON-terminal agent - the one reading that outranks
+ * every other flag. A terminal agent's failure is history the feed still
+ * carries, and a newer running turn is allowed to own the row. The derived
+ * field is preferred; the two raw flags reproduce it where a state predates it.
+ */
+export function hasUnreadNonTerminalFailure(
+  state: NotificationIndicatorState,
+): boolean {
+  return (
+    state.unreadNonTerminalFailure ??
+    (state.unreadFailure && state.unreadTerminalFailure !== true)
+  );
+}
+
 export function attentionTone(
   state: NotificationIndicatorState,
 ): IndicatorTone | null {
-  const unreadNonTerminalFailure =
-    state.unreadNonTerminalFailure ??
-    (state.unreadFailure && state.unreadTerminalFailure !== true);
-  if (unreadNonTerminalFailure) return FAILURE_TONE;
+  if (hasUnreadNonTerminalFailure(state)) return FAILURE_TONE;
   if (state.pendingFork) return FORK_TONE;
   if (state.pendingInterview) return INTERVIEW_TONE;
   if (state.pendingApproval) return APPROVAL_TONE;

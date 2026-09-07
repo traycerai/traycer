@@ -295,6 +295,7 @@ function createFixture(options: WorkspaceFixtureOptions): WorkspaceFixture {
         resolveRequests += 1;
         if (options.failedResolveRequests.has(resolveRequests)) {
           throw new RetryableTransportError({
+            replaySafetyFromKey: false,
             code: "RPC_ERROR",
             message: "Host temporarily unavailable",
             requestId: "req-workspace-folders",

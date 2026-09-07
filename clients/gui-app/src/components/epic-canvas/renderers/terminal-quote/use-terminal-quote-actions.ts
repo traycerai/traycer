@@ -6,7 +6,6 @@ import {
 } from "@/components/chat/quote/append-terminal-quote-to-draft";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 interface UseTerminalQuoteActionsArgs {
@@ -74,7 +73,7 @@ export function useTerminalQuoteActions(
       openNewConversationModal({
         epicId,
         tabId: viewTabId,
-        placement: ACTIVE_TILE_PLACEMENT,
+        placement: null,
         parentId: null,
         // This tile is bound to `tabHostId` for life and the quote points at a
         // terminal that only exists on that host, so the chat has to be created

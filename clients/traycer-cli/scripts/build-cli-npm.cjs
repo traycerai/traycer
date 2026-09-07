@@ -84,6 +84,19 @@ function main() {
         ? workspaceManifest.version
         : "0.0.0-local";
 
+  // Sentry DSN, baked exactly as build-cli-sea.cjs bakes it. `sentry.ts`
+  // reads `process.env.TRAYCER_CLI_SENTRY_DSN` directly (a form esbuild's
+  // define substitutes), and only calls `Sentry.init()` when the value is
+  // non-empty. Without this define the published npm bin kept the runtime
+  // lookup, so no npm install ever initialised Sentry: none of the CLI's
+  // own errors and, from #1673 on, none of the host crashes the supervisor
+  // reports reached it. An unset variable still bakes "", which keeps
+  // local builds telemetry-free.
+  const cliSentryDsn =
+    typeof process.env.TRAYCER_CLI_SENTRY_DSN === "string"
+      ? process.env.TRAYCER_CLI_SENTRY_DSN
+      : "";
+
   // Bundle everything (no externals) so the published artifact resolves
   // nothing at the user's runtime. Node builtins are auto-externalised by
   // `--platform=node`.
@@ -100,6 +113,7 @@ function main() {
     // build-cli-sea.cjs). Double-encoding would inject the quotes into
     // the value and break version resolution.
     `--define:process.env.TRAYCER_CLI_VERSION=${JSON.stringify(cliVersion)}`,
+    `--define:process.env.TRAYCER_CLI_SENTRY_DSN=${JSON.stringify(cliSentryDsn)}`,
   ];
   execFileSync(resolveEsbuildBin(), args, {
     cwd: workspaceRoot,

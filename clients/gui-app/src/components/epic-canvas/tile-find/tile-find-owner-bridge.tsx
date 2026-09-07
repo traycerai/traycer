@@ -9,7 +9,10 @@ import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
+import {
+  migrationModalRun,
+  useMigrationRunStore,
+} from "@/stores/migration/migration-run-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useTileFindStore } from "@/stores/tile-find";
 import { resolveTileFindOwnerBlocker } from "@/components/epic-canvas/tile-find/tile-find-owner-blocker";
@@ -34,11 +37,11 @@ export function TileFindOwnerBridge(): ReactNode {
   const notificationPopoverOpen = useNotificationsPopoverStore(
     (state) => state.open,
   );
+  // The blocking modal is up whenever ANY host is migrating or has left an
+  // unacknowledged failure - it is one modal over the whole app, so tile-find
+  // yields to it the same way whichever machine raised it.
   const migrationDialogActive = useMigrationRunStore(
-    (state) =>
-      state.status === "running" ||
-      state.status === "error" ||
-      state.remoteRunning,
+    (state) => migrationModalRun(state.runs) !== null || state.remoteRunning,
   );
   const domDialogActive = useBlockingDomDialogActive();
   const setOwnerBlocker = useTileFindStore((state) => state.setOwnerBlocker);

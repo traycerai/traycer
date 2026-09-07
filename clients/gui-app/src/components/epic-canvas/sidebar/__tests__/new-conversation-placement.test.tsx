@@ -13,7 +13,6 @@ import type { ComposerBodyProps } from "@/components/home/composer/composer-body
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import {
   newConversationModalStagingKey,
@@ -376,7 +375,7 @@ function Harness() {
             <NewConversationModalBody
               epicId="epic-1"
               tabId="tab-1"
-              placement={ACTIVE_TILE_PLACEMENT}
+              placement={null}
               parentId={null}
               hostId={null}
               dismissPickerRef={dismissPickerRef}

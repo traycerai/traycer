@@ -190,6 +190,12 @@ type BoundOwnerSurface = {
   readonly hasActiveTurn: boolean;
   /** Display name used in teardown copy (agent title, chat title). */
   readonly ownerLabel: string;
+  /**
+   * Chat-only display overlay for a worktree intent already consumed by an
+   * outstanding send. It must never feed dispatch or commit capture; the chat
+   * session remains the owner of this intent's lifecycle.
+   */
+  readonly inFlightWorktreeIntent: WorktreeIntent | null;
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
   // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
   // `worktree.getBinding` for terminal-agents). Drives the per-folder "missing"
@@ -2039,6 +2045,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const stagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(stagedKey)],
   );
+  // A live picker choice is authoritative. Once send consumes that choice,
+  // the chat session keeps its captured copy visible until the existing
+  // pending/accepted action lifecycle retires it. This overlay is deliberately
+  // render-only: dispatch and commit capture continue reading `stagedIntent`.
   const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
     (state) => state.setSuspendedWorkspacePaths,
   );
@@ -2061,16 +2071,28 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     }
     return map;
   }, [stagedIntent]);
+  const visibleEntryByPath = useMemo(() => {
+    const map = new Map<string, WorktreeFolderIntent>();
+    for (const entry of surface.inFlightWorktreeIntent?.entries ?? []) {
+      map.set(entry.workspacePath, entry);
+    }
+    // A live re-pick supersedes only its own folder. The remainder of a
+    // multi-folder dispatched intent stays visible until that dispatch
+    // resolves; dispatch capture itself continues reading stagedIntent only.
+    for (const entry of stagedIntent?.entries ?? []) {
+      map.set(entry.workspacePath, entry);
+    }
+    return map;
+  }, [stagedIntent, surface.inFlightWorktreeIntent]);
   const pendingBranchByPath = useMemo(() => {
     const map = new Map<string, string>();
-    if (stagedIntent === undefined) return map;
-    for (const entry of stagedIntent.entries) {
+    for (const entry of visibleEntryByPath.values()) {
       if (entry.kind === "worktree" && entry.branch.name.length > 0) {
         map.set(entry.workspacePath, entry.branch.name);
       }
     }
     return map;
-  }, [stagedIntent]);
+  }, [visibleEntryByPath]);
   const gitWorkspaces = useMemo(
     () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],
@@ -2799,8 +2821,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       const removePending = pendingRemovePaths.has(ws.workspacePath);
       const isPrimary = entry?.isPrimary ?? true;
       const stagedEntry = stagedEntryByPath.get(ws.workspacePath) ?? null;
+      const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
       const currentIntent =
-        stagedEntry ??
+        visibleEntry ??
         bindingEntryToFolderIntent(entry, ws.repoIdentifier, isPrimary);
       const branchDefault =
         defaultBranchByPath[ws.workspacePath] ?? EMPTY_DEFAULT_BRANCH;
@@ -2846,12 +2869,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       stagedEntryByPath,
       summariesByPath,
       surface.binding,
+      visibleEntryByPath,
     ],
   );
 
-  const remainingVisibleFolders = bindingEntries.filter(
-    (entry) => !editor.pendingRemovedPaths.has(entry.workspacePath),
-  ).length;
   const workspaceRunItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
     () =>
       workspaces
@@ -2900,10 +2921,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               // and `unresolvedWorkspaceRunItem`'s `removeDisabled: false` came
               // through the spread untouched. The lock clears with the turn and
               // the row is retryable again - nothing about it is one-shot.
-              removeDisabled:
-                activeRunLocksBinding ||
-                removePending ||
-                remainingVisibleFolders <= 1,
+              // No last-folder guard: removing the only entry is a legitimate
+              // rebind to folderless (the host writes the explicit folderless
+              // binding on the last `removeEntry`).
+              removeDisabled: activeRunLocksBinding || removePending,
               removeDisabledReason: removeDisabledReasonFor(
                 activeRunLocksBinding,
                 activeRunNotice,
@@ -3017,10 +3038,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             modeDisabled: false,
             modeDisabledReason: null,
             hasStagedIntent: stagedEntry !== null,
-            removeDisabled:
-              activeRunLocksBinding ||
-              removePending ||
-              remainingVisibleFolders <= 1,
+            // No last-folder guard - see the absent-row branch above.
+            removeDisabled: activeRunLocksBinding || removePending,
             removeDisabledReason: removeDisabledReasonFor(
               activeRunLocksBinding,
               activeRunNotice,
@@ -3062,7 +3081,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       editor.pendingRemovedPaths,
       handleBindingCommitted,
       markBindingDirtyWithoutResume,
-      remainingVisibleFolders,
       requestChatFolderRemoval,
       stageFolderRemoval,
       stagedKey,

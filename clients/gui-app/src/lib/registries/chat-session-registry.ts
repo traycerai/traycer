@@ -27,16 +27,20 @@ import {
 import {
   ChatSessionRegistry,
   DEFAULT_CHAT_IDLE_TTL_MS,
-  DEFAULT_MAX_WARM_CHAT_SESSIONS,
 } from "@/stores/chats/session-registry";
 import {
   BROWSER_STREAM_FLUSH_TIMERS,
   createStreamFlushCoordinator,
 } from "@/stores/chats/stream-flush-coordinator";
+import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 const registry = new ChatSessionRegistry({
   idleTtlMs: DEFAULT_CHAT_IDLE_TTL_MS,
-  maxWarmSessions: DEFAULT_MAX_WARM_CHAT_SESSIONS,
+  // The shell's retention profile (desktop: `DEFAULT_MAX_WARM_CHAT_SESSIONS`),
+  // read on every cap walk so the phone's smaller pool applies whenever its
+  // bootstrap selected it.
+  maxWarmSessions: () => getRetentionProfile().maxWarmChatSessions,
 });
 
 /**
@@ -172,6 +176,7 @@ export function useChatSessionHandle(
     // tile unmount), the socket stays alive across close -> warm -> reopen, so a
     // revived session is never handed a dead transport. `retry()` re-invokes
     // this factory, rebuilding the transport with live deps.
+    let acquiredHandle: ChatSessionStoreHandle | null = null;
     const factory: ChatStreamClientFactory = (
       factoryEpicId,
       factoryChatId,
@@ -198,6 +203,7 @@ export function useChatSessionHandle(
             chatId: factoryChatId,
             callbacks,
           }),
+        () => acquiredHandle?.store.getState().retry(),
       );
       return {
         sendAction: (frame) => result.client.sendAction(frame),
@@ -235,12 +241,14 @@ export function useChatSessionHandle(
           epicId: factoryEpicId,
           chatId: factoryChatId,
           userId,
+          environment: createRendererRuntimeEnvironment(),
           streamClientFactory: factory,
           streamFlushCoordinator: STREAM_FLUSH_COORDINATOR,
           onAuthError,
           onProviderAuthError,
         }),
     );
+    acquiredHandle = next;
     handleHostIds.set(next, hostId);
     setHandle(next);
 

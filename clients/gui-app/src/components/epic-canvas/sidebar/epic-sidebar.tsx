@@ -40,6 +40,7 @@ import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-t
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useSurfaceHostClient,
@@ -50,6 +51,11 @@ import {
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import {
+  describeBlockedChatWrites,
+  resolveChatWriteRoute,
+  useChatsByIdForWriteRoute,
+} from "@/hooks/epic/use-chat-write-route";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -123,6 +129,7 @@ import {
   useEpicArtifactRecords,
   useEpicConnectionStatus,
   useEpicPermissionRole,
+  useEpicNodeHostIds,
   useEpicSnapshotMeta,
   useEpicTreeIndex,
   useRootIds,
@@ -142,7 +149,14 @@ import {
   useEpicArchiveChats,
   useEpicDeleteChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
-import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
+import {
+  useChatArchiveSupported,
+  SET_CHAT_ARCHIVED_METHOD,
+} from "@/hooks/epic/use-chat-archive-support";
+import {
+  getNegotiatedHostMethods,
+  subscribeNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
@@ -177,6 +191,7 @@ import {
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
+import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -191,6 +206,7 @@ import {
   Fragment,
   useEffect,
   useLayoutEffect,
+  useSyncExternalStore,
   useMemo,
   useRef,
   useState,
@@ -221,6 +237,7 @@ import {
   BrowsersPanelActions,
   BrowsersPanelBody,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 const CHATS_PANEL_SKELETON = <ChatsPanelSkeleton />;
 const ARTIFACTS_PANEL_SKELETON = <ArtifactsPanelSkeleton />;
 const COMMENTS_PANEL_SKELETON = <CommentsPanelSkeleton />;
@@ -677,7 +694,12 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
       data-left-panel-group-size={panels.length}
     >
       <ArtifactReadLifecycleBridge epicId={epicId} tabId={tabId} />
-      <PanelGroupBody epicId={epicId} tabId={tabId} panels={panels} />
+      {/* A5a: the sidebar renders GitHub and markdown links (PR rows, comment
+          bodies) OUTSIDE `renderTile`, so without this they would have no
+          in-app destination and every one of them would open externally. */}
+      <LinkTargetProvider epicId={epicId} viewTabId={tabId}>
+        <PanelGroupBody epicId={epicId} tabId={tabId} panels={panels} />
+      </LinkTargetProvider>
     </Sidebar>
   );
 }
@@ -1410,7 +1432,6 @@ function SidebarBulkDeleteController(props: {
   const selection = useSidebarBulkSelection();
   const liveRecords = useEpicArtifactRecords();
   const tree = useEpicTreeIndex();
-  const epicHandle = useOpenEpicHandle();
   const navigateNested = useEpicNestedFocusNavigation();
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -1419,9 +1440,14 @@ function SidebarBulkDeleteController(props: {
   const unmarkArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.unmarkArtifactSelfDeleted,
   );
-  const deleteArtifact = useEpicDeleteArtifact();
+  // `null`: this controller deletes EVERY selected row, so there is no one
+  // artifact it speaks for. It reads its own `deletePending` off the
+  // selection store rather than the hook's flag.
+  const deleteArtifact = useEpicDeleteArtifact(null);
   const deleteChat = useEpicDeleteChat();
   const deleteTerminalAgent = useEpicDeleteTuiAgent();
+  const sessionHostId = useEpicSessionHostId();
+  const chatsById = useChatsByIdForWriteRoute();
   const recordById = useMemo(
     () => new Map(liveRecords.map((record) => [record.id, record])),
     [liveRecords],
@@ -1436,8 +1462,35 @@ function SidebarBulkDeleteController(props: {
     cancelSelection,
   } = selection;
 
+  // The bulk path dispatches `epic.deleteChat` per row, so it needs the same
+  // gate the per-row menus have. It REFUSES AS A WHOLE rather than deleting
+  // what it can: a partial delete of a confirmed multi-select is the worse
+  // failure, because that is exactly where a user is least likely to notice
+  // the one row that silently remained.
+  const blockedDeleteReason = useMemo(() => {
+    if (pendingDeleteIds === null) return null;
+    const blockedTitles = rootmostSelectedSidebarIds({
+      ids: pendingDeleteIds,
+      tree,
+    }).flatMap((id) => {
+      const record = recordById.get(id);
+      if (record === undefined || record.type !== "chat") return [];
+      const route = resolveChatWriteRoute({
+        chatsById,
+        isChatRow: true,
+        nodeId: id,
+        sessionHostId,
+      });
+      return route === "unavailable" ? [record.name] : [];
+    });
+    return describeBlockedChatWrites(blockedTitles);
+  }, [chatsById, pendingDeleteIds, recordById, sessionHostId, tree]);
+
   const handleConfirmDelete = useCallback(() => {
     if (pendingDeleteIds === null || deletePending) return;
+    // The dialog's confirm is already disabled while this is non-null; the
+    // check is here too because a keyboard submit is not the button.
+    if (blockedDeleteReason !== null) return;
     const rootmostIds = rootmostSelectedSidebarIds({
       ids: pendingDeleteIds,
       tree,
@@ -1451,7 +1504,6 @@ function SidebarBulkDeleteController(props: {
       return;
     }
     targets.forEach((target) => {
-      epicHandle.store.getState().deleteArtifact(target.id);
       markArtifactSelfDeleted(target.id);
     });
     setDeletePending(true);
@@ -1467,6 +1519,7 @@ function SidebarBulkDeleteController(props: {
             return deleteChat.mutateAsync({
               epicId: props.epicId,
               chatId: target.id,
+              hostId: chatsById[target.id]?.hostId ?? sessionHostId,
             });
           case "terminal-agent":
             return deleteTerminalAgent.mutateAsync({
@@ -1489,8 +1542,11 @@ function SidebarBulkDeleteController(props: {
         // still-being-deleted tab) get pushed as a route entry. Instead,
         // close every successfully-deleted open tab raw, then compute and
         // commit the post-batch focus target exactly once.
-        const openTargets = successfulIds.flatMap((id) => {
-          const found = findOpenArtifactInTab(props.tabId, id);
+        // The chat mutation already closed exactly the owning host's tiles.
+        const openTargets = targets.flatMap((target, index) => {
+          if (target.kind === "chat" || results[index].status !== "fulfilled")
+            return [];
+          const found = findOpenArtifactInTab(props.tabId, target.id);
           return found === null ? [] : [found];
         });
         if (openTargets.length > 0) {
@@ -1518,6 +1574,9 @@ function SidebarBulkDeleteController(props: {
         setDeletePending(false);
       });
   }, [
+    blockedDeleteReason,
+    chatsById,
+    sessionHostId,
     cancelSelection,
     clearSelectedIds,
     closeCanvasTab,
@@ -1526,7 +1585,6 @@ function SidebarBulkDeleteController(props: {
     deleteChat,
     deletePending,
     deleteTerminalAgent,
-    epicHandle,
     markArtifactSelfDeleted,
     navigateNested,
     pendingDeleteIds,
@@ -1540,6 +1598,7 @@ function SidebarBulkDeleteController(props: {
 
   return (
     <ConfirmDestructiveDialog
+      blockedReason={blockedDeleteReason}
       open={pendingDeleteIds !== null}
       onOpenChange={(open) => {
         if (!open) closeDeleteDialog();
@@ -1580,7 +1639,6 @@ interface SelectedChatArchiveAction {
 
 function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
   const selection = useSidebarBulkSelection();
-  const supported = useChatArchiveSupported();
   const archiveChats = useEpicArchiveChats();
   const activeAgentIds = useEpicActiveAgentIds();
   const tree = useEpicTreeIndex();
@@ -1589,6 +1647,7 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     latestTreeRef.current = tree;
   }, [tree]);
   const epicId = useOpenEpicHandle().epicId;
+  const sessionHostId = useEpicSessionHostId();
   const selectedRootIds = useMemo(
     () =>
       rootmostSelectedSidebarIds({
@@ -1596,6 +1655,19 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
         tree,
       }),
     [selection.selectedVisibleIds, tree],
+  );
+  const ownerHostIds = useEpicNodeHostIds(selectedRootIds);
+  const supported = useSyncExternalStore(subscribeNegotiatedManifests, () =>
+    (ownerHostIds.length === 0 ? [sessionHostId] : ownerHostIds).every(
+      (ownerHostId) => {
+        const hostId = ownerHostId ?? sessionHostId;
+        return (
+          hostId !== null &&
+          getNegotiatedHostMethods(hostId)?.has(SET_CHAT_ARCHIVED_METHOD) ===
+            true
+        );
+      },
+    ),
   );
   const selectedHasActiveAgent =
     sidebarIdsWithinRoots({
@@ -1615,7 +1687,14 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
       return;
     }
     archiveChats.mutate(
-      { epicId, chatIds: selectedRootIds, archived: true },
+      {
+        epicId,
+        chats: selectedRootIds.map((chatId, index) => ({
+          chatId,
+          hostId: ownerHostIds[index] ?? sessionHostId,
+        })),
+        archived: true,
+      },
       {
         onSuccess: (results) => {
           const successfulRootIds = selectedRootIds.filter(
@@ -1650,6 +1729,8 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     archiveChats,
     canMutate,
     epicId,
+    ownerHostIds,
+    sessionHostId,
     selectedHasActiveAgent,
     selectedRootIds,
     selection,
@@ -1795,10 +1876,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
   // A and opened a B-bound tile for it: the create succeeds and the tile is
   // wrong, which is the failure mode that looks like nothing went wrong.
   const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const createArtifact = useEpicCreateArtifact();
   const setLocalRootCreatePending = useEpicLeftPanelStore(
     (s) => s.setLocalRootCreatePending,
@@ -1825,12 +1903,16 @@ function TreePanelActions(props: TreePanelActionsProps) {
     (nodeId: string, onBeforeOpen: ((node: EpicNodeRef) => void) | null) => {
       const cancel = openProjectedSidebarNodeInTabWhenAvailable({
         epicHandle,
-        tabId: props.tabId,
         nodeId,
         fallbackHostId: activeHostId,
-        openTileInTab: (targetTabId, nodeRef) => {
-          navigateNested(props.epicId, targetTabId, () =>
-            prepareOpenTileInTabFocusTarget(targetTabId, nodeRef),
+        openNode: (nodeRef) => {
+          openTile(
+            tileIntent(
+              nodeRef,
+              { tabId: props.tabId },
+              "explicit",
+              "direct_ui",
+            ),
           );
         },
         onBeforeOpen,
@@ -1850,8 +1932,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
       activeHostId,
       clearAcknowledgedRootCreatePending,
       epicHandle,
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
+      openTile,
       projectedOpenCancels,
       props.epicId,
       props.panelId,

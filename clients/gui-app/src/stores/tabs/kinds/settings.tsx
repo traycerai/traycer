@@ -24,38 +24,11 @@ const settingsSurface = lazy(() =>
 // phones there is no two-pane modal, so opening a section navigates straight
 // to its route.
 export function settingsRouteOptions(section: SettingsSectionId) {
-  switch (section) {
-    case "general":
-      return { to: "/settings/general" } as const;
-    case "appearance":
-      return { to: "/settings/appearance" } as const;
-    case "app-notifications":
-      return { to: "/settings/app-notifications" } as const;
-    case "providers":
-      return { to: "/settings/providers" } as const;
-    case "notifications":
-      return { to: "/settings/notifications" } as const;
-    case "agents":
-      return { to: "/settings/agents" } as const;
-    case "keybindings":
-      return { to: "/settings/keybindings" } as const;
-    case "shell":
-      return { to: "/settings/shell" } as const;
-    case "worktrees":
-      return { to: "/settings/worktrees" } as const;
-    case "host":
-      return { to: "/settings/host" } as const;
-    case "devices":
-      return { to: "/settings/devices" } as const;
-    case "link-phone":
-      return { to: "/settings/link-phone" } as const;
-    case "app-diagnostics":
-      return { to: "/settings/app-diagnostics" } as const;
-    case "diagnostics":
-      return { to: "/settings/diagnostics" } as const;
-    case "usage":
-      return { to: "/settings/usage" } as const;
-  }
+  // Every section id has a `src/routes/settings.<id>.tsx` route, so the path
+  // IS the id — a per-section `case` was sixteen lines restating that. The
+  // template literal keeps the union of literal route strings TanStack needs,
+  // and an id added without its route file fails to type-check here.
+  return { to: `${SETTINGS_PATH_PREFIX}/${section}` } as const;
 }
 
 /**

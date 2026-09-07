@@ -29,6 +29,20 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
   ): IStreamSession;
 
   /**
+   * Opens a stream pinned to an exact client schema version. The peer must
+   * advertise that version or a newer minor on the same major; otherwise the
+   * session closes through the ordinary pre-subscribe unsupported path.
+   *
+   * This is for requests whose newer fields carry safety semantics and must
+   * never be projected through an older additive-minor schema.
+   */
+  subscribeAtVersion?<Method extends keyof Registry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<Registry, Method>,
+  ): IStreamSession;
+
+  /**
    * Opens a session whose params are re-read immediately before EVERY wire
    * subscribe, including the re-declare that follows a physical reconnect —
    * rather than freezing whatever was current when the session was created.

@@ -32,17 +32,17 @@ vi.mock("@/hooks/runner/use-runner-feature-settings-query", () => ({
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-addressable",
 }));
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type {
   ChatProjection,
   TuiAgentProjection,
 } from "@/stores/epics/open-epic/types";
 
-const handles: OpenEpicStoreHandle[] = [];
+const handles: OpenedStoreForTest[] = [];
 
 afterEach(() => {
   cleanup();
@@ -64,11 +64,17 @@ describe("useRegisteredEpicLiveAgents", () => {
     );
     expect(result.current).toEqual([null]);
 
-    const handle = createOpenEpicStore({
+    const handle = openStoreForTest({
       epicId: "epic-late-handle",
       userId: null,
-      streamClientFactory: fakeStreamClientFactory,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now: the store stopped
+      // constructing a runtime, so a `streamClientFactory` has nowhere
+      // else to go.
+      factories: {
+        streamClientFactory: fakeStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle.store.setState({
       chats: {
@@ -110,11 +116,17 @@ describe("useRegisteredEpicLiveAgents", () => {
     });
     expect(result.current).toEqual([null]);
 
-    const handle = createOpenEpicStore({
+    const handle = openStoreForTest({
       epicId: "epic-stable-refs",
       userId: null,
-      streamClientFactory: fakeStreamClientFactory,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now: the store stopped
+      // constructing a runtime, so a `streamClientFactory` has nowhere
+      // else to go.
+      factories: {
+        streamClientFactory: fakeStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle.store.setState({
       chats: {
@@ -147,11 +159,17 @@ describe("useRegisteredEpicLiveAgents", () => {
 
   it("resolves a tuiAgents entry to a terminal-agent live agent", () => {
     const registry = __getOpenEpicRegistryForTests();
-    const handle = createOpenEpicStore({
+    const handle = openStoreForTest({
       epicId: "epic-terminal-agent",
       userId: null,
-      streamClientFactory: fakeStreamClientFactory,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now: the store stopped
+      // constructing a runtime, so a `streamClientFactory` has nowhere
+      // else to go.
+      factories: {
+        streamClientFactory: fakeStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle.store.setState({
       tuiAgents: {
@@ -312,7 +330,7 @@ describe("useEpicAgentReference", () => {
   const chatId = "9600b202-1111-4111-8111-111111111111";
   const tuiAgentId = "beefcafe-2222-4222-8222-222222222222";
 
-  function handleWithAgents(epicId: string): OpenEpicStoreHandle {
+  function handleWithAgents(epicId: string): OpenedStoreForTest {
     const handle = createHandle(epicId);
     handle.store.setState({
       chats: {
@@ -393,7 +411,7 @@ describe("useEpicAgentReference", () => {
 });
 
 describe("useEpicSyncPillState", () => {
-  function healthyBaseline(handle: OpenEpicStoreHandle): void {
+  function healthyBaseline(handle: OpenedStoreForTest): void {
     handle.store.setState({
       hostTransportStatus: "open",
       cloudSyncStatus: "connected",
@@ -540,18 +558,24 @@ describe("agent role selectors", () => {
   });
 });
 
-function createHandle(epicId: string): OpenEpicStoreHandle {
-  const handle = createOpenEpicStore({
-    epicId,
+function createHandle(epicId: string): OpenedStoreForTest {
+  const handle = openStoreForTest({
+    epicId: epicId,
     userId: null,
-    streamClientFactory: fakeStreamClientFactory,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: fakeStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   handles.push(handle);
   return handle;
 }
 
-function openEpicWrapper(handle: OpenEpicStoreHandle) {
+function openEpicWrapper(handle: OpenedStoreForTest) {
   return function OpenEpicWrapper(props: { readonly children: ReactNode }) {
     return (
       <EpicSessionContext.Provider value={handle}>
@@ -592,6 +616,9 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
     userId: null,
     hostId: "host-a",
     isTitleEditedByUser: false,
+    // Ordinary registry-backed chat - this suite exercises selector
+    // behavior, not doc residency.
+    docResident: false,
     archivedAt: null,
     settings,
   };

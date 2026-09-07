@@ -491,6 +491,9 @@ describe("buildHostInstallCommand", () => {
       environment: "production",
       bootstrap: { enableLinger: false, allowSelfInvocation: true },
       force: false,
+      // A first install has no disruption boundary to report: there is no
+      // running host of this environment to stop, and no marker to stamp.
+      onWillStopHost: null,
     });
   });
 

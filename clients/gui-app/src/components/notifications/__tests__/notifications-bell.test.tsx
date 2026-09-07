@@ -159,6 +159,8 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
@@ -219,7 +221,11 @@ function mountBell(
 
   render(
     <StreamRuntimeContext.Provider
-      value={{ wsStreamClient: options.wsStreamClient, hostId: null }}
+      value={{
+        wsStreamClient: options.wsStreamClient,
+        hostId: null,
+        retain: null,
+      }}
     >
       {bell}
     </StreamRuntimeContext.Provider>,
@@ -261,8 +267,8 @@ const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
  * hits, untested. */
 function pressNotificationsChord(): void {
   fireEvent.keyDown(window, {
-    key: "N",
-    code: "KeyN",
+    key: "B",
+    code: "KeyB",
     ...(isMac() ? { metaKey: true } : { ctrlKey: true }),
     shiftKey: true,
   });

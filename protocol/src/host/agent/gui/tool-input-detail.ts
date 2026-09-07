@@ -38,6 +38,17 @@ const BULK_INPUT_FIELDS = new Set([
   "old_string",
   "new_string",
   "content",
+  // The browser REPL's cell source: whatever the agent typed into a page,
+  // passwords included, so persisting it puts page content into
+  // collaborator-readable chat persistence.
+  //
+  // This set is keyed by field NAME, not by tool, so listing `code` drops the
+  // field from EVERY tool's detail. That is safe because the browser REPL is
+  // the only tool that takes a `code` input today, and nothing reads the
+  // field by name anyway: not `deriveToolInputSummary` below, not
+  // `browser-tools.ts` (which identifies the REPL by tool NAME). The call
+  // still reads from `title` and the header summary.
+  "code",
   "edits",
   "patch",
   "patchText",

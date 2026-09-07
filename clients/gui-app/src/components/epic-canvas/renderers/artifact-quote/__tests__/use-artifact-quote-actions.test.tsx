@@ -3,13 +3,12 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -38,9 +37,9 @@ const SNAPSHOT: ArtifactQuoteSnapshot = {
   ],
 };
 
-let epicHandle: OpenEpicStoreHandle | null = null;
+let epicHandle: OpenedStoreForTest | null = null;
 
-function wrapperFor(handle: OpenEpicStoreHandle) {
+function wrapperFor(handle: OpenedStoreForTest) {
   return function Wrapper({ children }: { readonly children: ReactNode }) {
     return (
       <EpicSessionContext.Provider value={handle}>
@@ -51,11 +50,17 @@ function wrapperFor(handle: OpenEpicStoreHandle) {
 }
 
 function renderActions() {
-  const handle = createOpenEpicStore({
+  // The factories go to the COMPOSITION now, not the store: a suite that used
+  // to hand `createOpenEpicStore` a `streamClientFactory` has nothing to hand
+  // it. `writeCommand: null` is explicit - this suite never writes.
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   epicHandle = handle;
   return renderHook(
@@ -97,7 +102,7 @@ describe("useArtifactQuoteActions", () => {
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: EPIC_ID,
       tabId: TAB_ID,
-      placement: ACTIVE_TILE_PLACEMENT,
+      placement: null,
       parentId: null,
       hostId: null,
     });

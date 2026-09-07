@@ -7,7 +7,6 @@ import {
   type ArtifactQuote,
 } from "@/components/chat/quote/append-artifact-quote-to-draft";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
@@ -86,7 +85,7 @@ export function useArtifactQuoteActions(
       openNewConversationModal({
         epicId,
         tabId: viewTabId,
-        placement: ACTIVE_TILE_PLACEMENT,
+        placement: null,
         parentId: null,
         // An artifact does not live on one machine - its file is projected onto
         // every host serving the epic - so the new chat gets the epic's normal

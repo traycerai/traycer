@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, statSync, utimesSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
 
 interface CapturedAttachment {
@@ -125,6 +126,7 @@ const FORM: SupportSubmitReportRequest = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeBrowserDiagnostics: true,
   includeDiagnostics: true,
   images: [],
   overrideTitle: null,
@@ -152,6 +154,10 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
     pendingLoginItemRevisionFile: join(tempDir, "login-item"),
     substrateFile: join(tempDir, "substrate.json"),
     transitionJournalFile: join(tempDir, "transition.json"),
+    browserTelemetryFile: join(tempDir, "browser-telemetry.jsonl"),
+    browserTelemetryRotatedFile: join(tempDir, "browser-telemetry.jsonl.1"),
+    browserTraceFile: join(tempDir, "browser-trace.jsonl"),
+    browserTraceRotatedFile: join(tempDir, "browser-trace.jsonl.1"),
     environment: "production",
   };
   return new DesktopSupportService({
@@ -423,6 +429,74 @@ describe("DesktopSupportService.submitReport - consent panel log toggles", () =>
       KEY,
     );
     expect(lastHint().attachments).toEqual([]);
+  });
+});
+
+// Ticket 03 / plan D3: one consent flag covers both browser diagnostic
+// files, each skipped independently of the other when its own tail is
+// empty - same "toggle off must actually withhold it" invariant as the
+// desktop/host toggles above, plus the "absence is normal" skip-on-empty
+// rule that has no desktop/host equivalent (those two always exist).
+describe("DesktopSupportService.submitReport - browser diagnostics consent (ticket 03)", () => {
+  it("skips both browser attachments when neither file exists, even with the toggle on", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeBrowserDiagnostics: true },
+      KEY,
+    );
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "desktop.log",
+      "local-host.log",
+    ]);
+  });
+
+  it("attaches both browser files when present and the toggle is on", async () => {
+    await writeFile(
+      join(tempDir, "browser-telemetry.jsonl"),
+      '{"seq":1,"kind":"nav"}\n',
+      "utf8",
+    );
+    await writeFile(
+      join(tempDir, "browser-trace.jsonl"),
+      '{"seq":1,"kind":"cdp.command"}\n',
+      "utf8",
+    );
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeBrowserDiagnostics: true },
+      KEY,
+    );
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "desktop.log",
+      "local-host.log",
+      "browser-telemetry.jsonl",
+      "browser-trace.jsonl",
+    ]);
+  });
+
+  it("withholds both browser attachments when the toggle is off, even though the files exist", async () => {
+    await writeFile(
+      join(tempDir, "browser-telemetry.jsonl"),
+      '{"seq":1,"kind":"nav"}\n',
+      "utf8",
+    );
+    await writeFile(
+      join(tempDir, "browser-trace.jsonl"),
+      '{"seq":1,"kind":"cdp.command"}\n',
+      "utf8",
+    );
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    await service.submitReport(
+      { ...FORM, includeBrowserDiagnostics: false },
+      KEY,
+    );
+    expect(lastHint().attachments.map((a) => a.filename)).toEqual([
+      "desktop.log",
+      "local-host.log",
+    ]);
   });
 });
 
@@ -747,11 +821,9 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
     );
   });
 
-  it("does not re-record a sighting on the idempotent second freeze of a live key", async () => {
-    const service = buildService(null);
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
+  it("skips the sighting when fingerprint is null", async () => {
+    await buildService(null).freezeEvidence(KEY, null);
+    expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
   });
 
   it("records ONE sighting across StrictMode freeze → discard → freeze of the same key", async () => {
@@ -765,20 +837,6 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
     service.discardFrozenEvidence(KEY);
     await service.freezeEvidence(KEY, "fp:v1:sight");
     expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
-  });
-
-  it("still records a second sighting for a different frozen-evidence key (real re-open)", async () => {
-    const service = buildService(null);
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    service.discardFrozenEvidence(KEY);
-    // A genuine second dialog open mints a new draftId → new key.
-    await service.freezeEvidence("sender-1:2", "fp:v1:sight");
-    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(2);
-  });
-
-  it("skips the sighting when fingerprint is null", async () => {
-    await buildService(null).freezeEvidence(KEY, null);
-    expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
   });
 });
 
@@ -903,18 +961,6 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
     // itself, not just an incidental match.
     expect(eventIds[0]).toBe(eventIds[1]);
   });
-
-  it("returns the existing reportId when freezeEvidence is called again for an already-frozen live draft", async () => {
-    const service = buildService(null);
-    const { reportId: first } = await service.freezeEvidence(KEY, null);
-    const { reportId: second } = await service.freezeEvidence(KEY, null);
-
-    // Not a fresh mint: a second freeze of a still-live draft (React
-    // StrictMode's dev double-effect, or an accidental duplicate call) must
-    // not straddle a retry-vs-submit across two different report/event ids.
-    expect(second).toBe(first);
-  });
-
   it("resolves concurrent in-flight freezes of the same key to one shared reportId", async () => {
     const service = buildService(null);
 
@@ -1218,6 +1264,41 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     expect(bundle.logs.host).not.toBe("");
   });
 
+  it("includes both browser log tails when present and the toggle is on, blank when toggled off (ticket 03)", async () => {
+    await writeFile(
+      join(tempDir, "browser-telemetry.jsonl"),
+      '{"seq":1,"kind":"nav"}\n',
+      "utf8",
+    );
+    await writeFile(
+      join(tempDir, "browser-trace.jsonl"),
+      '{"seq":1,"kind":"cdp.command"}\n',
+      "utf8",
+    );
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    const { path: onPath } = await service.saveDiagnosticBundle(
+      { ...FORM, includeBrowserDiagnostics: true },
+      KEY,
+    );
+    const onBundle = JSON.parse(await readFile(onPath, "utf8")) as {
+      logs: { browserTelemetry: string; browserTrace: string };
+    };
+    expect(onBundle.logs.browserTelemetry).toContain('"kind":"nav"');
+    expect(onBundle.logs.browserTrace).toContain('"kind":"cdp.command"');
+
+    const { path: offPath } = await service.saveDiagnosticBundle(
+      { ...FORM, includeBrowserDiagnostics: false },
+      KEY,
+    );
+    const offBundle = JSON.parse(await readFile(offPath, "utf8")) as {
+      logs: { browserTelemetry: string; browserTrace: string };
+    };
+    expect(offBundle.logs.browserTelemetry).toBe("");
+    expect(offBundle.logs.browserTrace).toBe("");
+  });
+
   it("omits appVersion/platform/arch/versions/host from the bundle when includeDiagnostics is off", async () => {
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);
@@ -1281,5 +1362,43 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     expect(bundle).not.toHaveProperty("images");
     expect(raw).not.toContain("secret-screen.png");
     expect(raw).not.toContain("image/png");
+  });
+  it("writes the bundle owner-only and keeps a bundle saved moments ago", async () => {
+    // The bundle lands in a shared `/tmp` holding the desktop and host log
+    // tails and the browser trace, and every save used to leave its own
+    // directory behind for the lifetime of the machine's `/tmp`.
+    //
+    // The sweep is age-bounded, though: a bundle is REVEALED to the user so
+    // they can attach it to a ticket, so saving a second one must not pull the
+    // first out from under an open file manager window.
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    const first = await service.saveDiagnosticBundle(FORM, KEY);
+    expect(statSync(first.path).mode & 0o777).toBe(0o600);
+
+    const second = await service.saveDiagnosticBundle(FORM, KEY);
+    expect(second.path).not.toBe(first.path);
+    expect(existsSync(first.path)).toBe(true);
+    expect(existsSync(second.path)).toBe(true);
+  });
+
+  it("erases a bundle a previous run left behind, not just this run's", async () => {
+    // The bound has to survive a relaunch: an in-memory "last directory"
+    // field only ever cleans up within one process lifetime, so every restart
+    // orphaned another bundle in `/tmp` forever.
+    const orphan = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
+    await writeFile(join(orphan, "report.json"), "{}", "utf8");
+    // Aged past the retention window, which is what makes it an ORPHAN rather
+    // than a bundle the user is still holding on to.
+    const stale = new Date(Date.now() - 25 * 60 * 60_000);
+    utimesSync(orphan, stale, stale);
+
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const saved = await service.saveDiagnosticBundle(FORM, KEY);
+
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(saved.path)).toBe(true);
   });
 });

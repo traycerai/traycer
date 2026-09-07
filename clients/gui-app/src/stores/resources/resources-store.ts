@@ -11,14 +11,16 @@ import type {
   ResourcesStreamClient,
 } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import type {
-  AppResourceSnapshotWire,
-  EpicResourceSnapshotWire,
-  HostTreeResourceSnapshotWire,
-  OtherResourceSnapshotWire,
+  AppResourceSnapshotWireV15,
+  EpicResourceSnapshotWireV15,
+  HostTreeResourceSnapshotWireV15,
+  OtherResourceSnapshotWireV15,
   ManagedCommandOwnerWire,
-  OwnerResourceSnapshotWireV14,
-  ResourceProcessSnapshotWire,
+  OwnerResourceSnapshotWireV15,
+  ResourceProcessSnapshotWireV15,
   ResourceOwnerKindWireV14,
+  RestrictedResourceSnapshotWireV15,
+  ResourcesSubscribeDemand,
 } from "@traycer/protocol/host/resources/subscribe";
 
 /**
@@ -33,24 +35,22 @@ import type {
  * frames - see `mergeOwners`) and re-render only when its own metrics move.
  */
 
-export type ResourcesStreamClientHandle = Pick<ResourcesStreamClient, "close">;
+export type ResourcesStreamClientHandle = Pick<
+  ResourcesStreamClient,
+  "close" | "setDemand"
+>;
 
 export type ResourcesStreamClientFactory = (
   scope: ResourcesStreamScope,
   callbacks: ResourcesStreamCallbacks,
 ) => ResourcesStreamClientHandle;
 
-export type OwnerResourceUsage = OwnerResourceSnapshotWireV14;
-export type EpicResourceUsage = EpicResourceSnapshotWire;
-export type AppResourceUsage = AppResourceSnapshotWire;
-export type HostTreeResourceUsage = HostTreeResourceSnapshotWire;
-export type OtherResourceUsage = OtherResourceSnapshotWire;
-
-export interface TaskResourceSummary {
-  readonly cpuPercent: number;
-  readonly rssBytes: number;
-  readonly trackedProcessCount: number;
-}
+export type OwnerResourceUsage = OwnerResourceSnapshotWireV15;
+export type EpicResourceUsage = EpicResourceSnapshotWireV15;
+export type AppResourceUsage = AppResourceSnapshotWireV15;
+export type HostTreeResourceUsage = HostTreeResourceSnapshotWireV15;
+export type OtherResourceUsage = OtherResourceSnapshotWireV15;
+export type RestrictedResourceUsage = RestrictedResourceSnapshotWireV15;
 
 /**
  * Stable map key for one owner within an epic's projection.
@@ -102,16 +102,18 @@ export interface ResourcesState {
    * map is "not currently tracked" - callers must treat that as unknown, never
    * as zero use.
    */
-  readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWireV14>;
+  readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWireV15>;
   /** Host-app usage sampled alongside the owner projection. */
-  readonly app: AppResourceSnapshotWire | null;
+  readonly app: AppResourceSnapshotWireV15 | null;
   /** Whole host-process-tree aggregate, available from resources.subscribe@1.2. */
-  readonly hostTree: HostTreeResourceSnapshotWire | null;
+  readonly hostTree: HostTreeResourceSnapshotWireV15 | null;
   /** Unattributed host-tree process roots, available from resources.subscribe@1.2. */
-  readonly other: OtherResourceSnapshotWire | null;
+  readonly other: OtherResourceSnapshotWireV15 | null;
+  /** Aggregate-only usage hidden by authorization or subscription scope. */
+  readonly restricted: RestrictedResourceSnapshotWireV15 | null;
   /** `null` when the epic has no tracked owner roots (a valid quiet state). */
-  readonly epic: EpicResourceSnapshotWire | null;
-  readonly epics: ReadonlyMap<string, EpicResourceSnapshotWire>;
+  readonly epic: EpicResourceSnapshotWireV15 | null;
+  readonly epics: ReadonlyMap<string, EpicResourceSnapshotWireV15>;
   readonly dispose: () => void;
 }
 
@@ -124,12 +126,13 @@ export interface ResourcesStoreHandle {
   readonly key: string;
   readonly scope: ResourcesStreamScope;
   readonly store: UseBoundStore<StoreApi<ResourcesState>>;
+  readonly setDemand: (demand: ResourcesSubscribeDemand) => void;
   readonly dispose: () => void;
 }
 
-const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWireV14> =
+const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWireV15> =
   new Map();
-const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
+const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWireV15> = new Map();
 
 // Compare only the fields a chip renders. `sampledAt`/`rootPids` move on every
 // host tick even when nothing displayable changed, so excluding them lets an
@@ -137,12 +140,14 @@ const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
 // projection is resent each update, but only owners whose metrics actually moved
 // get a new reference (and re-render their chip).
 function ownerUsageEqual(
-  a: OwnerResourceSnapshotWireV14,
-  b: OwnerResourceSnapshotWireV14,
+  a: OwnerResourceSnapshotWireV15,
+  b: OwnerResourceSnapshotWireV15,
 ): boolean {
   return (
     a.cpuPercent === b.cpuPercent &&
     a.rssBytes === b.rssBytes &&
+    a.pssBytes === b.pssBytes &&
+    a.privateBytes === b.privateBytes &&
     a.processCount === b.processCount &&
     a.activeProcessName === b.activeProcessName &&
     managedCommandEqual(a.managedCommand, b.managedCommand) &&
@@ -167,8 +172,8 @@ function managedCommandEqual(
 }
 
 function processEqual(
-  a: ResourceProcessSnapshotWire,
-  b: ResourceProcessSnapshotWire,
+  a: ResourceProcessSnapshotWireV15,
+  b: ResourceProcessSnapshotWireV15,
 ): boolean {
   return (
     a.pid === b.pid &&
@@ -177,39 +182,55 @@ function processEqual(
     a.name === b.name &&
     a.command === b.command &&
     a.cpuPercent === b.cpuPercent &&
-    a.rssBytes === b.rssBytes
+    a.rssBytes === b.rssBytes &&
+    a.pssBytes === b.pssBytes &&
+    a.privateBytes === b.privateBytes &&
+    processDescriptorEqual(a.descriptor, b.descriptor)
   );
 }
 
+function processDescriptorEqual(
+  a: ResourceProcessSnapshotWireV15["descriptor"],
+  b: ResourceProcessSnapshotWireV15["descriptor"],
+): boolean {
+  if (a === null || b === null) return a === b;
+  // `family` is a literal type on both sides; comparing it is always true.
+  return a.runtime === b.runtime && a.role === b.role;
+}
+
 function processesEqual(
-  a: readonly ResourceProcessSnapshotWire[],
-  b: readonly ResourceProcessSnapshotWire[],
+  a: readonly ResourceProcessSnapshotWireV15[],
+  b: readonly ResourceProcessSnapshotWireV15[],
 ): boolean {
   if (a.length !== b.length) return false;
   return a.every((process, index) => processEqual(process, b[index]));
 }
 
 function epicUsageEqual(
-  a: EpicResourceSnapshotWire,
-  b: EpicResourceSnapshotWire,
+  a: EpicResourceSnapshotWireV15,
+  b: EpicResourceSnapshotWireV15,
 ): boolean {
   return (
     a.cpuPercent === b.cpuPercent &&
     a.rssBytes === b.rssBytes &&
+    a.pssBytes === b.pssBytes &&
+    a.privateBytes === b.privateBytes &&
     a.processCount === b.processCount &&
     a.ownerCount === b.ownerCount
   );
 }
 
 function appUsageEqual(
-  a: AppResourceSnapshotWire,
-  b: AppResourceSnapshotWire,
+  a: AppResourceSnapshotWireV15,
+  b: AppResourceSnapshotWireV15,
 ): boolean {
   if (
     a.hostTotalMemoryBytes !== b.hostTotalMemoryBytes ||
     a.processCount !== b.processCount ||
     a.cpuPercent !== b.cpuPercent ||
-    a.rssBytes !== b.rssBytes
+    a.rssBytes !== b.rssBytes ||
+    a.pssBytes !== b.pssBytes ||
+    a.privateBytes !== b.privateBytes
   ) {
     return false;
   }
@@ -218,35 +239,52 @@ function appUsageEqual(
 }
 
 function hostTreeUsageEqual(
-  a: HostTreeResourceSnapshotWire,
-  b: HostTreeResourceSnapshotWire,
-): boolean {
-  return (
-    a.processCount === b.processCount &&
-    a.cpuPercent === b.cpuPercent &&
-    a.rssBytes === b.rssBytes
-  );
-}
-
-function otherUsageEqual(
-  a: OtherResourceSnapshotWire,
-  b: OtherResourceSnapshotWire,
+  a: HostTreeResourceSnapshotWireV15,
+  b: HostTreeResourceSnapshotWireV15,
 ): boolean {
   return (
     a.processCount === b.processCount &&
     a.cpuPercent === b.cpuPercent &&
     a.rssBytes === b.rssBytes &&
+    a.pssBytes === b.pssBytes &&
+    a.privateBytes === b.privateBytes
+  );
+}
+
+function otherUsageEqual(
+  a: OtherResourceSnapshotWireV15,
+  b: OtherResourceSnapshotWireV15,
+): boolean {
+  return (
+    a.processCount === b.processCount &&
+    a.cpuPercent === b.cpuPercent &&
+    a.rssBytes === b.rssBytes &&
+    a.pssBytes === b.pssBytes &&
+    a.privateBytes === b.privateBytes &&
     processesEqual(a.processes, b.processes)
   );
 }
 
+function restrictedUsageEqual(
+  a: RestrictedResourceSnapshotWireV15,
+  b: RestrictedResourceSnapshotWireV15,
+): boolean {
+  return (
+    a.processCount === b.processCount &&
+    a.cpuPercent === b.cpuPercent &&
+    a.rssBytes === b.rssBytes &&
+    a.pssBytes === b.pssBytes &&
+    a.privateBytes === b.privateBytes
+  );
+}
+
 function mergeOwners(
-  previous: ReadonlyMap<string, OwnerResourceSnapshotWireV14>,
+  previous: ReadonlyMap<string, OwnerResourceSnapshotWireV15>,
   payload: ResourcesProjectionPayload,
   scope: ResourcesStreamScope,
-): ReadonlyMap<string, OwnerResourceSnapshotWireV14> {
+): ReadonlyMap<string, OwnerResourceSnapshotWireV15> {
   if (payload.owners.length === 0) return EMPTY_OWNERS;
-  const next = new Map<string, OwnerResourceSnapshotWireV14>();
+  const next = new Map<string, OwnerResourceSnapshotWireV15>();
   for (const owner of payload.owners) {
     const key =
       scope.kind === "global"
@@ -273,23 +311,23 @@ function mergeOwners(
 }
 
 function mergeEpic(
-  previous: EpicResourceSnapshotWire | null,
-  next: EpicResourceSnapshotWire | null,
-): EpicResourceSnapshotWire | null {
+  previous: EpicResourceSnapshotWireV15 | null,
+  next: EpicResourceSnapshotWireV15 | null,
+): EpicResourceSnapshotWireV15 | null {
   if (next === null) return null;
   if (previous !== null && epicUsageEqual(previous, next)) return previous;
   return next;
 }
 
 function mergeEpics(
-  previous: ReadonlyMap<string, EpicResourceSnapshotWire>,
+  previous: ReadonlyMap<string, EpicResourceSnapshotWireV15>,
   payload: ResourcesProjectionPayload,
-): ReadonlyMap<string, EpicResourceSnapshotWire> {
+): ReadonlyMap<string, EpicResourceSnapshotWireV15> {
   if (payload.epics.length === 0) {
     if (payload.epic === null) return EMPTY_EPICS;
     return new Map([[payload.epic.epicId, payload.epic]]);
   }
-  const next = new Map<string, EpicResourceSnapshotWire>();
+  const next = new Map<string, EpicResourceSnapshotWireV15>();
   for (const epic of payload.epics) {
     const existing = previous.get(epic.epicId);
     next.set(
@@ -303,29 +341,40 @@ function mergeEpics(
 }
 
 function mergeApp(
-  previous: AppResourceSnapshotWire | null,
-  next: AppResourceSnapshotWire | null,
-): AppResourceSnapshotWire | null {
+  previous: AppResourceSnapshotWireV15 | null,
+  next: AppResourceSnapshotWireV15 | null,
+): AppResourceSnapshotWireV15 | null {
   if (next === null) return null;
   if (previous !== null && appUsageEqual(previous, next)) return previous;
   return next;
 }
 
 function mergeHostTree(
-  previous: HostTreeResourceSnapshotWire | null,
-  next: HostTreeResourceSnapshotWire | null | undefined,
-): HostTreeResourceSnapshotWire | null {
+  previous: HostTreeResourceSnapshotWireV15 | null,
+  next: HostTreeResourceSnapshotWireV15 | null | undefined,
+): HostTreeResourceSnapshotWireV15 | null {
   if (next === null || next === undefined) return null;
   if (previous !== null && hostTreeUsageEqual(previous, next)) return previous;
   return next;
 }
 
 function mergeOther(
-  previous: OtherResourceSnapshotWire | null,
-  next: OtherResourceSnapshotWire | null | undefined,
-): OtherResourceSnapshotWire | null {
+  previous: OtherResourceSnapshotWireV15 | null,
+  next: OtherResourceSnapshotWireV15 | null | undefined,
+): OtherResourceSnapshotWireV15 | null {
   if (next === null || next === undefined) return null;
   if (previous !== null && otherUsageEqual(previous, next)) return previous;
+  return next;
+}
+
+function mergeRestricted(
+  previous: RestrictedResourceSnapshotWireV15 | null,
+  next: RestrictedResourceSnapshotWireV15 | null | undefined,
+): RestrictedResourceSnapshotWireV15 | null {
+  if (next === null || next === undefined) return null;
+  if (previous !== null && restrictedUsageEqual(previous, next)) {
+    return previous;
+  }
   return next;
 }
 
@@ -346,6 +395,7 @@ export function createResourcesStore(
     app: null,
     hostTree: null,
     other: null,
+    restricted: null,
     epic: null,
     epics: EMPTY_EPICS,
     dispose: () => {
@@ -366,6 +416,7 @@ export function createResourcesStore(
       app: mergeApp(state.app, payload.app),
       hostTree: mergeHostTree(state.hostTree, payload.hostTree),
       other: mergeOther(state.other, payload.other),
+      restricted: mergeRestricted(state.restricted, payload.restricted),
       epic: mergeEpic(state.epic, payload.epic),
       epics: mergeEpics(state.epics, payload),
     }));
@@ -402,6 +453,11 @@ export function createResourcesStore(
     key,
     scope: options.scope,
     store,
+    // The client already ignores a demand it is holding, so there is nothing
+    // to dedupe here.
+    setDemand: (demand) => {
+      streamClient?.setDemand(demand);
+    },
     dispose: () => {
       store.getState().dispose();
     },

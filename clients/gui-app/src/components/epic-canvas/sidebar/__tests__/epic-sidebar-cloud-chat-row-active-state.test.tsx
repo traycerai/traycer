@@ -76,7 +76,6 @@ function renderRow(tabId: string): HTMLElement {
   render(
     <EpicSidebarCloudChatRow
       chat={CHAT}
-      epicId={CHAT.identity.taskId}
       tabId={tabId}
       depth={0}
       selectionMode={false}

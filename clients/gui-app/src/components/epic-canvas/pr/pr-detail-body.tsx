@@ -18,7 +18,7 @@ import {
   type PrDetailSubscriptionData,
 } from "@/hooks/pr/use-pr-detail-subscription";
 import { usePrQuoteTargets } from "@/hooks/pr/use-pr-quote-targets";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink, type LinkClickEvent } from "@/lib/links/open-link";
 import {
   derivePrAttentionQueue,
   type PrAttentionItem,
@@ -56,6 +56,7 @@ import {
   usePrDetailTab,
   usePrDetailViewStore,
 } from "@/stores/epics/pr-detail-view-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -228,7 +229,7 @@ function PrDetailLoaded(props: {
   readonly onRefresh: () => void;
 }): ReactNode {
   const { core, checks, activity, reviewThreads, files, commits } = props.data;
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const hostId = useTabHostId();
   const viewKey = prDetailViewKey({
     githubHost: props.githubHost,
@@ -239,15 +240,15 @@ function PrDetailLoaded(props: {
   const tab = usePrDetailTab(viewKey);
   const setTab = usePrDetailViewStore((state) => state.setTab);
   const quote = usePrQuoteTargets({ viewKey, owners: core.owners });
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const queue = derivePrAttentionQueue({ core, checks, activity });
   const target = quote.target;
 
   const openDetails = useCallback(
-    (url: string): void => {
-      openExternalLink.mutate(url);
+    (url: string, event: LinkClickEvent): void => {
+      void openLink(url, "github", event);
     },
-    [openExternalLink],
+    [openLink],
   );
 
   /**
@@ -264,18 +265,22 @@ function PrDetailLoaded(props: {
    */
   const revealTarget = useCallback(
     (next: PrQuoteTarget): void => {
-      tileNavigation.openTileInTab(
-        props.viewTabId,
-        makeOpenableNodeRef({
-          id: next.id,
-          instanceId: uuidv4(),
-          type: next.kind === "chat" ? "chat" : "terminal-agent",
-          name: next.title,
-          hostId,
-        }),
+      openTile(
+        tileIntent(
+          makeOpenableNodeRef({
+            id: next.id,
+            instanceId: uuidv4(),
+            type: next.kind === "chat" ? "chat" : "terminal-agent",
+            name: next.title,
+            hostId,
+          }),
+          { tabId: props.viewTabId },
+          "explicit",
+          "direct_ui",
+        ),
       );
     },
-    [tileNavigation, props.viewTabId, hostId],
+    [openTile, props.viewTabId, hostId],
   );
 
   const sendQueueItem = useCallback(
@@ -432,7 +437,6 @@ function PrDetailLoaded(props: {
             <PrDetailFilesTab
               core={core}
               files={files}
-              epicId={props.epicId}
               viewTabId={props.viewTabId}
               hostId={hostId}
               onQuoteFile={target === null ? null : sendFile}

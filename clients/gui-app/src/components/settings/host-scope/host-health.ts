@@ -154,14 +154,7 @@ export interface DeriveHostHealthOptions {
    * cold start.
    */
   readonly authorityAttached: boolean;
-  /**
-   * Whether the ACCOUNT's plan includes remote hosts — the axis the wire no
-   * longer carries, combined with `connectivity` in `deriveHostPresence`. This
-   * surface reads the raw registry DTO rather than a directory entry, so the
-   * caller supplies it (the negation of `useRemoteHostsPlanRestricted`), where
-   * an entry-based surface reads the `planAllowsRemote` stamped at projection
-   * time.
-   */
+  /** Legacy projection input; production always allows remote connectivity. */
   readonly planAllowsRemote: boolean;
   readonly nowMs: number;
 }

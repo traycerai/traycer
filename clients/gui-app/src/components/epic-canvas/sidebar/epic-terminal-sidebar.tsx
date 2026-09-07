@@ -1,3 +1,4 @@
+import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Host-driven raw-terminal list rendered as a left-panel rail entry. Durable
  * rows come from the authoritative `terminal.plain.list` collection stream;
@@ -18,10 +19,12 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent,
 } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useDraggable } from "@dnd-kit/core";
@@ -54,14 +57,11 @@ import {
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
-import {
-  findOpenTileInTab,
-  useEpicCanvasStore,
-  useIsActiveTile,
-} from "@/stores/epics/canvas/store";
+import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import {
   useEpicLeftPanelStore,
   useLeftPanelSectionCollapsed,
@@ -86,6 +86,14 @@ import {
 } from "@/components/epic-canvas/sidebar/terminal-list-states";
 import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
 import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
+import {
+  SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+  revealSidebarNode,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
 import type {
   ListedTerminalSidebarSession,
   TerminalSidebarSessionRow,
@@ -117,42 +125,27 @@ function TerminalsPanelBodyLive(props: {
 }) {
   const { epicId, tabId } = props;
   const panel = useEpicTerminalsPanel({ epicId });
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareSetActiveTileTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
 
   const prepareOpenRow = panel.prepareOpenRow;
   const openExisting = useCallback(
-    (row: TerminalSidebarSessionRow) => {
+    (row: TerminalSidebarSessionRow, event: MouseEvent<HTMLElement>) => {
       const tile = prepareOpenRow(row);
       if (tile === null) return;
-      const found = findOpenTileInTab(tabId, tile);
-      if (found !== null) {
-        navigateNested(epicId, tabId, () =>
-          prepareSetActiveTileTabFocusTarget(
-            tabId,
-            found.paneId,
-            found.instanceId,
-          ),
-        );
-        return;
-      }
-      navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(tabId, tile),
-      );
+      openTile({
+        node: tile,
+        target: { tabId },
+        // Explicit, not `single`: double-click on a terminal row is RENAME, so
+        // no gesture would ever promote a previewed terminal tile and clicking
+        // row A then row B would evict A.
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
     },
-    [
-      epicId,
-      navigateNested,
-      prepareOpenRow,
-      prepareOpenTileInTabFocusTarget,
-      prepareSetActiveTileTabFocusTarget,
-      tabId,
-    ],
+    [openTile, prepareOpenRow, tabId],
   );
 
   return (
@@ -200,11 +193,29 @@ interface TerminalSidebarBodyProps {
   readonly panel: EpicTerminalsPanel;
   readonly epicId: string;
   readonly tabId: string;
-  readonly onOpen: (row: TerminalSidebarSessionRow) => void;
+  readonly onOpen: (
+    row: TerminalSidebarSessionRow,
+    event: MouseEvent<HTMLElement>,
+  ) => void;
 }
 
 function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   const { panel } = props;
+  const listRef = useRef<HTMLUListElement>(null);
+  const revealRequest = useSidebarNodeRevealRequest(props.tabId);
+  useLayoutEffect(() => {
+    if (revealRequest === null || listRef.current === null) return;
+    if (
+      !revealSidebarNode(
+        listRef.current,
+        revealRequest.nodeId,
+        revealRequest.nonce,
+      )
+    ) {
+      return;
+    }
+    clearSidebarNodeRevealRequest(props.tabId, revealRequest.nonce);
+  }, [panel.rows, props.tabId, revealRequest]);
   if (panel.isLoading) {
     return <TerminalsLoadingState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
   }
@@ -223,6 +234,7 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   }
   return (
     <ul
+      ref={listRef}
       aria-label="Epic terminals"
       className="space-y-0.5"
       data-testid="epic-terminal-sidebar-list"
@@ -240,7 +252,7 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
           session={row.session}
           runtimeStatus={row.runtimeStatus}
           durable={row.durable}
-          onOpen={() => props.onOpen(row)}
+          onOpen={(event) => props.onOpen(row, event)}
           authority={panel}
         />
       ))}
@@ -269,7 +281,7 @@ interface TerminalRowProps {
   readonly session: ListedTerminalSidebarSession;
   readonly runtimeStatus: "running" | "dormant" | "unknown";
   readonly durable: boolean;
-  readonly onOpen: () => void;
+  readonly onOpen: (event: MouseEvent<HTMLElement>) => void;
   readonly authority: EpicTerminalRowAuthority;
 }
 
@@ -380,7 +392,9 @@ function TerminalRow(props: TerminalRowProps) {
     if (isRenaming || !actions.canRename) return;
     startRename();
   };
+  const copyIdEntry = useSidebarCopyIdMenuEntry(session.sessionId);
   const rowMenuEntries = terminalRowMenuEntries({
+    copyIdEntry,
     closeDisabled: actions.closeDisabled,
     onStartRename: startRename,
     renameDisabled: !actions.canRename,
@@ -401,7 +415,17 @@ function TerminalRow(props: TerminalRowProps) {
     <li>
       <ContextMenu>
         <ContextMenuTrigger asChild disabled={isRenaming}>
-          <div className="group/term-row relative">
+          <div
+            data-sidebar-node-id={epicTerminalUiIdentityKey(
+              "session",
+              hostId,
+              session.sessionId,
+            )}
+            className={cn(
+              "group/term-row relative",
+              SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+            )}
+          >
             {isRenaming ? (
               <div
                 className={cn(
@@ -438,7 +462,7 @@ function TerminalRow(props: TerminalRowProps) {
                       ? "bg-accent font-medium text-accent-foreground"
                       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
                   )}
-                  onClick={() => onOpen()}
+                  onClick={onOpen}
                   onDoubleClick={handleDoubleClick}
                 >
                   <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
@@ -474,7 +498,7 @@ function TerminalRow(props: TerminalRowProps) {
                         <MoreHorizontal className="size-3" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
+                    <DropdownMenuContent align="end" className="w-max">
                       <SidebarDropdownMenuItems entries={rowMenuEntries} />
                     </DropdownMenuContent>
                   </DropdownMenu>

@@ -1,34 +1,65 @@
 import "../../../../__tests__/test-browser-apis";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { BrowserSaveLoginsController } from "@/lib/browser-view/use-browser-save-logins";
-import type { BrowserSavedLoginSitesResponse } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserSavedLoginSite,
+  BrowserSavedLoginSitesResponse,
+} from "@traycer/protocol/host/browser/contracts";
 
-/**
- * Settings > Browser's saved-logins group. Saving is silent and on by
- * default, Chrome-style, so what is worth pinning here is what the surface
- * still promises: the toggle reflects the machine's answer, turning it off
- * goes behind a destructive confirm, forgetting everything asks first, and
- * the site list carries names and nothing else.
- */
+type PreFieldSavedLoginSite = Omit<
+  BrowserSavedLoginSite,
+  "contributedByHostId"
+>;
+type SavedLoginSitesAnswer =
+  | Extract<BrowserSavedLoginSitesResponse, { kind: "sealed" }>
+  | {
+      readonly kind: "sites";
+      readonly sites: readonly (
+        | BrowserSavedLoginSite
+        | PreFieldSavedLoginSite
+      )[];
+    };
 
 const saveLogins = vi.hoisted((): { current: BrowserSaveLoginsController } => ({
   current: { enabled: true, pending: false, setEnabled: () => undefined },
 }));
-const sites = vi.hoisted(
-  (): { current: BrowserSavedLoginSitesResponse | null } => ({ current: null }),
-);
+const sites = vi.hoisted((): { current: SavedLoginSitesAnswer | null } => ({
+  current: null,
+}));
+const queryState = vi.hoisted(() => ({ isLoading: false, isError: false }));
 const refetch = vi.hoisted(() => vi.fn());
-/** Whatever a host runtime IS here - the group only asks whether one exists. */
+const hostDirectory = vi.hoisted(
+  (): {
+    localHostId: string | null;
+    labels: Record<string, string | undefined>;
+  } => ({ localHostId: null, labels: {} }),
+);
 const hostBinding = vi.hoisted((): { current: object | null } => ({
+  current: null,
+}));
+const browserView = vi.hoisted(() => ({
+  forgetLogins: vi.fn(() => Promise.resolve(true)),
+  clearSavedLoginSite: vi.fn((_domain: string) => Promise.resolve(true)),
+}));
+const browserViewState = vi.hoisted((): { current: object } => ({
   current: {},
 }));
-const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => true));
-const clearSavedLoginSite = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHostOrNull: () => ({ browserView: {} }),
+  useRunnerHostOrNull: () => ({ browserView: browserViewState.current }),
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -40,12 +71,29 @@ vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
 }));
 
 vi.mock("@/hooks/browser/use-browser-saved-login-sites-query", () => ({
-  useBrowserSavedLoginSitesQuery: () => ({ data: sites.current, refetch }),
+  BROWSER_SAVED_LOGIN_SITES_METHOD: "browser.savedLoginSites",
+  useBrowserSavedLoginSitesQuery: () => ({
+    data: sites.current,
+    isLoading: queryState.isLoading,
+    isError: queryState.isError,
+    refetch,
+  }),
 }));
 
-vi.mock("@/lib/browser-view/sessions/browser-sessions-coordinator", () => ({
-  forgetAllBrowserLogins,
-  clearSavedLoginSite,
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => hostDirectory.localHostId,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) => {
+    if (hostId === null) return null;
+    const label = hostDirectory.labels[hostId];
+    return label === undefined ? null : { label };
+  },
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 function controller(
@@ -59,42 +107,77 @@ function controller(
   };
 }
 
+function savedSite(
+  domain: string,
+  contributedByHostId: string | null,
+): BrowserSavedLoginSite {
+  return { domain, lastSeen: Date.now(), contributedByHostId };
+}
+
 function renderSection(
   current: BrowserSaveLoginsController,
-  data: BrowserSavedLoginSitesResponse | null,
-): void {
+  data: SavedLoginSitesAnswer | null,
+) {
   saveLogins.current = current;
   sites.current = data;
-  render(<BrowserSettingsSection />);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <BrowserSettingsSection />
+    </QueryClientProvider>,
+  );
 }
 
 function toggle(): HTMLElement {
-  return screen.getByRole("switch", { name: "Save website logins" });
+  return screen.getByRole("switch", {
+    name: "Save website sessions on this computer",
+  });
 }
 
-describe("<BrowserSettingsSection /> saved logins", () => {
-  afterEach(() => {
-    cleanup();
-    forgetAllBrowserLogins.mockClear();
-    clearSavedLoginSite.mockClear();
-    refetch.mockClear();
+function openManager(): HTMLElement {
+  fireEvent.click(
+    screen.getByRole("button", { name: /^(View all|Manage all)/ }),
+  );
+  return screen.getByRole("dialog", { name: "Saved website sessions" });
+}
+
+describe("<BrowserSettingsSection /> website sessions", () => {
+  beforeEach(() => {
+    browserViewState.current = browserView;
     hostBinding.current = {};
   });
 
-  it("reflects the machine's decision", () => {
+  afterEach(() => {
+    cleanup();
+    browserView.forgetLogins.mockClear();
+    browserView.clearSavedLoginSite.mockClear();
+    refetch.mockClear();
+    sites.current = null;
+    queryState.isLoading = false;
+    queryState.isError = false;
+    hostDirectory.localHostId = null;
+    hostDirectory.labels = {};
+    hostBinding.current = {};
+    useBrowserFocusStore.setState({ openImportLogins: false });
+    useSettingsStore.setState({ browserDevOrigins: [] });
+  });
+
+  it("reflects the computer's saving decision", () => {
     renderSection(controller({ enabled: true }), null);
 
     expect(toggle().getAttribute("data-state")).toBe("checked");
   });
 
-  it("renders nothing until the bridge has answered", () => {
+  it("renders nothing until the browser bridge has answered", () => {
     renderSection(controller({ enabled: null }), null);
 
-    expect(screen.queryByText("Saved logins")).toBeNull();
+    expect(screen.queryByText("Website sessions")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
-  it("turns saving on immediately, with no confirm", () => {
+  it("turns saving on immediately", () => {
     const current = controller({ enabled: false });
     renderSection(current, null);
 
@@ -103,20 +186,20 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     expect(current.setEnabled).toHaveBeenCalledExactlyOnceWith(true);
   });
 
-  it("turns saving off only after the destructive confirm", () => {
+  it("turns saving off only after confirmation", () => {
     const current = controller({ enabled: true });
     renderSection(current, null);
 
     fireEvent.click(toggle());
     expect(current.setEnabled).not.toHaveBeenCalled();
-    expect(screen.getByText("Stop saving website logins?")).not.toBeNull();
+    expect(screen.getByText("Stop saving website sessions?")).not.toBeNull();
 
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(current.setEnabled).toHaveBeenCalledExactlyOnceWith(false);
   });
 
-  it("does not turn off when the confirm is cancelled", () => {
+  it("does not turn saving off when confirmation is cancelled", () => {
     const current = controller({ enabled: true });
     renderSection(current, null);
 
@@ -126,144 +209,360 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     expect(current.setEnabled).not.toHaveBeenCalled();
   });
 
-  it("forgets everything only after the destructive confirm", () => {
-    renderSection(controller({}), null);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Forget all browser logins…" }),
-    );
-    expect(forgetAllBrowserLogins).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
-    // Taken by a live stream, so the dialog is done.
-    expect(screen.queryByText("Forget all browser logins?")).toBeNull();
-  });
-
-  it("keeps the confirm open when no live stream took the forget", () => {
-    renderSection(controller({}), null);
-    forgetAllBrowserLogins.mockReturnValueOnce(false);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Forget all browser logins…" }),
-    );
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    // Nothing went out, so nothing may look done: closing here would report a
-    // forget the app never performed. Same refusal as the per-row Clear.
-    expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Forget all browser logins?")).not.toBeNull();
-  });
-
-  it("renders nothing at all without a host runtime", () => {
+  it("renders no website-session group without a host runtime", () => {
     hostBinding.current = null;
+    useSettingsStore.setState({ browserDevOrigins: ["http://localhost:5173"] });
     renderSection(controller({ enabled: true }), {
       kind: "sites",
-      sites: [{ domain: "example.com", lastSeen: Date.now() }],
+      sites: [savedSite("example.com", null)],
     });
 
-    // The whole group goes, not just the list: with no host to answer, both
-    // destructive actions would reach nobody.
-    expect(screen.queryByText("Saved logins")).toBeNull();
+    expect(screen.queryByText("Website sessions")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Forget all browser logins…" }),
-    ).toBeNull();
-    // The rest of the Browser section is unaffected.
-    expect(screen.getByText("Web link default")).not.toBeNull();
+    expect(screen.getByText("Detected dev origins")).not.toBeNull();
   });
 
-  it("lists site names and last-seen times, and never a value", () => {
+  it("shows three alphabetical previews and discloses the exact remainder", () => {
     renderSection(controller({}), {
       kind: "sites",
       sites: [
-        { domain: "example.com", lastSeen: Date.now() },
-        { domain: "example.org", lastSeen: Date.now() },
+        savedSite("zulu.example", null),
+        savedSite("beta.example", null),
+        savedSite("alpha.example", null),
+        savedSite("echo.example", null),
+        savedSite("delta.example", null),
       ],
     });
 
-    expect(screen.getByText("example.com")).not.toBeNull();
-    expect(screen.getByText("example.org")).not.toBeNull();
-    expect(screen.getAllByText("Just now")).toHaveLength(2);
-    // A row is a site and a time; the wire shape it renders has no third
-    // field, so there is nothing here a value could arrive in.
-  });
-
-  it("says a sealed host is locked, not empty", () => {
-    renderSection(controller({}), { kind: "sealed" });
-
+    const preview = screen.getByRole("list", {
+      name: "First three saved sites",
+    });
     expect(
-      screen.getByText("Connect this desktop to unlock saved logins."),
+      within(preview)
+        .getAllByRole("listitem")
+        .map((row) => row.textContent),
+    ).toEqual(["alpha.example", "beta.example", "delta.example"]);
+    expect(screen.queryByText("echo.example")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "View all 2 more sites" }),
     ).not.toBeNull();
-    expect(screen.queryByText("No saved logins yet.")).toBeNull();
+    expect(screen.queryByText("Just now")).toBeNull();
+
+    const manager = openManager();
+    expect(
+      within(manager)
+        .getAllByRole("listitem")
+        .map((row) => row.textContent.replace("Remove", "")),
+    ).toEqual([
+      "alpha.example",
+      "beta.example",
+      "delta.example",
+      "echo.example",
+      "zulu.example",
+    ]);
   });
 
-  it("says so when the jar is genuinely empty", () => {
-    renderSection(controller({}), { kind: "sites", sites: [] });
-
-    expect(screen.getByText("No saved logins yet.")).not.toBeNull();
-  });
-
-  it("holds the cleared row through the pre-merge window, then releases it", () => {
-    const bothSites: BrowserSavedLoginSitesResponse = {
+  it("searches the side sheet and distinguishes an empty search", () => {
+    renderSection(controller({}), {
       kind: "sites",
       sites: [
-        { domain: "example.com", lastSeen: Date.now() },
-        { domain: "example.org", lastSeen: Date.now() },
+        savedSite("alpha.example", null),
+        savedSite("beta.example", null),
       ],
+    });
+    const manager = openManager();
+    const search = within(manager).getByLabelText("Search saved sites");
+
+    fireEvent.change(search, { target: { value: "missing" } });
+
+    expect(within(manager).getByText("0 of 2 sites")).not.toBeNull();
+    expect(within(manager).getByText("No matching sites")).not.toBeNull();
+    expect(
+      within(manager).queryByRole("button", { name: "Choose source…" }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(manager).getByRole("button", { name: "Clear search" }),
+    );
+    expect(within(manager).getByText("2 sites")).not.toBeNull();
+  });
+
+  it("keeps remove-all available when the collection is sealed", async () => {
+    renderSection(controller({}), { kind: "sealed" });
+
+    expect(screen.getByText("Locked")).not.toBeNull();
+    expect(
+      screen.getByText(/Connect this desktop to unlock saved website sessions/),
+    ).not.toBeNull();
+    expect(screen.queryByText("0 sites")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove all…" }));
+    await waitFor(() => {
+      expect(browserView.forgetLogins).toHaveBeenCalledTimes(1);
+      expect(refetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps remote-host attribution in both previews and manager rows", () => {
+    hostDirectory.localHostId = "host-here";
+    hostDirectory.labels = {
+      "host-here": "This Mac",
+      "host-there": "Studio Mac",
+    };
+    const preFieldSite: PreFieldSavedLoginSite = {
+      domain: "legacy.example",
+      lastSeen: Date.now(),
+    };
+    renderSection(controller({}), {
+      kind: "sites",
+      sites: [
+        savedSite("remote.example", "host-there"),
+        savedSite("local.example", "host-here"),
+        preFieldSite,
+      ],
+    });
+
+    const preview = screen.getByRole("list", {
+      name: "First three saved sites",
+    });
+    expect(
+      within(preview).getByText("Includes a sign-in from Studio Mac"),
+    ).not.toBeNull();
+    expect(within(preview).queryByText(/This Mac/)).toBeNull();
+
+    const manager = openManager();
+    expect(
+      within(manager).getByText("Includes a sign-in from Studio Mac"),
+    ).not.toBeNull();
+    expect(
+      within(manager).queryByText("Includes a sign-in from This Mac"),
+    ).toBeNull();
+    expect(within(manager).queryByText("Includes a sign-in from")).toBeNull();
+  });
+
+  it("shows loading and recoverable failure states", () => {
+    queryState.isLoading = true;
+    const view = renderSection(controller({}), null);
+    expect(screen.getByText("Loading…")).not.toBeNull();
+
+    queryState.isLoading = false;
+    queryState.isError = true;
+    view.rerender(<BrowserSettingsSection />);
+    expect(screen.getByText("Unavailable")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a genuine empty collection without an unnecessary disclosure", () => {
+    renderSection(controller({}), { kind: "sites", sites: [] });
+
+    expect(screen.getByText("0 sites")).not.toBeNull();
+    expect(
+      screen.queryByRole("list", { name: "First three saved sites" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^(View all|Manage all)/ }),
+    ).toBeNull();
+  });
+
+  it("removes one site only after main confirms", async () => {
+    renderSection(controller({}), {
+      kind: "sites",
+      sites: [savedSite("example.com", null), savedSite("example.org", null)],
+    });
+    const manager = openManager();
+
+    fireEvent.click(
+      within(manager).getByRole("button", {
+        name: "Remove saved website session for example.com",
+      }),
+    );
+
+    expect(browserView.clearSavedLoginSite).toHaveBeenCalledWith("example.com");
+    await waitFor(() => {
+      expect(refetch).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByText("example.com")).toBeNull();
+    expect(screen.getAllByText("example.org").length).toBeGreaterThan(0);
+  });
+
+  it("holds an optimistic removal through a stale reply, then releases it", async () => {
+    const bothSites: BrowserSavedLoginSitesResponse = {
+      kind: "sites",
+      sites: [savedSite("example.com", null), savedSite("example.org", null)],
     };
     saveLogins.current = controller({});
     sites.current = bothSites;
     const view = render(<BrowserSettingsSection />);
+    const manager = openManager();
 
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Clear saved logins for example.com",
+      within(manager).getByRole("button", {
+        name: "Remove saved website session for example.com",
       }),
     );
-    expect(screen.queryByText("example.com")).toBeNull();
-
-    // The host merges asynchronously, so the answer behind the click can still
-    // name the site. The row stays hidden - that is what the optimism is for.
-    view.rerender(<BrowserSettingsSection />);
-    expect(screen.queryByText("example.com")).toBeNull();
-
-    // The merge lands and the host drops it.
-    sites.current = {
-      kind: "sites",
-      sites: [{ domain: "example.org", lastSeen: Date.now() }],
-    };
-    view.rerender(<BrowserSettingsSection />);
-    expect(screen.queryByText("example.com")).toBeNull();
-
-    // The user signs into that site again. The row has to come back: before
-    // this it stayed hidden for the rest of the session.
-    sites.current = bothSites;
-    view.rerender(<BrowserSettingsSection />);
-    expect(screen.getByText("example.com")).not.toBeNull();
-  });
-
-  it("sends clearSite for one row and refetches the list", () => {
-    renderSection(controller({}), {
-      kind: "sites",
-      sites: [
-        { domain: "example.com", lastSeen: Date.now() },
-        { domain: "example.org", lastSeen: Date.now() },
-      ],
+    await waitFor(() => {
+      expect(screen.queryByText("example.com")).toBeNull();
     });
 
+    view.rerender(<BrowserSettingsSection />);
+    expect(screen.queryByText("example.com")).toBeNull();
+
+    sites.current = {
+      kind: "sites",
+      sites: [savedSite("example.org", null)],
+    };
+    view.rerender(<BrowserSettingsSection />);
+    sites.current = bothSites;
+    view.rerender(<BrowserSettingsSection />);
+
+    expect(screen.getAllByText("example.com").length).toBeGreaterThan(0);
+  });
+
+  it("leaves a site in place when main declines or rejects", async () => {
+    browserView.clearSavedLoginSite
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error("the main process went away"));
+    renderSection(controller({}), {
+      kind: "sites",
+      sites: [savedSite("example.com", null)],
+    });
+    const manager = openManager();
+    const remove = () =>
+      within(manager).getByRole("button", {
+        name: "Remove saved website session for example.com",
+      });
+
+    fireEvent.click(remove());
+    await waitFor(() => {
+      expect(browserView.clearSavedLoginSite).toHaveBeenCalledTimes(1);
+    });
+    expect(remove()).not.toBeNull();
+
+    fireEvent.click(remove());
+    await waitFor(() => {
+      expect(browserView.clearSavedLoginSite).toHaveBeenCalledTimes(2);
+    });
+    expect(remove()).not.toBeNull();
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the sheet open on remove all and reveals the import next step", async () => {
+    const bridge = new FakeBrowserViewBridge();
+    const forgetLogins = vi.spyOn(bridge, "forgetLogins");
+    browserViewState.current = bridge;
+    renderSection(controller({}), {
+      kind: "sites",
+      sites: [savedSite("example.com", null), savedSite("example.org", null)],
+    });
+    const manager = openManager();
+
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Clear saved logins for example.com",
-      }),
+      within(manager).getByRole("button", { name: "Remove all…" }),
     );
 
-    expect(clearSavedLoginSite).toHaveBeenCalledWith("example.com");
-    expect(refetch).toHaveBeenCalledTimes(1);
-    // The row goes at once: the host merges asynchronously, so the refetch
-    // behind this click can still read the pre-clear slice.
-    expect(screen.queryByText("example.com")).toBeNull();
-    expect(screen.queryByText("example.org")).not.toBeNull();
+    expect(forgetLogins).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("confirm-action")).toBeNull();
+    await waitFor(() => {
+      expect(
+        within(manager).getByText("No saved website sessions"),
+      ).not.toBeNull();
+    });
+    expect(
+      within(manager).getByRole("button", { name: "Choose source…" }),
+    ).not.toBeNull();
+    expect(
+      within(manager).getByRole("button", { name: "Done" }),
+    ).not.toBeNull();
+
+    fireEvent.click(
+      within(manager).getByRole("button", { name: "Choose source…" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+    });
+    expect(
+      screen.queryByRole("dialog", { name: "Saved website sessions" }),
+    ).toBeNull();
+  });
+
+  it("keeps previews manageable while saving is paused and disables import with a reason", () => {
+    renderSection(controller({ enabled: false }), {
+      kind: "sites",
+      sites: [savedSite("example.com", null), savedSite("example.org", null)],
+    });
+
+    expect(screen.getByText("example.com")).not.toBeNull();
+    expect(
+      screen.getByText(
+        "Saving is paused on this computer. Existing sessions stay available to manage.",
+      ),
+    ).not.toBeNull();
+    const importButton = screen.getByRole("button", { name: "Choose source…" });
+    expect(importButton.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByText("Turn on Save website sessions first."),
+    ).not.toBeNull();
+  });
+
+  it("opens the existing import flow from the outcome-led row", async () => {
+    browserViewState.current = new FakeBrowserViewBridge();
+    renderSection(controller({ enabled: true }), null);
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose source…" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+    });
+    expect(
+      screen.getByRole("heading", {
+        name: "Import logins from another browser",
+      }),
+    ).not.toBeNull();
+  });
+
+  describe("the import intent", () => {
+    it("opens the import flow on mount without a click", async () => {
+      browserViewState.current = new FakeBrowserViewBridge();
+      useBrowserFocusStore.getState().requestImportLogins();
+
+      renderSection(controller({ enabled: true }), null);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+      });
+    });
+
+    it("consumes the intent when the dialog closes", async () => {
+      browserViewState.current = new FakeBrowserViewBridge();
+      useBrowserFocusStore.getState().requestImportLogins();
+      renderSection(controller({ enabled: true }), null);
+      await waitFor(() => {
+        expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+      });
+
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
+      });
+      expect(useBrowserFocusStore.getState().openImportLogins).toBe(false);
+    });
+
+    it("drops an intent while session saving is off", async () => {
+      browserViewState.current = new FakeBrowserViewBridge({
+        saveLogins: false,
+      });
+      useBrowserFocusStore.getState().requestImportLogins();
+
+      renderSection(controller({ enabled: false }), null);
+
+      await waitFor(() => {
+        expect(useBrowserFocusStore.getState().openImportLogins).toBe(false);
+      });
+      expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
+    });
   });
 });

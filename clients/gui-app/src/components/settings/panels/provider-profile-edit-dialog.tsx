@@ -493,6 +493,7 @@ export function ProfileEditDialog(props: {
         </DialogContent>
       </Dialog>
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmRemoveOpen}
         onOpenChange={setConfirmRemoveOpen}
         title={`Remove ${profileDisplayLabel(props.profile)}?`}

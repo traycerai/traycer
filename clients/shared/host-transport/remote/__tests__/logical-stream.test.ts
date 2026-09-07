@@ -38,6 +38,7 @@ function createStream(
     method: "terminal.subscribe",
     paramsProvider: () => ({}),
     schemaVersion: { major: 1, minor: 0 },
+    requiredSchemaVersion: null,
     qos: QosClass.INTERACTIVE,
     port,
   });

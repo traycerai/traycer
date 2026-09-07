@@ -15,11 +15,11 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useEpicTreeIndex } from "@/lib/epic-selectors";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 const EPIC_ID = "epic-chat-order";
 const AGENT_ID = "agent-parent";
@@ -113,7 +113,7 @@ function seedDoc(doc: Y.Doc): void {
   epic.set("chats", chats);
 }
 
-function createSession(): OpenEpicStoreHandle {
+function createSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_epicId, callbacks) => {
     captured.value = callbacks;
@@ -126,11 +126,21 @@ function createSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: factory,
     userId: "user-1",
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("stream factory not invoked");
   const donor = new Y.Doc();

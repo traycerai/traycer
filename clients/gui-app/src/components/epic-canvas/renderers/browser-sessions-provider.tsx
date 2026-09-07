@@ -1,52 +1,18 @@
-import {
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import {
-  authenticatedHostStreamKey,
-  authenticatedOwnerIdentityKey,
-} from "@/hooks/host/use-host-stream-client-for";
-import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
-import {
-  acquireBrowserSessionsCoordinator,
-  browserSessionsCoordinatorKey,
-  browserSessionsCoordinatorState,
-  hasBrowserSessionsCoordinator,
-  subscribeToBrowserSessionsCoordinator,
-  upsertBrowserSessionsCoordinatorConsumer,
-  type BrowserSessionsOwner,
-  type BrowserSessionsState,
-} from "@/lib/browser-view/sessions/browser-sessions-coordinator";
-import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import { useBrowserSessions } from "./use-browser-sessions";
 import {
   BrowserSessionsContext,
   BrowserSessionsCoordinatorKeyContext,
+  BrowserSessionsSnapshotContext,
 } from "./browser-sessions-context";
-
-function browserSessionsOwnerIdentityKey(
-  hostClient: HostClient<HostRpcRegistry> | null,
-  hostEntry: HostDirectoryEntry | null,
-): string | null {
-  return hostClient === null
-    ? null
-    : authenticatedOwnerIdentityKey(hostClient, hostEntry);
-}
 
 export function BrowserSessionsProvider(props: {
   readonly epicId: string;
@@ -74,19 +40,19 @@ export function BrowserSessionsHostProvider(props: {
   const runnerHost = useRunnerHost();
   const browserView = runnerHost.browserView;
   const localHostId = useReactiveLocalHostId();
-  const desktopWindowId = useWindowsBridge()?.windowId ?? null;
   const { state: sessions, coordinatorKey } = useBrowserSessions({
     hostId: props.hostId,
     hostClient: props.hostClient,
     epicId: props.epicId,
     browserView,
     localHostId,
-    desktopWindowId,
   });
   return (
     <BrowserSessionsCoordinatorKeyContext.Provider value={coordinatorKey}>
       <BrowserSessionsContext.Provider value={sessions}>
-        {props.children}
+        <BrowserSessionsSnapshotProvider value={sessions}>
+          {props.children}
+        </BrowserSessionsSnapshotProvider>
       </BrowserSessionsContext.Provider>
     </BrowserSessionsCoordinatorKeyContext.Provider>
   );
@@ -122,119 +88,25 @@ export function BrowserSessionsHostBoundary(props: {
     </BrowserSessionsHostProvider>
   );
 }
-
-interface UseBrowserSessionsArgs {
-  readonly hostId: string | null;
-  readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly epicId: string;
-  readonly browserView: BrowserViewBridge | null;
-  /** This machine's host id, declared as the Electron locality signal. */
-  readonly localHostId: string | null;
-  /**
-   * This renderer's desktop window id, or null off Electron. Declared on
-   * `electronTabLifecycleReady` so the host hands the Electron lifecycle over
-   * only to the incumbent owner's own window.
-   */
-  readonly desktopWindowId: string | null;
-}
-
-interface BrowserSessionsHookResult {
-  readonly state: BrowserSessionsState;
-  readonly coordinatorKey: string | null;
-}
-
-function useBrowserSessions(
-  args: UseBrowserSessionsArgs,
-): BrowserSessionsHookResult {
-  const { hostId, epicId, browserView, localHostId, desktopWindowId } = args;
-  const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
-  const transportReady =
-    args.hostClient !== null &&
-    authenticatedHostStreamKey(args.hostClient, hostEntry) !== null;
-  const ownerIdentityKey = browserSessionsOwnerIdentityKey(
-    args.hostClient,
-    hostEntry,
+/**
+ * Publishes the sessions state through a ref whose identity never changes, so
+ * an event-time reader (`useOpenBrowserUrl`) sees the current value without
+ * re-rendering on every stream frame. Exported for tests that mount
+ * `BrowserSessionsContext.Provider` by hand.
+ */
+export function BrowserSessionsSnapshotProvider(props: {
+  readonly value: BrowserSessionsState | null;
+  readonly children: ReactNode;
+}) {
+  const ref = useRef<BrowserSessionsState | null>(props.value);
+  // Layout, not passive: the ref has to hold the committed value before the
+  // frame the user can click in, and a passive effect may flush after paint.
+  useLayoutEffect(() => {
+    ref.current = props.value;
+  });
+  return (
+    <BrowserSessionsSnapshotContext.Provider value={ref}>
+      {props.children}
+    </BrowserSessionsSnapshotContext.Provider>
   );
-  const openTransport = useDurableStreamTransportFactory();
-  const owner = useMemo<BrowserSessionsOwner | null>(
-    () =>
-      hostId === null || ownerIdentityKey === null
-        ? null
-        : { hostId, identityKey: ownerIdentityKey },
-    [hostId, ownerIdentityKey],
-  );
-  const ownerCoordinatorKey =
-    owner === null ? null : browserSessionsCoordinatorKey(epicId, owner);
-  const coordinatorKey =
-    ownerCoordinatorKey !== null &&
-    (transportReady || hasBrowserSessionsCoordinator(ownerCoordinatorKey))
-      ? ownerCoordinatorKey
-      : null;
-  const [consumerId] = useState(() => Symbol("browser-sessions-consumer"));
-  const acquireCoordinator = useEffectEvent(
-    (key: string, selectedOwner: BrowserSessionsOwner): (() => void) =>
-      acquireBrowserSessionsCoordinator({
-        key,
-        consumerId,
-        epicId,
-        owner: selectedOwner,
-        runtime: { browserView, localHostId, desktopWindowId, openTransport },
-        createIfMissing: transportReady,
-      }),
-  );
-
-  useEffect(() => {
-    if (coordinatorKey === null || owner === null) return;
-    return acquireCoordinator(coordinatorKey, owner);
-  }, [consumerId, coordinatorKey, epicId, owner]);
-
-  useEffect(() => {
-    if (coordinatorKey === null) return;
-    upsertBrowserSessionsCoordinatorConsumer(coordinatorKey, consumerId, {
-      browserView,
-      localHostId,
-      desktopWindowId,
-      openTransport,
-    });
-  }, [
-    browserView,
-    consumerId,
-    coordinatorKey,
-    desktopWindowId,
-    localHostId,
-    openTransport,
-  ]);
-
-  const subscribe = useCallback(
-    (listener: () => void) =>
-      subscribeToBrowserSessionsCoordinator(coordinatorKey, listener),
-    [coordinatorKey],
-  );
-  const getSnapshot = useCallback(
-    () => browserSessionsCoordinatorState(coordinatorKey),
-    [coordinatorKey],
-  );
-  const state = useSyncExternalStore(subscribe, getSnapshot, () => null);
-  const unavailableState = useMemo(
-    () => unavailableBrowserSessionsState(hostId),
-    [hostId],
-  );
-  return { state: state ?? unavailableState, coordinatorKey };
-}
-
-function unavailableBrowserSessionsState(
-  hostId: string | null,
-): BrowserSessionsState {
-  const unavailable = (): Promise<never> =>
-    Promise.reject(new Error("Browser sessions stream is not ready."));
-  return {
-    hostId,
-    lifecycle: "connecting",
-    inventoryReady: false,
-    items: [],
-    errorMessage: null,
-    retry: () => undefined,
-    openTab: unavailable,
-    closeTab: unavailable,
-  };
 }

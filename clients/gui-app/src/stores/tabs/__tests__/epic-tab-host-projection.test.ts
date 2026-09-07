@@ -13,11 +13,11 @@ import {
   getOpenEpicRegistry,
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -37,12 +37,18 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-function buildHandle(epicId: string): OpenEpicStoreHandle {
-  return createOpenEpicStore({
-    epicId,
-    streamClientFactory: noopStreamClientFactory,
+function buildHandle(epicId: string): OpenedStoreForTest {
+  return openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
 }
 

@@ -3,11 +3,10 @@ import type { HostHealth } from "@/components/settings/host-scope/host-health";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import {
   buildSweepHostPickerRows,
-  groupSweepHostPickerRows,
+  countTaskWorktrees,
   namesHostOutsideSurface,
-  nudgeHostIds,
+  sweepHostCountLabel,
   sweepNeedsHostPicker,
-  unionHostIds,
 } from "@/components/epics/sweep-host-model";
 import { parseHostIdStamp, stampHostIds } from "@/lib/host/host-id-stamp";
 
@@ -97,163 +96,93 @@ describe("namesHostOutsideSurface", () => {
   });
 });
 
-describe("unionHostIds", () => {
-  it("folds several Tasks' provenance into one set", () => {
-    expect(
-      [
-        ...unionHostIds([
-          ["host-a", "host-b"],
-          ["host-b", "host-c"],
-        ]),
-      ].sort(),
-    ).toEqual(["host-a", "host-b", "host-c"]);
-  });
-
-  it("treats an unanswerable row as contributing nothing, not as a verdict", () => {
-    // `null` (a peer that predates `chatHostIds`) and `[]` (this Task has no
-    // chats anywhere) reach the same badge set. Only one of them is a fact,
-    // and neither is allowed to REMOVE a host from the picker.
-    expect([...unionHostIds([null, ["host-a"]])]).toEqual(["host-a"]);
-    expect([...unionHostIds([null, null])]).toEqual([]);
-  });
-});
-
-describe("nudgeHostIds", () => {
-  it("drops the host being censused, keeping the rest of the badges", () => {
-    // The badge on the host you are already looking at describes the rows in
-    // front of you; only the others are somewhere to be sent.
-    expect(
-      nudgeHostIds(new Set(["host-a", "host-b", "host-c"]), "host-b"),
-    ).toEqual(["host-a", "host-c"]);
-  });
-
-  it("answers with the whole badge set when nothing is being censused yet", () => {
-    expect(nudgeHostIds(new Set(["host-b"]), null)).toEqual(["host-b"]);
-  });
-
-  it("says nothing when the only badged host IS the one on screen", () => {
-    expect(nudgeHostIds(new Set(["host-a"]), "host-a")).toEqual([]);
-    expect(nudgeHostIds(new Set(), "host-a")).toEqual([]);
-  });
-
-  it("answers by the SET, not by the order a surface folded it in", () => {
-    // Two surfaces (History's rows, the Epic status row) fold the same
-    // provenance from different record shapes. They must nudge alike.
-    expect(nudgeHostIds(new Set(["host-c", "host-b"]), null)).toEqual(
-      nudgeHostIds(new Set(["host-b", "host-c"]), null),
-    );
-  });
-});
-
 describe("buildSweepHostPickerRows", () => {
-  it("keeps every host, marking occupancy and the surface's default", () => {
+  it("keeps every host, flat, marking only the surface's default", () => {
     const rows = buildSweepHostPickerRows({
       hosts: [hostOption("host-a"), hostOption("host-b"), hostOption("host-c")],
-      occupiedHostIds: new Set(["host-b"]),
       defaultHostId: "host-a",
     });
 
-    // Never filtered: a host with no record naming it can still hold the
-    // Task's worktrees, because owner-binding cascades are best-effort.
+    // Never filtered and never grouped: a host with no record naming it can
+    // still hold the Task's worktrees, and the shared picker's own order is
+    // the order.
     expect(rows.map((row) => row.host.hostId)).toEqual([
       "host-a",
       "host-b",
       "host-c",
     ]);
-    expect(rows.map((row) => row.occupied)).toEqual([false, true, false]);
     expect(rows.map((row) => row.isDefault)).toEqual([true, false, false]);
   });
 
   it("marks no default when the surface has no host", () => {
     const rows = buildSweepHostPickerRows({
       hosts: [hostOption("host-a")],
-      occupiedHostIds: new Set(),
       defaultHostId: null,
     });
     expect(rows[0].isDefault).toBe(false);
   });
 });
 
-describe("groupSweepHostPickerRows", () => {
-  function rows(input: {
-    readonly occupied: readonly string[];
-    readonly defaultHostId: string | null;
-  }) {
-    return buildSweepHostPickerRows({
-      hosts: [hostOption("host-a"), hostOption("host-b"), hostOption("host-c")],
-      occupiedHostIds: new Set(input.occupied),
-      defaultHostId: input.defaultHostId,
-    });
-  }
-
-  function ids(
-    group: readonly { readonly host: { readonly hostId: string } }[],
-  ) {
-    return group.map((row) => row.host.hostId);
-  }
-
-  it("lifts badged hosts to the top level, badged first", () => {
-    const groups = groupSweepHostPickerRows(
-      rows({ occupied: ["host-c"], defaultHostId: "host-a" }),
-    );
-    // Badged leads even though the shared picker's order puts host-a first:
-    // that ordering is the claim the group is making.
-    expect(ids(groups.primary)).toEqual(["host-c", "host-a"]);
-    expect(ids(groups.other)).toEqual(["host-b"]);
+describe("countTaskWorktrees", () => {
+  const owner = (epicId: string, ownerKind: "chat" | "terminal-agent") => ({
+    epicId,
+    ownerKind,
+    ownerId: `${ownerKind}-${epicId}`,
+    updatedAt: 0,
   });
 
-  it("never demotes the default host, even unbadged", () => {
-    const groups = groupSweepHostPickerRows(
-      rows({ occupied: ["host-b"], defaultHostId: "host-c" }),
-    );
-    expect(ids(groups.primary)).toEqual(["host-b", "host-c"]);
-    // Hiding the PRE-SELECTED host behind a disclosure is the one thing the
-    // grouping must never do.
-    expect(ids(groups.other)).toEqual(["host-a"]);
+  it("counts a worktree once however many selected owners share it", () => {
+    // Two chats and a terminal agent on one worktree: one worktree.
+    expect(
+      countTaskWorktrees(
+        [
+          {
+            owners: [
+              owner("epic-1", "chat"),
+              owner("epic-1", "chat"),
+              owner("epic-1", "terminal-agent"),
+            ],
+          },
+        ],
+        new Set(["epic-1"]),
+      ),
+    ).toBe(1);
   });
 
-  it("counts a host that is both badged and default only once", () => {
-    const groups = groupSweepHostPickerRows(
-      rows({ occupied: ["host-a"], defaultHostId: "host-a" }),
-    );
-    expect(ids(groups.primary)).toEqual(["host-a"]);
-    expect(ids(groups.other)).toEqual(["host-b", "host-c"]);
+  it("counts terminal-agent worktrees, which the old badge missed", () => {
+    expect(
+      countTaskWorktrees(
+        [{ owners: [owner("epic-1", "terminal-agent")] }],
+        new Set(["epic-1"]),
+      ),
+    ).toBe(1);
   });
 
-  it("renders flat when nothing is badged and there is no default", () => {
-    // Every row would otherwise land under the disclosure, and a wholly
-    // collapsed list is strictly worse than the flat one it replaced.
-    const groups = groupSweepHostPickerRows(
-      rows({ occupied: [], defaultHostId: null }),
-    );
-    expect(ids(groups.primary)).toEqual(["host-a", "host-b", "host-c"]);
-    expect(groups.other).toEqual([]);
+  it("ignores worktrees owned only by unselected Tasks, and orphans", () => {
+    expect(
+      countTaskWorktrees(
+        [
+          { owners: [owner("epic-2", "chat")] },
+          { owners: [] },
+          { owners: [owner("epic-1", "chat"), owner("epic-2", "chat")] },
+        ],
+        new Set(["epic-1"]),
+      ),
+    ).toBe(1);
+  });
+});
+
+describe("sweepHostCountLabel", () => {
+  it("keeps the word and the number", () => {
+    expect(sweepHostCountLabel(1)).toBe("1 worktree");
+    expect(sweepHostCountLabel(3)).toBe("3 worktrees");
   });
 
-  it("grows no disclosure when every host is already top-level", () => {
-    const groups = groupSweepHostPickerRows(
-      rows({ occupied: ["host-a", "host-b", "host-c"], defaultHostId: null }),
-    );
-    expect(ids(groups.primary)).toEqual(["host-a", "host-b", "host-c"]);
-    expect(groups.other).toEqual([]);
-  });
-
-  it("keeps every row across both groups, always", () => {
-    for (const arrangement of [
-      { occupied: ["host-b"], defaultHostId: "host-a" },
-      { occupied: [], defaultHostId: "host-b" },
-      { occupied: ["host-c"], defaultHostId: null },
-      { occupied: [], defaultHostId: null },
-    ]) {
-      const groups = groupSweepHostPickerRows(rows(arrangement));
-      // Grouping is presentation. It may never drop a host - that is the
-      // completeness backstop the picker exists to hold.
-      expect([...ids(groups.primary), ...ids(groups.other)].sort()).toEqual([
-        "host-a",
-        "host-b",
-        "host-c",
-      ]);
-    }
+  it("renders nothing for zero and for unknown alike", () => {
+    // "No number" covers zero, loading, failed and unreachable, so a row
+    // never claims a zero it has not proven.
+    expect(sweepHostCountLabel(0)).toBeNull();
+    expect(sweepHostCountLabel(null)).toBeNull();
   });
 });
 

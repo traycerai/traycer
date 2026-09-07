@@ -29,9 +29,17 @@ const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
 }));
 
-vi.mock("../../host/pid-metadata", () => ({
-  readHostPidMetadata: mocks.readHostPidMetadataMock,
-}));
+vi.mock("../../host/pid-metadata", async () => {
+  // Only the read is stubbed; `publishedHostProcessGone` stays real so
+  // `running` follows the (mocked) `isProcessAlive` as the command does.
+  const actual = await vi.importActual<
+    typeof import("../../host/pid-metadata")
+  >("../../host/pid-metadata");
+  return {
+    ...actual,
+    readHostPidMetadata: mocks.readHostPidMetadataMock,
+  };
+});
 
 vi.mock("../../host/bootstrap-log", () => ({
   readBootstrapMarkers: mocks.readBootstrapMarkersMock,

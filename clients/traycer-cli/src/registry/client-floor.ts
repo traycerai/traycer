@@ -48,7 +48,8 @@ export type HostClientFloorVerdict =
    * policy reserved for the INSTALLED side - so this is a data-integrity
    * failure, and it refuses rather than degrading to "no floor". Degrading
    * would make a typo in the publisher the way to disable the floor fleet-
-   * wide, silently.
+   * wide, silently. `requiredCliVersion` here is the declared text BOUNDED
+   * for rendering (`describeUnreadableFloor`), not the raw value.
    */
   | { readonly kind: "floor-unreadable"; readonly requiredCliVersion: string };
 
@@ -63,7 +64,14 @@ export function evaluateHostClientFloor(
   const requiredCliVersion = input.requiredCliVersion;
   if (requiredCliVersion === null) return { kind: "unfloored" };
   if (!isValidHostVersion(requiredCliVersion)) {
-    return { kind: "floor-unreadable", requiredCliVersion };
+    // Bounded HERE, at the verdict's construction, so every consumer of
+    // the refusal - the message, the registry client's WARN lines, the
+    // error's `details` - carries the same bounded text (see
+    // `describeUnreadableFloor`).
+    return {
+      kind: "floor-unreadable",
+      requiredCliVersion: describeUnreadableFloor(requiredCliVersion),
+    };
   }
   if (input.cliVersion === LOCAL_CLI_VERSION) {
     return { kind: "unreleased-cli", requiredCliVersion };
@@ -112,4 +120,20 @@ export function hostClientFloorRefusalMessage(
     return `host registry: version '${resolvedVersion}' requires Traycer CLI ${refusal.requiredCliVersion} or newer, and this is ${refusal.cliVersion}. Update Traycer first, then install the host.`;
   }
   return `host registry: version '${resolvedVersion}' declares requiredCliVersion ${JSON.stringify(refusal.requiredCliVersion)}, which is not a version this CLI can compare against. The manifest is wrong; do not work around it by installing a different version.`;
+}
+
+// An unreadable floor is registry text this CLI could not parse. A valid
+// floor is a bounded token by construction; this one is not, so the
+// verdict carries it bounded - its charset (printable ASCII, the rest
+// shown as `?`) and its length - and every render of the REFUSAL (the
+// message, the WARN lines, `details`, the reason `host available` authors
+// onto its one unsplittable JSON line and every GUI surface) inherits
+// that bound. The catalog ENTRY itself travels as the manifest parsed it;
+// the GUI renders no floor it cannot read as a version.
+const UNREADABLE_FLOOR_RENDER_LIMIT = 64;
+
+function describeUnreadableFloor(value: string): string {
+  const printable = value.replace(/[^\x20-\x7e]/g, "?");
+  if (printable.length <= UNREADABLE_FLOOR_RENDER_LIMIT) return printable;
+  return `${printable.slice(0, UNREADABLE_FLOOR_RENDER_LIMIT)}... (${value.length} characters)`;
 }

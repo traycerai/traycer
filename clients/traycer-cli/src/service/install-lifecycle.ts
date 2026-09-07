@@ -2,6 +2,7 @@ import type { InstallHostLifecycle, SwapLockRecovery } from "../installer";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
+import { didServiceRegistrationCommit } from "./cli-invocation-record";
 import { isSelfNamingCliInvocation } from "./cli-invocation-shape";
 import {
   createServiceController,
@@ -13,6 +14,7 @@ import {
 import { readRegisteredCliInvocation } from "./platforms/macos";
 import {
   describeSlotLockHolders,
+  epochMicrosNow,
   killLingeringSlotProcesses,
 } from "./platforms/windows";
 import type { Environment } from "../runner/environment";
@@ -32,7 +34,8 @@ import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
 function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
   if (process.platform !== "win32") return null;
   return {
-    killLingeringProcesses: () => killLingeringSlotProcesses(label, null),
+    killLingeringProcesses: () =>
+      killLingeringSlotProcesses(label, null, { now: epochMicrosNow }),
     describeLockHolders: () => describeSlotLockHolders(label, null),
   };
 }
@@ -116,6 +119,20 @@ export interface CreateServiceInstallLifecycleOptions {
   // ensure/update/apply only skipped the busy PRE-check and the
   // cooperative stop's own busy denial still aborted the install.
   readonly force: boolean;
+  /**
+   * Runs once the pre-swap stop's mutation-capability check has passed and
+   * immediately before the actuator stops the host: the first point at
+   * which this lifecycle can have disturbed it. NOT before that check, and
+   * not on the status probe: a probe that throws, or an authority that is
+   * refused, has touched nothing - and `host update` restores a marker it
+   * took over only for a failure that touched nothing. The `service-stop`
+   * progress line precedes both and says nothing about either. A lifecycle
+   * that decides not to stop (a stopped or unregistered service on POSIX)
+   * never calls it; the swap itself reports that boundary
+   * (`CommitInstallFromSourceOptions.onWillSwap`). `null` when no caller is
+   * tracking the boundary.
+   */
+  readonly onWillStopHost: (() => void) | null;
 }
 
 // Build the lifecycle hooks `installHost` needs to keep the OS
@@ -154,9 +171,10 @@ export function createServiceInstallLifecycle(
       // open handles inside the install dir would fail the swap rename, so
       // it runs even when the service wasn't observed running.
       if (status.state === "running" || process.platform === "win32") {
-        await withServiceMutationAuthority(verifyMutationCapability, () =>
-          controller.stop(label, { force: options.force }),
-        );
+        await withServiceMutationAuthority(verifyMutationCapability, () => {
+          if (options.onWillStopHost !== null) options.onWillStopHost();
+          return controller.stop(label, { force: options.force });
+        });
         state.stoppedBeforeSwap = true;
         return;
       }
@@ -180,9 +198,13 @@ export function createServiceInstallLifecycle(
         process.platform === "darwin"
       ) {
         try {
-          await withServiceMutationAuthority(verifyMutationCapability, () =>
-            controller.stop(label, { force: options.force }),
-          );
+          await withServiceMutationAuthority(verifyMutationCapability, () => {
+            // Fired before a cooperative stop a busy host may still DENY;
+            // that denial is `HOST_BUSY`, which every caller routes to the
+            // park arm - the one exit that never reads the boundary.
+            if (options.onWillStopHost !== null) options.onWillStopHost();
+            return controller.stop(label, { force: options.force });
+          });
           state.stoppedBeforeSwap = true;
         } catch (cause) {
           if (isServiceMutationAuthorityError(cause)) throw cause;
@@ -496,7 +518,21 @@ async function runWithPublishedHostStartAdoption(
   try {
     await start();
     await lease?.waitForSpawn();
+  } catch (error) {
+    // The invocation-record decorator can reject AFTER the service manager
+    // accepted the registration and began launching the supervisor (record
+    // commit, lifecycle write, stale-marker clear). The supervisor is coming
+    // up and will present this lease; cancelling it now would refuse or kill
+    // an admitted child and leave a registered service hostless. So the lease
+    // is honoured first and the record error surfaces afterwards. A spawn
+    // wait that itself fails must not replace the error being reported.
+    if (didServiceRegistrationCommit(error)) {
+      await lease?.waitForSpawn().catch(() => undefined);
+    }
+    throw error;
   } finally {
-    await lease?.cancel();
+    // cancel() propagating out of this `finally` would swap in its own error
+    // for the actuator or record error being reported.
+    await lease?.cancel().catch(() => undefined);
   }
 }

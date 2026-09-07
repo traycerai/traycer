@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prosemirrorJSONToYXmlFragment } from "@tiptap/y-tiptap";
 import * as Y from "yjs";
+import { serializeArtifactMarkdown } from "@/lib/artifacts/artifact-export";
 import { artifactDocumentBundle } from "@/editor-core";
 import type { TDocumentDefinitions } from "pdfmake/interfaces";
 
@@ -28,7 +29,13 @@ vi.mock("pdfmake/build/vfs_fonts", () => ({
   "Roboto-Regular.ttf": "regular-font-data",
 }));
 
-function createFragment(markdown: string): Y.XmlFragment {
+/**
+ * Still round-trips through a real `Y.XmlFragment` rather than handing the
+ * builder its input string back: the export used to serialize the fragment
+ * itself, so parsing and re-serializing here keeps these expectations pinned to
+ * the same bytes that change moved OUT of the builder.
+ */
+function createBody(markdown: string): string {
   const doc = new Y.Doc();
   const fragment = doc.getXmlFragment("artifact-body");
   prosemirrorJSONToYXmlFragment(
@@ -36,7 +43,7 @@ function createFragment(markdown: string): Y.XmlFragment {
     artifactDocumentBundle.markdownManager.parse(markdown),
     fragment,
   );
-  return fragment;
+  return serializeArtifactMarkdown(fragment);
 }
 
 describe("PDF artifact export", () => {
@@ -59,7 +66,7 @@ describe("PDF artifact export", () => {
         {
           id: "retry-pdf",
           title: "Retry PDF",
-          fragment: createFragment("# Retry"),
+          markdown: createBody("# Retry"),
         },
       ],
       format: "pdf" as const,
@@ -84,7 +91,7 @@ describe("PDF artifact export", () => {
         {
           id: "structured-pdf",
           title: "Structured PDF",
-          fragment: createFragment(
+          markdown: createBody(
             "# Design\n\nA **bold** and *italic* paragraph.\n\n- One\n- Two\n\n| A | B |\n| - | - |\n| 1 | 2 |",
           ),
         },
@@ -143,7 +150,7 @@ describe("PDF artifact export", () => {
         {
           id: "visual-pdf",
           title: "Visual PDF",
-          fragment: createFragment(
+          markdown: createBody(
             `\`\`\`mermaid\n${mermaidSource}\n\`\`\`\n\n\`\`\`wireframe\n${wireframeSource}\n\`\`\``,
           ),
         },
@@ -189,7 +196,7 @@ describe("PDF artifact export", () => {
         {
           id: "tasks-pdf",
           title: "Tasks PDF",
-          fragment: createFragment(
+          markdown: createBody(
             "- [ ] Draft copy\n- [x] Ship release\n  - [ ] Notify team",
           ),
         },

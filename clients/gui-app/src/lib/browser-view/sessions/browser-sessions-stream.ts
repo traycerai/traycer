@@ -2,17 +2,6 @@ import type {
   BrowserSessionInfo,
   BrowserSessionsServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
-import type {
-  StreamCloseReason,
-  StreamConnectionStatus,
-} from "@traycer-clients/shared/host-transport/i-stream-session";
-
-export type BrowserSessionsLifecycle =
-  | "connecting"
-  | "live"
-  | "reconnecting"
-  | "closed"
-  | "failed";
 
 /**
  * Session-list projection shared by the primary-host provider and the remote
@@ -38,15 +27,4 @@ export function browserSessionsReducer(
     return current.filter((session) => session.sessionId !== frame.sessionId);
   }
   return null;
-}
-
-export function browserSessionsLifecycle(
-  status: StreamConnectionStatus,
-  reason: StreamCloseReason | null,
-): BrowserSessionsLifecycle {
-  if (reason?.kind === "fatalError") return "failed";
-  if (status === "open") return "live";
-  if (status === "reconnecting") return "reconnecting";
-  if (status === "closed") return "closed";
-  return "connecting";
 }

@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
-import type { BrowserViewNativeTabKey } from "@traycer-clients/shared/platform/browser-view";
-import type { BrowserSessionsLifecycle } from "../sessions/browser-sessions-stream";
+import type {
+  BrowserSessionsLifecycle,
+  BrowserViewNativeTabKey,
+} from "@traycer-clients/shared/platform/browser-view";
 import {
   isBrowserTileVisible,
   subscribeVisibleBrowserTiles,
@@ -13,14 +15,17 @@ export const PIP_CAPTION_FADE_MS = 300;
 
 export type PipStreamHealth = "live" | "stale" | "disconnected";
 
+/** Who asked for a PiP: a user gesture, or the host-push pipeline. */
+export type PipOrigin = "manual" | "agent";
+
 export interface PipTarget extends BrowserViewNativeTabKey {
   readonly selectionId: string;
   /**
    * Who asked for this PiP. The agent-surfacing pipeline never replaces a
    * `manual` target (explicit user intent) but freely replaces `agent`
-   * targets latest-wins; see `decideAgentTabDisposition`.
+   * targets latest-wins; see `hostOpenedTabSuppressReason`.
    */
-  readonly origin: "manual" | "agent";
+  readonly origin: PipOrigin;
 }
 
 export interface PipCaption {
@@ -65,7 +70,7 @@ export function convertBrowserTabToPip(input: {
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
-  readonly origin: "manual" | "agent";
+  readonly origin: PipOrigin;
   readonly onReady: () => void;
   readonly onError: (message: string) => void;
 }): void {

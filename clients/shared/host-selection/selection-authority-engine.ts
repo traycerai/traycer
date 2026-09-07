@@ -64,11 +64,14 @@ import {
   type SelectionSubscription,
   type SelectionTransportKind,
 } from "./selection-authority-contract";
+import { PLAN_RESTRICTED_REPROBE_MS } from "../host-transport/remote/config";
 
 /**
- * How many CONSECUTIVE transport-confirmed refusals/timeouts - counted across
- * every window's attempts, deduplicated per (incarnation, attemptId) - make a
- * host `dead` (connection registry §2).
+ * How many CONSECUTIVE ordinary transport-confirmed refusals/timeouts - counted
+ * across every window's attempts, deduplicated per (incarnation, attemptId) -
+ * make a host `dead` (connection registry §2). A deterministic
+ * `plan-restricted` entitlement refusal is the deliberate one-observation
+ * exception; see `deriveLease`.
  *
  * Three, not one: the registry's target is "confirmation within ~5-10 s of
  * real death, not one failed probe". The transports pace their own redials
@@ -358,6 +361,8 @@ export type DialDisposition =
   | "inert-indeterminate"
   /** A live session for this host outranks the failure (invariant 5). */
   | "suppressed-live-session"
+  /** A deterministic plan denial already owns the verdict and reprobe clock. */
+  | "suppressed-plan-restriction"
   /** The host is not in the answered fleet. */
   | "dropped-outside-fleet"
   /** This (incarnation, attemptId) was already ingested. */
@@ -519,7 +524,8 @@ interface CompatRecord {
 /** Per-host aggregated evidence. Pruned when the host leaves the fleet. */
 interface HostEvidence {
   refusalStreak: number;
-  lastCountedRefusalDetail: "plan-restricted" | null;
+  planRestrictedRefusalObserved: boolean;
+  planRestrictedUntil: number | null;
   compat: CompatRecord | null;
   /** Authority-local deadline of the current tombstone episode, if any. */
   restartEpisodeEndsAt: number | null;
@@ -553,7 +559,8 @@ interface HostEvidence {
 function emptyHostEvidence(): HostEvidence {
   return {
     refusalStreak: 0,
-    lastCountedRefusalDetail: null,
+    planRestrictedRefusalObserved: false,
+    planRestrictedUntil: null,
     compat: null,
     restartEpisodeEndsAt: null,
     provedAliveAtLeastOnce: false,
@@ -1436,7 +1443,8 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // through, so no producer has to remember it separately.
     evidence.provedAliveAtLeastOnce = true;
     evidence.refusalStreak = 0;
-    evidence.lastCountedRefusalDetail = null;
+    evidence.planRestrictedRefusalObserved = false;
+    evidence.planRestrictedUntil = null;
     evidence.restartEpisodeEndsAt = null;
     // The dial-stall counter retires with the streak, and HERE rather than
     // only on a dial success, because this is the single funnel every kind of
@@ -1488,6 +1496,20 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       this.recordDialDisposition(report, "inert-indeterminate");
       return;
     }
+    const evidence = this.hostEvidence(hostId);
+    const now = this.options.clock.now();
+    if (
+      report.outcome === "confirmed-refusal" &&
+      report.refusalDetail === "plan-restricted"
+    ) {
+      evidence.planRestrictedRefusalObserved = true;
+      evidence.refusalStreak = 0;
+      // Every non-duplicate refusal is fresh authenticated evidence from the
+      // physical session that just failed. Replace the prior deadline even
+      // while it is active so authority, negative cache and owner rebuild all
+      // describe the latest denial rather than an older identity's window.
+      evidence.planRestrictedUntil = now + PLAN_RESTRICTED_REPROBE_MS;
+    }
     if (this.hasLiveSession(hostId)) {
       // Recorded for diagnostics, never accumulated: a live session anywhere
       // in the app outranks every other evidence class (invariant 5). The
@@ -1495,10 +1517,22 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       this.recordDialDisposition(report, "suppressed-live-session");
       return;
     }
-    const evidence = this.hostEvidence(hostId);
+    const planRestrictionActive =
+      evidence.planRestrictedRefusalObserved &&
+      evidence.planRestrictedUntil !== null &&
+      now < evidence.planRestrictedUntil;
+    if (
+      report.outcome === "confirmed-refusal" &&
+      report.refusalDetail === "plan-restricted"
+    ) {
+      this.recordDialDisposition(report, "suppressed-plan-restriction");
+      return;
+    }
+    if (planRestrictionActive) {
+      this.recordDialDisposition(report, "suppressed-plan-restriction");
+      return;
+    }
     evidence.refusalStreak += 1;
-    evidence.lastCountedRefusalDetail =
-      report.outcome === "confirmed-refusal" ? report.refusalDetail : null;
     this.recordDialDisposition(
       report,
       // Equality, not `>=`: this names the ONE report that crossed, which is
@@ -1582,7 +1616,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // a success that arrives twice is classified `dropped-duplicate-attempt`
     // before its outcome is ever examined. Counting that as a stalled failure
     // would let a replayed SUCCESS raise "dial failures are not advancing".
-    if (report.outcome === "success" || dispositionCounts(disposition)) {
+    if (
+      report.outcome === "success" ||
+      dispositionCounts(disposition) ||
+      disposition === "suppressed-plan-restriction"
+    ) {
       this.dialStalls.delete(hostId);
       return;
     }
@@ -2761,8 +2799,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    *    (which would flash `ready` a moment before the socket dies) and the
    *    death arm.
    * 3. a live session anywhere in the app is firsthand proof of life.
-   * 4. the confirmed-death streak. `plan-restricted` is reachable ONLY from a
-   *    refusal whose transport error carried it - never from a DTO.
+   * 4. confirmed refusal evidence. A `plan-restricted` refusal is conclusive
+   *    after one observation because it is a deterministic entitlement verdict;
+   *    ordinary reachability refusals still require the confirmed-death streak.
+   *    `plan-restricted` is reachable ONLY from a refusal whose transport error
+   *    carried it - never from a DTO.
    * 5. otherwise `connecting`: no evidence yet, or a streak still short of
    *    the threshold. Deliberately non-committal - neither usable-by-proof
    *    nor dead.
@@ -2886,14 +2927,19 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     if (
       evidence !== null &&
-      evidence.refusalStreak >= CONFIRMED_DEATH_REFUSAL_STREAK
+      ((evidence.planRestrictedRefusalObserved &&
+        evidence.planRestrictedUntil !== null &&
+        now < evidence.planRestrictedUntil) ||
+        evidence.refusalStreak >= CONFIRMED_DEATH_REFUSAL_STREAK)
     ) {
       return {
         hostId,
         status: "dead",
         dead: {
           reason:
-            evidence.lastCountedRefusalDetail === "plan-restricted"
+            evidence.planRestrictedRefusalObserved &&
+            evidence.planRestrictedUntil !== null &&
+            now < evidence.planRestrictedUntil
               ? "plan-restricted"
               : "offline",
         },
@@ -2976,8 +3022,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       if (earliest === null || deadline < earliest) earliest = deadline;
     };
     for (const entry of this.fleet.hosts) {
-      const endsAt = this.evidence.get(entry.hostId)?.restartEpisodeEndsAt;
+      const evidence = this.evidence.get(entry.hostId);
+      const endsAt = evidence?.restartEpisodeEndsAt;
       if (endsAt !== undefined && endsAt !== null) consider(endsAt);
+      const planRestrictedUntil = evidence?.planRestrictedUntil;
+      if (planRestrictedUntil !== undefined && planRestrictedUntil !== null) {
+        consider(planRestrictedUntil);
+      }
       if (entry.kind === "local" && this.localOutageStartedAt !== null) {
         consider(this.localOutageStartedAt + LOCAL_EXPECTED_OUTAGE_CEILING_MS);
       }

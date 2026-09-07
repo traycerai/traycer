@@ -1,12 +1,13 @@
 import { useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projection-helpers";
 
 /**
  * What the cache holds for one `epic.listChatRecords` answer: the rows, plus
@@ -17,7 +18,15 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
  * answer is applied. `null` when no session existed to read at dispatch.
  */
 interface ChatRecordListAnswer {
-  readonly chats: readonly ChatRecordSummary[];
+  /**
+   * The `@1.1` row, NOT the base one. The base row is assignable to it in the
+   * wrong direction, so typing this as `ChatRecordSummary` is a silent
+   * narrowing rather than a type error: the request asks for the doc-resident
+   * remainder and the cache then drops `docResident`, the one field that says
+   * which rows those are. What is lost surfaces on the WRITE, not the render -
+   * a rename routed to `epic.renameChat` with an id naming no registry chat.
+   */
+  readonly chats: readonly ChatRecordSummaryV11[];
   readonly issuedAtSeq: number | null;
   /**
    * WHICH store's counter `issuedAtSeq` was read from
@@ -79,7 +88,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // not projecting.
   const client = useEpicSessionHostClient();
   const handle = useMaybeOpenEpicHandle();
-  const params = useMemo(() => ({ epicId }), [epicId]);
+  // `hasDocReplica` decides whether the host serves the doc-resident
+  // remainder - see `GUI_PROJECTS_EPIC_DOC_REPLICA`. Declared by us because
+  // only we know it: the host would have to infer it from `epic.subscribe`'s
+  // negotiated major, which this method's own version cannot see.
+  const params = useMemo(
+    () => ({ epicId, hasDocReplica: GUI_PROJECTS_EPIC_DOC_REPLICA }),
+    [epicId],
+  );
   // Viewer-scoped, exactly like the cloud-chat reads: the response is one
   // identity's own chats, so two users on one installation have different
   // correct answers and must never share a cache slot.

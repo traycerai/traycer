@@ -37,9 +37,21 @@ export const REPORT_IMAGE_READ_TIMEOUT_MS = 15_000;
 export const REPORT_LOG_TAIL_MAX_BYTES = 512_000;
 
 /**
- * Total attachment budget (Critique G5): 3 images x 5 MiB (15 MiB) + 2 log
- * tails x ~512 KB (~1 MiB) = ~16 MiB of real payload. 20 MiB total leaves
- * ~4 MiB of headroom for Sentry envelope framing/JSON overhead around that
+ * The closed-world contract's full set of possible log attachments (ticket
+ * 03, plan D3): `desktop.log`, `host.log` (`local-host.log` on the wire),
+ * `browser-telemetry.jsonl`, `browser-trace.jsonl`. Was 2 before browser
+ * diagnostics existed. `reportImagesExceedBudget` reserves every one of
+ * these at its max cap regardless of which consent toggles are currently on
+ * or whether a browser file exists on disk - the budget must hold even when
+ * a retry flips a toggle back on, or a trace file absent at dialog-open
+ * appears by submit time.
+ */
+export const MAX_REPORT_LOG_ATTACHMENTS = 4;
+
+/**
+ * Total attachment budget (Critique G5): 3 images x 5 MiB (15 MiB) + 4 log
+ * tails x ~512 KB (~2 MiB) = ~17 MiB of real payload. 20 MiB total leaves
+ * ~3 MiB of headroom for Sentry envelope framing/JSON overhead around that
  * payload, comfortably under Sentry's server-side envelope ceiling. This is
  * enforced at attach time in the UI (never silently at flush, see the ticket
  * 08 guardrail) and re-enforced by Electron main's IPC parser.
@@ -67,14 +79,20 @@ export function reportImageMediaTypeForMimeType(
 /**
  * True when `imageBytesTotal` (the sum of every attached image's byte
  * length) would push the report's total attachment payload - images plus
- * both frozen log tails - over {@link TOTAL_ATTACHMENT_BUDGET_BYTES}. Both
- * tails are counted at their max cap regardless of whether the consent
- * panel's log toggles are on, since the budget must hold even when a retry
- * flips a toggle back on after this check ran.
+ * every possible frozen log tail - over {@link TOTAL_ATTACHMENT_BUDGET_BYTES}.
+ * `attachedLogCount` is the actual number of log attachments to reserve
+ * budget for (pass {@link MAX_REPORT_LOG_ATTACHMENTS} for the closed-world
+ * contract's full set); every reserved tail is counted at its max cap
+ * regardless of whether the consent panel's log toggles are on or a browser
+ * file exists on disk, since the budget must hold even when a retry flips a
+ * toggle back on after this check ran.
  */
-export function reportImagesExceedBudget(imageBytesTotal: number): boolean {
+export function reportImagesExceedBudget(
+  imageBytesTotal: number,
+  attachedLogCount: number,
+): boolean {
   return (
-    imageBytesTotal + 2 * REPORT_LOG_TAIL_MAX_BYTES >
+    imageBytesTotal + attachedLogCount * REPORT_LOG_TAIL_MAX_BYTES >
     TOTAL_ATTACHMENT_BUDGET_BYTES
   );
 }

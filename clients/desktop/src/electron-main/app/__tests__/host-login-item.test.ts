@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import electronLog from "electron-log";
+import type { ProbeCommandResult } from "@traycer-clients/shared/host-lifecycle";
 import {
   chmodSync,
   existsSync,
@@ -19,6 +21,7 @@ import {
   expect,
   it,
   vi,
+  type Mock,
 } from "vitest";
 
 // `inAppLaunchAgentPlistPath` reads `process.resourcesPath` synchronously
@@ -213,6 +216,7 @@ function makeFakeChild(): FakeChildHandle {
 const {
   registerHostLoginItem,
   readHostLoginItemStatus,
+  readParkedRegistrationTakeover,
   retireCompetingCliRegistrationAtLaunch,
   overrideAgentPrintRunnerForTests,
   runLaunchctlBootout,
@@ -466,10 +470,22 @@ describe("registerHostLoginItem", () => {
               .mockReturnValueOnce({ status: "enabled" }) // snapshot: primary
               .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
               .mockReturnValue({ status: "not-registered" });
+            // Production change: this guard's refusal now ALWAYS reports
+            // "parked" rather than the prior primary status it used to
+            // return in its place - an `enabled` here used to read as a
+            // completed register cycle to the caller.
             await expect(registerHostLoginItem(undefined)).resolves.toBe(
-              "enabled",
+              "parked",
             );
             expect(setLoginItemSettings).not.toHaveBeenCalled();
+            expect(electronLog.warn).toHaveBeenLastCalledWith(
+              "[host-login-item] registration parked: prior registration cannot be restored exactly",
+              {
+                primary: "enabled",
+                legacy: "enabled",
+                legacyManifest: "unreadable",
+              },
+            );
           }),
         );
       } finally {
@@ -777,23 +793,28 @@ describe("registerHostLoginItem - legacy manifest retirement (present-manifest d
     expect(existsSync(legacyCliManifestPath())).toBe(true);
   });
 
-  it("a park BEFORE the first mutation reports the truthful prior primary status, never `deferred-busy` - unlike the two fail-closed cases above", async () => {
-    // Contrast with the two fail-closed cases above: THIS park happens at
-    // the very first guard (`canBeginDestructiveRegistration`), before any
-    // edge has run, so there is no authority-loss ambiguity - the snapshot
-    // IS still current and safe to hand back verbatim. A POST-mutation park
-    // (a failed/reappeared manifest removal, or any edge after that point)
-    // cannot make the same claim - a mutation may already have landed under
-    // a since-lost capability, so it reports the busy-continuation sentinel
-    // instead of pretending the stale snapshot is still truthful.
+  it("a park BEFORE the first mutation reports `parked`, never the prior primary status and never `deferred-busy`", async () => {
+    // Production change: this guard's refusal — whether it happens before
+    // any edge has run (this case) or mid-cycle after some have already
+    // landed (the fail-closed cases above) — now uniformly reports
+    // "parked", carrying the diagnosing snapshot in the warn log rather than
+    // in the return value itself. The prior behaviour distinguished a
+    // pre-mutation park (truthful prior status) from a post-mutation one
+    // (`deferred-busy`); that distinction is gone from the return value.
     getLoginItemSettings
       .mockReturnValueOnce({ status: "requires-approval" }) // snapshot: primary - disqualifying
       .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
-      "requires-approval",
-    );
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
     expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(electronLog.warn).toHaveBeenLastCalledWith(
+      "[host-login-item] registration parked: prior registration cannot be restored exactly",
+      {
+        primary: "requires-approval",
+        legacy: "not-registered",
+        legacyManifest: "absent",
+      },
+    );
   });
 });
 
@@ -1153,6 +1174,355 @@ describe("readHostLoginItemStatus", () => {
   });
 });
 
+// `readParkedRegistrationTakeover` decides whether a parked register cycle
+// can be finished by the CLI-owned LaunchAgent (`host service install
+// --takeover`) instead of failing. Five gates, in order, every refusal
+// naming which one fired:
+//
+//   1. primary label manageable by SMAppService (not not-found/not-supported,
+//      or unreadable) -> `primary-manageable`, no further reads at all.
+//   2. legacy label IS a BTM registration (enabled/requires-approval/
+//      unreadable) -> `legacy-registered`.
+//   3. the raw CLI manifest could not be probed -> `manifest-unreadable`
+//      (present AND absent both pass this gate).
+//   4. either label has a live launchd job (a pid, or `state = running`) or
+//      an unanswerable print -> `job-running` / `job-indeterminate`.
+//   5. otherwise takeover, naming the primary status.
+//
+// The job probe is shared with the retirement gate's `runAgentPrint` seam
+// (`overrideAgentPrintRunnerForTests`) and checks HOST_AGENT_LABEL
+// (`ai.traycer.host.agent`) before CLI_HOST_LABEL (`ai.traycer.host`).
+describe("readParkedRegistrationTakeover", () => {
+  const HOST_AGENT_LABEL = "ai.traycer.host.agent";
+
+  function agentPrintTarget(target: string): "agent" | "cli" {
+    return target.endsWith(`/${HOST_AGENT_LABEL}`) ? "agent" : "cli";
+  }
+
+  function notLoadedPrintResult() {
+    return {
+      exitCode: 113,
+      stdout: "",
+      stderr: "Could not find specified service\n",
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    };
+  }
+
+  function observedPrintResult(fields: readonly string[]) {
+    return {
+      exitCode: 0,
+      stdout: [
+        "gui/501/some.label = {",
+        ...fields.map((field) => `\t${field}`),
+        "}",
+        "",
+      ].join("\n"),
+      stderr: "",
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    };
+  }
+
+  // Every test installs its own print stub (or relies on the default
+  // "not loaded" stub below) so the suite never reads the developer's real
+  // launchd domain, mirroring the `retireCompetingCliRegistrationAtLaunch`
+  // convention above.
+  let printRunner: Mock<(target: string) => Promise<ProbeCommandResult>>;
+
+  beforeEach(() => {
+    printRunner = vi.fn<(target: string) => Promise<ProbeCommandResult>>(
+      async () => notLoadedPrintResult(),
+    );
+    overrideAgentPrintRunnerForTests(printRunner);
+  });
+
+  afterEach(() => {
+    overrideAgentPrintRunnerForTests(null);
+  });
+
+  it("(not-found, not-found, manifest absent, both labels absent) is a takeover", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-found" }); // legacy
+    // No `writeLegacyCliManifest()` call: manifest absent.
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "takeover",
+      status: "not-found",
+    });
+    expect(getLoginItemSettings).toHaveBeenCalledTimes(2);
+    expect(printRunner).toHaveBeenCalledTimes(2);
+  });
+
+  it("(not-supported, not-registered, manifest present, jobs absent) is a takeover", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-supported" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    writeLegacyCliManifest();
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "takeover",
+      status: "not-supported",
+    });
+  });
+
+  // A label that IS loaded but carries neither a pid nor a `running` job
+  // state is "none" for this purpose - `runAgentPrint` returning `observed`
+  // does not by itself prove a live process.
+  it("is a takeover when a label is observed but has no pid and its job state is not running", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async () =>
+      observedPrintResult(["state = waiting", "path = /some/path"]),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "takeover",
+      status: "not-found",
+    });
+    expect(printRunner).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["not-registered", { status: "not-registered" }],
+    ["enabled", { status: "enabled" }],
+  ] as const)(
+    "primary %s is no-takeover/primary-manageable, and reads nothing else",
+    async (_label, settings) => {
+      getLoginItemSettings.mockReturnValueOnce(settings);
+
+      await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+        kind: "no-takeover",
+        reason: "primary-manageable",
+      });
+      expect(getLoginItemSettings).toHaveBeenCalledTimes(1);
+      expect(printRunner).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a throwing primary read is no-takeover/primary-manageable, and reads nothing else", async () => {
+    getLoginItemSettings.mockImplementationOnce(() => {
+      throw new Error("BTM database is sad");
+    });
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "primary-manageable",
+    });
+    expect(getLoginItemSettings).toHaveBeenCalledTimes(1);
+    expect(printRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["enabled", { status: "enabled" }],
+    ["requires-approval", { status: "requires-approval" }],
+  ] as const)(
+    "(not-found, legacy %s) is no-takeover/legacy-registered, and never prints",
+    async (_label, legacySettings) => {
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: "not-found" }) // primary
+        .mockReturnValueOnce(legacySettings); // legacy
+
+      await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+        kind: "no-takeover",
+        reason: "legacy-registered",
+      });
+      expect(printRunner).not.toHaveBeenCalled();
+    },
+  );
+
+  it("(not-found, then a throwing legacy read) is no-takeover/legacy-registered, and never prints", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockImplementationOnce(() => {
+        throw new Error("BTM database is sad");
+      }); // legacy
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "legacy-registered",
+    });
+    expect(printRunner).not.toHaveBeenCalled();
+  });
+
+  // Root ignores file mode bits, so the probe would succeed and this would
+  // assert the wrong branch (same convention as the register-cycle tests
+  // above).
+  it.skipIf(process.getuid?.() === 0)(
+    "an unreadable CLI manifest directory is no-takeover/manifest-unreadable",
+    async () => {
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: "not-found" }) // primary
+        .mockReturnValueOnce({ status: "not-registered" }); // legacy
+      const agentsDir = join(workHome, "Library", "LaunchAgents");
+      mkdirSync(agentsDir, { recursive: true });
+      // Drops the SEARCH (execute) bit, so `access()` on the known filename
+      // fails EACCES rather than ENOENT - the probe's unreadable branch.
+      chmodSync(agentsDir, 0o600);
+      try {
+        await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+          kind: "no-takeover",
+          reason: "manifest-unreadable",
+        });
+      } finally {
+        chmodSync(agentsDir, 0o755);
+      }
+      expect(printRunner).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a pid on the agent label is no-takeover/job-running, and the CLI label is never even probed", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async (target: string) =>
+      agentPrintTarget(target) === "agent"
+        ? observedPrintResult(["state = running", "pid = 123"])
+        : notLoadedPrintResult(),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "job-running",
+    });
+    expect(printRunner).toHaveBeenCalledTimes(1);
+  });
+
+  it("a running job state on the CLI label (agent label absent) is no-takeover/job-running", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async (target: string) =>
+      agentPrintTarget(target) === "agent"
+        ? notLoadedPrintResult()
+        : observedPrintResult(["state = running"]),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "job-running",
+    });
+    expect(printRunner).toHaveBeenCalledTimes(2);
+  });
+
+  // `pid = 0` is launchd's idle-job marker, not a live process: the shared
+  // parser still reports it as `observed` (it is a finite number), so a
+  // reader that treated ANY observed pid as running would park every boot
+  // cycle on a job with nothing left to interrupt. Only a positive pid or an
+  // explicit `running` job state may call it live - see
+  // `probeLaunchdJobProcess` in `host-login-item.ts`.
+  it("a `pid = 0` line with no running state on the agent label is an idle job: the CLI label is probed next and the verdict is takeover", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async (target: string) =>
+      agentPrintTarget(target) === "agent"
+        ? observedPrintResult(["state = waiting", "pid = 0"])
+        : notLoadedPrintResult(),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "takeover",
+      status: "not-found",
+    });
+    expect(printRunner).toHaveBeenCalledTimes(2);
+  });
+
+  it("a `pid = 0` line with no running state on the CLI label (agent label absent) is an idle job, and the verdict is takeover", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async (target: string) =>
+      agentPrintTarget(target) === "agent"
+        ? notLoadedPrintResult()
+        : observedPrintResult(["state = waiting", "pid = 0"]),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "takeover",
+      status: "not-found",
+    });
+    expect(printRunner).toHaveBeenCalledTimes(2);
+  });
+
+  it("an exit-0 print with no recognizable job fields (indeterminate ownership) is no-takeover/job-indeterminate, not an idle job", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async () =>
+      observedPrintResult(["some unknown field = value"]),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "job-indeterminate",
+    });
+    // Fails closed on the agent label's read; the CLI label is never probed.
+    expect(printRunner).toHaveBeenCalledTimes(1);
+  });
+
+  it("a spawn-failed print is no-takeover/job-indeterminate", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async () => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      spawnFailed: true,
+      signal: null,
+    }));
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "job-indeterminate",
+    });
+  });
+
+  it("a timed-out print is no-takeover/job-indeterminate", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async () => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: true,
+      spawnFailed: false,
+      signal: null,
+    }));
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "job-indeterminate",
+    });
+  });
+
+  it("a non-zero exit whose output is not a not-found message is no-takeover/job-indeterminate", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "some unrecognized launchctl failure\n",
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    }));
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "job-indeterminate",
+    });
+  });
+});
+
 // Ticket packaging-smappservice-activation (issue #287 descriptor-hardening
 // review, Finding 3): a busy/indeterminate `desktop-install-cloud.js`
 // install leaves a `pending-login-item-revision.json` marker (see
@@ -1188,19 +1558,6 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     expect(status).toBe("requires-approval");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
   });
-
-  it("leaves the marker in place when the register cycle ends not-registered (SMAppService refused)", async () => {
-    writePendingRevisionMarker();
-    // Every status read stays `not-registered` - the BTM-commit poll
-    // exhausts its deadline and the cycle fails closed.
-    getLoginItemSettings.mockReturnValue({ status: "not-registered" });
-
-    const status = await registerHostLoginItem(undefined);
-
-    expect(status).toBe("not-registered");
-    expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
-  });
-
   it("is a no-op when no marker was ever written", async () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
@@ -1245,21 +1602,6 @@ describe("hasUnappliedPendingLoginItemRevision (M-B)", () => {
       hasUnappliedPendingLoginItemRevision("production"),
     ).resolves.toBe(true);
   });
-
-  it("is false again after a successful register cycle deletes the marker", async () => {
-    writePendingRevisionMarker();
-    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
-    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
-    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
-    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
-
-    await registerHostLoginItem(undefined);
-
-    await expect(
-      hasUnappliedPendingLoginItemRevision("production"),
-    ).resolves.toBe(false);
-  });
-
   it("treats a marker whose clear FAILED as already-applied, but re-arms for a newer revision", async () => {
     writePendingRevisionMarker();
     const markerDir = join(workHome, ".traycer", "host");
@@ -1646,23 +1988,6 @@ describe("unregisterHostLoginItemGuarded - removable-state entry guard", () => {
     expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
       openAtLogin: false,
       serviceName: "ai.traycer.host.plist",
-    });
-  });
-
-  it("not-supported admits removal — its own clear leg is skipped, the other label's still runs", async () => {
-    getLoginItemSettings
-      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
-      .mockReturnValueOnce({ status: "not-supported" }); // snapshot: legacy
-
-    await expect(
-      unregisterHostLoginItemGuarded(async () => true),
-    ).resolves.toBe(true);
-    // Only the primary label's clear ran — the legacy leg has no API to
-    // clear with under `not-supported` and is skipped, not attempted.
-    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
-    expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
-      openAtLogin: false,
-      serviceName: "ai.traycer.host.agent.plist",
     });
   });
 });

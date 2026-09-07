@@ -1,3 +1,4 @@
+import { browserScopedChordLabel } from "@/lib/browser-view/reserved-chords-registration";
 import type { ActionId } from "@/lib/keybindings/actions";
 import type { ChordString } from "@/lib/keybindings/chord";
 
@@ -67,6 +68,16 @@ export function findConflict(
         message: `Already used by ${reserved.label}. Pick a different chord.`,
       };
     }
+  }
+  // Derived from the one guest-focused input policy, so the warning cannot
+  // drift from what a focused browser tile actually claims.
+  const browserScoped = browserScopedChordLabel(candidate);
+  if (browserScoped !== null) {
+    return {
+      severity: "os-clash",
+      conflictingActionId: null,
+      message: `Won't fire while a browser tile has focus: ${browserScoped}`,
+    };
   }
   if (Object.hasOwn(OS_CLASH_CHORDS, candidate)) {
     return {

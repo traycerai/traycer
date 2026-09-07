@@ -44,15 +44,26 @@ vi.mock("@/lib/host", () => ({
 }));
 
 // The epic session and the comm-graph fan-in both build durable transports.
-// The session's stream client is overridden by the test harness and the
-// comm-graph opener by `__setCommGraphSubscriptionOpenerForTests`, so this
-// stub must never actually be called.
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// This stub used to THROW on the reasoning that neither would reach it. Half of
+// that reasoning is gone: the session's stream-factory override was deleted, so
+// `EpicSessionProvider` now opens a transport unconditionally and the throw
+// failed every test here.
+//
+// The comm-graph half still holds, and by construction rather than by this
+// stub: `use-comm-graph-snapshot.ts` builds its opener as
+// `localOpenerOverride ?? createCommGraphSubscriptionOpener(openTransport)`, and
+// `??` short-circuits - with `__setCommGraphSubscriptionOpenerForTests`
+// installed the wrapped opener is never even constructed, let alone invoked.
+// What the throw added on top of that was redundancy, and it is what is lost
+// here; the primary guarantee is the override, which this file still installs.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({
@@ -102,8 +113,11 @@ import type {
   CommGraphSubscriptionRequest,
 } from "@/lib/comm-graph/comm-graph-subscription";
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import type { CommGraphTileRef } from "@/stores/epics/canvas/types";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
 import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
+import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import type { TileFindAdapter } from "@/stores/tile-find";
 
 const EPIC_ID = "epic-comm-graph";
 const CHAT_ID = "chat-1";
@@ -173,14 +187,51 @@ function seedDoc(doc: Y.Doc): void {
   epic.set("chats", chats);
 }
 
+function seedEmptyDoc(doc: Y.Doc): void {
+  const epic = doc.getMap("epic");
+  epic.set("title", "Epic");
+  epic.set("artifacts", new Y.Map<unknown>());
+  epic.set("tuiAgents", new Y.Map<unknown>());
+  epic.set("chats", new Y.Map<unknown>());
+}
+
+/**
+ * Every case below asserts on React Flow nodes, so the tile is opened in the
+ * NODE-GRAPH mode explicitly. The tile's own default is the office floor, which
+ * draws to a canvas and mounts no nodes at all.
+ */
+function graphModeTileRef(): CommGraphTileRef {
+  const ref = makeCommGraphTileRef(EPIC_ID);
+  return { ...ref, view: { ...ref.view, mode: "graph" } };
+}
+
 async function renderTile(): Promise<void> {
+  await renderTileWithFindRegistration(undefined);
+}
+
+async function renderTileWithFindRegistration(
+  onRegister: ((adapter: TileFindAdapter) => void) | undefined,
+): Promise<void> {
+  const node = graphModeTileRef();
+  const tile = <CommGraphTile node={node} viewTabId={EPIC_ID} />;
   render(
     <QueryClientProvider client={queryClient}>
       <TestEpicSessionWrapper epicId={EPIC_ID}>
-        <CommGraphTile
-          node={makeCommGraphTileRef(EPIC_ID)}
-          viewTabId={EPIC_ID}
-        />
+        {onRegister === undefined ? (
+          tile
+        ) : (
+          <TileFindContext.Provider
+            value={{
+              tileInstanceId: node.instanceId,
+              registerAdapter: (adapter) => {
+                onRegister(adapter);
+                return () => undefined;
+              },
+            }}
+          >
+            {tile}
+          </TileFindContext.Provider>
+        )}
       </TestEpicSessionWrapper>
     </QueryClientProvider>,
   );
@@ -226,6 +277,41 @@ afterEach(() => {
  * message list on click.
  */
 describe("CommGraphTile", () => {
+  it("registers a ready zero-result Find adapter for an empty graph", async () => {
+    harness.teardown();
+    harness.install(seedEmptyDoc, "owner");
+    const registration: { adapter: TileFindAdapter | null } = {
+      adapter: null,
+    };
+
+    await renderTileWithFindRegistration((adapter) => {
+      registration.adapter = adapter;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("comm-graph-empty")).toBeDefined();
+      expect(registration.adapter).not.toBeNull();
+    });
+    const registeredAdapter = registration.adapter;
+    if (registeredAdapter === null) {
+      throw new Error("empty communication graph did not register Find");
+    }
+    act(() => {
+      void registeredAdapter.search({
+        requestId: 1,
+        query: "agent",
+        matchCase: false,
+      });
+    });
+    expect(registeredAdapter.getSnapshot()).toMatchObject({
+      requestId: 1,
+      status: "ready",
+      current: 0,
+      total: 0,
+      exactHighlight: "none",
+    });
+  });
+
   it("subscribes once per host referenced by the epic's agents", async () => {
     await renderTile();
 

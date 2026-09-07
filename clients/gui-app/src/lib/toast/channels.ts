@@ -42,3 +42,22 @@ export const authSessionExpiredToast =
  */
 export const linkLoginAlreadySignedInToast =
   scopedToastChannel("link-login")("already-signed-in");
+
+/**
+ * A host this client refused because its published Noise static key no longer
+ * matches the one pinned on first sight (browser-security-hardening H11), and
+ * a certificate a server presented that this machine does not trust. Both are
+ * per-entity: repeated refusals of the same host or the same server say the
+ * same thing, and the recovery is one decision, not a growing stack.
+ */
+export const hostKeyPinMismatchToast = scopedToastChannel("host-key-pin");
+export const untrustedCertificateToast = scopedToastChannel("cert-untrusted");
+
+/**
+ * Main refused a cross-window auth-session projection this window pushed
+ * (`WindowsBridgeAuthSessionBridge`) - the bearer failed verification, so the
+ * sibling window's session did not adopt it. Global, not entity-scoped: a
+ * repeat refusal says the same thing, so it replaces rather than stacking.
+ */
+export const authSessionRefusedToast =
+  scopedToastChannel("auth-session")("refused");

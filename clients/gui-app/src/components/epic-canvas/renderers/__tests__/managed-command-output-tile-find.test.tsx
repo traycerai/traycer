@@ -48,6 +48,12 @@ vi.mock(
     useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandConfigureIsPending: () => false,
+    useManagedCommandRelaunchOnHostRestart: (
+      _target: unknown,
+      streamed: { relaunchOnHostRestart: boolean },
+    ) => streamed.relaunchOnHostRestart,
+    useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
   }),
 );
@@ -70,11 +76,11 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
 }));
 
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { __setManagedCommandOutputStreamClientFactoryForTests } from "@/providers/managed-command-output-stream-factory-override";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
@@ -95,6 +101,7 @@ const COMMAND: ManagedCommand = {
   cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
+  relaunchOnHostRestart: false,
   createdAtMs: 10,
   updatedAtMs: 10,
 };
@@ -129,7 +136,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-let epicHandle: OpenEpicStoreHandle;
+let epicHandle: OpenedStoreForTest;
 let restoreLayoutGeometry: () => void;
 
 function installOutputStub(): {
@@ -244,11 +251,21 @@ beforeEach(() => {
     openTabOrder: [TAB_ID],
     activeTabId: TAB_ID,
   });
-  epicHandle = createOpenEpicStore({
+  epicHandle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
 });
 

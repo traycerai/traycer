@@ -62,7 +62,7 @@ function makeBridge(options: {
           token: null,
           profile: null,
         }),
-      set: () => Promise.resolve(),
+      set: () => Promise.resolve({ outcome: "accepted" as const }),
       onChange: () => ({ dispose: () => undefined }),
     },
   };

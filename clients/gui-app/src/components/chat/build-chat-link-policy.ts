@@ -22,10 +22,33 @@ import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path"
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { setWorkspaceFileRevealTarget } from "@/stores/epics/canvas/workspace-file-reveal-store";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type {
   EpicCanvasTileRef,
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
+
+/**
+ * Every link this policy opens is a single-click on rendered markdown, so it
+ * carries the `single` gesture and no explicit placement - the tile-placement
+ * setting decides tab-vs-split, and dedupe focuses an already-open instance
+ * (C4, C6, C11). Modifiers stay `null`: the markdown anchor hands the policy a
+ * link, not the mouse event.
+ */
+function chatLinkOpenIntent(
+  tabId: string,
+  node: EpicCanvasTileRef,
+): TileOpenIntent {
+  return {
+    node,
+    target: { tabId },
+    gesture: "single",
+    modifiers: null,
+    placement: null,
+    dedupe: true,
+    source: "direct_ui",
+  };
+}
 
 /**
  * Static dependencies the chat link policy closes over, all sourced from React
@@ -62,7 +85,12 @@ export interface ChatLinkPolicyDeps {
    */
   readonly workspaceClient: HostClient<HostRpcRegistry> | null;
   readonly navigate: UseNavigateResult<string>;
-  readonly previewTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
+  /**
+   * The one tile-open seam (C1). The policy stays pure - the provider hands
+   * in `useEpicTileNavigation().openTile` - and every link open here is a
+   * single-click gesture, so the placement setting decides where it lands.
+   */
+  readonly openTile: (intent: TileOpenIntent) => void;
 }
 
 /**
@@ -223,10 +251,11 @@ export function openResolvedArtifact(
     lifecycle.setPendingProjectedOpenCancel(
       openProjectedSidebarNodeInTabWhenAvailable({
         epicHandle: deps.epicHandle,
-        tabId: deps.tabId,
         nodeId: artifact.artifactId,
         fallbackHostId: resolveHostId,
-        openTileInTab: deps.previewTileInTab,
+        openNode: (node) => {
+          deps.openTile(chatLinkOpenIntent(deps.tabId, node));
+        },
         onBeforeOpen: null,
         onOpened: () => {
           lifecycle.setPendingProjectedOpenCancel(null);
@@ -373,7 +402,7 @@ function openWorkspaceFileRef(
   if (link.line !== null) {
     setWorkspaceFileRevealTarget(deps.tabId, ref.id, link.line, link.col);
   }
-  deps.previewTileInTab(deps.tabId, ref);
+  deps.openTile(chatLinkOpenIntent(deps.tabId, ref));
 }
 
 /** The click's supersession token, checked when the existence probe settles. */

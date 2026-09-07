@@ -553,6 +553,7 @@ describe("chatActivityIndicator", () => {
       cadence: null,
       status,
       chatId: "chat-1",
+      relaunchOnHostRestart: false,
       createdAtMs: 1,
       updatedAtMs: 1,
     };
@@ -909,8 +910,6 @@ function interviewMessage(
       kind: "interview",
       status: segment.status,
       toolName: "AskUserQuestion",
-      title: null,
-      description: null,
       questions: [],
       answers: [],
       draftAnswers: [],

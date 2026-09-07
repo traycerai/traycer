@@ -9,6 +9,7 @@ import {
   type HostTreeResourceUsage,
   type OtherResourceUsage,
   type OwnerResourceUsage,
+  type RestrictedResourceUsage,
   type ResourcesState,
   type ResourcesStoreHandle,
 } from "@/stores/resources/resources-store";
@@ -54,6 +55,7 @@ export interface GlobalResourceEpicEntry {
   readonly app: AppResourceUsage | null;
   readonly hostTree: HostTreeResourceUsage | null;
   readonly other: OtherResourceUsage | null;
+  readonly restricted: RestrictedResourceUsage | null;
   readonly owners: readonly OwnerResourceUsage[];
   readonly epic: EpicResourceUsage | null;
 }
@@ -70,6 +72,7 @@ export interface GlobalResourceProjection {
   readonly app: AppResourceUsage | null;
   readonly hostTree: HostTreeResourceUsage | null;
   readonly other: OtherResourceUsage | null;
+  readonly restricted: RestrictedResourceUsage | null;
   readonly owners: readonly OwnerResourceUsage[];
   readonly entries: readonly GlobalResourceEpicEntry[];
 }
@@ -81,6 +84,7 @@ export const EMPTY_GLOBAL_RESOURCE_PROJECTION: GlobalResourceProjection = {
   app: null,
   hostTree: null,
   other: null,
+  restricted: null,
   owners: [],
   entries: [],
 };
@@ -158,6 +162,7 @@ class ResourcesRegistry {
         app: state.app,
         hostTree: state.hostTree,
         other: state.other,
+        restricted: state.restricted,
         owners: [...state.owners.values()],
         epic: state.epic,
       };
@@ -179,6 +184,11 @@ class ResourcesRegistry {
       app,
       hostTree,
       other,
+      // A per-epic restricted aggregate means "outside this epic". Combining
+      // one of those with the fallback's already-combined visible owners would
+      // count the same trees twice and relabel them Restricted. Only a real
+      // global stream can supply the global unauthorized-only aggregate.
+      restricted: null,
       owners,
       entries,
     };
@@ -241,6 +251,7 @@ class ResourcesRegistry {
         app: state.app,
         hostTree: state.hostTree,
         other: state.other,
+        restricted: state.restricted,
         owners: scopedOwners,
         epic,
       };
@@ -251,6 +262,7 @@ class ResourcesRegistry {
       app: state.app,
       hostTree: state.hostTree,
       other: state.other,
+      restricted: state.restricted,
       owners,
       entries,
     };
@@ -507,6 +519,7 @@ const emptyResourcesStore = create<ResourcesState>()(() => ({
   app: null,
   hostTree: null,
   other: null,
+  restricted: null,
   epic: null,
   epics: new Map(),
   dispose: () => undefined,

@@ -10,8 +10,14 @@ import {
 import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
+import { useHostLease } from "@/hooks/host/use-host-lease";
 import { isUnknownHost } from "@/lib/host/constants";
 import { HOST_STARTING_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+
+function isPlanRestrictedLease(lease: HostLeaseSnapshot | null): boolean {
+  return lease?.status === "dead" && lease.dead.reason === "plan-restricted";
+}
 
 export type HostReachabilityStatus =
   | "checking"
@@ -118,6 +124,7 @@ export interface HostReachability {
  * healthy machine read-only for two hours on 2026-08-11.
  */
 export function useHostReachability(hostId: string): HostReachability {
+  const lease = useHostLease(hostId);
   const list = useHostDirectoryList();
   const hasReadySession = useRemoteSessionPollReadiness(hostId);
   const directoryVerdict = useMemo<HostReachability>(() => {
@@ -237,6 +244,15 @@ export function useHostReachability(hostId: string): HostReachability {
     // actually evidence about the host.
     const hostLabel = entry.label.length > 0 ? entry.label : hostId;
     const hostKind = entry.kind;
+    if (!hasReadySession && isPlanRestrictedLease(lease)) {
+      return {
+        status: "unreachable",
+        hostLabel,
+        unavailability: "plan-restricted",
+        basis: "directory",
+        hostKind,
+      };
+    }
     const unavailability = hostUnavailability(entry);
     if (unavailability === null) {
       return {
@@ -286,7 +302,7 @@ export function useHostReachability(hostId: string): HostReachability {
       basis: "directory",
       hostKind,
     };
-  }, [hostId, list.data, list.fetchStatus, hasReadySession]);
+  }, [hostId, list.data, list.fetchStatus, hasReadySession, lease]);
 
   // F4/S2. `host-starting` was the one arm with no way out: the directory
   // cannot distinguish "this machine's host is three seconds from publishing"

@@ -1,7 +1,6 @@
 import { createContext, useContext } from "react";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
-export type { BrowserSessionsLifecycle } from "@/lib/browser-view/sessions/browser-sessions-stream";
 export type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
 export const BrowserSessionsContext =
@@ -36,4 +35,26 @@ export const BrowserSessionsCoordinatorKeyContext = createContext<
 
 export function useMaybeBrowserSessionsCoordinatorKey(): string | null {
   return useContext(BrowserSessionsCoordinatorKeyContext);
+}
+
+/** @see BrowserSessionsSnapshotContext */
+export interface BrowserSessionsSnapshot {
+  readonly current: BrowserSessionsState | null;
+}
+
+/**
+ * A STABLE handle onto the same value {@link BrowserSessionsContext} carries,
+ * for consumers that only need it inside an event handler.
+ *
+ * Reading the context itself re-renders on every sessions-stream frame (see
+ * the note on `BrowserSessionsCoordinatorKeyContext` above); `useOpenBrowserUrl`
+ * is mounted by ~30 link surfaces at once and wants the sessions ONLY at click
+ * time, so it reads `.current` off this ref instead. The ref object identity
+ * never changes, so consuming this context subscribes to nothing.
+ */
+export const BrowserSessionsSnapshotContext =
+  createContext<BrowserSessionsSnapshot | null>(null);
+
+export function useMaybeBrowserSessionsSnapshot(): BrowserSessionsSnapshot | null {
+  return useContext(BrowserSessionsSnapshotContext);
 }

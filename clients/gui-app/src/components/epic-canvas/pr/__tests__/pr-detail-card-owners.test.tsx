@@ -32,7 +32,7 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({ openTileInEpic: vi.fn() }),
+  useEpicTileNavigation: () => ({ openTile: vi.fn() }),
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({

@@ -12,9 +12,6 @@ import { ResolvedInterviewCard } from "@/components/chat/segments/resolved-inter
 interface InterviewSegmentProps {
   readonly blockId: string;
   readonly status: "streaming" | "completed" | "errored";
-  readonly toolName: string | null;
-  readonly title: string | null;
-  readonly description: string | null;
   readonly questions: ReadonlyArray<InterviewQuestion>;
   readonly answers: ReadonlyArray<InterviewAnswer>;
   readonly draftAnswers: ReadonlyArray<InterviewAnswer>;
@@ -42,9 +39,6 @@ export function InterviewSegment(props: InterviewSegmentProps) {
       reviewInput={{
         blockId: props.blockId,
         status: props.status,
-        toolName: props.toolName,
-        title: props.title,
-        description: props.description,
         questions: props.questions,
         answers: props.answers,
         draftAnswers: props.draftAnswers,

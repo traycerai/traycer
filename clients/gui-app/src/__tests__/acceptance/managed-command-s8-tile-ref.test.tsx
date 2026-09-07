@@ -15,11 +15,11 @@
  */
 import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   makeManagedCommandOutputTileRef,
@@ -40,7 +40,7 @@ const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-let epicHandle: OpenEpicStoreHandle | null = null;
+let epicHandle: OpenedStoreForTest | null = null;
 
 beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -130,11 +130,21 @@ describe("S8 · tile-ref minimalism", () => {
   });
 
   it("S8d: opening an output window writes nothing to the epic doc", () => {
-    epicHandle = createOpenEpicStore({
+    epicHandle = openStoreForTest({
       epicId: EPIC_ID,
-      streamClientFactory: noopEpicStreamClientFactory,
       userId: null,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: noopEpicStreamClientFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     let docUpdates = 0;
     epicHandle.doc.on("update", () => {

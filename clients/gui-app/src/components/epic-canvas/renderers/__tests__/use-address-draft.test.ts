@@ -74,4 +74,28 @@ describe("useAddressDraft", () => {
     });
     expect(result.current.addressValue).toBe(URL_A);
   });
+
+  it("focuses and selects the registered field on demand (Cmd+L)", () => {
+    const { result } = renderHook(() => useAddressDraft(URL_A));
+    const input = document.createElement("input");
+    input.value = URL_A;
+    document.body.appendChild(input);
+
+    // Nothing registered yet: must not throw, must not focus anything.
+    act(() => {
+      result.current.focusAddress();
+    });
+    expect(document.activeElement).not.toBe(input);
+
+    act(() => {
+      result.current.setAddressInput(input);
+      result.current.focusAddress();
+    });
+    expect(document.activeElement).toBe(input);
+    // Selected, so typing a new URL replaces the old one.
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(URL_A.length);
+
+    input.remove();
+  });
 });

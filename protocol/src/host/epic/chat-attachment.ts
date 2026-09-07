@@ -85,9 +85,10 @@ export const readChatAttachmentFoundSchema = z.object({
   /**
    * HOST-AUTHORITATIVE, derived from the delivered bytes' magic bytes - never
    * echoed from a client-declared media type and never inferred from a file
-   * extension. Same rule and same enum as the asset-stream header
-   * (`assetMediaTypeSchema`), reused rather than re-declared so the set of
-   * formats a renderer must handle cannot drift between the two byte channels.
+   * extension. Same rule as the asset-stream header, and deliberately the
+   * IMAGE-ONLY enum (`assetMediaTypeSchema`, the frozen 1.0 set): chat
+   * attachments are an image channel, and this response shipped at 1.0, so
+   * the asset stream's 1.1 PDF growth must not widen it.
    */
   mediaType: assetMediaTypeSchema,
 });

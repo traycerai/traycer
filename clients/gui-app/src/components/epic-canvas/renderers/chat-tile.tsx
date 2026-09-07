@@ -119,6 +119,7 @@ import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
+  dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
   projectQueueWithPendingCancellations,
   type ChatSessionState,
@@ -279,6 +280,7 @@ import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
@@ -804,7 +806,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     ],
   );
   const systemOverlayActive = useAnySystemOverlayActive();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
     useState<ChatMessageScrollRequest | null>(null);
   const backgroundScrollRequestIdRef = useRef(0);
@@ -879,7 +881,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   }, []);
   // Cross-tile transcript jumps (today: the communication-graph timeline).
   // Parked in a store rather than called directly because the jump is issued
-  // from another tile, possibly before this one exists - `openTileInEpic`
+  // from another tile, possibly before this one exists - `openTile`
   // mounts it and the request is waiting here when it renders.
   const transcriptJump = useChatTranscriptJumpStore(
     (s) => s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
@@ -1095,9 +1097,23 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            tileNavigation.openTileInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
       cumulative: (filePath) => {
@@ -1108,9 +1124,23 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            tileNavigation.openTileInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
       cumulativeBundle: (filePaths) => {
@@ -1119,7 +1149,15 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
           chatId: view.node.id,
           filePaths,
         });
-        return () => tileNavigation.openTileInTab(view.viewTabId, tile);
+        return () =>
+          openTile(
+            tileIntent(
+              tile,
+              { tabId: view.viewTabId },
+              "explicit",
+              "direct_ui",
+            ),
+          );
       },
       hash: (request) => {
         const tile = makeSnapshotHashDiffTile({
@@ -1132,13 +1170,27 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            tileNavigation.openTileInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
     }),
-    [hostId, tileNavigation, view.node.id, view.viewTabId],
+    [hostId, openTile, view.node.id, view.viewTabId],
   );
 
   return (
@@ -1517,6 +1569,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const stagedChatWorktreeIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[chatWorktreeStagingKeyId],
+  );
+  const consumedWorktreeIntentClientActionId = useWorktreeIntentStagingStore(
+    (s) =>
+      s.consumedForDispatchByKey[chatWorktreeStagingKeyId]?.clientActionId ??
+      null,
+  );
+  const inFlightChatWorktreeIntent = dispatchedWorktreeIntentForDisplay(
+    state.pendingActions,
+    state.acceptedActions,
+    consumedWorktreeIntentClientActionId,
   );
   const stagedChatWorkspacePaths = useMemo<ReadonlySet<string>>(() => {
     if (stagedChatWorktreeIntent === undefined) {
@@ -2723,6 +2785,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           // would make sense for.
           hasActiveTurn: composerActiveTurnStatus !== null,
           ownerLabel: node.name,
+          inFlightWorktreeIntent: inFlightChatWorktreeIntent,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -2736,6 +2799,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       node.id,
       node.name,
       state.worktreeBinding,
+      inFlightChatWorktreeIntent,
       effectiveMissingPaths,
       state.snapshotLoaded,
       activeTurnStatus,

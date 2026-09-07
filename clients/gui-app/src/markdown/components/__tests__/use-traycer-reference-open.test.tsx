@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCallback, type MouseEvent } from "react";
 import { useTraycerReferenceOpenHandler } from "@/markdown/components/use-traycer-reference-open";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  EpicCanvasTileRef,
-  EpicNodeRef,
-} from "@/stores/epics/canvas/types";
+import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 const testState = vi.hoisted(() => ({
@@ -17,10 +19,7 @@ const testState = vi.hoisted(() => ({
     name: "Spec One",
     hostId: "host-1",
   } satisfies EpicNodeRef,
-  openTilePreviewInEpic: vi.fn(
-    (_epicId: string, _node: EpicCanvasTileRef): NestedFocusTarget | null =>
-      null,
-  ),
+  openTile: vi.fn((_intent: TileOpenIntent): NestedFocusTarget | null => null),
   openEpicHandle: {
     epicId: "epic-1",
     store: {
@@ -46,26 +45,24 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({
-    openTilePreviewInEpic: testState.openTilePreviewInEpic,
-    openTilePreviewInTab: vi.fn(),
-    openTileInTab: vi.fn(),
-    openTileInEpic: vi.fn(),
-  }),
+  useEpicTileNavigation: () => ({ openTile: testState.openTile }),
 }));
 
 describe("useTraycerReferenceOpenHandler", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    testState.openTilePreviewInEpic.mockImplementation(
-      (epicId: string, node: EpicCanvasTileRef): NestedFocusTarget | null => {
-        const store = useEpicCanvasStore.getState();
-        const tabId = store.resolveTargetTabForEpic(epicId, undefined);
-        return store.prepareOpenTilePreviewInTabFocusTarget(tabId, node);
-      },
+    // The spy runs the REAL seam, so the store still transitions and the
+    // recorded intent is the thing under test.
+    testState.openTile.mockImplementation(
+      (intent: TileOpenIntent): NestedFocusTarget | null =>
+        openTileWithNavigation(
+          intent,
+          (_epicId, _tabId, prepare) => prepare(),
+          MANUAL_TILE_OPEN,
+        ),
     );
-    testState.openTilePreviewInEpic.mockClear();
+    testState.openTile.mockClear();
   });
 
   afterEach(cleanup);
@@ -81,10 +78,18 @@ describe("useTraycerReferenceOpenHandler", () => {
 
     // A revert to the raw canvas preview call would still mutate the store, but
     // it would bypass this route-aware boundary spy.
-    expect(testState.openTilePreviewInEpic).toHaveBeenCalledWith(
-      "epic-1",
-      testState.testRef,
-    );
+    // A click on a reference is a SINGLE gesture on the epic, de-duped, with
+    // the click's modifier triple attached: preview-vs-permanent is then the
+    // resolver's call, not this hook's.
+    expect(testState.openTile).toHaveBeenCalledWith({
+      node: testState.testRef,
+      target: { epicId: "epic-1" },
+      gesture: "single",
+      modifiers: { shift: false, alt: false, middle: false },
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
+    });
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     if (canvas?.root?.kind !== "pane") throw new Error("expected pane");
     const activeTile =

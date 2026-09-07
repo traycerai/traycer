@@ -43,8 +43,8 @@ export function TeardownForceDeleteDialog(props: {
               Delete worktree {props.worktreeLabel}?
             </DialogTitle>
             <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
-              It&apos;s still held by the following. Deleting will stop them
-              first.
+              Anything working in this worktree when the delete runs will be
+              stopped.
             </DialogDescription>
           </div>
         </div>

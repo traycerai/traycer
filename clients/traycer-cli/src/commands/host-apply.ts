@@ -85,7 +85,10 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
           force: args.force,
           noService: args.noService,
           expectedStageFingerprint: args.expectedStageFingerprint,
+          expectedStagedVersion: null,
           onProgress: (info) => ctx.progress(info),
+          onWillCommitStaged: null,
+          onWillDisruptHost: null,
         }),
     );
     const activation = activationOf(outcome);
@@ -131,7 +134,8 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
  *                      case: that branch kickstarts the agent label and
  *                      reports "start".
  *   - `null`           nothing was committed (`no-op`,
- *                      `stage-fingerprint-mismatch`), so there is no
+ *                      `stage-fingerprint-mismatch`,
+ *                      `stage-version-mismatch`), so there is no
  *                      activation to report. NOT `failed`: those outcomes
  *                      never touch or probe the running host, and reporting a
  *                      failure for a healthy, already-current install would be
@@ -151,6 +155,11 @@ function humanSummary(outcome: ApplyHostOutcome): string {
   }
   if (outcome.outcome === "stage-fingerprint-mismatch") {
     return "staged host changed after eligibility; retry against the current stage";
+  }
+  if (outcome.outcome === "stage-version-mismatch") {
+    // Unreachable from this command (it pins no version), kept exhaustive
+    // so a caller that starts pinning one gets a sentence, not a crash.
+    return `staged host is ${outcome.actualStagedVersion}, not the requested ${outcome.expectedStagedVersion}; retry against the current stage`;
   }
   // These lines report the ACTIVATION, never liveness - the same distinction
   // `activation` draws in the payload, and for the same reason: nothing here

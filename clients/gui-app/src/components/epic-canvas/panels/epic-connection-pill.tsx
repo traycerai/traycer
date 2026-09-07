@@ -3,10 +3,16 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { LivePulse } from "@/components/ui/live-pulse";
 import {
   useEpicHasFreshCloudSyncStatus,
+  useEpicHostTransportStatus,
   useEpicSyncPillState,
+  useEpicWriteCommandAlert,
 } from "@/lib/epic-selectors";
 import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
-import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
+import { useCloudLinkGrace } from "@/components/epic-canvas/panels/use-cloud-link-grace";
+import type {
+  EpicSyncPillState,
+  EpicWriteCommandAlert,
+} from "@/lib/epic-sync-pill-state";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   useEpicChatBackupStatus,
@@ -38,15 +44,30 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
  * It is deliberately NOT a connection indicator. It used to be one - it read
  * the renderer↔host stream status alone - and that is why it read "All changes
  * synced" through the incident where an Epic's artifact bodies existed nowhere
- * but the authoring host. The claim now comes from
- * {@link EpicSyncPillState}, which weighs the host↔cloud link, a fresh cloud
- * observation, and both dirtiness legs as well, and resolves every ambiguous
- * case toward "not synced".
+ * but the authoring host. Its durability claim now rests on the five inputs of
+ * wire-lane invariant 8, and resolves every ambiguous case toward "not
+ * synced": (i) the GUI↔host transport, (ii) the control lane's cloud-sync
+ * status and its per-cycle freshness, (iii) the control lane's aggregate dirty
+ * bit, (iv) runtime-local divergence, and (v) refused or superseded writes.
+ *
+ * (i)-(iv) arrive as {@link EpicSyncPillState}; (v) arrives BESIDE it as
+ * {@link EpicWriteCommandAlert} and is weighed as its own plane here. Folding
+ * the two into one verdict is what `replica-runtime/freshness.ts` forbids -
+ * "an aggregate hides rejected writes, which is the one thing a green
+ * indicator must never do" - and keeping them apart is what lets this pill
+ * report a refused write and a down link at the same time.
  *
  * Transient disconnects keep edits buffered (in the host's durable store while
  * only the cloud link is down, in the per-Epic store while the host itself is
  * unreachable) and flush on reconnect; the pill is the only indicator - there
  * is no banner during reconnect.
+ *
+ * A cloud-only drop is additionally held back for `CLOUD_LINK_GRACE_MS`
+ * (`use-cloud-link-grace.ts`) before it may read amber: the host re-dials the
+ * collab socket within seconds, the edits are durable on the host throughout,
+ * and naming every such drop taught users the product's connection was
+ * broken while it was working. A host-link drop gets no such grace - there,
+ * an unsent edit exists only in this window and the copy is the warning.
  */
 export interface EpicConnectionPillProps {
   readonly epicId: string;
@@ -54,7 +75,13 @@ export interface EpicConnectionPillProps {
 
 export function EpicConnectionPill(props: EpicConnectionPillProps) {
   const derived = useEpicSyncPillState();
-  const state = useSyncPillDisplayState(derived);
+  const hostTransportStatus = useEpicHostTransportStatus();
+  // A cloud-only drop (host reachable, edits durable on the host) reads as
+  // neutral `syncing` until it has lasted `CLOUD_LINK_GRACE_MS`; a host-link
+  // drop is never held back. The escalation clock below still reads the RAW
+  // verdict, so the grace cannot delay or mask "Still reconnecting…".
+  const graced = useCloudLinkGrace(derived, hostTransportStatus);
+  const state = useSyncPillDisplayState(graced);
   const hasFreshCloudSyncStatus = useEpicHasFreshCloudSyncStatus();
   // The escalation clock reads the RAW verdict, not the settled display
   // state: the settle hold renames a genuine `synced` to `syncing` until the
@@ -77,9 +104,14 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
     JSON.stringify([terminalAuthority.hostId, props.epicId]),
   );
   const presenceDegraded = useAgentActivityPresenceDegraded();
+  // Input (v), read as its own plane. It bypasses `useSyncPillDisplayState`
+  // entirely: the settle hold exists to stop routine save churn from strobing,
+  // and a terminal write outcome is neither routine nor transient.
+  const writeCommandAlert = useEpicWriteCommandAlert();
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
   const secondarySignals = {
+    writeCommandAlert,
     chatBackupStatus,
     terminalCatalogUnavailable,
     commGraphFeedHealth,
@@ -89,8 +121,11 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
     artifactIndicator: indicatorFor(state, linkDownTooLong),
     ...secondarySignals,
   });
+  // The graced verdict, not the settled one: a cloud drop inside its grace
+  // must read as quiet on hover too, or the tooltip names an outage the dot
+  // is deliberately not showing.
   const rawSelected = highestSeverityIndicator({
-    artifactIndicator: indicatorFor(derived, linkDownTooLong),
+    artifactIndicator: indicatorFor(graced, linkDownTooLong),
     ...secondarySignals,
   });
   const { indicator } = selected;
@@ -137,9 +172,14 @@ function warningAnnouncement(
   selected: SelectedIndicator,
   linkDownTooLong: boolean,
 ): string | null {
+  // Warning OR WORSE. Reading `=== "warning"` here meant a `danger` plane that
+  // is not the artifact leg - a refused write, most of all - fell through to
+  // the artifact switch below and was announced only if the LINK happened to
+  // be in a state worth announcing. A rejected write beside a healthy link
+  // said nothing at all.
   if (
     selected.source !== "artifact" &&
-    selected.indicator.severity === "warning"
+    SEVERITY_RANK[selected.indicator.severity] >= SEVERITY_RANK.warning
   ) {
     return accessibleNameFor(selected);
   }
@@ -224,6 +264,7 @@ interface PillIndicator {
 
 type PillSource =
   | "artifact"
+  | "write-command"
   | "chat-backup"
   | "terminal-catalog"
   | "comm-graph"
@@ -302,6 +343,8 @@ const QUIET_CONTAINER_CLASS =
   "h-5 px-1.5 py-0 text-overline italic leading-none text-muted-foreground";
 const AMBER_CONTAINER_CLASS =
   "rounded-md bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-400";
+const RED_CONTAINER_CLASS =
+  "rounded-md bg-red-500/10 px-2 py-0.5 text-red-700 dark:text-red-400";
 
 /**
  * The two link-down states, and how each reads before and after
@@ -363,12 +406,13 @@ const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
 
 /**
  * The secondary planes weighed against the artifact/Yjs verdict. An object
- * rather than a parameter list: there are five of them now, and a positional
+ * rather than a parameter list: there are six of them now, and a positional
  * call site stops being readable (and trips `max-params`) well before the
  * pill runs out of planes to report.
  */
 interface PillSignals {
   readonly artifactIndicator: PillIndicator;
+  readonly writeCommandAlert: EpicWriteCommandAlert | null;
   readonly chatBackupStatus: EpicChatBackupStatus | null;
   readonly terminalCatalogUnavailable: boolean;
   readonly commGraphFeedHealth: CommGraphFeedHealth | null;
@@ -393,6 +437,15 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
     indicator: signals.artifactIndicator,
   };
   const secondary: PillCandidate[] = [];
+  // First among the secondaries, so it takes every tie below the artifact leg:
+  // a write the authority refused is the one signal here that names work the
+  // user believes happened and which did not.
+  if (signals.writeCommandAlert !== null) {
+    secondary.push({
+      source: "write-command",
+      indicator: indicatorForWriteCommandAlert(signals.writeCommandAlert),
+    });
+  }
   if (signals.chatBackupStatus !== null) {
     secondary.push({
       source: "chat-backup",
@@ -438,6 +491,64 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
     )
     .map((candidate) => candidate.indicator);
   return { ...selected, alsoDegraded };
+}
+
+/**
+ * Input (v), and the ambiguous arm of input (iv), as copy.
+ *
+ * All three carry a LABEL rather than a bare dot, which the other secondary
+ * planes do not: those describe a plane that is degraded but healing, while
+ * each of these describes one of the user's own edits that is not in the epic.
+ * None of them is discoverable by hovering a light the user has no reason to
+ * hover.
+ *
+ * A refused write is `danger` because it is terminal and no reconnect resolves
+ * it. The other two are `warning`: a superseded write lost a race it may win
+ * on a reapply, and an ambiguous delivery may still settle on its own.
+ */
+const WRITE_COMMAND_ALERT_COPY: Record<
+  EpicWriteCommandAlert,
+  {
+    readonly severity: PillIndicator["severity"];
+    readonly label: string;
+    readonly message: string;
+  }
+> = {
+  rejected: {
+    severity: "danger",
+    label: "Change not saved",
+    message:
+      "A recent change was refused and has not been applied. Make it again to retry.",
+  },
+  superseded: {
+    severity: "warning",
+    label: "Change replaced",
+    message:
+      "A newer change from another device replaced a recent change of yours. Make it again if you still want it.",
+  },
+  outcomeUnknown: {
+    severity: "warning",
+    label: "Change may not be saved",
+    message:
+      "A recent change was sent but its result is unknown, so it may not have been applied. It settles on its own once the server confirms.",
+  },
+};
+
+function indicatorForWriteCommandAlert(
+  alert: EpicWriteCommandAlert,
+): PillIndicator {
+  const copy = WRITE_COMMAND_ALERT_COPY[alert];
+  return {
+    severity: copy.severity,
+    containerClassName:
+      copy.severity === "danger" ? RED_CONTAINER_CLASS : AMBER_CONTAINER_CLASS,
+    dotClassName: copy.severity === "danger" ? "bg-red-500" : "bg-amber-500",
+    label: copy.label,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: copy.message,
+    ariaLabel: copy.message,
+  };
 }
 
 /**
@@ -640,8 +751,7 @@ function indicatorFor(
     case "offline":
       return {
         severity: "danger",
-        containerClassName:
-          "rounded-md bg-red-500/10 px-2 py-0.5 text-red-700 dark:text-red-400",
+        containerClassName: RED_CONTAINER_CLASS,
         dotClassName: "bg-red-500",
         label: "Offline",
         showAgentSpinner: false,
