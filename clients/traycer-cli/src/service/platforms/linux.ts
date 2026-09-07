@@ -607,6 +607,20 @@ async function finishForcedStopForPublishedHost(
         exitCode: 1,
       });
     case "hung":
+      // "MAY come up beside it" is hedged on purpose, and the hedge is load
+      // bearing - do not harden it to "will" (reviewer C). The two-host
+      // reading assumes the survivor is genuinely OUTSIDE the unit, which is
+      // the case this message names and the one that costs a data dir. It is
+      // not the only way to survive SIGKILL: a process INSIDE the cgroup stuck
+      // in uninterruptible sleep survives it too, and there the unit stays
+      // active, systemd relaunches nothing, and the operator has one stuck
+      // process rather than two hosts.
+      //
+      // Nothing here can tell those apart, which is why the remedy is the same
+      // either way - `host status` first, before intervening. The sentence
+      // describes the worse branch because that is the one worth planning for;
+      // stating it as certain would send an operator hunting a second host
+      // that does not exist.
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
         message: `host ${operation} --force: ${premise}, but the published host (pid=${outcome.pid}, running outside the unit) survived SIGKILL through the exit grace; the stop did not take effect.${

@@ -660,12 +660,22 @@ function authenticatedRefusalReason(err: unknown): string | null {
   // at the one place this text is minted (cold review B).
   //
   // The cap is not cosmetic. This string is interpolated into the verify
-  // failure's message, and that message is what `writer.fail` stores, which
-  // `host.status.operation.error` mirrors onto a rendered GUI surface. So an
-  // unbounded, host-authored value sits beside a token whose whole contract is
-  // that it is a closed set of fixed strings. Bounding it at the source bounds
-  // every consumer at once; bounding it at any one consumer would leave the
-  // durable record - the furthest-travelling one - unbounded.
+  // failure's message, which `writer.fail` stores and
+  // `host.status.operation.error` mirrors. The durable record is the
+  // furthest-travelling consumer and the reason to bound at the source: as of
+  // Q23 the GUI's `verification-refused` card renders fixed copy and does not
+  // carry this text at all - which is exactly why bounding at a consumer would
+  // have been the wrong place. So an unbounded, host-authored value sits
+  // beside a token whose whole contract is that it is a closed set of fixed
+  // strings, and bounding it here bounds every consumer at once.
+  //
+  // The sentence this replaces said the text was rendered in the GUI. That was
+  // TRUE when written - the generic failed card interpolated `Update failed:
+  // <host's words>` verbatim - and the Q23 GUI patch invalidated it for this
+  // code alone; other codes still render their own message. Recorded rather
+  // than quietly corrected, because "my justification decayed while the code
+  // stayed right" is the failure this round kept finding, and a cap justified
+  // by a consumer that no longer exists is the shape someone removes.
   const detail = err.message.slice(0, REFUSAL_REASON_MAX_CHARS);
   const suffix = err.message.length > REFUSAL_REASON_MAX_CHARS ? "..." : "";
   return `${err.code}: ${detail}${suffix}`;
@@ -676,8 +686,10 @@ function authenticatedRefusalReason(err: unknown): string | null {
  *
  * Long enough for the messages the field actually produces - the lane's
  * samples run to about 60 characters ("no applicable key found in the JSON Web
- * Key Set") - with room for a host that says more, and short enough that a
- * record and a rendered card cannot be flooded by one.
+ * Key Set") - with room for a host that says more, and short enough that the
+ * durable record cannot be flooded by one. The bound is sized for the record,
+ * not for a card: see the mint above for why no GUI surface carries this text
+ * for this code any more.
  */
 const REFUSAL_REASON_MAX_CHARS = 200;
 
