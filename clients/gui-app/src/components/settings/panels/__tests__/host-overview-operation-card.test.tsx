@@ -340,6 +340,31 @@ function clearStagedManifest(version: string): HostAvailableManifest {
   };
 }
 
+/**
+ * ONE manifest, TWO versions with opposite floors: the staged rc.3 installs on
+ * this host's tools, and a NEWER rc.4 does not. The summary walk picks rc.4 (it
+ * scans newest first and a floored candidate still wins the walk), so
+ * `updates.cliFloor` is non-null while a park on rc.3 is not floored at all.
+ *
+ * This is the separating case the two `floorParkFixture` cases cannot be: both
+ * of those stage exactly the version the walk picks, so the walk's floor and
+ * the park's floor coincide by construction and any predicate keyed on either
+ * one passes.
+ */
+function splitFloorManifest(): HostAvailableManifest {
+  // Both builders return exactly one version (their own doc says so), so the
+  // index is safe by construction rather than by a check the types reject.
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T00:00:00Z",
+    latest: "1.3.0-rc.4",
+    versions: [
+      floorStagedManifest("1.3.0-rc.4").versions[0],
+      clearStagedManifest("1.3.0-rc.3").versions[0],
+    ],
+  };
+}
+
 function floorStagedManifest(version: string): HostAvailableManifest {
   const manifest = clearStagedManifest(version);
   return {
@@ -1929,5 +1954,297 @@ describe("HostOverviewOperationCard — a work park under an unmet CLI floor", (
         screen.getByTestId("host-overview-operation-phase").textContent,
       ).toBe("Update waits for 0 sessions to finish");
     });
+  });
+});
+
+/**
+ * The three ways the floor-park sentence's PREDICATE can be wrong while its
+ * RULE is right, each found by a mounted probe rather than by reading. The
+ * first shipped version keyed on `updates.cliFloor !== null`, which is neither
+ * what puts the help button on screen nor a fact about the park's own version.
+ */
+describe("HostOverviewOperationCard — the floor sentence and its affordance", () => {
+  function parkStatus(
+    targetVersion: string,
+    busySessionCount: number,
+  ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
+    return statusWithBusy(
+      "1.3.0-rc.2",
+      attemptOperation({
+        phase: "waiting-for-work",
+        execution: "active",
+        liveness: "active",
+        targetVersion,
+        busySessionCount,
+      }),
+      busySessionCount > 0,
+      busySessionCount,
+    );
+  }
+
+  function bindFixture(
+    fixture: OverviewHostFixture,
+    methods: readonly string[],
+  ) {
+    recordNegotiatedHostMethods("host-a", methods);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+  }
+
+  // ── J1: the sentence must not outlive the button it names ────────────────
+
+  it("(J1a) a RETIRED updates region shows no help button, so the park keeps the count sentence", async () => {
+    // `installDegrade` (no `host.update.install` negotiated) retires the
+    // region: `HostOverviewUpdatesRegion` short-circuits to the degraded
+    // notice and renders no remedy row at all. The card is behind no such
+    // gate. Falsifies `cliFloorBlocked = updates.cliFloor !== null`, which is
+    // true here — the check still runs and the walk still finds the floor.
+    let checks = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () => parkStatus("1.3.0-rc.3", 0),
+        "host.update.check": () => {
+          checks += 1;
+          return {
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "explicit-include" as const,
+            manifest: floorStagedManifest("1.3.0-rc.3"),
+          };
+        },
+      },
+    });
+    bindFixture(
+      fixture,
+      ALL_OVERVIEW_METHODS.filter((method) => method !== "host.update.install"),
+    );
+    renderPanel();
+
+    await screen.findByTestId("host-overview-updates-degraded");
+    // The floor really was read — otherwise this pin would pass for the
+    // trivial reason that there was no floor to substitute on.
+    await waitFor(() => expect(checks).toBeGreaterThan(0));
+    expect(
+      screen.queryByRole("button", { name: "Show installation help" }),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update waits for 0 sessions to finish");
+  });
+
+  it("(J1b) a scope that turns UNUSABLE takes the help button with it, and the retained sentence drops the floor clause", async () => {
+    // The floor is read while everything is healthy, then only the SCOPE
+    // changes — same client, same cached manifest, nothing about the read
+    // moves. The whole region sits behind `!usable`, the card does not. The
+    // shipped predicate left "Last seen: Update waits for Traycer's
+    // command-line tools… — see installation help" on screen with no help
+    // anywhere on the page.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () => parkStatus("1.3.0-rc.3", 0),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: floorStagedManifest("1.3.0-rc.3"),
+        }),
+      },
+    });
+    bindFixture(fixture, ALL_OVERVIEW_METHODS);
+    const panel = renderPanelPersistent();
+
+    // Healthy first: the substitution is on, and its button is really there.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe(
+        "Update waits for Traycer's command-line tools to be updated — see installation help",
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "Show installation help" }),
+    ).toBeTruthy();
+
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      status: "unreachable",
+    };
+    panel.rerender();
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Show installation help" }),
+      ).toBeNull();
+    });
+    // Retained, and WITHOUT the clause that names a button nobody can see.
+    const phase = screen.getByTestId(
+      "host-overview-operation-phase",
+    ).textContent;
+    expect(phase).toContain("Last seen:");
+    expect(phase).not.toContain("installation help");
+  });
+
+  // ── J2: the floor named must be the PARK's, not the summary walk's ───────
+
+  it("(J2a) a park on an INSTALLABLE version keeps the count sentence, though the walk's own candidate is floored", async () => {
+    // `splitFloorManifest`: the walk picks the floored rc.4, so
+    // `updates.cliFloor` is non-null — but the park is on rc.3, which this
+    // host's tools install perfectly well. The sentence must describe the
+    // park. Falsifies any predicate keyed on the walk's candidate.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () => parkStatus("1.3.0-rc.3", 2),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: splitFloorManifest(),
+        }),
+      },
+    });
+    bindFixture(fixture, ALL_OVERVIEW_METHODS);
+    renderPanel();
+
+    // The walk DID find a floor — the remedy row is on screen. Without this
+    // the pin would pass on a page with no floor anywhere.
+    await screen.findByRole("button", { name: "Show installation help" });
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update waits for 2 sessions to finish");
+  });
+
+  it("(J2b) the same manifest, with the park ON the floored version, does substitute", async () => {
+    // The positive half of J2a: identical fixture but the park targets rc.4.
+    // Discriminates on the park's version alone.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () => parkStatus("1.3.0-rc.4", 0),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: splitFloorManifest(),
+        }),
+      },
+    });
+    bindFixture(fixture, ALL_OVERVIEW_METHODS);
+    renderPanel();
+
+    await screen.findByRole("button", { name: "Show installation help" });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe(
+        "Update waits for Traycer's command-line tools to be updated — see installation help",
+      );
+    });
+  });
+
+  // ── 3b: never beside a force control that works ──────────────────────────
+
+  it("(3b) a BOUND park with live work keeps the count sentence AND its working Force update…", async () => {
+    // Two floors, not one. The manifest's per-version requirement is what
+    // gates the record-derived staged force; a bound attempt's Force dispatches
+    // `host.update.continue`, which the host answers against its OWN
+    // bound-intent floor (`cli-failed {cli-too-old}`) and which this page does
+    // not gate on the catalog. So the button here is live, and a sentence
+    // saying the update waits on the command-line tools while the button that
+    // resumes it sits beside the words is the same lie in the other direction.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () => parkStatus("1.3.0-rc.3", 2),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: floorStagedManifest("1.3.0-rc.3"),
+        }),
+      },
+    });
+    bindFixture(fixture, [...ALL_OVERVIEW_METHODS, "host.update.continue"]);
+    renderPanel();
+
+    const force = await screen.findByTestId(
+      "host-overview-operation-force-update",
+    );
+    expect(force.hasAttribute("disabled")).toBe(false);
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update waits for 2 sessions to finish");
+  });
+
+  it("(3b positive control) the RECORD-derived staged wait under the same floor substitutes, and offers no Force", async () => {
+    // Same manifest, same count, `host.update.continue` NOT negotiated — so
+    // the park routes to `legacyStagedForce`, which the floor withholds
+    // (a floored stage is not `stagedEntryOfferable`). Nothing to contradict
+    // the sentence, so the sentence stands. This and the case above differ by
+    // one negotiated method.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () => parkStatus("1.3.0-rc.3", 2),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: floorStagedManifest("1.3.0-rc.3"),
+        }),
+      },
+    });
+    bindFixture(fixture, ALL_OVERVIEW_METHODS);
+    renderPanel();
+
+    await screen.findByRole("button", { name: "Show installation help" });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe(
+        "Update waits for Traycer's command-line tools to be updated — see installation help",
+      );
+    });
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
   });
 });

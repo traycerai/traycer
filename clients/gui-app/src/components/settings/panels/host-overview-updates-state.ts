@@ -465,6 +465,8 @@ export function useHostOverviewUpdates(input: {
   return {
     degrade,
     cliFloor,
+    cliFloorForVersion: (version) =>
+      readCliFloorForVersion(actionableManifest, input.platformKey, version),
     stagedEntryOfferable,
     activate: bound.activate,
     continueAttempt: bound.continueAttempt,
@@ -699,7 +701,32 @@ export interface HostOverviewUpdatesState {
   readonly degrade: OverviewDegradeReason | null;
   readonly summary: HostOverviewUpdatesSummary;
   readonly picker: VersionPickerProps;
+  /**
+   * The SUMMARY WALK's floor — the one the remedy row and the recheck are
+   * about, on the version this region would offer to install.
+   *
+   * Deliberately NOT an answer about any other version. The staged release is
+   * not part of the walk (it was chosen earlier, by a catalog that may since
+   * have moved), and neither is a parked attempt's target: a manifest can
+   * carry a floored rc.4 above a perfectly installable rc.3, and this field
+   * says nothing about rc.3. A consumer asking "is THIS version floored" wants
+   * {@link HostOverviewUpdatesState.cliFloorForVersion}.
+   */
   readonly cliFloor: CliFloor | null;
+  /**
+   * The catalog's CLI floor for one named version, or `null` when that version
+   * installs on this host's tools — the per-version question {@link cliFloor}
+   * cannot answer.
+   *
+   * Same `readCliFloor` the summary walk uses, so the two cannot disagree
+   * about a version they both look at; `null` for a version the manifest does
+   * not list, and for a null version (a park that named no target). It reads
+   * ONLY the floor, deliberately not `describeForceUpdateRefusal`: that also
+   * refuses a withdrawn or unresolvable entry, and a caller choosing CLI-floor
+   * COPY off it would say "update your command-line tools" about a release
+   * that was yanked.
+   */
+  readonly cliFloorForVersion: (version: string | null) => CliFloor | null;
   readonly stagedEntryOfferable: boolean;
   /**
    * `host.update.install {version, force: true}` — the staged-wait force.
@@ -1164,6 +1191,27 @@ function deriveCliFloorAndForceGate(input: {
             hostName: input.hostName,
           }),
   };
+}
+
+/**
+ * The floor for ONE named version, looked up in the same actionable manifest
+ * the summary walk reads.
+ *
+ * The walk's own candidate is chosen by an ordered scan; this is the direct
+ * question, for a caller that already knows which version it means — a parked
+ * attempt's target, say, which the walk may never visit because something
+ * newer sits above it.
+ */
+function readCliFloorForVersion(
+  manifest: HostAvailableManifest | null,
+  platformKey: string | null,
+  version: string | null,
+): CliFloor | null {
+  if (version === null) return null;
+  return readCliFloor(
+    manifest?.versions.find((entry) => entry.version === version),
+    platformKey,
+  );
 }
 
 function readCliFloor(

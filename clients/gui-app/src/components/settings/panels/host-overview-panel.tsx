@@ -84,6 +84,7 @@ import {
   holdsLifecycleGate,
   isQuietUpdateView,
   isRecordObservation,
+  offersForceRestart,
   UNKNOWN_FLEET_UPDATE_VIEW,
   type FleetUpdateObservation,
   type FleetUpdateView,
@@ -1374,6 +1375,54 @@ export function HostOverviewPanel(props: {
     attemptControl === null || updates.degrade !== null || anyPending
       ? null
       : () => setBoundOffer(attemptControl);
+  // The card's force handler for a PARK, hoisted because the sentence beside
+  // the button now has to know whether the button is there. It was this exact
+  // expression inline; naming it is what keeps the two from disagreeing.
+  const parkForceControl =
+    attemptControl?.intent === "continue" ? openBoundOffer : legacyStagedForce;
+
+  // THE REMEDY ROW'S OWN RENDER DECISION, named once and read twice.
+  //
+  // The card's CLI-floor sentence ends in "see installation help", and that
+  // button belongs to the updates region — which does NOT render it merely
+  // because a floor exists. The region short-circuits to the degraded notice
+  // on `degrade` and the whole region sits behind `usable`, and the card is
+  // behind neither, so a floor read while healthy could leave the sentence
+  // pointing at a button that had since gone: a scope that went unreachable
+  // rendered "Last seen: … — see installation help" with no help anywhere on
+  // the page. Deriving the sentence's precondition from the row's own
+  // condition is what makes that unrepresentable rather than merely fixed.
+  const remedyRowRendered =
+    usable && updates.degrade === null && updates.summary.remedy !== null;
+
+  // Whether the card's park sentence may name the CLI floor. THREE conditions,
+  // and each one is a defect that shipped without it:
+  //
+  // 1. The affordance is on screen (above). A sentence that names a way
+  //    forward nobody can see is worse than the count it replaced.
+  // 2. The floor is the PARK's, not the summary walk's. `updates.cliFloor` is
+  //    about the version this region would offer to install, which is chosen
+  //    by an ordered scan and need not be the version the park is stuck on: a
+  //    manifest carrying a floored rc.4 above an installable rc.3 made a park
+  //    on rc.3 claim a floor that did not apply to it.
+  // 3. This card offers no live force control for the park. The floor gate
+  //    withholds the RECORD-derived staged wait's Force update… (a floored
+  //    stage is not `stagedEntryOfferable`), but a BOUND attempt's Force
+  //    routes to `host.update.continue` and is deliberately not gated on the
+  //    manifest floor at all — two different floors, the catalog's per-version
+  //    requirement versus the host's own bound-intent floor, which the host
+  //    answers itself with `cli-failed {cli-too-old}`. So a bound park with
+  //    live work can render a working Force beside this sentence, and telling
+  //    someone their update waits on the command-line tools while the button
+  //    that resumes it sits next to the words is the same class of lie in the
+  //    other direction. `offersForceRestart` is half the test because it is
+  //    what decides the button RENDERS: at a zero count it does not, which is
+  //    the observed hardware case and must still substitute.
+  const cliFloorBlocked =
+    operationView !== null &&
+    remedyRowRendered &&
+    !(parkForceControl !== null && offersForceRestart(operationView)) &&
+    updates.cliFloorForVersion(operationView.targetVersion) !== null;
 
   // The two facts the window modal's own update gate reduces to, asked once
   // here rather than inside the JSX. Force-provisioning is the BUNDLED host's
@@ -1513,15 +1562,8 @@ export function HostOverviewPanel(props: {
           <HostOverviewOperationCard
             view={operationView}
             hostName={displayName}
-            // Exactly the predicate the region renders its remedy row on:
-            // `remedy` is `describeCliFloorRemedy(...)` for a non-null
-            // `cliFloor` and `null` otherwise, so this is true when — and only
-            // when — `Show installation help` is on screen for the sentence to
-            // point at. Not narrowed to `repairable`: an unreadable floor is
-            // still a floor, still withholds Update now, and still renders the
-            // help action; what `repairable` decides is which REMEDY copy the
-            // row gets, not whether the park is CLI-blocked.
-            cliFloorBlocked={updates.cliFloor !== null}
+            // Resolved above, where the three conditions behind it are stated.
+            cliFloorBlocked={cliFloorBlocked}
             // Restart cannot activate a stage. A floor gate must not turn a
             // staged wait's Force update into a different, ineffective force
             // - and a record leg that is not live does not vouch that no
@@ -1592,11 +1634,7 @@ export function HostOverviewPanel(props: {
             // the case `installForce` cannot express.
             //
             // Otherwise today's staged-wait force.
-            onForceUpdate={
-              attemptControl?.intent === "continue"
-                ? openBoundOffer
-                : legacyStagedForce
-            }
+            onForceUpdate={parkForceControl}
           />
         )}
         {/* The update ANSWER, on the card that describes the host — not under a

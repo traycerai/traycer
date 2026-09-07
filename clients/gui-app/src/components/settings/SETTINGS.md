@@ -2366,20 +2366,40 @@ aria-live="polite"` carrying the equivalent text for
       `waiting-for-work` ("Update waits for N sessions to finish")
       kinds, AFTER the coarse marker and before `idle`, and like every park
       they hold no lifecycle gate and earn no fast poll.
-      **While the region's CLI-floor lane is active, a `waiting-for-work` park
-      says so instead of naming a count** ("Update waits for Traycer's
-      command-line tools to be updated — see installation help"). Observed on
-      real hardware: an rc-era CLI in the slot, a host sitting `Online · Idle`,
-      and the card reading "Update waits for 0 sessions to finish" while the
-      host's reconciler refused the resume every tick. The floor outranks the
-      count at ANY count, including a positive one - finishing the work resumes
-      nothing while no CLI on that machine can carry the release - and it
-      points at the remedy row's existing `Show installation help` rather than
-      restating it, the same shape as "Update status unavailable — see
-      Diagnostics". The WORK park only: `waiting-to-activate` names a restart
-      into bytes already placed, which no CLI upgrade unblocks. The landing
-      banner passes `false` and keeps the count, because it has no floor lane
-      and so no affordance for the substituted sentence to point at.
+      **A CLI-floored `waiting-for-work` park says so instead of naming a
+      count** ("Update waits for Traycer's command-line tools to be updated —
+      see installation help"). Observed on real hardware: an rc-era CLI in the
+      slot, a host sitting `Online · Idle`, and the card reading "Update waits
+      for 0 sessions to finish" while the host's reconciler refused the resume
+      every tick. The floor outranks the count at ANY count, including a
+      positive one - finishing the work resumes nothing while no CLI on that
+      machine can carry the release - and it points at the remedy row's
+      existing `Show installation help` rather than restating it, the same
+      shape as "Update status unavailable — see Diagnostics". The WORK park
+      only: `waiting-to-activate` names a restart into bytes already placed,
+      which no CLI upgrade unblocks. The landing banner passes `false` and
+      keeps the count, because it has no floor lane and so no affordance for
+      the substituted sentence to point at.
+      **THREE conditions, and the first shipped version had none of them
+      right** (it asked only whether the summary walk found a floor):
+      (1) the remedy row is actually RENDERED - the region short-circuits to
+      its degraded notice on `degrade` and the whole region sits behind
+      `usable`, neither of which gates the card, so a floor read while healthy
+      could leave the sentence pointing at a button that had since gone;
+      (2) the floor is the PARK's version, read by the same `readCliFloor` on
+      that version rather than on the walk's candidate - a manifest carrying a
+      floored rc.4 above an installable rc.3 must not make a park on rc.3 claim
+      a floor; (3) this card is offering no working force control for the park.
+      That last one is why the withheld-Force claim is the CALLER's finding and
+      not a property of the floor: it holds for the record-derived staged wait,
+      whose Force the floor gate withholds (a floored stage is not
+      `stagedEntryOfferable`), and NOT for a bound attempt, whose Force
+      dispatches `host.update.continue` against the host's own bound-intent
+      floor - a different floor from the catalog's per-version requirement,
+      answered by the host itself with `cli-failed {cli-too-old}`, and
+      deliberately not folded into this gate. `offersForceRestart` is half of
+      that test because it decides whether the button RENDERS at all: at a zero
+      count it does not, which is the observed case and still substitutes.
       **A TERMINAL attempt that is not `failed` yields the operation slot to
       BOTH of these parks** (D-49): `complete` and `superseded` let the
       records answer first, so "another actor delivered the version and this

@@ -186,11 +186,19 @@ function waitingForWorkSentence(
   // carry the release at all.
   //
   // It points at the affordance rather than restating the fix: the remedy row
-  // is already on screen with its own sentence and its own `Show installation
-  // help`, and the floor gate withholds Force and Restart on this card
-  // precisely so that row is the only way forward. Two full remedies for one
-  // blocker is the layered narration this page keeps deleting — hence the same
-  // shape as `Update status unavailable — see Diagnostics` above.
+  // is on screen with its own sentence and its own `Show installation help`,
+  // and two full remedies for one blocker is the layered narration this page
+  // keeps deleting — hence the same shape as `Update status unavailable — see
+  // Diagnostics` above.
+  //
+  // That the row is the ONLY way forward is the CALLER's finding, not a fact
+  // about the floor. It holds for a record-derived staged wait, whose Force
+  // update… the floor gate withholds (a floored stage is not offerable), and
+  // NOT for a bound attempt, whose Force routes to `host.update.continue`
+  // against a different floor entirely and can render live beside this
+  // sentence. So the Overview passes `false` whenever it is showing a working
+  // force control for the park — see `host-overview-panel.tsx`, which is where
+  // that question can be answered.
   //
   // Only the WORK park. `waiting-to-activate` names a restart, and a restart
   // into bytes that are already placed is not something a CLI upgrade unblocks;
