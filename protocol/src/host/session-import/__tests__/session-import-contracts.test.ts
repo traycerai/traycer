@@ -3,6 +3,7 @@ import {
   sessionImportScanClientFrameSchema,
   sessionImportScanServerFrameSchema,
   sessionImportScanV10,
+  sessionImportScanV11,
 } from "@traycer/protocol/host/session-import/scan";
 import {
   sessionImportRunClientFrameSchema,
@@ -614,12 +615,14 @@ describe("sessionImport.status@1.0", () => {
  * feature the wire cannot carry, and nothing else in the suite would notice.
  */
 describe("sessionImport.* registry membership", () => {
-  it("registers both stream methods at minor 0 with a per-method degrade", () => {
+  it("registers scan at minors 0 and 1, retaining the v1.0 contract for older hosts", () => {
     const scan = hostStreamRpcRegistry["sessionImport.scan"];
     expect(scan).toBeDefined();
-    expect(scan[1].latestMinor).toBe(0);
+    expect(scan[1].latestMinor).toBe(1);
     expect(scan[1].versions[0].contract).toBe(sessionImportScanV10);
+    expect(scan[1].versions[1].contract).toBe(sessionImportScanV11);
     expect(sessionImportScanV10.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(sessionImportScanV11.schemaVersion).toEqual({ major: 1, minor: 1 });
 
     const run = hostStreamRpcRegistry["sessionImport.run"];
     expect(run).toBeDefined();

@@ -135,8 +135,7 @@ function SessionImportRow(props: {
           </Button>
         }
       />
-      {/* Opens on the host this row named, so the dialog's own picker agrees
-          with the page behind it; the pick can still be changed there. */}
+      {/* The dialog stays bound to the host this Settings page names. */}
       {importOpen ? (
         <SessionImportDialog
           onClose={() => setImportOpen(false)}
