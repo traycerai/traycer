@@ -154,6 +154,30 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
 
   // ---- recovery: additive, optional, but describes a TERMINAL conclusion --
 
+  // WHAT THE THREE PHASE-LEGALITY ROWS BELOW DO NOT PIN, established by
+  // ablation rather than by reading, and written down here because it is a
+  // fact about the DECODER that no row in this file can express.
+  //
+  // The decoder guards `recovery`'s phase legality TWICE: a terminal-only gate
+  // (`executionForPhase(phase) !== "terminal"`), and then an outcome-must-match-
+  // phase check. Deleting the terminal-only gate alone reddens NOTHING here -
+  // all 22 rows still pass. That is not a gap in these rows; it is a property
+  // of the code. `parseRecovery` closes `outcome` over exactly
+  // `complete | failed | superseded`, and each of those is rejected against
+  // every phase but its own namesake - all three of which are terminal. So by
+  // the time the first gate runs, no input it could reject survives the second
+  // one either. It cannot be isolated by any input the schema admits, so no
+  // honest test can pin it.
+  //
+  // Leave it in place. It is the legible statement of intent, and it becomes
+  // LOAD-BEARING the moment either fact changes: a fourth `outcome`, or an
+  // outcome that legitimately maps to a non-terminal phase. What it is not
+  // today is enforcement - and a reader who deletes the outcome-match check
+  // believing this one still covers the case would be wrong in the unsafe
+  // direction. Deleting the outcome-match check alone reddens exactly one row
+  // ("...outcome disagrees with the record's own terminal phase") and nothing
+  // else, which is the honest division of labour between the two.
+
   describe("recovery provenance", () => {
     it("decodes a recovery record attached to a matching TERMINAL phase", () => {
       const result = decodeHostUpdateAttempt(
