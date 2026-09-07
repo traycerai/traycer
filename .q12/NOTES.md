@@ -146,6 +146,46 @@ Named in the `generationWrittenBySwap` docblock, in `phaseWrite`'s (a `null`
 there is not evidence that nothing changed), and in the acceptance pin's
 comment, so none of the three teaches an invariant that does not hold.
 
+## A Q13 regression found at the merge, fixed here — `52810952c`
+
+ea8ce20c's merge surfaced `linux-install-flow.test.ts:766` RED. **It was my
+regression, not a stale pin.** Q13 replaced
+
+    stopForRestart: (label, options) => stopService(label, run, options.force, "restart")
+
+with a function taking **no `force` at all**, so on Linux `host restart --force`
+silently stopped escalating to the published host and stopped REPORTING a
+forced stop that had not taken effect.
+
+The distinction the inversion blurred, and it is the useful part:
+
+| State | Meaning | Answer |
+| --- | --- | --- |
+| signalled instance not provably gone | we could not tell | `forcedRecycle: true`; the relaunch recycles and repairs it |
+| `--force`, and the forced stop reports `hung` | the stop **did not take effect** | reject — the caller explicitly asked to be told |
+
+The coordinator's reading of the name `SERVICE_CONTROL_FAILED` was right, and
+it was right for the reason the name suggests: a service-control call that
+failed is not the same fact as an instance that cannot be proven dead.
+
+Restored as the LAST escalation rather than by reverting to `stopService`, so
+Q13's property survives: the signal ladder still runs, the unit is never left
+INACTIVE with `Restart=` disarmed, and only when the ladder cannot prove the
+instance gone does `--force` reach the host process directly, outside the
+unit's cgroup.
+
+**Pinned from both sides.** The twin row is the one worth keeping: wiring the
+escalation unconditionally would reach for the published host on every ordinary
+update restart — and with the manager left armed, `pid.json` by then may name
+the REPLACEMENT systemd has already started rather than the instance we
+signalled. That is the same hazard `ea23f8911` pinned for the confirmation,
+arriving at a second site. One-sided pins are how the first regression got in.
+
+| # | Ablation | Reddened |
+| --- | --- | --- |
+| RW-F1 | the force escalation removed again | the force row alone |
+| RW-F2 | the escalation made unconditional | the non-force twin alone |
+
 ## Red-watches
 
 | #       | Ablation                                 | Reddened                                          |
