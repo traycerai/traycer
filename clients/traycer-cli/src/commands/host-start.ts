@@ -55,9 +55,10 @@ import {
 } from "../host/crash-telemetry";
 import { consumeHostStartAdoption } from "../host/host-start-adoption";
 import {
-  hasActionableStopIntent,
+  actionableStopIntentReason,
   readStopIntentIdentity,
   type StopIntentIdentity,
+  type StopIntentReason,
 } from "../host/stop-intent";
 import {
   attestLaunchdSupervisorPid,
@@ -277,6 +278,29 @@ const FORWARDED_SHUTDOWN_SIGNALS = [
  */
 const SERVICE_RELAUNCH_BUSY_EXIT_CODE = 76;
 
+/**
+ * The supervisor exited because a RESTART was announced, and a restart is
+ * owed (Q13).
+ *
+ * `stop-requested` exits 0 so no manager brings the host back, and that is
+ * right for `stop` and `uninstall`. It was wrong for `restart`, which is what
+ * every update's pre-swap stop announces (`stopForRestart` ->
+ * `announceStop(env, "restart", ...)`) and which the protocol defines as the
+ * one reason that DOES promise a comeback. Exiting 0 there told the service
+ * manager the job had finished successfully; on a CLI-only install, if the
+ * CLI that promised the restart then died, nothing brought the host back and
+ * nothing was left that would.
+ *
+ * So the invariant narrows rather than bends: the record already says which
+ * stop this was, and only the one that promises a return re-arms the manager.
+ *
+ * Distinct from 76 (`SERVICE_RELAUNCH_BUSY_EXIT_CODE`) and 75
+ * (`EXIT_RESTART_INTO_REFRESHED_SLOT`) so a support pull can tell "a restart
+ * is owed and I am handing it back to the manager" apart from "deferred,
+ * retry me" and from every other way this supervisor ends.
+ */
+const RESTART_OWED_EXIT_CODE = 77;
+
 export interface ResolveHostStartTargetDeps {
   readonly readInstallRecord: (
     environment: Environment,
@@ -486,11 +510,15 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // supervisor refusing to start. See `host/stop-intent.ts`.
   // `servedAtStartup` is the clock-independent half: the record that existed
   // when this supervisor started, which it therefore has already answered.
+  // Returns WHY, not whether (Q13): the refusal and the exit code are two
+  // decisions that must come from one read of one record. A boolean here plus
+  // a second read for the reason could straddle a record that changed between
+  // them, and decide the refusal from one stop and the exit code from another.
   readonly hasStopIntent: (
     environment: Environment,
     nowMs: number,
     servedAtStartup: StopIntentIdentity | null,
-  ) => Promise<boolean>;
+  ) => Promise<StopIntentReason | null>;
   readonly readStopIntentIdentity: (
     environment: Environment,
   ) => Promise<StopIntentIdentity | null>;
@@ -648,7 +676,7 @@ const defaultRunDeps: RunHostStartDeps = {
       clearTimeout(timer);
     };
   },
-  hasStopIntent: hasActionableStopIntent,
+  hasStopIntent: actionableStopIntentReason,
   readStopIntentIdentity,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
@@ -1071,6 +1099,8 @@ export async function runHostStart(
         // supervisor, which would resume this very retry - see
         // `RelaunchStopCause`.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
+        if (decision.cause === "restart-requested")
+          return exitSupervisor(RESTART_OWED_EXIT_CODE);
         return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
       }
       if (err instanceof CliError) {
@@ -1277,6 +1307,8 @@ export async function runHostStart(
         // See `RelaunchStopCause`: a nonzero code here would be read as a crash
         // and answered with a fresh supervisor, undoing the stop just honoured.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
+        if (decision.cause === "restart-requested")
+          return exitSupervisor(RESTART_OWED_EXIT_CODE);
         return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
       }
       // First attempt with someone waiting: report now rather than after the
@@ -1344,11 +1376,12 @@ export async function runHostStart(
     // Reading the latch AFTER the await is what closes it; from here to
     // `currentChild = child` is unbroken synchronous code, so no signal can
     // land in between.
-    const stopAnnounced = await deps.hasStopIntent(
-      opts.environment,
-      Date.now(),
-      servedStopIntentAtStartup,
-    );
+    const stopAnnounced =
+      (await deps.hasStopIntent(
+        opts.environment,
+        Date.now(),
+        servedStopIntentAtStartup,
+      )) !== null;
     if (shuttingDown || stopAnnounced) {
       logger.info("Host supervisor not spawning - a stop was requested", {
         environment: opts.environment,
@@ -1636,6 +1669,8 @@ export async function runHostStart(
             continue;
           }
           if (decision.cause === "stop-requested") return exitSupervisor(0);
+          if (decision.cause === "restart-requested")
+            return exitSupervisor(RESTART_OWED_EXIT_CODE);
         }
         await writeProbeTerminalIfAttested({
           context: attemptProbeContext,
@@ -1712,6 +1747,8 @@ export async function runHostStart(
         // See `RelaunchStopCause`: 66 would be read as a crash and answered
         // with a fresh supervisor, undoing the stop this branch just honoured.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
+        if (decision.cause === "restart-requested")
+          return exitSupervisor(RESTART_OWED_EXIT_CODE);
       }
       return exitSupervisor(66);
     }
@@ -1831,7 +1868,7 @@ export async function runHostStart(
         opts.environment,
         Date.now(),
         servedStopIntentAtStartup,
-      ))
+      )) !== null
     ) {
       logger.info("Host supervisor stopping a child a stop raced", {
         environment: opts.environment,
@@ -1919,6 +1956,8 @@ export async function runHostStart(
         // See `RelaunchStopCause`: 66 would be read as a crash and answered
         // with a fresh supervisor, undoing the stop this branch just honoured.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
+        if (decision.cause === "restart-requested")
+          return exitSupervisor(RESTART_OWED_EXIT_CODE);
       }
       return exitSupervisor(66);
     }
@@ -2048,7 +2087,39 @@ export async function runHostStart(
     // A clean exit is the host standing down on purpose - never relaunch it.
     // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure`
     // restated, which is the point: one semantic on all three platforms.
+    //
+    // ...with ONE reading of "on purpose" that was wrong, and it is the E6L
+    // outage (Q13). An update's pre-swap stop announces `restart` and then
+    // SIGTERMs the host, which exits 0 - so this branch reported success to
+    // the service manager and stood down. On a CLI-only install, if the CLI
+    // that promised the restart died before making it, nothing brought the
+    // host back and nothing was left that would: the reconciler that could
+    // lives inside the host this exit keeps down.
+    //
+    // A clean exit UNDER A STANDING `restart` INTENT is not the host standing
+    // down; it is the first half of a restart somebody still owes. Handing it
+    // back to the manager non-zero is what makes the manager the actor that
+    // finishes it - and the relaunched supervisor is not admitted blindly, it
+    // goes through the same attempt-record admission as any other start.
+    //
+    // The other reasons keep this branch's answer. `stop` and `uninstall`
+    // mean do not bring this back. `install-swap`, despite its name, is the
+    // reason that "deliberately promises no comeback, because a CLI swap's
+    // relaunch is unbounded" - it rides the RPC leg, not a service stop.
     if (!outcome.abnormal) {
+      const standing = await deps.hasStopIntent(
+        opts.environment,
+        Date.now(),
+        servedStopIntentAtStartup,
+      );
+      if (standing === "restart") {
+        logger.info("Host supervisor exiting with a restart still owed", {
+          environment: opts.environment,
+          attemptId,
+          exitCode: RESTART_OWED_EXIT_CODE,
+        });
+        return exitSupervisor(RESTART_OWED_EXIT_CODE);
+      }
       return exitSupervisor(outcome.exitCode);
     }
 
@@ -2087,7 +2158,11 @@ export async function runHostStart(
       // reads the intent as already served and brings the host back. The
       // refusal and the exit code have to agree. See `RelaunchStopCause`.
       return exitSupervisor(
-        decision.cause === "stop-requested" ? 0 : outcome.exitCode,
+        decision.cause === "stop-requested"
+          ? 0
+          : decision.cause === "restart-requested"
+            ? RESTART_OWED_EXIT_CODE
+            : outcome.exitCode,
       );
     }
     consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -2120,7 +2195,10 @@ type RelaunchDecision =
  * five relaunches this supervisor stops guessing and hands the machine back to
  * the platform, whose throttling is the outer bound on the loop.
  */
-type RelaunchStopCause = "stop-requested" | "budget-exhausted";
+type RelaunchStopCause =
+  | "stop-requested"
+  | "restart-requested"
+  | "budget-exhausted";
 
 /**
  * The single place that answers "may this dead child be brought back?".
@@ -2162,35 +2240,43 @@ async function decideRelaunch(input: {
   readonly shutdownRequested: Promise<void>;
 }): Promise<RelaunchDecision> {
   const { deps, logger, environment, reason } = input;
-  const refused = async (when: "before" | "after"): Promise<boolean> => {
+  // `null` = not refused. A non-null value is the CAUSE to stop with, and it
+  // carries which stop it was, because the two stops need opposite exit codes.
+  const refused = async (
+    when: "before" | "after",
+  ): Promise<RelaunchStopCause | null> => {
     if (input.isShuttingDown()) {
       logger.info("Host supervisor not relaunching - shutting down", {
         environment,
         reason,
         observed: when,
       });
-      return true;
+      // A forwarded SIGTERM is this process being torn down, not a record
+      // being honoured. No intent has been read, so it takes the exit that
+      // asks for nothing.
+      return "stop-requested";
     }
-    if (
-      await deps.hasStopIntent(
-        environment,
-        Date.now(),
-        input.servedStopIntentAtStartup,
-      )
-    ) {
+    const announced = await deps.hasStopIntent(
+      environment,
+      Date.now(),
+      input.servedStopIntentAtStartup,
+    );
+    if (announced !== null) {
       logger.info("Host supervisor not relaunching - a stop was requested", {
         environment,
         reason,
         observed: when,
+        stopReason: announced,
       });
-      return true;
+      return announced === "restart" ? "restart-requested" : "stop-requested";
     }
-    return false;
+    return null;
   };
 
   // Checked before the sleep too - purely so an already-known stop does not
   // pay a minute of backoff before being honoured.
-  if (await refused("before")) return { kind: "stop", cause: "stop-requested" };
+  const refusedBefore = await refused("before");
+  if (refusedBefore !== null) return { kind: "stop", cause: refusedBefore };
   if (input.consecutiveRelaunches >= deps.maxRelaunches) {
     logger.error(
       "Host supervisor relaunch budget exhausted - leaving the host down",
@@ -2225,7 +2311,8 @@ async function decideRelaunch(input: {
   // re-read below; there the cost of waiting is latency, not a defeated stop.
   await Promise.race([deps.sleep(backoffMs), input.shutdownRequested]);
   // The load-bearing one: a stop that landed while we slept.
-  if (await refused("after")) return { kind: "stop", cause: "stop-requested" };
+  const refusedAfter = await refused("after");
+  if (refusedAfter !== null) return { kind: "stop", cause: refusedAfter };
   return {
     kind: "relaunch",
     consecutiveRelaunches: input.consecutiveRelaunches + 1,

@@ -377,7 +377,7 @@ function makeRunStubs(
     //   - unset, `sleep` is a REAL timer, and one exhausted budget costs
     //     1+5+15+30+60 = 111s of wall clock, which no 10s test timeout
     //     survives.
-    hasStopIntent: async () => false,
+    hasStopIntent: async () => null,
     // Same hazard as `hasStopIntent` above, and easier to miss because it is
     // read ONCE at startup rather than per attempt: unset, the `Partial`
     // default falls through to the real `readStopIntentIdentity`, which reads
@@ -2356,6 +2356,65 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(term.recorded.exited).toBe(0);
   });
 
+  it.each([
+    ["restart", 77],
+    ["stop", 0],
+    ["uninstall", 0],
+    ["install-swap", 0],
+  ] as const)(
+    "Q13: a %s stop intent ends the supervisor with exit %i",
+    async (stopReason, expected) => {
+      // The exit code is how the supervisor answers the service manager, and
+      // for one of these four the old answer left machines down. `restart` is
+      // what every update's pre-swap stop announces (`stopForRestart` ->
+      // `announceStop(env, "restart", ...)`), and the protocol defines it as
+      // the ONLY reason that promises a comeback. Exiting 0 told systemd and
+      // launchd the job had finished successfully; on a CLI-only install, if
+      // the CLI that promised the restart then died, nothing brought the host
+      // back.
+      //
+      // The other three keep exit 0 and must: `stop` and `uninstall` mean do
+      // not bring this back, and `install-swap` "deliberately promises no
+      // comeback, because a CLI swap's relaunch is unbounded" - so re-arming
+      // a manager for it would contradict what it announces. Its name is the
+      // trap here, which is why it is pinned rather than assumed.
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      let stopLanded = false;
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              maxRelaunches: 5,
+              hasStopIntent: async () => (stopLanded ? stopReason : null),
+              spawn: (command, args, options) => {
+                originalSpawn(command, args, options);
+                stopLanded = true;
+                const child = makeStubChild();
+                setImmediate(() => {
+                  child.emit("exit", 0, null);
+                });
+                return asChildProcess(child);
+              },
+            },
+          ),
+        recorded,
+      );
+
+      expect(recorded.exited).toBe(expected);
+      // Whatever the code, the supervisor does NOT relaunch in-process: a
+      // stop that was requested is honoured here and handed to the manager,
+      // never worked around by spawning again ourselves.
+      expect(recorded.spawnCalls).toHaveLength(1);
+    },
+  );
+
   it("escalates a raced stop to SIGKILL when the child ignores SIGTERM", async () => {
     // Without this the supervisor awaits `childEnding` with no deadline, and
     // nothing else intervenes: the stop announced itself on disk, `host stop`
@@ -2377,7 +2436,7 @@ describe("runHostStart - crash relaunch loop", () => {
           {
             ...deps,
             maxRelaunches: 5,
-            hasStopIntent: async () => stopLanded,
+            hasStopIntent: async () => (stopLanded ? ("stop" as const) : null),
             // Fire the escalation immediately instead of after 30s.
             escalateAfter: (_ms, run) => {
               setImmediate(run);
@@ -2469,7 +2528,7 @@ describe("runHostStart - crash relaunch loop", () => {
             },
             hasStopIntent: async () => {
               intentChecks += 1;
-              return stopRequested;
+              return stopRequested ? ("stop" as const) : null;
             },
           },
         ),
@@ -2741,7 +2800,7 @@ describe("runHostStart - relaunch loop, guards re-checked across the backoff", (
           {
             ...scripted.deps,
             maxRelaunches: 5,
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
             // The stop happens WHILE we are backing off.
             sleep: async () => {
               stopRequested = true;
@@ -2827,7 +2886,7 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
             // The install record never comes back, so every attempt fails to
             // resolve a target and the loop keeps retrying.
             readInstallRecord: async () => null,
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
             sleep: async () => {
               stopRequested = true;
             },
@@ -2891,7 +2950,7 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               originalSpawn(command, args, options);
               throw new Error("EBUSY: install swap in progress");
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
             sleep: async () => {
               stopRequested = true;
             },
@@ -2932,7 +2991,7 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               });
               return asChildProcess(child);
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
             sleep: async () => {
               stopRequested = true;
             },
@@ -3198,7 +3257,7 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
             closeLogFd: async (fd) => {
               closed.push(fd);
             },
-            hasStopIntent: async () => true,
+            hasStopIntent: async () => "stop" as const,
           },
         ),
       recorded,
@@ -3575,7 +3634,7 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               // The record on disk IS the one this supervisor started with, so
               // its own start already answered it. Deliberately no clock here:
               // that is the whole point of the identity rule.
-              return servedAtStartup === null;
+              return servedAtStartup === null ? ("stop" as const) : null;
             },
           },
         ),
@@ -3613,7 +3672,7 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               stopRequested = true;
               return 42;
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
           },
         ),
       recorded,
@@ -3654,7 +3713,7 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               if (attempts === 2) stopRequested = true;
               return 42;
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () => (stopRequested ? ("stop" as const) : null),
           },
         ),
       recorded,
@@ -3698,7 +3757,7 @@ describe("runHostStart - a stop that lands INSIDE the pre-spawn read", () => {
             maxRelaunches: 5,
             hasStopIntent: async () => {
               process.emit("SIGTERM");
-              return false;
+              return null;
             },
           },
         ),
