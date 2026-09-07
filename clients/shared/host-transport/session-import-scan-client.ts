@@ -17,6 +17,11 @@ import type {
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
 
+export type SessionImportImportedSupport =
+  | "unknown"
+  | "supported"
+  | "unsupported";
+
 export interface SessionImportProviderFailure {
   readonly harness: GuiHarnessId;
   readonly reason: SessionImportFailureReason;
@@ -29,6 +34,7 @@ export interface SessionImportProviderFailure {
  * there is no upstream API on the wrapper.
  */
 export interface SessionImportScanCallbacks {
+  readonly onImportedSupport: (support: SessionImportImportedSupport) => void;
   readonly onStarted: (providers: ReadonlyArray<GuiHarnessId>) => void;
   readonly onGroup: (group: SessionImportGroup) => void;
   readonly onProviderFailed: (failure: SessionImportProviderFailure) => void;
@@ -61,6 +67,7 @@ export class SessionImportScanClient {
   private readonly session: IStreamSession;
   private readonly callbacks: SessionImportScanCallbacks;
   private closed: boolean;
+  private importedSupport: SessionImportImportedSupport = "unknown";
 
   constructor(options: SessionImportScanClientOptions) {
     this.callbacks = options.callbacks;
@@ -74,6 +81,7 @@ export class SessionImportScanClient {
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason) => {
+      this.updateImportedSupport();
       this.callbacks.onConnectionStatus(status, reason);
     });
   }
@@ -87,10 +95,26 @@ export class SessionImportScanClient {
     this.session.close();
   }
 
+  private updateImportedSupport(): void {
+    // Per-session negotiation works on both local and remote transports, and
+    // resets to unknown on reconnect (which may reach an upgraded host).
+    const version = this.session.getNegotiatedSchemaVersion();
+    const support: SessionImportImportedSupport =
+      version === null
+        ? "unknown"
+        : version.major === 1 && version.minor >= 1
+          ? "supported"
+          : "unsupported";
+    if (support === this.importedSupport) return;
+    this.importedSupport = support;
+    this.callbacks.onImportedSupport(support);
+  }
+
   private handleServerFrame(
     envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
+    this.updateImportedSupport();
     const parsed = sessionImportScanServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       return;
