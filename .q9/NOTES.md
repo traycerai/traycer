@@ -8,12 +8,19 @@ shared.
 
 ## Commits
 
+SHAs were REWRITTEN once, to narrow the lead commit's message from "fixes
+E6L" to "fixes the reboot / manual start path" (see the Linux-lane finding
+below). Anything citing the old shas `45b489909` / `0db667743` / `038b782ed` /
+`8707a3853` is reading the pre-reword branch.
+
 | SHA | What |
 | --- | --- |
-| `45b489909` | the admission change (`contender.ts`, `host-start.ts`, pins) |
-| `0db667743` | the INFO line, routed through `onAdmittedBeside` |
-| `038b782ed` | moved a pin that was watching nothing |
-| `8707a3853` | pinned the field-observed `restarting`/`continuation: null` shape |
+| `e40c0b52a` | the admission change (`contender.ts`, `host-start.ts`, pins) |
+| `96a131ffd` | the INFO line, routed through `onAdmittedBeside` |
+| `b17e55132` | moved a pin that was watching nothing |
+| `368a07a30` | pinned the field-observed `restarting`/`continuation: null` shape |
+| `5b59ce157` | this note |
+| `42e67dfa8` | cold review B's dependency pin + the corrected conjunct rows |
 
 Suites: `shared` contender 89/89, CLI `host-start` + `host-start-adoption`
 107/107, `tsgo --noEmit` clean.
