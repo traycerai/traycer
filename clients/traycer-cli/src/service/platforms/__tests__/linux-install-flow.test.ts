@@ -770,6 +770,53 @@ describe("linux service stop --force", () => {
       expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "restart");
     });
 
+    it("the failure message describes the RESTART world, not the stop world", async () => {
+      // Only the verb was parameterised when `stopForRestart` started reusing
+      // this failure path; the premise stayed "the systemd unit is stopped".
+      // That is true after `stop --force` and FALSE after `restart --force`:
+      // Q13's ladder is `systemctl kill`, which runs no stop job, so the unit
+      // stays loaded with `Restart=` armed and systemd is very likely starting
+      // a replacement while the operator reads the message.
+      //
+      // This is the sentence someone reads while deciding whether their host
+      // is down, and the old remediation ("remove the stale record ... and
+      // reinstall") invites an uninstall in the middle of a relaunch.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      const message = await createLinuxController(settledRunner())
+        .stopForRestart(label, { force: true })
+        .then(
+          () => "",
+          (error: { readonly message: string }) => error.message,
+        );
+
+      expect(message).toContain("remains armed");
+      expect(message).toContain("systemd will relaunch it");
+      // The two claims that were wrong for this path, asserted absent by the
+      // exact strings the `stop` path still uses.
+      expect(message).not.toContain("the systemd unit is stopped");
+      expect(message).not.toContain("host service uninstall");
+    });
+
+    it("...while the plain stop --force keeps the stopped-unit premise and its remediation", async () => {
+      // The twin. The `stop` path really does run `systemctl stop`, so its
+      // premise and its "remove the stale record" advice are both correct and
+      // must not be changed along with the restart path's.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("the systemd unit is stopped"),
+      });
+    });
+
     it("a NON-force stopForRestart never escalates to the published host", async () => {
       // The twin of the row above, and the reason the row above is not enough
       // on its own.

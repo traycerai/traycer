@@ -394,6 +394,18 @@ async function stopForRestartService(
   if (force) {
     await finishForcedStopForPublishedHost(label, "restart");
   }
+  // `true` even when the forced stop above SUCCEEDED, and that is deliberate
+  // rather than a missed branch (cold review B: the obvious tidy here returns
+  // `false`, which is the dangerous direction).
+  //
+  // What a successful `finishForcedStopForPublishedHost` proves is that the
+  // PUBLISHED host is gone. It says nothing about the unit instance this
+  // function signalled, which the ladder above already failed to prove dead -
+  // and the manager is still armed, so a replacement may be starting anyway.
+  // `false` would tell the relaunch to `systemctl start`, which no-ops against
+  // a unit systemd still considers active; the update would then activate over
+  // whatever is still serving. A needless recycle costs one restart. A false
+  // "gone" costs the swap.
   return { forcedRecycle: true };
 }
 
@@ -544,11 +556,44 @@ async function cancelScheduledAutoRestart(
 // teardown already ran with positive confirmation, and an absent record is
 // the NORMAL trace of a host that exited gracefully and unlinked its own
 // file - success, nothing further to finish.
+/**
+ * The clause both forced-stop failures open with - and Q13 made it false on
+ * one of the two paths (cold review B).
+ *
+ * Only the VERB was parameterised when `stopForRestart` started reusing this
+ * function; the PREMISE stayed "the systemd unit is stopped". That is true
+ * after `stop --force`, which really does run `systemctl stop`. It is false
+ * after `restart --force`: the ladder is `systemctl kill`, which runs no stop
+ * job, so the unit stays LOADED with `Restart=` armed and `RestartSec=5` means
+ * systemd is very likely starting a replacement while the operator reads the
+ * message. This is the sentence someone reads while deciding whether their
+ * host is down, so it has to describe the world they are actually in.
+ */
+function forcedStopPremise(operation: "stop" | "restart"): string {
+  return operation === "stop"
+    ? "the systemd unit is stopped"
+    : "the unit was signalled and remains armed, so systemd will relaunch it";
+}
+
+/**
+ * What to actually do about it, which differs for the same reason.
+ *
+ * "Remove the stale record and reinstall" is advice for a unit that is down
+ * and staying down. Given to someone whose unit is cycling it is worse than
+ * unhelpful - it invites an uninstall in the middle of a relaunch.
+ */
+function forcedStopRemediation(operation: "stop" | "restart"): string {
+  return operation === "stop"
+    ? "Retry in a moment; if the host is known dead, remove the stale record via 'traycer host service uninstall' and reinstall."
+    : "Retry in a moment; a replacement host is probably already starting, so check 'traycer host status' before intervening - do not uninstall a unit that is still cycling.";
+}
+
 async function finishForcedStopForPublishedHost(
   label: ServiceLabel,
   operation: "stop" | "restart",
 ): Promise<void> {
   const outcome = await forceStopHostProcess(label.environment, operation);
+  const premise = forcedStopPremise(operation);
   switch (outcome.kind) {
     case "stopped":
     case "no-host":
@@ -557,14 +602,18 @@ async function finishForcedStopForPublishedHost(
     case "identity-unverified":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host ${operation} --force: the systemd unit is stopped, but pid.json names pid=${outcome.pid} and its identity cannot be verified (the pid may have been recycled), so refusing to signal it. Retry in a moment; if the host is known dead, remove the stale record via 'traycer host service uninstall' and reinstall.`,
+        message: `host ${operation} --force: ${premise}, but pid.json names pid=${outcome.pid} and its identity cannot be verified (the pid may have been recycled), so refusing to signal it. ${forcedStopRemediation(operation)}`,
         details: { unit: unitName(label), pid: outcome.pid },
         exitCode: 1,
       });
     case "hung":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host ${operation} --force: the systemd unit is stopped, but the published host (pid=${outcome.pid}, running outside the unit) survived SIGKILL through the exit grace; the stop did not take effect.`,
+        message: `host ${operation} --force: ${premise}, but the published host (pid=${outcome.pid}, running outside the unit) survived SIGKILL through the exit grace; the stop did not take effect.${
+          operation === "restart"
+            ? " A relaunched host may come up beside it, so treat this as two hosts over one data dir until the survivor is dealt with."
+            : ""
+        }`,
         details: { unit: unitName(label), pid: outcome.pid },
         exitCode: 1,
       });
