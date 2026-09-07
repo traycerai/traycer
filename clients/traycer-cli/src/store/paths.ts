@@ -91,29 +91,15 @@ const HOST_PID_FILENAME = "pid.json";
 // no import path to it - the same arrangement as every other host-written
 // contract read below.
 //
-// These were ONE subdir constant shared by both files, asserting `auth/`, and
-// that assertion was wrong for the credential (Q21 / dc84fa8b's O3): the host
-// writes `identity/device-credentials.json`
-// (`traycer-host/src/.../on-box-credentials.ts:97`), and a real box's `auth/`
-// holds only `jwks.json`. Doctor's presence check therefore read a path that
-// has never existed.
-//
-// Split rather than re-pointed, because sharing was the deeper fault: one
-// constant made two independently-owned host contracts move together, so
-// correcting either would have silently relocated the other. They are now two
-// facts that can be wrong, and verified, one at a time.
-const HOST_CREDENTIAL_SUBDIR = "identity";
-const HOST_CREDENTIAL_FILENAME = "device-credentials.json";
-// UNVERIFIED, and deliberately left where it was. The marker's subdir was only
-// ever `auth/` because it shared the constant above, so the correction removes
-// its evidence without supplying any of its own - and this is the path whose
-// wrongness would be SILENT: the marker's presence is the entire verdict, so a
-// path the host does not write reads as ENOENT, which
-// `probeHostCredentialNeedsReauth` reports as "no burn on record". A false
-// clean on the one fault it exists to surface. Asked of the host owner
-// (dc84fa8b); moving it on a guess would trade a known-suspect path for an
-// unknown one.
-const HOST_NEEDS_REAUTH_SUBDIR = "auth";
+// The shared subdir is a FACT, not a coincidence: the host declares the same
+// two names under the same directory in one file
+// (`traycer-host/src/auth/host-credential-store.ts:28-29`, `:195`, with
+// `hostNeedsReauthPath` at `:221` joining them exactly as below). Splitting
+// them here would let the CLI's two halves drift from a host that keeps them
+// together. Verified 2026-09-07 against the host source, after Q21 proposed
+// the opposite and was withdrawn - see the credential docblock.
+const HOST_CREDENTIAL_SUBDIR = "auth";
+const HOST_CREDENTIAL_FILENAME = "credentials.json";
 const HOST_NEEDS_REAUTH_FILENAME = "needs-reauth.json";
 // The host's IDENTITY subtree - a different plane from `auth/` above, holding
 // the coordination keypair, the enrollment record, and its own sticky
@@ -247,14 +233,23 @@ export function hostLogBackupPath(
  * this module: the host is an external component, and its store module is not
  * importable from this repo at all.
  *
- * Which is exactly why this was wrong for as long as it was (Q21). The
- * docblock ASSERTED the host owned `auth/credentials.json` and nothing could
- * check the assertion, so doctor's presence probe read a path that has never
- * existed and reported the plane absent on a perfectly healthy host. The name
- * now matches the host's writer
- * (`traycer-host/src/.../on-box-credentials.ts:97`), and the pin below it
- * fixes the layout against a fixture built like a real box rather than against
- * this comment.
+ * THE HOST HAS TWO CREDENTIAL LINEAGES AND THIS IS THE SECOND ONE. Naming the
+ * other explicitly, because the omission cost a round: `host-enroll`'s
+ * registration-time, device-bound credential lives at
+ * `identity/device-credentials.json`
+ * (`traycer-host/src/coordination/on-box-credentials.ts:38-50`) and serves the
+ * coordination CONTROL plane - heartbeat, relay attach grants, update
+ * reconciliation, self-deprovision. It is a separate refresh family in a
+ * separate file with its own loop, and the CLI deliberately does not read it.
+ * This function resolves the `host-delegate` credential above, for the DATA
+ * plane. Q21 was filed against this path on a filename match with that other
+ * lineage and withdrawn once the host source was read.
+ *
+ * Note also what an ABSENT file means here, since that is the other half of
+ * the same mistake: a box whose `auth/` holds only `jwks.json` has simply
+ * never had a connected owner client provision a delegated credential - which
+ * is the expected state for an unprovisioned host. Absence is not evidence of
+ * a wrong path.
  */
 export function hostCredentialPath(
   environment: Environment | undefined,
@@ -279,7 +274,7 @@ export function hostNeedsReauthPath(
 ): string {
   return join(
     hostHomeDir(environment),
-    HOST_NEEDS_REAUTH_SUBDIR,
+    HOST_CREDENTIAL_SUBDIR,
     HOST_NEEDS_REAUTH_FILENAME,
   );
 }

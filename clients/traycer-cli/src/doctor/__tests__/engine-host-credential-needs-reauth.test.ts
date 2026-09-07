@@ -100,36 +100,44 @@ function hostAuthDir(): string {
 }
 
 /**
- * The host's IDENTITY subtree, where its delegated credential actually lives.
+ * The host's IDENTITY subtree - the OTHER credential lineage, which this probe
+ * deliberately does not read.
  *
- * Kept apart from {@link hostAuthDir} on purpose: the two were one directory in
- * `store/paths.ts` and that was the Q21 defect. A fixture that reuses one
- * helper for both cannot tell the two paths apart, which is exactly the
- * confusion the pin below exists to catch.
+ * `host-enroll`'s registration-time device-bound credential lives at
+ * `identity/device-credentials.json`
+ * (`traycer-host/src/coordination/on-box-credentials.ts:38-50`) and serves the
+ * coordination control plane. The delegated `host-delegate` credential this
+ * probe reports on lives under `auth/`. The fixture builds BOTH so a probe
+ * that confused the two - which a round of this ticket did, on a filename
+ * match - cannot pass here.
  */
 function hostIdentityDir(): string {
   return join(workHome, ".traycer", "host", "identity");
 }
 
 /**
- * A box laid out the way a real one is (Q21 / dc84fa8b's O3): the host's
- * delegated credential under `identity/device-credentials.json`, and `auth/`
- * holding only `jwks.json`.
+ * A box laid out the way a real one is: the DELEGATED credential under
+ * `auth/credentials.json` beside the `jwks.json` that always shares that
+ * directory, and the unrelated device-bound credential of the other lineage
+ * under `identity/`.
  *
- * Written as a LAYOUT rather than as one file, because the defect was a layout
- * claim: `store/paths.ts` asserted `auth/credentials.json` and nothing could
- * check it, so doctor probed a path that has never existed. A fixture that
- * creates only the file the code expects can never catch that class - it has to
- * create what the HOST creates, including the decoy.
+ * Written as a LAYOUT rather than as one file because the near-miss was a
+ * layout confusion, and a fixture that creates only the file the code expects
+ * can never catch that class - it has to create what the HOST creates,
+ * decoys included.
  */
 function writeRealBoxCredentialLayout(): void {
+  mkdirSync(hostAuthDir(), { recursive: true });
+  writeFileSync(
+    join(hostAuthDir(), "credentials.json"),
+    JSON.stringify({ hostId: "h", ownerUserId: "u" }),
+  );
+  writeFileSync(join(hostAuthDir(), "jwks.json"), JSON.stringify({ keys: [] }));
   mkdirSync(hostIdentityDir(), { recursive: true });
   writeFileSync(
     join(hostIdentityDir(), "device-credentials.json"),
     JSON.stringify({ hostId: "h", ownerUserId: "u" }),
   );
-  mkdirSync(hostAuthDir(), { recursive: true });
-  writeFileSync(join(hostAuthDir(), "jwks.json"), JSON.stringify({ keys: [] }));
 }
 
 function writeNeedsReauthMarker(marker: unknown): void {
@@ -213,21 +221,26 @@ describe("runDoctor host credential needs-reauth", () => {
     ).toBe(true);
   });
 
-  it("Q21: sees the host's credential where the host actually writes it", async () => {
-    // The probe read `<hostHome>/auth/credentials.json`, asserted by a docblock
-    // in `store/paths.ts` and by nothing else. The host writes
-    // `identity/device-credentials.json`
-    // (`traycer-host/src/.../on-box-credentials.ts:97`); a real box's `auth/`
-    // holds only `jwks.json`. So `credentialFilePresent` was `false` on every
-    // host that has ever run, healthy or not, and a support bundle read the
-    // credential plane as absent.
+  it("reads the DELEGATED credential, not the device-bound one of the other lineage", async () => {
+    // Q21 was filed as a defect here and WITHDRAWN: the host has two credential
+    // lineages by design, and the report compared this path for one against the
+    // host's path for the other. `auth/credentials.json` is correct
+    // (`traycer-host/src/auth/host-credential-store.ts:28-29`).
     //
-    // The fixture writes BOTH - the real credential and the `auth/` decoy - so
-    // this cannot pass by the old path accidentally existing.
-    // Falsification (the ablation): point `HOST_CREDENTIAL_SUBDIR` /
-    // `HOST_CREDENTIAL_FILENAME` back at `auth` / `credentials.json` and this
-    // reddens, while every other pin in this file stays green - which is the
-    // measure of how invisible the defect was.
+    // The pin stays because the path was unpinned when that happened, and the
+    // near-miss is the argument for pinning it: a fixture asserting only the
+    // file the code expects could not have told the two lineages apart. This
+    // one builds both, so a probe re-pointed at `identity/` - the change the
+    // withdrawn report asked for - fails here instead of shipping.
+    //
+    // Worth knowing for the next reader of the box: `auth/` holding ONLY
+    // `jwks.json` is not evidence of a wrong path. It means no connected owner
+    // client has ever provisioned a delegated credential, which is the expected
+    // state for an unprovisioned host - and mistaking that absence for a defect
+    // is the other half of the same error.
+    // Falsification (the ablation, run): point `HOST_CREDENTIAL_SUBDIR` /
+    // `HOST_CREDENTIAL_FILENAME` at `identity` / `device-credentials.json` and
+    // this reddens, while every other pin in this file stays green.
     stageHealthyHostMocks();
     writeRealBoxCredentialLayout();
     writeNeedsReauthMarker({
@@ -245,15 +258,16 @@ describe("runDoctor host credential needs-reauth", () => {
     expect(issue?.details).toMatchObject({ credentialFilePresent: true });
   });
 
-  it("Q21 control: with NOTHING under identity/, the credential reads absent", async () => {
-    // The other half, and what stops the pin above from passing on a probe that
-    // simply answered `true`. `auth/` is still populated, so a probe that had
-    // been re-pointed at the wrong directory in the OTHER direction - or one
-    // that stopped checking - fails here.
+  it("control: with the OTHER lineage's credential only, this one reads absent", async () => {
+    // What stops the pin above from passing on a probe that simply answered
+    // `true`. The device-bound credential is present under `identity/` and the
+    // delegated one is not, which is a real state - a host enrolled but never
+    // visited by a connected owner client - and the probe must report the
+    // delegated credential absent rather than borrowing the other lineage's.
     stageHealthyHostMocks();
-    mkdirSync(hostAuthDir(), { recursive: true });
+    mkdirSync(hostIdentityDir(), { recursive: true });
     writeFileSync(
-      join(hostAuthDir(), "credentials.json"),
+      join(hostIdentityDir(), "device-credentials.json"),
       JSON.stringify({ hostId: "h" }),
     );
     writeNeedsReauthMarker({
