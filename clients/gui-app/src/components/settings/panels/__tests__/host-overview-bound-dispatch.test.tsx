@@ -74,6 +74,7 @@ import type {
   HostInstallRecord,
   HostStagedRecord,
 } from "@traycer/protocol/config/installation-records";
+import { STALE_ATTEMPT_CLOSED_SUFFIX } from "@traycer/protocol/config/host-update-ack-reason";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -1249,6 +1250,22 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
         releasesLatch: true,
       },
       {
+        // Q26, on the BOUND arm. Pin (m) drives the install call site; this
+        // row is the only one that shows the bound one strips too, which is
+        // the difference between one shared decider and a second copy of the
+        // arms that would pass (m) while reading
+        // "Couldn't confirm the update started on host-a:
+        // nothing-to-do-stale-attempt-closed" here.
+        label: "dispatch-indeterminate, suffixed",
+        response: {
+          outcome: "dispatch-indeterminate" as const,
+          reason: `nothing-to-do${STALE_ATTEMPT_CLOSED_SUFFIX}`,
+        },
+        expected:
+          "host-a is already up to date. An interrupted update record was also cleaned up.",
+        releasesLatch: true,
+      },
+      {
         label: "already-updating",
         response: { outcome: "already-updating" as const, attemptId: "a1" },
         expected: "host-a is already installing an update.",
@@ -1326,26 +1343,105 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
     }
   });
 
-  it("(m) dispatch-indeterminate reasons map to their own sentences, and an unknown reason keeps the generic one with the reason named", async () => {
+  /**
+   * Q26. The copy is decided on the BASE reason, so a decline that also closed
+   * a stranded attempt reads as the same answer it would have read without the
+   * closure, plus at most one clause.
+   *
+   * WHAT THE SUFFIXED HALF OF THIS TABLE IS. It tests the DECISION FUNCTION,
+   * not a census of what hosts emit. Only `nothing-to-do` is producible
+   * suffixed today: the suffix rides the selector's reason on a `released`
+   * outcome, and the other five bases are minted on paths that structurally
+   * refuse it (the `recovered-*` pair is projected from a `terminalized`
+   * segment, which is the other outcome kind; the `refused-*` three are minted
+   * under conditions that are the negation of the gate that appends). That
+   * census is the CLI's, at `44d4b9615` — it is not a promise about a host,
+   * and the grammar permits the suffix on any base, which is why every base is
+   * pinned. Do not read these rows as evidence that those declines arrive
+   * suffixed in production.
+   *
+   * Same distinction the null-target rows in `host-update-operation-copy` had
+   * to be retitled for: a pin can have correct coverage and a false
+   * description, and the description is what the next reader reasons from.
+   */
+  it("(m) copy is decided on the base reason — each base reads the same plain or suffixed — and a suffixed decline adds the closure clause except where the lead sentence is already about a concluded record", async () => {
+    const HOST_CHANGED =
+      "The host changed while the update was being prepared. Try again.";
+    const CLOSURE_CLAUSE = "An interrupted update record was also cleaned up.";
+    const bases: ReadonlyArray<{
+      readonly base: string;
+      readonly lead: string;
+      /**
+       * Whether the suffixed form appends the closure clause. False on the two
+       * recovery arms and only there: their lead sentence is already about a
+       * record being concluded, so the clause would narrate one event twice.
+       */
+      readonly clauseOnSuffix: boolean;
+    }> = [
+      {
+        base: "nothing-to-do",
+        lead: "host-a is already up to date.",
+        clauseOnSuffix: true,
+      },
+      {
+        base: "recovered-complete",
+        lead: "The last update already finished.",
+        clauseOnSuffix: false,
+      },
+      {
+        base: "recovered-failed",
+        lead: "The last update failed.",
+        clauseOnSuffix: false,
+      },
+      {
+        base: "refused-attempt-gone",
+        lead: HOST_CHANGED,
+        clauseOnSuffix: true,
+      },
+      {
+        base: "refused-unverifiable",
+        lead: HOST_CHANGED,
+        clauseOnSuffix: true,
+      },
+      {
+        base: "refused-install-changed",
+        lead: HOST_CHANGED,
+        clauseOnSuffix: true,
+      },
+    ];
+
     const scenarios: ReadonlyArray<{
       readonly reason: string;
       readonly expected: string;
+      /** Whether this sentence is allowed to show the wire suffix. */
+      readonly showsSuffix: boolean;
     }> = [
-      { reason: "nothing-to-do", expected: "host-a is already up to date." },
-      {
-        reason: "recovered-complete",
-        expected: "The last update already finished.",
-      },
-      { reason: "recovered-failed", expected: "The last update failed." },
-      {
-        reason: "refused-attempt-gone",
-        expected:
-          "The host changed while the update was being prepared. Try again.",
-      },
+      ...bases.flatMap((row) => [
+        { reason: row.base, expected: row.lead, showsSuffix: false },
+        {
+          reason: `${row.base}${STALE_ATTEMPT_CLOSED_SUFFIX}`,
+          expected: row.clauseOnSuffix
+            ? `${row.lead} ${CLOSURE_CLAUSE}`
+            : row.lead,
+          showsSuffix: false,
+        },
+      ]),
+      // The DIAGNOSTIC arm, both forms. An unenumerated reason keeps the
+      // generic sentence with the reason named — and names it UNSTRIPPED,
+      // which is the one place the suffix is meant to reach the eye: this
+      // sentence exists to be pasted into a support thread, so it reports the
+      // raw vocabulary the host used. It adds no clause either, for the same
+      // reason the recovery arms do not: the string already says it.
       {
         reason: "refused-something-else",
         expected:
           "Couldn't confirm the update started on host-a: refused-something-else. Watching for progress.",
+        showsSuffix: false,
+      },
+      {
+        reason: `refused-something-else${STALE_ATTEMPT_CLOSED_SUFFIX}`,
+        expected: `Couldn't confirm the update started on host-a: refused-something-else${STALE_ATTEMPT_CLOSED_SUFFIX}. Watching for progress.`,
+        showsSuffix: true,
       },
     ];
 
@@ -1375,8 +1471,21 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
         await screen.findByRole("button", { name: "Update now" }),
       );
       await waitFor(() => {
-        expect(toast.info).toHaveBeenCalledWith(scenario.expected);
+        expect(vi.mocked(toast.info).mock.calls.length).toBeGreaterThan(0);
       });
+      const message = vi.mocked(toast.info).mock.calls.at(-1)?.[0];
+
+      // Asserted BEFORE the sentence, because it is the fact that separates a
+      // decided sentence from the generic one, and it is the whole signature
+      // of the regression this pin watches: comparing the raw reason drops
+      // every suffixed decline into the diagnostic arm, where the suffix
+      // reaches the eye. A row that only compared the full string would go red
+      // there too, but would not say WHY.
+      expect(
+        typeof message === "string" &&
+          message.includes(STALE_ATTEMPT_CLOSED_SUFFIX),
+      ).toBe(scenario.showsSuffix);
+      expect(message).toBe(scenario.expected);
 
       cleanup();
       resetHostServiceWriteLatchesForTest();
@@ -1385,6 +1494,16 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
       hostBindingMock.current = null;
       vi.clearAllMocks();
     }
+  });
+
+  it("(m3) the imported suffix constant IS the wire string, so a protocol rename reddens here rather than in production", () => {
+    // Pin (m) builds every suffixed reason FROM the constant, which is what
+    // keeps a second spelling of the suffix out of gui-app — and is also why
+    // pin (m) alone cannot tell a rename from a rewrite: rename the constant
+    // and those rows agree with the new value while a real host keeps sending
+    // the old one. This row is the other half. It is the only place in gui-app
+    // that spells the suffix out.
+    expect(STALE_ATTEMPT_CLOSED_SUFFIX).toBe("-stale-attempt-closed");
   });
 });
 

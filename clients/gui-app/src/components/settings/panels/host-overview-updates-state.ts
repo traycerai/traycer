@@ -3,6 +3,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
+  baseDispatchAckReason,
+  dispatchAckReasonClosedStaleAttempt,
+} from "@traycer/protocol/config/host-update-ack-reason";
+import {
   compareHostVersions,
   isValidHostVersion,
   isStrictlyNewerHostVersion,
@@ -1568,26 +1572,80 @@ function describeIndeterminateDispatch(
   reason: string | null,
   hostName: string,
 ): string {
-  if (reason === "nothing-to-do") return `${hostName} is already up to date.`;
-  if (reason === "recovered-complete")
-    return "The last update already finished.";
+  // Q26. A decline that ALSO closed a stranded attempt carries
+  // `<base>-stale-attempt-closed`, and every comparison below is on the BASE.
+  // Comparing the raw string dropped every such decline into the generic
+  // sentence — "Couldn't confirm the update started on host-a:
+  // nothing-to-do-stale-attempt-closed" over a host that is simply up to date.
+  //
+  // Stripping is the protocol's job, not this module's: the suffix has exactly
+  // one spelling in the repository (`STALE_ATTEMPT_CLOSED_SUFFIX`), the CLI's
+  // generator imports the same constant, and a local copy of either the literal
+  // or the strip is how a build and a strip drift apart.
+  const base = reason === null ? null : baseDispatchAckReason(reason);
+  if (base === "nothing-to-do") {
+    return withStaleClosure(`${hostName} is already up to date.`, reason);
+  }
+  // No closure clause on either recovery arm. The lead sentence is already
+  // about a record being concluded, so appending "a stranded update record was
+  // also closed" narrates one event as two — the boundary the ruling drew.
+  //
+  // Unreachable today rather than merely unused: the recovery reasons are
+  // projected from a terminalized segment and are never a SELECTOR reason, and
+  // the suffix is applied to the selector's reason (a08004f6's topology
+  // answer). Kept because it is a rule about the GRAMMAR, which permits the
+  // suffix on any base — so a topology change lands correctly instead of
+  // shipping the double narration.
+  if (base === "recovered-complete") return "The last update already finished.";
   // The record's own failure arrives on the next `host.status` frame and the
   // operation card states it; this only says which run it is about.
-  if (reason === "recovered-failed") return "The last update failed.";
+  if (base === "recovered-failed") return "The last update failed.";
   if (
-    reason === "refused-attempt-gone" ||
-    reason === "refused-unverifiable" ||
+    base === "refused-attempt-gone" ||
+    base === "refused-unverifiable" ||
     // No producer after this plan — a moved install record on a park is written
     // `failed {install-changed}` and arrives as the record's own failure — but
     // the reason stays in the grammar, so the arm stays here rather than
     // falling through to a sentence that would misdescribe it.
-    reason === "refused-install-changed"
+    base === "refused-install-changed"
   ) {
-    return "The host changed while the update was being prepared. Try again.";
+    return withStaleClosure(
+      "The host changed while the update was being prepared. Try again.",
+      reason,
+    );
   }
+  // The DIAGNOSTIC arm echoes what the host actually sent, suffix included, and
+  // adds no clause: this sentence exists to be pasted into a support thread, so
+  // stripping here would hide a fact from the one place that reports the raw
+  // vocabulary, and appending a clause would say the same thing twice.
   return reason === null
     ? `Couldn't confirm the update started on ${hostName}. Watching for progress.`
     : `Couldn't confirm the update started on ${hostName}: ${reason}. Watching for progress.`;
+}
+
+/**
+ * The lead sentence, plus one clause when this decline also closed a stranded
+ * attempt.
+ *
+ * Worth saying at all because the closure is USER-VISIBLE: the stranded record
+ * was what the Overview card had been reporting, and the dispatch ends it. A
+ * card that changes with no explanation is worse than one short sentence, which
+ * is why this is not the layered narration the page otherwise deletes — it is
+ * the dispatch's own outcome, not a second remedy for one blocker.
+ *
+ * Says only what the suffix knows. It records THAT a stranded attempt was
+ * closed and never HOW it settled — the same 21 characters ride a record that
+ * ended `complete` and one that ended `failed` — so this must not imply either
+ * (see the note in `host-update-ack-reason.ts`, which rules out a
+ * "concludes-as-done" predicate for exactly this reason). "Cleaned up" is
+ * outcome-free on purpose; the record's own state arrives on the next
+ * `host.status` frame and the operation card states it.
+ */
+function withStaleClosure(sentence: string, reason: string | null): string {
+  if (reason === null || !dispatchAckReasonClosedStaleAttempt(reason)) {
+    return sentence;
+  }
+  return `${sentence} An interrupted update record was also cleaned up.`;
 }
 
 /**
