@@ -129,8 +129,8 @@ export function useCommGraphSnapshot(
   // Relay dialability depends on the pull-only session cache, so the
   // directory query alone cannot see a session dying or appearing under an
   // `offline`/plan-restricted entry. This subscription re-renders on a readiness
-  // flip, which recomputes the two memos below and pushes the new relay set /
-  // readiness keys into the cloud manager through their effects.
+  // flip, which recomputes the two memos below and reconciles the new relay
+  // set and readiness keys into the cloud manager as one update.
   const directoryHostIdsForReadiness = useMemo(
     () => (hostDirectory.data ?? []).map((entry) => entry.hostId),
     [hostDirectory.data],
@@ -138,21 +138,31 @@ export function useCommGraphSnapshot(
   const hasReadySessionFor = useRemoteSessionsPollReadiness(
     directoryHostIdsForReadiness,
   );
+  // ORDER, not sort. Every dialable host relays the same rows, so the only
+  // thing the choice decides is which link the epic's whole cloud feed rides.
+  // Sorting by ID handed that to whichever host ID happened to sort first, so
+  // an account with one remote host named ahead of this machine relayed every
+  // epic on it through the remote link. The local host is the shorter,
+  // cheaper, always-present path, so it goes first; the rest keep ID order for
+  // a stable candidate sequence.
   const relayHostIds = useMemo(() => {
-    const directoryHostIds = hostDirectory.data
-      ?.filter(
-        (entry) =>
-          dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
-          null,
-      )
-      .map((entry) => entry.hostId);
-    return Array.from(
-      new Set(
-        directoryHostIds === undefined || directoryHostIds.length === 0
-          ? hostIds
-          : directoryHostIds,
-      ),
-    ).sort();
+    const dialableEntries = hostDirectory.data?.filter(
+      (entry) =>
+        dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
+        null,
+    );
+    if (dialableEntries === undefined || dialableEntries.length === 0) {
+      return Array.from(new Set(hostIds)).sort();
+    }
+    const localHostIds = dialableEntries
+      .filter((entry) => entry.kind === "local")
+      .map((entry) => entry.hostId)
+      .sort();
+    const otherHostIds = dialableEntries
+      .filter((entry) => entry.kind !== "local")
+      .map((entry) => entry.hostId)
+      .sort();
+    return Array.from(new Set([...localHostIds, ...otherHostIds]));
   }, [hasReadySessionFor, hostDirectory.data, hostIds]);
   // The ID set does not change when a host publishes its endpoint late or
   // upgrades in place. Keep that transport identity separately so a retained
@@ -206,9 +216,17 @@ export function useCommGraphSnapshot(
     relayHostIdsRef.current = relayHostIds;
   }, [relayHostIds]);
 
+  // ONE effect for both halves of a directory update, and BEFORE the claim
+  // below, so a manager never opens against half-installed state. The two
+  // memos are recomputed by the same render and describe the same directory;
+  // pushing them through separate setters let each one dial on the other
+  // half's stale value.
   useEffect(() => {
-    cloudManager.setRelayReadinessKeys(relayReadinessKeys);
-  }, [cloudManager, relayReadinessKeys]);
+    cloudManager.reconcileRelays({
+      hostIds: relayHostIds,
+      readinessKeys: relayReadinessKeys,
+    });
+  }, [cloudManager, relayHostIds, relayReadinessKeys]);
 
   useEffect(() => {
     acquireCommGraphCloudSubscription(
@@ -221,10 +239,6 @@ export function useCommGraphSnapshot(
       releaseCommGraphCloudSubscription(epicId, cloudClaim);
     };
   }, [cloudClaim, cloudManager, cloudOpener, epicId]);
-
-  useEffect(() => {
-    cloudManager.setRelayHostIds(relayHostIds);
-  }, [cloudManager, relayHostIds]);
 
   useEffect(() => {
     cloudManager.setOriginHostIds(hostIds);
