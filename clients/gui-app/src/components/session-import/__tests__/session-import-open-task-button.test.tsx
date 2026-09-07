@@ -14,6 +14,7 @@ const harness = vi.hoisted(() => ({
   resolvedHostIds: [] as string[],
   navigate: vi.fn(),
   intents: [] as Array<Record<string, unknown>>,
+  rejectActivation: false,
   toast: vi.fn(),
 }));
 
@@ -54,8 +55,15 @@ vi.mock("@/lib/tab-navigation", () => ({
   activateTabIntent: (
     navigate: (options: Record<string, unknown>) => Promise<void>,
     intent: Record<string, unknown>,
+    options: { onRejected?: (error: Error) => void } | undefined,
   ) => {
     harness.intents.push(intent);
+    if (harness.rejectActivation) {
+      options?.onRejected?.(
+        new Error("Another task was opened before this task could open."),
+      );
+      return true;
+    }
     void navigate({}).catch(() => undefined);
     return true;
   },
@@ -101,6 +109,7 @@ beforeEach(() => {
   harness.navigate.mockReset();
   harness.navigate.mockResolvedValue(undefined);
   harness.intents.length = 0;
+  harness.rejectActivation = false;
   harness.toast.mockReset();
 });
 
@@ -162,6 +171,28 @@ describe("SessionImportOpenTaskButton", () => {
     expect(
       screen.getByRole("button", { name: "Open task: Imported task" }),
     ).toBeTruthy();
+  });
+
+  it("reports an activation rejection, clears pending state, and allows retry", async () => {
+    harness.request.mockResolvedValue({ settings: { model: "model-1" } });
+    harness.rejectActivation = true;
+    const onTaskOpened = vi.fn();
+    renderButton(onTaskOpened, null);
+    const button = () =>
+      screen.getByRole("button", { name: "Open task: Imported task" });
+
+    fireEvent.click(button());
+
+    await waitFor(() => expect(harness.toast).toHaveBeenCalledTimes(1));
+    expect(onTaskOpened).not.toHaveBeenCalled();
+    expect(button()).toHaveProperty("disabled", false);
+    expect(harness.navigate).not.toHaveBeenCalled();
+
+    harness.rejectActivation = false;
+    fireEvent.click(button());
+
+    await waitFor(() => expect(onTaskOpened).toHaveBeenCalledTimes(1));
+    expect(harness.request).toHaveBeenCalledTimes(2);
   });
 
   it("does not navigate when the caller cannot finish its pre-open work", async () => {

@@ -92,7 +92,7 @@ export function SessionImportOpenTaskButton(props: {
               },
               includeNestedFocus: true,
             }),
-            undefined,
+            { onRejected: reject },
           );
           if (!accepted)
             reject(new Error("The task could not be opened. Try again."));

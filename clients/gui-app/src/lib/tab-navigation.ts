@@ -108,7 +108,13 @@ export interface TabNavigationLocation {
   readonly search: Readonly<Record<string, unknown>> | undefined;
 }
 
-export type TabNavigationOptions = Pick<NavigateOptions, "replace" | "search">;
+export type TabNavigationOptions = Pick<
+  NavigateOptions,
+  "replace" | "search"
+> & {
+  /** Rejected before navigate runs, including a superseded hydration queue entry. */
+  readonly onRejected?: (error: Error) => void;
+};
 
 export interface TabNavigationDiagnostics {
   readonly pendingTokenCount: number;
@@ -578,10 +584,20 @@ export class TabNavigationController {
   ): boolean {
     this.navigator = navigate;
     if (!this.hydrationReady) {
+      const superseded = this.queuedActivation;
       this.queuedActivation = { navigate, intent, options };
+      superseded?.options?.onRejected?.(
+        new Error("Another task was opened before this task could open."),
+      );
       return true;
     }
-    return this.executeActivation(navigate, intent, options);
+    const accepted = this.executeActivation(navigate, intent, options);
+    if (!accepted) {
+      options?.onRejected?.(
+        new Error("The task could not be opened. Try again."),
+      );
+    }
+    return accepted;
   }
 
   /**
@@ -784,11 +800,16 @@ export class TabNavigationController {
     const queuedActivation = this.queuedActivation;
     this.queuedActivation = null;
     if (queuedActivation !== null) {
-      this.executeActivation(
+      const accepted = this.executeActivation(
         queuedActivation.navigate,
         queuedActivation.intent,
         queuedActivation.options,
       );
+      if (!accepted) {
+        queuedActivation.options?.onRejected?.(
+          new Error("The task could not be opened. Try again."),
+        );
+      }
     }
   }
 
