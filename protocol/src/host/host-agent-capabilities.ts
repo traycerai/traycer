@@ -18,7 +18,10 @@
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { z } from "zod";
-import { hostConnectivitySchema } from "./host-status";
+import {
+  hostCommandInterpreterSchema,
+  hostConnectivitySchema,
+} from "./host-status";
 
 export const hostResolveRepoPathsRequestSchema = z.object({
   epicId: z.string().min(1),
@@ -106,14 +109,25 @@ export const hostOneOffShellRunV10 = defineRpcContract({
  * lease cannot carry), and projecting a fabricated `false` here would tell an
  * agent a machine is idle when nothing in the system knows that.
  *
+ * **`commandInterpreter` is the LAST SUCCESSFULLY REPORTED one**, and `null`
+ * means unknown with no fallback. It answers "what shell dialect should I
+ * write this command in for that machine?", which `platform` cannot: on
+ * Windows the same command meets Git Bash, PowerShell or cmd depending on
+ * what the user configured, and only that host knows which. Do NOT infer it
+ * from `platform` when it is null — that inference is the defect this field
+ * exists to remove. It can lag a Settings change, a shell installation, or an
+ * offline period, and it describes a NEWLY resolved command only: an
+ * already-persisted managed command keeps the interpreter it was created with.
+ *
  * `publicKey` is **not** projected: it is the dialer's Noise material, not
  * something an agent has any use for.
  *
  * `platform` is passed through as the cloud's free-text string (it is what
  * feeds the desktop host directory). Do not narrow it to an enum here — the
  * value's shape is authn's to define, and an enum would drift the moment it
- * writes something new. It is, incidentally, how an agent learns which shell
- * flavour a one-off command will meet on that machine.
+ * writes something new. It is NOT how an agent learns which shell a command
+ * will meet: that is `commandInterpreter`, and the claim that `platform`
+ * answers it was only ever true on POSIX.
  */
 export const hostDirectoryEntrySchema = z.object({
   hostId: z.string(),
@@ -121,6 +135,7 @@ export const hostDirectoryEntrySchema = z.object({
   platform: z.string().nullable(),
   appVersion: z.string().nullable(),
   connectivity: hostConnectivitySchema,
+  commandInterpreter: hostCommandInterpreterSchema.nullable(),
 });
 export type HostDirectoryEntrySummary = z.infer<
   typeof hostDirectoryEntrySchema

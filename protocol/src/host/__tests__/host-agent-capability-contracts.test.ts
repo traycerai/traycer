@@ -67,6 +67,7 @@ describe("host-agent capability contracts", () => {
           platform: "darwin",
           appVersion: "1.2.3",
           connectivity: "connectable",
+          commandInterpreter: "posix-shell",
           // A server that volunteers key material must not have it survive
           // into the agent-facing value; the closed schema strips it.
           publicKey: "MUST-NOT-SURVIVE",
@@ -96,6 +97,7 @@ describe("host-agent capability contracts", () => {
             platform: null,
             appVersion: null,
             connectivity,
+            commandInterpreter: null,
             // The cloud list carries no drain state; a server that
             // volunteered one must not reach the agent as a fact.
             busy: false,
@@ -460,5 +462,49 @@ describe("host-agent capability contracts", () => {
         target: "../escape",
       }).success,
     ).toBe(false);
+  });
+
+  it("carries the last reported command interpreter, with null meaning unknown", () => {
+    // The reason this field exists: `platform` cannot tell an agent which
+    // shell dialect a Windows host will meet, and null must read as unknown
+    // rather than licensing a platform guess.
+    for (const commandInterpreter of [
+      "posix-shell",
+      "git-bash",
+      "powershell",
+      "cmd",
+      null,
+    ]) {
+      const parsed = hostDirectoryListV10.responseSchema.parse({
+        hosts: [
+          {
+            hostId: "host-b",
+            displayName: null,
+            platform: "win32",
+            appVersion: null,
+            connectivity: "connectable",
+            commandInterpreter,
+          },
+        ],
+      });
+      expect(parsed.hosts[0]?.commandInterpreter).toBe(commandInterpreter);
+    }
+  });
+
+  it("refuses an interpreter token the agent contract does not define", () => {
+    expect(() =>
+      hostDirectoryListV10.responseSchema.parse({
+        hosts: [
+          {
+            hostId: "host-b",
+            displayName: null,
+            platform: "win32",
+            appVersion: null,
+            connectivity: "connectable",
+            commandInterpreter: "fish",
+          },
+        ],
+      }),
+    ).toThrow();
   });
 });
