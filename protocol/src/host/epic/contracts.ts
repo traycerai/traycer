@@ -155,6 +155,20 @@ import {
   fetchArtifactAttachmentRequestSchema,
   fetchArtifactAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/artifact-attachment";
+import {
+  captureTabScreenshotRequestSchema,
+  captureTabScreenshotResponseSchema,
+  epicFileTombstoneRequestSchema,
+  epicFileTombstoneResponseSchema,
+  openEpicFileInBrowserRequestSchema,
+  openEpicFileInBrowserResponseSchema,
+  readEpicFileRequestSchema,
+  readEpicFileResponseSchema,
+  startTabRecordingRequestSchema,
+  startTabRecordingResponseSchema,
+  stopTabRecordingRequestSchema,
+  stopTabRecordingResponseSchema,
+} from "@traycer/protocol/host/epic/files";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -938,6 +952,87 @@ export const epicFetchArtifactAttachmentV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: fetchArtifactAttachmentRequestSchema,
   responseSchema: fetchArtifactAttachmentResponseSchema,
+});
+
+// ── Epic file plane (epic-media-pipeline) ──────────────────────────────────
+// Seven optional verbs against the `files` manifest, none on the released
+// floor. There is no `epic.listFiles`: the manifest is a sibling `Y.Map` on
+// the epic root doc, so a client that can render a file already replicates the
+// table an RPC would re-serve, more slowly and one round-trip behind. See
+// `epic/files.ts` for the per-method reasoning.
+
+// Where one file's bytes are, never the bytes themselves - a 512 MiB cap and
+// `Range`-seeking video are the wrong shape for an RPC body. The host picks
+// among the three byte planes that already exist (asset stream, D32 loopback
+// static server, signed cloud URL) from facts only it holds: what is on its
+// disk, and whether the caller's declared `coLocatedHostId` is its own.
+export const epicReadFileV10 = defineRpcContract({
+  method: "epic.readFile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readEpicFileRequestSchema,
+  responseSchema: readEpicFileResponseSchema,
+});
+
+// Tombstone and un-tombstone, one operation in two directions, hence one
+// request/response pair. Deletion never reaches the cloud object: a sha may be
+// named by another path, a `versions[]` entry or a `derivedFrom` link, and
+// neither the server (which stores no paths) nor a host (which sees concurrent
+// CRDT edits) can prove it dead. The bytes go when the epic goes.
+export const epicDeleteFileV10 = defineRpcContract({
+  method: "epic.deleteFile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: epicFileTombstoneRequestSchema,
+  responseSchema: epicFileTombstoneResponseSchema,
+});
+
+export const epicRestoreFileV10 = defineRpcContract({
+  method: "epic.restoreFile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: epicFileTombstoneRequestSchema,
+  responseSchema: epicFileTombstoneResponseSchema,
+});
+
+// "Open in browser" for an HTML file: the host starts its per-epic loopback
+// static server on demand and answers with a `127.0.0.1` url the client opens a
+// browser tile at. The alternative - serving epic HTML from the cloud origin -
+// is never done, because an epic file is attacker-authored content as far as
+// every other epic on that origin is concerned.
+export const epicOpenFileInBrowserV10 = defineRpcContract({
+  method: "epic.openFileInBrowser",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: openEpicFileInBrowserRequestSchema,
+  responseSchema: openEpicFileInBrowserResponseSchema,
+});
+
+// The toolbar's capture button. `save` is the same opt-in the REPL verb takes,
+// so both producers speak one vocabulary, and the response carries the minted
+// file's `(path, sha256)` because that is exactly what `epic.readFile` needs
+// back - the toast must not wait for the manifest entry to replicate.
+export const epicCaptureTabScreenshotV10 = defineRpcContract({
+  method: "epic.captureTabScreenshot",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: captureTabScreenshotRequestSchema,
+  responseSchema: captureTabScreenshotResponseSchema,
+});
+
+// Recording control. Start returns a host-minted `recordingId` - the handle for
+// stop, for the tile badge, and for every `epic.fileEvents` frame about the run
+// - or a typed refusal, because every refusal here is a cap the host checked
+// before doing work, not a failure. Stop acknowledges the STOP, not the save:
+// finalize (drain, hash, rename, manifest write) lands on the doc and the
+// stream rather than holding an RPC open across a flush.
+export const epicStartTabRecordingV10 = defineRpcContract({
+  method: "epic.startTabRecording",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: startTabRecordingRequestSchema,
+  responseSchema: startTabRecordingResponseSchema,
+});
+
+export const epicStopTabRecordingV10 = defineRpcContract({
+  method: "epic.stopTabRecording",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: stopTabRecordingRequestSchema,
+  responseSchema: stopTabRecordingResponseSchema,
 });
 
 // The per-chat run-settings tuple the row above deliberately does not carry.

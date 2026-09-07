@@ -1950,6 +1950,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions,
+    fileResolutions: [],
   };
 
   const chatWithImages: Chat = {
@@ -2678,6 +2679,7 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   });
 
   const planBlock = (harnessId: string) => ({

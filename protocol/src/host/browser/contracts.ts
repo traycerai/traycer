@@ -753,6 +753,37 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // Recording control, host -> desktop. TEXT ONLY, like every other frame
+      // on this stream: the clip's chunks never touch it. The helper is
+      // same-origin with the host's loopback listener and `POST`s each
+      // `timeslice` chunk straight there, so there is no base64 leg, no second
+      // long-poll on a helper document that allows exactly one outstanding
+      // call, and the same byte path on both runtimes.
+      //
+      // `helperUrl` is the host's own loopback URL with the recording's
+      // one-shot token already in it; the desktop opens a hidden window at it
+      // and neither constructs nor inspects it. `recordingId` is host-minted
+      // and is the correlation handle for both answers below.
+      kind: z.literal("startTabRecording"),
+      ...textFrameFields,
+      tabId: z.string(),
+      recordingId: z.string(),
+      helperUrl: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // Tear the helper window down. Addressed by `recordingId` alone: the tab
+      // may already be gone (auto-stop on tab close is one of the reasons this
+      // frame is sent), so naming it would make the stop unroutable in exactly
+      // the case it matters most.
+      kind: z.literal("stopTabRecording"),
+      ...textFrameFields,
+      recordingId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("caption"),
       ...textFrameFields,
       sessionId: z.string(),
@@ -1026,6 +1057,32 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       ...browserForgetLedgerSchema.shape,
     })
     .strict(),
+  z
+    .object({
+      // The desktop's helper window exists, its display-media grant resolved,
+      // and its `MediaRecorder` is running. The host waits for THIS rather than
+      // for the frame it sent: window creation, the permission handler and the
+      // capture start are three separate failures on the desktop side, and a
+      // start that is merely dispatched proves none of them.
+      kind: z.literal("recordingHelperReady"),
+      ...textFrameFields,
+      recordingId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // The helper stopped, for a reason the desktop knows and the host does
+      // not - the window was destroyed, the capture stream ended, the user
+      // revoked the grant. `reason` is an OPEN string, deliberately: the host
+      // finalizes the staged chunks the same way regardless and only logs
+      // this, so an unknown value costs a less specific log line rather than a
+      // dropped frame. It is a diagnostic, never a discriminator.
+      kind: z.literal("recordingEnded"),
+      ...textFrameFields,
+      recordingId: z.string(),
+      reason: z.string(),
+    })
+    .strict(),
 ]);
 export type BrowserSessionsClientFrame = z.infer<
   typeof browserSessionsClientFrameSchema
@@ -1113,8 +1170,8 @@ const noJarMaterialReachesARenderer: BrowserSessionsUxFrameCarryingJarMaterial e
 void noJarMaterialReachesARenderer;
 
 /**
- * The client frames a renderer may ASK for: the three user-initiated tab
- * requests, and nothing else.
+ * The client frames a renderer may SEND: the three user-initiated tab requests
+ * and the two recording answers, and nothing else.
  *
  * `forgetLogins` and `clearSite` are deliberately NOT here even though a
  * renderer button starts both. They shred every connected host's slice of the
@@ -1129,6 +1186,16 @@ export const BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS = [
   "openTab",
   "closeTab",
   "captureTabPreview",
+  // The two recording ANSWERS. They are not requests: each settles a
+  // `startTabRecording` / `stopTabRecording` the host itself issued, naming a
+  // `recordingId` only the host mints, so a forged one either matches no live
+  // recording (dropped) or ends a recording the same user could already end
+  // from the toolbar. They carry no jar material and grant no capability,
+  // which is the whole reason `forgetLogins` / `clearSite` stay out of this
+  // list - and the helper window they speak for lives in main, so main
+  // produces them and the renderer coordinator only relays.
+  "recordingHelperReady",
+  "recordingEnded",
 ] as const;
 
 export type BrowserSessionsUxClientFrame = Extract<

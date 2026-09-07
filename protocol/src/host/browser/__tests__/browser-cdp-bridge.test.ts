@@ -9,6 +9,7 @@ import {
   type BrowserCdpCommand,
   type BrowserCdpResult,
 } from "@traycer/protocol/host/browser/contracts";
+import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
 
 const REQUEST = {
   kind: "cdpRequest" as const,
@@ -82,6 +83,12 @@ const COMMANDS: readonly BrowserCdpCommand[] = [
     depth: null,
     pierce: false,
   },
+  {
+    kind: "cdpAddScriptToEvaluateOnNewDocument",
+    source: "window.__traycer_rrweb = true;",
+    worldName: "__traycer_rrweb",
+  },
+  { kind: "cdpRemoveScriptToEvaluateOnNewDocument", identifier: "1" },
 ];
 
 const SUCCESS_RESULTS: readonly BrowserCdpResult[] = [
@@ -113,6 +120,12 @@ const SUCCESS_RESULTS: readonly BrowserCdpResult[] = [
   { kind: "cdpDispatchKeyEvent", ok: true },
   { kind: "cdpSetDeviceMetricsOverride", ok: true },
   { kind: "cdpDescribeNode", ok: true, frameId: "child-frame-1" },
+  {
+    kind: "cdpAddScriptToEvaluateOnNewDocument",
+    ok: true,
+    identifier: "1",
+  },
+  { kind: "cdpRemoveScriptToEvaluateOnNewDocument", ok: true },
 ];
 
 describe("browser.sessions@1.0 CDP bridge", () => {
@@ -285,5 +298,114 @@ describe("browser.sessions@1.0 CDP bridge", () => {
     expect(clientKinds.filter((kind) => kind.startsWith("cdp"))).toEqual([
       "cdpResult",
     ]);
+  });
+});
+
+describe("cdpAddScriptToEvaluateOnNewDocument / cdpRemoveScriptToEvaluateOnNewDocument (epic-media-pipeline)", () => {
+  it("maps each kind to its raw CDP method", () => {
+    expect(CURATED_CDP_METHOD_BY_KIND.cdpAddScriptToEvaluateOnNewDocument).toBe(
+      "Page.addScriptToEvaluateOnNewDocument",
+    );
+    expect(
+      CURATED_CDP_METHOD_BY_KIND.cdpRemoveScriptToEvaluateOnNewDocument,
+    ).toBe("Page.removeScriptToEvaluateOnNewDocument");
+  });
+
+  it("requires worldName - it is pinned host-side, never chosen by the desktop", () => {
+    expect(
+      browserCdpCommandSchema.safeParse({
+        kind: "cdpAddScriptToEvaluateOnNewDocument",
+        source: "window.x = 1;",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserCdpCommandSchema.safeParse({
+        kind: "cdpAddScriptToEvaluateOnNewDocument",
+        source: "window.x = 1;",
+        worldName: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserCdpCommandSchema.safeParse({
+        kind: "cdpAddScriptToEvaluateOnNewDocument",
+        source: "window.x = 1;",
+        worldName: "__traycer_rrweb",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("dispatches the add command with no leaked kind field and resolves the identifier", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
+    const send = async (
+      method: string,
+      params: Record<string, unknown>,
+    ): Promise<unknown> => {
+      calls.push({ method, params });
+      return { identifier: "3" };
+    };
+
+    const result = await dispatchCuratedCdp(send, {
+      kind: "cdpAddScriptToEvaluateOnNewDocument",
+      source: "window.__traycer_rrweb = true;",
+      worldName: "__traycer_rrweb",
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "Page.addScriptToEvaluateOnNewDocument",
+        params: {
+          source: "window.__traycer_rrweb = true;",
+          worldName: "__traycer_rrweb",
+        },
+      },
+    ]);
+    expect(result).toEqual({
+      kind: "cdpAddScriptToEvaluateOnNewDocument",
+      ok: true,
+      identifier: "3",
+    });
+  });
+
+  it("rejects when the reply is missing identifier, mirroring Page.captureScreenshot's data narrowing", async () => {
+    const send = async (): Promise<unknown> => {
+      return {};
+    };
+
+    await expect(
+      dispatchCuratedCdp(send, {
+        kind: "cdpAddScriptToEvaluateOnNewDocument",
+        source: "window.__traycer_rrweb = true;",
+        worldName: "__traycer_rrweb",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("dispatches the remove command with {identifier} and resolves ok: true", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
+    const send = async (
+      method: string,
+      params: Record<string, unknown>,
+    ): Promise<unknown> => {
+      calls.push({ method, params });
+      return {};
+    };
+
+    const result = await dispatchCuratedCdp(send, {
+      kind: "cdpRemoveScriptToEvaluateOnNewDocument",
+      identifier: "3",
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "Page.removeScriptToEvaluateOnNewDocument",
+        params: { identifier: "3" },
+      },
+    ]);
+    expect(result).toEqual({
+      kind: "cdpRemoveScriptToEvaluateOnNewDocument",
+      ok: true,
+    });
   });
 });

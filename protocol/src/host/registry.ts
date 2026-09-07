@@ -374,6 +374,13 @@ import {
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicFetchArtifactAttachmentV10,
+  epicCaptureTabScreenshotV10,
+  epicDeleteFileV10,
+  epicOpenFileInBrowserV10,
+  epicReadFileV10,
+  epicRestoreFileV10,
+  epicStartTabRecordingV10,
+  epicStopTabRecordingV10,
   epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
@@ -438,6 +445,7 @@ import {
   epicListTuiAgentsV11,
   epicListTuiAgentsV12,
 } from "@traycer/protocol/host/epic/tui-agent-records";
+import { epicFileEventsV10 } from "@traycer/protocol/host/epic/files";
 import { epicStateSubscribeV10 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
@@ -6859,6 +6867,120 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // ── Epic file plane (epic-media-pipeline) ────────────────────────────────
+  // Seven brand-new v1.0 names, every one OUTSIDE `RELEASED_FLOOR_METHOD_NAMES`
+  // with `degrade: { kind: "unsupported" }`. The degrade arm needs no surface
+  // of its own and deliberately renders nothing: a host that predates this
+  // plane has no `files` manifest, so its epics have no files to read, delete,
+  // record or open - the client hides the whole surface rather than showing a
+  // dead one. There is no `epic.listFiles` to register; the manifest is a
+  // sibling `Y.Map` on the epic root doc and the GUI projects it from the
+  // replica it already holds.
+  //
+  // Answers WHERE one file's bytes are (asset stream / D32 loopback / signed
+  // cloud url) or why they are not obtainable - never the bytes, which run to
+  // 512 MiB and need `Range`.
+  "epic.readFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Tombstone / un-tombstone on the manifest entry. No cloud delete exists to
+  // register: a sha may be named by another path, a `versions[]` entry or a
+  // `derivedFrom` link, so nothing can prove the object dead before the epic is.
+  "epic.deleteFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicDeleteFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.restoreFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicRestoreFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Starts the per-epic loopback static server on demand and hands back the
+  // `127.0.0.1` url a browser tile opens. Host-local by construction - the tab
+  // runs on the answering host's machine, which is what makes loopback resolve.
+  "epic.openFileInBrowser": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicOpenFileInBrowserV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // The browser tile's capture button. `save` mirrors the REPL verb's own
+  // opt-in so both producers of a screenshot speak one vocabulary.
+  "epic.captureTabScreenshot": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicCaptureTabScreenshotV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Recording control. The run's lifecycle is on `epic.fileEvents` and its
+  // output is in the manifest; these two only start and stop it.
+  "epic.startTabRecording": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicStartTabRecordingV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.stopTabRecording": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicStopTabRecordingV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   // The per-chat run-settings tuple the record row above summarises down to a
   // harness id. Optional and host-LOCAL for the same reason as the list - it
   // answers out of this host's own chat store, the only place the tuple lives
@@ -9071,7 +9193,10 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       // so its prior in-repo minor history (@1.0-@1.4) is collapsed into one
       // fresh @1.0 baseline carrying every frame kind - see the doc comment
       // on `browserSessionsV1` in `contracts.ts`. Agent-browser PiP ticket 01
-      // extends that same 1.0 in place.
+      // and the epic-media-pipeline recording control frames
+      // (`startTabRecording` / `stopTabRecording` out, `recordingHelperReady` /
+      // `recordingEnded` back - text only, the clip's chunks go over HTTP)
+      // extend that same 1.0 in place.
       latestMinor: 0,
       versions: {
         0: {
@@ -9254,6 +9379,27 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: epicCommunicationGraphSubscribeV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream method: the epic file plane's
+  // out-of-band channel, carrying ONLY the two things the `files` manifest
+  // structurally cannot say - a drop-zone file the watcher refused (which never
+  // becomes an entry, so this frame is its only record) and a recording's
+  // in-flight lifecycle (which has no entry to observe until finalize). Every
+  // settled fact - the saved clip, its upload status, a rename, a tombstone -
+  // is read off the doc replica instead, so no fact has two arrival orders. A
+  // host that predates the plane never advertises it, the subscription degrades
+  // to `unsupported`, and a client with no file plane on that host has nothing
+  // to badge or toast. Never add it to the unary released floor - that list is
+  // fail-closed on the name set.
+  "epic.fileEvents": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicFileEventsV10,
         },
       },
     },

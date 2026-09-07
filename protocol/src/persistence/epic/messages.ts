@@ -287,6 +287,64 @@ export const imageResolutionEntrySchema = z.discriminatedUnion("state", [
 ]);
 export type ImageResolutionEntry = z.infer<typeof imageResolutionEntrySchema>;
 
+/**
+ * One entry in an assistant message's durable EPIC-FILE resolution record - the
+ * host's answer, at message time, for one markdown link or image in the
+ * assistant's text whose target is a path under the epic root (D28).
+ *
+ * ## Why this is not `imageResolutions`
+ *
+ * The instinct is to widen the image record, and it is wrong twice over.
+ * `imageResolutionEntrySchema` pins `mediaType` to the CLOSED
+ * `supportedImageMediaTypeSchema` enum, and a video is not in it - widening the
+ * enum is exactly the narrowing/growth class `COMPATIBILITY.md` calls breaking.
+ * Worse, two of the hand-frozen wire copies below
+ * (`assistantMessageSchemaPreReasonix`, `assistantMessageSchemaPreSettlement`)
+ * carry `imageResolutions` and bind that live entry object BY REFERENCE, so
+ * widening it would widen the released `chat.subscribe` lines they serve - the
+ * peers on those lines would then be handed a media type their own schema
+ * refuses. A new array is the only shape that leaves those lines where they
+ * are.
+ *
+ * ## Never bytes, and never a URL
+ *
+ * The entry is an ADDRESS: `path` + `sha256` name one immutable object in the
+ * `files` manifest, and the renderer resolves it through `epic.readFile` like
+ * any other file. Persisting a signed url here would bake a minutes-long
+ * credential into a record that replicates to every epic participant and
+ * outlives the url by years.
+ *
+ * ## Open strings, deliberately
+ *
+ * `kind`, `mediaType` and `state` are open, matching the manifest entry's own
+ * leniency (`persistence/epic/files.ts`): a value added later is then a
+ * compatible same-major addition needing no new frozen copy, and a reader that
+ * does not recognize one renders a generic file chip instead of rejecting the
+ * message. That is the opposite trade-off from `imageResolutionEntrySchema`'s
+ * state-discriminated union, and it is the right one here precisely because
+ * this record must NOT become another closed enum on a wire that keeps growing.
+ *
+ * `path`/`sha256` are nullable because an unresolved entry has no object to
+ * name - the target was outside the epic root, tombstoned, or never a manifest
+ * key. `src` is always present: it is the raw markdown target as authored, and
+ * it is what the renderer falls back to showing.
+ */
+export const fileResolutionEntrySchema = z.object({
+  /** The markdown target exactly as the assistant wrote it. */
+  src: z.string(),
+  /** Open: `"resolved"`, `"unavailable"`, `"deleted"`, ... */
+  state: z.string(),
+  /** Manifest key of the resolved entry; `null` when nothing resolved. */
+  path: z.string().nullable(),
+  /** Content address of the resolved object; `null` when nothing resolved. */
+  sha256: z.string().nullable(),
+  /** Sniffed, host-authoritative; open so video/pdf/anything later fits. */
+  mediaType: z.string().nullable(),
+  /** The manifest entry's `kind` (`recording`, `screenshot`, `file`, ...). */
+  kind: z.string().nullable(),
+});
+export type FileResolutionEntry = z.infer<typeof fileResolutionEntrySchema>;
+
 export const assistantMessageSchema = z.object({
   role: z.literal("assistant"),
   /**
@@ -352,6 +410,20 @@ export const assistantMessageSchema = z.object({
    * consent chips (see `imageResolutionEntrySchema`).
    */
   imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+  /**
+   * Durable EPIC-FILE resolution record for this message's markdown-referenced
+   * epic files, one entry per distinct `src` (D28). Separate from
+   * `imageResolutions` by necessity, not taste - see
+   * `fileResolutionEntrySchema`.
+   *
+   * Defaulted, which is the whole compatibility argument: every message
+   * persisted before the file plane existed parses cleanly as `[]`, and the
+   * four hand-frozen wire copies below simply omit the key, so a released peer
+   * neither receives it nor has to know it exists. Adding it here is a
+   * same-major persistence addition under `COMPATIBILITY.md`'s "new key whose
+   * input schema accepts absence" rule.
+   */
+  fileResolutions: z.array(fileResolutionEntrySchema).default([]),
 });
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 

@@ -145,6 +145,34 @@ const cdpSetDeviceMetricsOverrideCommandSchema = z
     mobile: z.boolean(),
   })
   .strict();
+/**
+ * rrweb's injection pair (D17). `addScriptToEvaluateOnNewDocument` is what
+ * makes a recording survive navigation: the script is re-installed by the
+ * browser on every new document, so the recorder does not have to notice and
+ * re-inject after each one.
+ *
+ * `worldName` is REQUIRED and PINNED HOST-SIDE - the caller of this curated
+ * vocabulary is the host's recording controller, never the desktop, which
+ * relays the command it is handed. Naming a world keeps the recorder out of the
+ * page's main world, so the page cannot read, patch or throw from the
+ * recorder's globals, and the recorder cannot collide with the page's. It is
+ * not optional because the main world is the wrong answer, not a default: an
+ * omitted `worldName` is exactly the injection this pair exists to avoid.
+ */
+const cdpAddScriptToEvaluateOnNewDocumentCommandSchema = z
+  .object({
+    kind: z.literal("cdpAddScriptToEvaluateOnNewDocument"),
+    source: z.string(),
+    worldName: z.string().min(1),
+  })
+  .strict();
+/** Removal by the identifier the add returned. Injection ends with the run. */
+const cdpRemoveScriptToEvaluateOnNewDocumentCommandSchema = z
+  .object({
+    kind: z.literal("cdpRemoveScriptToEvaluateOnNewDocument"),
+    identifier: z.string(),
+  })
+  .strict();
 const cdpDescribeNodeCommandSchema = z
   .object({
     kind: z.literal("cdpDescribeNode"),
@@ -168,6 +196,8 @@ export const browserCdpCommandSchema = z.discriminatedUnion("kind", [
   cdpDispatchKeyEventCommandSchema,
   cdpSetDeviceMetricsOverrideCommandSchema,
   cdpDescribeNodeCommandSchema,
+  cdpAddScriptToEvaluateOnNewDocumentCommandSchema,
+  cdpRemoveScriptToEvaluateOnNewDocumentCommandSchema,
 ]);
 export type BrowserCdpCommand = z.infer<typeof browserCdpCommandSchema>;
 
@@ -190,6 +220,9 @@ export const CURATED_CDP_METHOD_BY_KIND = {
   cdpDispatchKeyEvent: "Input.dispatchKeyEvent",
   cdpSetDeviceMetricsOverride: "Emulation.setDeviceMetricsOverride",
   cdpDescribeNode: "DOM.describeNode",
+  cdpAddScriptToEvaluateOnNewDocument: "Page.addScriptToEvaluateOnNewDocument",
+  cdpRemoveScriptToEvaluateOnNewDocument:
+    "Page.removeScriptToEvaluateOnNewDocument",
 } as const satisfies Record<BrowserCdpCommand["kind"], string>;
 
 export type CuratedCdpMethod =
@@ -288,6 +321,24 @@ const browserCdpSuccessResultSchema = z.discriminatedUnion("kind", [
       kind: z.literal("cdpDescribeNode"),
       ok: z.literal(true),
       frameId: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      // The handle the removal takes. Narrowed off the raw reply the same way
+      // `Page.captureScreenshot`'s `data` is: a missing or non-string
+      // `identifier` is a malformed response, not an empty string, because a
+      // recorder that "removed" a script it never identified would leave rrweb
+      // injected into every future document of that tab.
+      kind: z.literal("cdpAddScriptToEvaluateOnNewDocument"),
+      ok: z.literal(true),
+      identifier: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cdpRemoveScriptToEvaluateOnNewDocument"),
+      ok: z.literal(true),
     })
     .strict(),
 ]);

@@ -90,8 +90,23 @@ export async function dispatchCuratedCdp(
     case "cdpInsertText":
     case "cdpDispatchKeyEvent":
     case "cdpSetDeviceMetricsOverride":
+    case "cdpRemoveScriptToEvaluateOnNewDocument":
       await sendCommand(send, command);
       return { kind: command.kind, ok: true };
+    case "cdpAddScriptToEvaluateOnNewDocument": {
+      const response = requireRecord(
+        await sendCommand(send, command),
+        "Page.addScriptToEvaluateOnNewDocument",
+      );
+      return {
+        kind: command.kind,
+        ok: true,
+        identifier: requireString(
+          response.identifier,
+          "Page.addScriptToEvaluateOnNewDocument.identifier",
+        ),
+      };
+    }
     case "cdpDescribeNode": {
       const response = requireRecord(
         await sendCommand(send, command),

@@ -1159,3 +1159,142 @@ describe("browser.sessions@1.0 frame-kind sets", () => {
     expect(uxKinds.has("clearSite")).toBe(false);
   });
 });
+
+describe("browser.sessions@1.0 tab recording control (epic-media-pipeline)", () => {
+  it("parses the two host->desktop server frames with hasBinaryPayload: false", () => {
+    const startTabRecording = {
+      kind: "startTabRecording",
+      hasBinaryPayload: false,
+      tabId: "tab-1",
+      recordingId: "rec-1",
+      helperUrl: "http://127.0.0.1:1/rec-1",
+    };
+    expect(
+      browserSessionsServerFrameSchema.safeParse(startTabRecording).success,
+    ).toBe(true);
+
+    const stopTabRecording = {
+      kind: "stopTabRecording",
+      hasBinaryPayload: false,
+      recordingId: "rec-1",
+    };
+    expect(
+      browserSessionsServerFrameSchema.safeParse(stopTabRecording).success,
+    ).toBe(true);
+  });
+
+  it("parses the two desktop->host client answers with hasBinaryPayload: false", () => {
+    const recordingHelperReady = {
+      kind: "recordingHelperReady",
+      hasBinaryPayload: false,
+      recordingId: "rec-1",
+    };
+    expect(
+      browserSessionsClientFrameSchema.safeParse(recordingHelperReady).success,
+    ).toBe(true);
+
+    const recordingEnded = {
+      kind: "recordingEnded",
+      hasBinaryPayload: false,
+      recordingId: "rec-1",
+      reason: "window-closed",
+    };
+    expect(
+      browserSessionsClientFrameSchema.safeParse(recordingEnded).success,
+    ).toBe(true);
+  });
+
+  // No binary frames: the clip's chunks never touch this stream. The helper
+  // POSTs each timeslice chunk straight to the host's loopback listener, so
+  // every recording-control frame here is text-only, like every other frame
+  // on `browser.sessions`.
+  it("rejects all four recording-control frames when hasBinaryPayload: true", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "startTabRecording",
+        hasBinaryPayload: true,
+        tabId: "tab-1",
+        recordingId: "rec-1",
+        helperUrl: "http://127.0.0.1:1/rec-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "stopTabRecording",
+        hasBinaryPayload: true,
+        recordingId: "rec-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "recordingHelperReady",
+        hasBinaryPayload: true,
+        recordingId: "rec-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "recordingEnded",
+        hasBinaryPayload: true,
+        recordingId: "rec-1",
+        reason: "window-closed",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects all four recording-control frames carrying an extra unknown field", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "startTabRecording",
+        hasBinaryPayload: false,
+        tabId: "tab-1",
+        recordingId: "rec-1",
+        helperUrl: "http://127.0.0.1:1/rec-1",
+        extra: "nope",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "stopTabRecording",
+        hasBinaryPayload: false,
+        recordingId: "rec-1",
+        extra: "nope",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "recordingHelperReady",
+        hasBinaryPayload: false,
+        recordingId: "rec-1",
+        extra: "nope",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "recordingEnded",
+        hasBinaryPayload: false,
+        recordingId: "rec-1",
+        reason: "window-closed",
+        extra: "nope",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("relays recordingHelperReady/recordingEnded to the renderer, but keeps forgetLogins/clearSite out", () => {
+    const uxKinds: ReadonlySet<string> = new Set(
+      BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+    );
+    expect(uxKinds.has("recordingHelperReady")).toBe(true);
+    expect(uxKinds.has("recordingEnded")).toBe(true);
+    expect(uxKinds.has("forgetLogins")).toBe(false);
+    expect(uxKinds.has("clearSite")).toBe(false);
+  });
+
+  it("keeps startTabRecording/stopTabRecording off the jar-only server-frame set - they carry no jar material", () => {
+    const jarKinds: ReadonlySet<string> = new Set(
+      BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS,
+    );
+    expect(jarKinds.has("startTabRecording")).toBe(false);
+    expect(jarKinds.has("stopTabRecording")).toBe(false);
+  });
+});
