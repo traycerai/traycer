@@ -9,11 +9,20 @@ const pidMetadata = vi.hoisted(() => ({
   metadata: null as { pid: number } | null,
   gone: false,
   goneCalls: 0,
+  // When set, `readHostPidMetadata` answers with this instead once the unit
+  // has been signalled - the armed manager's replacement host.
+  replacement: null as { pid: number } | null,
+  signalled: false,
+  goneFor: null as number | null,
 }));
 vi.mock("../../../host/pid-metadata", () => ({
-  readHostPidMetadata: async () => pidMetadata.metadata,
-  publishedHostProcessGone: () => {
+  readHostPidMetadata: async () =>
+    pidMetadata.signalled && pidMetadata.replacement !== null
+      ? pidMetadata.replacement
+      : pidMetadata.metadata,
+  publishedHostProcessGone: (m: { pid: number }) => {
     pidMetadata.goneCalls += 1;
+    if (pidMetadata.goneFor !== null) return m.pid === pidMetadata.goneFor;
     return pidMetadata.gone;
   },
 }));
@@ -360,6 +369,7 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     const commands: string[][] = [];
     const controller = createLinuxController(async (command, args) => {
       commands.push([command, ...args]);
+      if (args.includes("kill")) pidMetadata.signalled = true;
       return { stdout: "", stderr: "", exitCode: 0 };
     });
     return { controller, commands };
@@ -369,6 +379,9 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     pidMetadata.metadata = null;
     pidMetadata.gone = false;
     pidMetadata.goneCalls = 0;
+    pidMetadata.replacement = null;
+    pidMetadata.signalled = false;
+    pidMetadata.goneFor = null;
     // Production graces are the host's own force-exit watchdog plus a 10s
     // kill window; letting them elapse is what makes the exhausted-ladder
     // case untestable at real timing.
@@ -446,6 +459,32 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     // And it did not consult the identity predicate at all - there was
     // nothing to consult it about.
     expect(pidMetadata.goneCalls).toBe(0);
+  });
+
+  it("confirms the instance it SIGNALLED, not whatever the armed manager started in its place", async () => {
+    // The hazard this design creates, and the reason the confirmation cannot
+    // be a fresh read. With the unit left armed, systemd starts a replacement
+    // supervisor `RestartSec` after the signal - so by the time the stop is
+    // confirming, `pid.json` may already name a DIFFERENT live host. Reading
+    // the instance after signalling would ask "is that replacement gone",
+    // answer no, escalate SIGKILL at it, and report a forced recycle over a
+    // host that came up exactly as intended.
+    //
+    // The old host (4242) is gone; the replacement (5353) is live.
+    pidMetadata.metadata = { pid: 4242 };
+    pidMetadata.replacement = { pid: 5353 };
+    pidMetadata.goneFor = 4242;
+    const { controller, commands } = recordingController();
+
+    const stopped = await controller.stopForRestart(
+      labelFor("ai.traycer.host.dev"),
+      { force: false },
+    );
+
+    // Proven gone from the identity captured BEFORE the signal.
+    expect(stopped.forcedRecycle).toBe(false);
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(false);
   });
 
   it("the user-facing `host stop` still uses the manager's stop verb - this round does not change that path", async () => {
