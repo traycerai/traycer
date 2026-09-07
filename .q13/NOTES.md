@@ -105,11 +105,11 @@ not ship the verb change without it.
 | RW-13m | plain `kickstart` applied unconditionally (macOS)  | the `-k` pin plus one pre-existing test                     |
 | RW-13n | the busy refusal reverted to `logger.warn`         | the cadence pin alone                                       |
 | RW-13o | the `busy` reason string made to interpolate       | the cadence pin alone                                       |
-| RW-13p | the `forcedRecycle` consumer removed              | the recycle pin alone                                       |
-| RW-13q | the recycle done with `stop` instead of `restart` | the recycle pin + the never-INACTIVE pin                    |
-| RW-13r | the identity predicate never consulted            | the SIGKILL row (now on `goneCalls`) + the ordering pin     |
-| RW-13s | an `accountId` added to the INFO field bag        | the cadence pin — **the leak B predicted**                  |
-| RW-13t | the line emitted at BOTH info and warn            | the cadence pin, via the absence assertion                  |
+| RW-13p | the `forcedRecycle` consumer removed               | the recycle pin alone                                       |
+| RW-13q | the recycle done with `stop` instead of `restart`  | the recycle pin + the never-INACTIVE pin                    |
+| RW-13r | the identity predicate never consulted             | the SIGKILL row (now on `goneCalls`) + the ordering pin     |
+| RW-13s | an `accountId` added to the INFO field bag         | the cadence pin — **the leak B predicted**                  |
+| RW-13t | the line emitted at BOTH info and warn             | the cadence pin, via the absence assertion                  |
 
 **RW-13h initially came back GREEN** and that is the finding: the ordering the
 whole confirmation rests on was unpinned, because the mock answered the same
@@ -125,8 +125,8 @@ named as the hazard was the unguarded one. A conjunct can be half-pinned and
 look covered.
 
 **B named the mechanism behind all three green ablations, and it is checkable
-rather than a hunch:** in every case the pin passed because *a guard earlier in
-the same predicate short-circuited before the clause under test*. The
+rather than a hunch:** in every case the pin passed because _a guard earlier in
+the same predicate short-circuited before the clause under test_. The
 discipline that follows — for any pin on a multi-clause predicate, build the
 fixture with every clause except the one under test at its **permissive**
 value. RW-13h's replacement instance is exactly that move.
@@ -140,8 +140,8 @@ relaunch loop, and the admission callback at `:1472` spawns without re-asking.
 
 ### The property I first cited was too narrow
 
-I claimed convergence rests on *"the start verb no-ops against a job the
-manager already considers running"*. **That governs only the case where an
+I claimed convergence rests on _"the start verb no-ops against a job the
+manager already considers running"_. **That governs only the case where an
 instance IS running, and Q13 both creates and lengthens the case where none
 is** (B):
 
@@ -156,14 +156,14 @@ has a pending auto-restart → the executor issues its start. Two start
 requests, nothing running, and the verb property is silent about it.
 
 **The property actually depended on:** the manager admits at most one instance
-of the job *in every state*, including while a restart is pending. That is the
+of the job _in every state_, including while a restart is pending. That is the
 manager's object model, not the verb's behaviour.
 
-| Platform | The singleton | Holds in every state? |
-| --- | --- | --- |
-| systemd | the **unit** — an explicit start job and a pending auto-restart converge on one main process | yes |
-| launchd | the **label** — a kickstart during a throttle hold is deferred, not duplicated | yes |
-| Task Scheduler | `IgnoreNew`, which **is** the narrow property verbatim | **UNVERIFIED — nothing behind it** |
+| Platform       | The singleton                                                                                | Holds in every state?              |
+| -------------- | -------------------------------------------------------------------------------------------- | ---------------------------------- |
+| systemd        | the **unit** — an explicit start job and a pending auto-restart converge on one main process | yes                                |
+| launchd        | the **label** — a kickstart during a throttle hold is deferred, not duplicated               | yes                                |
+| Task Scheduler | `IgnoreNew`, which **is** the narrow property verbatim                                       | **UNVERIFIED — nothing behind it** |
 
 **Windows is therefore downgraded from "pinned" to the same UNVERIFIED tier as
 its verb change.** The pin stays and reads the right artifact; what shrank is
@@ -182,7 +182,7 @@ Reported here first as merely "inert". **B showed it was a real failure on the
 one platform this round changed**, and the fix landed in `48aa79900`.
 
 A plain `systemctl --user start` no-ops against a unit systemd still considers
-active — the *same* no-op `forcedRecycle` was invented to name on macOS. So a
+active — the _same_ no-op `forcedRecycle` was invented to name on macOS. So a
 Linux stop returning `forcedRecycle: true` (SIGKILL could not prove the
 instance gone, or `systemctl kill` itself failed — invisible, since `killUnit`
 tolerates a non-zero exit and never reads it) issued a start that did nothing,

@@ -4543,10 +4543,19 @@ describe("acceptance: cells with no legacy ancestor", () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
     const crashed = await crashAtRestarting("2.0.0");
-    // The seed's baseline names the PRE-apply install record; the live one is
-    // the target now. Only the refresh the recovery park writes makes them
-    // equal, which is what this pin exists to prove end to end.
-    expect(crashed.claim).toMatchObject({ installedVersion: "1.0.0" });
+    // Q12 CHANGED THIS ASSERTION, and the change is the deliverable.
+    //
+    // It used to read `installedVersion: "1.0.0"` - the pre-apply install -
+    // because nothing refreshed the baseline across `applying -> restarting`,
+    // so a crash at `restarting` left a record whose claim described a world
+    // the swap had already replaced. The old comment here said "only the
+    // refresh the recovery park writes makes them equal", and that was
+    // exactly the defect: the record spent the whole interval between the
+    // swap and the recovery unable to say what its own swap had installed.
+    //
+    // The swap now writes it. So the baseline is already at the target at the
+    // moment of the crash, before any recovery has run.
+    expect(crashed.claim).toMatchObject({ installedVersion: "2.0.0" });
 
     const report = await verifyHostUpdateAttempt(ENVIRONMENT, {
       attemptId: crashed.attemptId,

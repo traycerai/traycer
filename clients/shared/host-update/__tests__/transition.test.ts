@@ -1425,6 +1425,75 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
     if (outcome.kind !== "advanced") return;
     expect("claim" in outcome.record).toBe(false);
   });
+
+  it("the same ignore rule on `applying -> restarting`, the edge Q12 refreshes", () => {
+    // The sibling above pins the rule on a PARK. Q12 makes the swap itself
+    // refresh, which puts a claim refresh on `applying -> restarting` for the
+    // first time - a different phase pair reaching the same
+    // `refreshedClaimBaseline`. Pinned separately rather than assumed from
+    // the park row, because the two edges are only equivalent for as long as
+    // the refresh stays phase-agnostic, and nothing here forces that.
+    //
+    // The consequence is a real limit on Q12 and belongs in front of anyone
+    // relying on it: an attempt whose record carries no claim gets NO
+    // recorded generation from its own swap, silently and correctly. A
+    // consumer that wants to trust an installed/running/target equality has
+    // to gate on the claim being present, not on Q12 having run.
+    const current = makeRecord({ phase: "applying", continuation: null });
+    expect("claim" in current).toBe(false);
+    const outcome = advanceAttempt(current, attemptIdentityOf(current), {
+      phase: "restarting",
+      continuation: null,
+      progress: null,
+      error: null,
+      claimRefresh: {
+        installedVersion: "2.0.0",
+        installGeneration: "gen-written-by-the-swap",
+        stageFingerprint: null,
+      },
+      nowIso: "2026-01-01T00:05:00.000Z",
+    });
+    expect(outcome.kind).toBe("advanced");
+    if (outcome.kind !== "advanced") return;
+    expect("claim" in outcome.record).toBe(false);
+  });
+
+  it("but a record WITH a claim takes the swap's generation on that same edge", () => {
+    // Q12's positive half, at the layer that actually applies it. The
+    // baseline stops describing the install the swap replaced and starts
+    // describing the one it wrote - while `allowDowngrade` is COPIED from the
+    // prior claim, never restated, because a refresh may not re-grant consent.
+    const current = makeRecord({ phase: "applying", continuation: null });
+    const withClaim = {
+      ...current,
+      claim: {
+        installedVersion: "1.0.0",
+        installGeneration: "gen-before-the-swap",
+        stageFingerprint: null,
+        allowDowngrade: true,
+      },
+    };
+    const outcome = advanceAttempt(withClaim, attemptIdentityOf(withClaim), {
+      phase: "restarting",
+      continuation: null,
+      progress: null,
+      error: null,
+      claimRefresh: {
+        installedVersion: "2.0.0",
+        installGeneration: "gen-written-by-the-swap",
+        stageFingerprint: null,
+      },
+      nowIso: "2026-01-01T00:05:00.000Z",
+    });
+    expect(outcome.kind).toBe("advanced");
+    if (outcome.kind !== "advanced") return;
+    expect(outcome.record.claim).toEqual({
+      installedVersion: "2.0.0",
+      installGeneration: "gen-written-by-the-swap",
+      stageFingerprint: null,
+      allowDowngrade: true,
+    });
+  });
 });
 
 // ---- decideAttemptRecovery ---------------------------------------------------
