@@ -99,6 +99,39 @@ function hostAuthDir(): string {
   return join(workHome, ".traycer", "host", "auth");
 }
 
+/**
+ * The host's IDENTITY subtree, where its delegated credential actually lives.
+ *
+ * Kept apart from {@link hostAuthDir} on purpose: the two were one directory in
+ * `store/paths.ts` and that was the Q21 defect. A fixture that reuses one
+ * helper for both cannot tell the two paths apart, which is exactly the
+ * confusion the pin below exists to catch.
+ */
+function hostIdentityDir(): string {
+  return join(workHome, ".traycer", "host", "identity");
+}
+
+/**
+ * A box laid out the way a real one is (Q21 / dc84fa8b's O3): the host's
+ * delegated credential under `identity/device-credentials.json`, and `auth/`
+ * holding only `jwks.json`.
+ *
+ * Written as a LAYOUT rather than as one file, because the defect was a layout
+ * claim: `store/paths.ts` asserted `auth/credentials.json` and nothing could
+ * check it, so doctor probed a path that has never existed. A fixture that
+ * creates only the file the code expects can never catch that class - it has to
+ * create what the HOST creates, including the decoy.
+ */
+function writeRealBoxCredentialLayout(): void {
+  mkdirSync(hostIdentityDir(), { recursive: true });
+  writeFileSync(
+    join(hostIdentityDir(), "device-credentials.json"),
+    JSON.stringify({ hostId: "h", ownerUserId: "u" }),
+  );
+  mkdirSync(hostAuthDir(), { recursive: true });
+  writeFileSync(join(hostAuthDir(), "jwks.json"), JSON.stringify({ keys: [] }));
+}
+
 function writeNeedsReauthMarker(marker: unknown): void {
   mkdirSync(hostAuthDir(), { recursive: true });
   writeFileSync(
@@ -178,6 +211,64 @@ describe("runDoctor host credential needs-reauth", () => {
     expect(
       result.issues.some((i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH"),
     ).toBe(true);
+  });
+
+  it("Q21: sees the host's credential where the host actually writes it", async () => {
+    // The probe read `<hostHome>/auth/credentials.json`, asserted by a docblock
+    // in `store/paths.ts` and by nothing else. The host writes
+    // `identity/device-credentials.json`
+    // (`traycer-host/src/.../on-box-credentials.ts:97`); a real box's `auth/`
+    // holds only `jwks.json`. So `credentialFilePresent` was `false` on every
+    // host that has ever run, healthy or not, and a support bundle read the
+    // credential plane as absent.
+    //
+    // The fixture writes BOTH - the real credential and the `auth/` decoy - so
+    // this cannot pass by the old path accidentally existing.
+    // Falsification (the ablation): point `HOST_CREDENTIAL_SUBDIR` /
+    // `HOST_CREDENTIAL_FILENAME` back at `auth` / `credentials.json` and this
+    // reddens, while every other pin in this file stays green - which is the
+    // measure of how invisible the defect was.
+    stageHealthyHostMocks();
+    writeRealBoxCredentialLayout();
+    writeNeedsReauthMarker({
+      reason: "burned",
+      recordedAt: "2026-08-21T15:12:00.000Z",
+      hostId: "h",
+      ownerUserId: "u",
+    });
+
+    const result = await runProductionDoctor();
+
+    const issue = result.issues.find(
+      (i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH",
+    );
+    expect(issue?.details).toMatchObject({ credentialFilePresent: true });
+  });
+
+  it("Q21 control: with NOTHING under identity/, the credential reads absent", async () => {
+    // The other half, and what stops the pin above from passing on a probe that
+    // simply answered `true`. `auth/` is still populated, so a probe that had
+    // been re-pointed at the wrong directory in the OTHER direction - or one
+    // that stopped checking - fails here.
+    stageHealthyHostMocks();
+    mkdirSync(hostAuthDir(), { recursive: true });
+    writeFileSync(
+      join(hostAuthDir(), "credentials.json"),
+      JSON.stringify({ hostId: "h" }),
+    );
+    writeNeedsReauthMarker({
+      reason: "burned",
+      recordedAt: "2026-08-21T15:12:00.000Z",
+      hostId: "h",
+      ownerUserId: "u",
+    });
+
+    const result = await runProductionDoctor();
+
+    const issue = result.issues.find(
+      (i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH",
+    );
+    expect(issue?.details).toMatchObject({ credentialFilePresent: false });
   });
 
   it("stays silent for a host with no marker", async () => {

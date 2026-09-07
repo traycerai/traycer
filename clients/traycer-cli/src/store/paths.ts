@@ -90,8 +90,30 @@ const HOST_PID_FILENAME = "pid.json";
 // out here rather than imported: the host owns these names, and this repo has
 // no import path to it - the same arrangement as every other host-written
 // contract read below.
-const HOST_CREDENTIAL_SUBDIR = "auth";
-const HOST_CREDENTIAL_FILENAME = "credentials.json";
+//
+// These were ONE subdir constant shared by both files, asserting `auth/`, and
+// that assertion was wrong for the credential (Q21 / dc84fa8b's O3): the host
+// writes `identity/device-credentials.json`
+// (`traycer-host/src/.../on-box-credentials.ts:97`), and a real box's `auth/`
+// holds only `jwks.json`. Doctor's presence check therefore read a path that
+// has never existed.
+//
+// Split rather than re-pointed, because sharing was the deeper fault: one
+// constant made two independently-owned host contracts move together, so
+// correcting either would have silently relocated the other. They are now two
+// facts that can be wrong, and verified, one at a time.
+const HOST_CREDENTIAL_SUBDIR = "identity";
+const HOST_CREDENTIAL_FILENAME = "device-credentials.json";
+// UNVERIFIED, and deliberately left where it was. The marker's subdir was only
+// ever `auth/` because it shared the constant above, so the correction removes
+// its evidence without supplying any of its own - and this is the path whose
+// wrongness would be SILENT: the marker's presence is the entire verdict, so a
+// path the host does not write reads as ENOENT, which
+// `probeHostCredentialNeedsReauth` reports as "no burn on record". A false
+// clean on the one fault it exists to surface. Asked of the host owner
+// (dc84fa8b); moving it on a guess would trade a known-suspect path for an
+// unknown one.
+const HOST_NEEDS_REAUTH_SUBDIR = "auth";
 const HOST_NEEDS_REAUTH_FILENAME = "needs-reauth.json";
 // The host's IDENTITY subtree - a different plane from `auth/` above, holding
 // the coordination keypair, the enrollment record, and its own sticky
@@ -224,6 +246,15 @@ export function hostLogBackupPath(
  * Read here by string path, like every other host-written on-disk contract in
  * this module: the host is an external component, and its store module is not
  * importable from this repo at all.
+ *
+ * Which is exactly why this was wrong for as long as it was (Q21). The
+ * docblock ASSERTED the host owned `auth/credentials.json` and nothing could
+ * check the assertion, so doctor's presence probe read a path that has never
+ * existed and reported the plane absent on a perfectly healthy host. The name
+ * now matches the host's writer
+ * (`traycer-host/src/.../on-box-credentials.ts:97`), and the pin below it
+ * fixes the layout against a fixture built like a real box rather than against
+ * this comment.
  */
 export function hostCredentialPath(
   environment: Environment | undefined,
@@ -248,7 +279,7 @@ export function hostNeedsReauthPath(
 ): string {
   return join(
     hostHomeDir(environment),
-    HOST_CREDENTIAL_SUBDIR,
+    HOST_NEEDS_REAUTH_SUBDIR,
     HOST_NEEDS_REAUTH_FILENAME,
   );
 }
