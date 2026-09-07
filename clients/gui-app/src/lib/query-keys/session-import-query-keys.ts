@@ -11,6 +11,8 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
  * run they were watching finishes, without reaching for a raw array literal.
  */
 export const sessionImportQueryKeys = {
+  openTask: (hostId: string | null) =>
+    ["sessionImport.openTask", hostId] as const,
   status: (hostId: string | null): QueryKey =>
     hostQueryKeys.method<HostRpcRegistry, "sessionImport.status">(
       hostId,

@@ -14,6 +14,7 @@ import {
 import {
   FOLDER_CONTROL_TRIGGER_CLASS,
   folderLocationValue,
+  importedWorktreeSourceBranch,
   workspaceRunBranchSourceLabel,
   type WorkspaceRunItem,
 } from "./workspace-run-item";
@@ -347,13 +348,8 @@ function importedWorktreeBranchDetails(item: WorkspaceRunItem): {
     item.summary.worktrees.find(
       (worktree) => worktree.worktreePath === intent.worktreePath,
     ) ?? null;
-  const mainEntry = item.summary.worktrees.find((worktree) => worktree.isMain);
   return {
-    sourceBranch:
-      matching?.sourceBranch ??
-      mainEntry?.branch ??
-      item.summary.mainBranch ??
-      "Unknown source",
+    sourceBranch: importedWorktreeSourceBranch(item) ?? "Unknown source",
     currentBranchName: matching?.branch ?? item.branchLabel,
   };
 }

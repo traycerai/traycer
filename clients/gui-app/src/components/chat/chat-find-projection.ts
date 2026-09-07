@@ -529,15 +529,15 @@ function approvalHeaderSearchText(
 
 function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (segment.agentMessageSend !== null) {
+    // The header's "Sent message" label is screen-reader-only, so it is not
+    // indexed: a find hit on it would highlight nothing. The collapsed
+    // preview is what actually paints.
     return [
       normalizeSearchableText(
-        [
-          "Sent message",
-          formatSingleLine(segment.agentMessageSend.message, {
-            maxLength: CHAT_FIND_PREVIEW_MAX_LENGTH,
-            ellipsis: "…",
-          }),
-        ].join(" "),
+        formatSingleLine(segment.agentMessageSend.message, {
+          maxLength: CHAT_FIND_PREVIEW_MAX_LENGTH,
+          ellipsis: "…",
+        }),
       ),
     ];
   }

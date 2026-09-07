@@ -3,9 +3,10 @@ import type { Environment } from "../runner/environment";
 import { createCliLogger } from "../logger";
 import {
   isValidLocalHostWebsocketUrl,
+  publishedHostProcessGone,
   readHostPidMetadata,
+  type HostPidMetadata,
 } from "../host/pid-metadata";
-import { isProcessAlive } from "../store/cli-lock";
 
 // Bounded, purely-local health probe `commands/host-update.ts` runs after
 // the install-dir swap + service restart to decide whether the new host
@@ -33,7 +34,13 @@ export interface HealthProbeResult {
 export interface HealthProbeOptions {
   readonly environment: Environment;
   // Injectable for tests so they don't need a real process/socket.
-  // `null` uses the real local pid-liveness / loopback-TCP checks.
+  // `null` uses the real local checks: the pid's liveness AND, for a record
+  // that carries the host's creation stamp, that the live pid is still that
+  // process (`publishedHostProcessGone`) - a crashed host's pid recycled onto
+  // an unrelated process beside a listener on the old port must never read
+  // as a healthy new host, because the caller clears its progress marker
+  // and reports the update a success on this answer. A test seam sees the
+  // pid alone.
   readonly checkProcessAlive: ((pid: number) => boolean) | null;
   readonly checkTcpReachable:
     | ((host: string, port: number) => Promise<boolean>)
@@ -52,7 +59,10 @@ export async function probeHostHealth(
   opts: HealthProbeOptions,
 ): Promise<HealthProbeResult> {
   const logger = createCliLogger(opts.environment);
-  const checkProcessAlive = opts.checkProcessAlive ?? isProcessAlive;
+  const checkProcessAlive: (metadata: HostPidMetadata) => boolean =
+    opts.checkProcessAlive === null
+      ? (metadata) => !publishedHostProcessGone(metadata)
+      : liveByPidOnly(opts.checkProcessAlive);
   const checkTcpReachable = opts.checkTcpReachable ?? probeLoopbackTcp;
   const totalBudgetMs = opts.totalBudgetMs ?? DEFAULT_TOTAL_BUDGET_MS;
   const retryDelayMs = opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
@@ -88,9 +98,15 @@ export async function probeHostHealth(
   }
 }
 
+function liveByPidOnly(
+  checkPid: (pid: number) => boolean,
+): (metadata: HostPidMetadata) => boolean {
+  return (metadata) => checkPid(metadata.pid);
+}
+
 async function attemptOnce(
   environment: Environment,
-  checkProcessAlive: (pid: number) => boolean,
+  checkProcessAlive: (metadata: HostPidMetadata) => boolean,
   checkTcpReachable: (host: string, port: number) => Promise<boolean>,
 ): Promise<HealthProbeResult> {
   const metadata = await readHostPidMetadata(environment);
@@ -106,10 +122,10 @@ async function attemptOnce(
       detail: "host pid metadata advertises an invalid local websocket URL",
     };
   }
-  if (!checkProcessAlive(metadata.pid)) {
+  if (!checkProcessAlive(metadata)) {
     return {
       healthy: false,
-      detail: `host process (pid ${metadata.pid}) is not alive`,
+      detail: `host process (pid ${metadata.pid}) is not alive, or the pid now belongs to another process`,
     };
   }
   const parsed = new URL(metadata.websocketUrl);

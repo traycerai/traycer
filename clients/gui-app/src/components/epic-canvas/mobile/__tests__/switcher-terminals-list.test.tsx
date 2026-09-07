@@ -32,6 +32,14 @@ const HOST_A = "host-a";
 const HOST_B = "host-b";
 const SHARED_ID = "shared-term";
 
+const writeText = vi.hoisted(() =>
+  vi.fn((_value: string) => Promise.resolve()),
+);
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  value: { writeText },
+  configurable: true,
+});
+
 interface DurableCollectionHolder {
   /**
    * `undefined`, not null, for an absent catalog: that is what the real
@@ -313,6 +321,7 @@ beforeEach(() => {
   role.value = "owner";
   hostClient.value = { request: () => undefined };
   onClose.mockClear();
+  writeText.mockClear();
 });
 afterEach(() => {
   cleanup();
@@ -459,7 +468,7 @@ describe("<SwitcherTerminalsList /> rows", () => {
     ).toBeTruthy();
   });
 
-  it("gives an editor Rename and Close, and a viewer no menu at all", () => {
+  it("gives an editor working Rename and Close, and a viewer Copy ID with mutations disabled", () => {
     durableCollection.value = completeFleet([
       durableTerminal({
         hostId: HOST_A,
@@ -469,15 +478,35 @@ describe("<SwitcherTerminalsList /> rows", () => {
       }),
     ]);
     const editor = renderList(openEpicTab());
-    expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+    const editorRename = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Rename",
+    });
+    const editorClose = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Close",
+    });
+    expect(editorRename.disabled).toBe(false);
+    expect(editorClose.disabled).toBe(false);
     editor.unmount();
 
+    // A viewer can still open the menu and copy the session id - only the
+    // mutating entries (Rename, Close) stay gated behind editor access.
     role.value = "viewer";
     renderList(openEpicTab());
     expect(
-      screen.queryByRole("button", { name: "Actions for Durable shell" }),
-    ).toBeNull();
+      screen.getByRole("button", { name: "Actions for Durable shell" }),
+    ).toBeTruthy();
+    const viewerRename = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Rename",
+    });
+    const viewerClose = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Close",
+    });
+    expect(viewerRename.disabled).toBe(true);
+    expect(viewerClose.disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy ID" }));
+    expect(writeText).toHaveBeenCalledWith("durable-term");
+    expect(durableRenameMutate).not.toHaveBeenCalled();
   });
 
   it("disables both mutations for a durable row the client may not mutate", () => {

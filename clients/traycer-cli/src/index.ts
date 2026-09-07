@@ -88,6 +88,11 @@ import {
 import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
+import {
+  acknowledgeRelocationEntry,
+  relocateOutOfHostCgroupIfNeeded,
+  type CgroupRelocation,
+} from "./host/cgroup-relocation";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
 import { runHostCapabilities } from "./host/capabilities";
 import {
@@ -222,6 +227,12 @@ function withRunner(
   ) => CommandFn,
 ): CommanderCommand {
   return addRunnerFlags(cmd).action(async (...actionArgs: unknown[]) => {
+    // First, before anything else this action does. On a relocated run the
+    // parent is holding fd 3 open waiting to learn whether a CLI exists in the
+    // new scope at all; until this byte is written, every failure here is
+    // indistinguishable from `systemd-run` failing to start us. A no-op on an
+    // ordinary run. See host/cgroup-relocation.ts.
+    acknowledgeRelocationEntry();
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const positionals = extractActionPositionals(actionArgs);
     const optsBag = command.optsWithGlobals() as Record<string, unknown>;
@@ -253,7 +264,40 @@ function withRunner(
       );
       return build(optsBag, positionals)(ctx);
     };
-    await runCommand(guarded, extractRunnerFlags(optsBag));
+    const flags = extractRunnerFlags(optsBag);
+    // Linux: a command that is about to stop the host runs in a transient
+    // scope of its own, because on this platform it would otherwise be killed
+    // by the stop it issues (see host/cgroup-relocation.ts).
+    //
+    // Here, once, for the same reason the capability check above is: BEFORE the
+    // command body, which is where every CLI lock, update-contender claim,
+    // dispatch ACK and progress marker is taken. The relocated child must own
+    // all of them, and the parent - which is about to die with the host's
+    // cgroup - must own none. Building `fn` lazily keeps argument parsing
+    // behind this point too, so nothing the command does has happened yet.
+    let relocation: CgroupRelocation;
+    try {
+      // Keyed by command path AND the parsed options: `host uninstall` without
+      // `--all`, and the bytes-only forms of install/ensure/apply, never reach
+      // a stop, so relocating them would only expose them to its failure modes.
+      relocation = await relocateOutOfHostCgroupIfNeeded(commandPath, optsBag);
+    } catch (error) {
+      // Rendered through the runner's normal error path rather than thrown from
+      // the action: an error escaping Commander lands in the entry's generic
+      // handler, which reports E_UNEXPECTED and loses the code the host and
+      // Desktop switch on.
+      await runCommand(() => Promise.reject(error), flags);
+      return;
+    }
+    if (relocation.kind === "completed") {
+      // The child ran the command and owned the output stream through inherited
+      // stdio. This process adds nothing to it - under `--json` writing a
+      // second terminal envelope would corrupt the child's NDJSON - and exits
+      // with the child's code through the runner's own terminator.
+      await finishAndExit(relocation.exitCode);
+      return;
+    }
+    await runCommand(guarded, flags);
   });
 }
 
@@ -1062,6 +1106,20 @@ function registerHostCommands(program: Command): void {
     )
     .requiredOption("--service-uid <uid>", "Internal: target GUI service uid")
     .action(async (opts) => {
+      // Deliberately NOT relocated out of the host's cgroup on Linux, unlike
+      // every other route that reaches a host stop (host/cgroup-relocation.ts).
+      // The script that spawns this lease is in the same cgroup as the lease:
+      // started from a Traycer-hosted terminal, the two land inside the host
+      // unit together, and the stop the lease would perform kills the script
+      // mid-maintenance whether or not the lease itself survives it. Moving
+      // the lease alone would also turn the script's direct child into a
+      // waiting wrapper, so its cancellation (TERM/KILL to that child, exit as
+      // death evidence) would no longer prove the lease holder is gone. The
+      // second-line guard in `withStopIntent` therefore refuses the action,
+      // the refusal travels to the script as the protocol's own `refused`
+      // frame ("run this from a shell outside the Traycer host"), and the
+      // lease releases with nothing touched - which is the outcome a caller
+      // that cannot outlive the stop should get.
       const admission =
         opts.admission === "desktop-activation-maintenance" ||
         opts.admission === "uninstall-maintenance"

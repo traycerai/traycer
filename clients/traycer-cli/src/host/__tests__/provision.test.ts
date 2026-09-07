@@ -412,6 +412,53 @@ describe("provisionHost - Finding D: implicit-registry-minimum satisfaction", ()
     expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps another build of the requested release only when the registry has not yanked it - the string is the artifact, the comparator only ranks it", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0+bar"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const kept = await provisionHost(
+      makeOpts({
+        satisfaction: {
+          kind: "implicit-registry-minimum",
+          version: "2.0.0+foo",
+        },
+      }),
+    );
+    expect(kept.action).toBe("noop");
+    expect(isVersionYankedMock).toHaveBeenCalledWith("2.0.0+bar");
+
+    isVersionYankedMock.mockReset();
+    isVersionYankedMock.mockResolvedValue(true);
+    const replaced = await provisionHost(
+      makeOpts({
+        satisfaction: {
+          kind: "implicit-registry-minimum",
+          version: "2.0.0+foo",
+        },
+      }),
+    );
+    expect(replaced.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats the exact requested string as satisfied without a yank lookup (control for the other-build row)", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0+bar"));
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: {
+          kind: "implicit-registry-minimum",
+          version: "2.0.0+bar",
+        },
+      }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+
   it("reinstalls an older install and never consults the yank list for it", async () => {
     createServiceControllerMock.mockReturnValue(runningController());
     readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.6.0"));

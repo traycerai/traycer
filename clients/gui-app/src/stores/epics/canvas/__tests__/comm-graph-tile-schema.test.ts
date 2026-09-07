@@ -51,7 +51,7 @@ describe("comm-graph tile schema", () => {
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
       type: "comm-graph",
-      name: "Communication graph",
+      name: "Agent office",
       hostId: UNKNOWN_HOST_PLACEHOLDER,
       epicId: EPIC_ID,
       view: { x: 4, y: 5, zoom: 2 },
@@ -69,7 +69,7 @@ describe("comm-graph tile schema", () => {
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
       type: "comm-graph",
-      name: "Communication graph",
+      name: "Agent office",
       hostId: UNKNOWN_HOST_PLACEHOLDER,
       epicId: EPIC_ID,
       view: { x: 0, y: 0, zoom: 1, mode: "isometric" },
@@ -86,7 +86,7 @@ describe("comm-graph tile schema", () => {
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
       type: "comm-graph",
-      name: "Communication graph",
+      name: "Agent office",
       hostId: UNKNOWN_HOST_PLACEHOLDER,
       epicId: EPIC_ID,
       view: { x: 0, y: 0, zoom: 1, mode: "office" },
@@ -101,7 +101,7 @@ describe("comm-graph tile schema", () => {
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
       type: "comm-graph",
-      name: "Communication graph",
+      name: "Agent office",
       hostId: UNKNOWN_HOST_PLACEHOLDER,
       epicId: EPIC_ID,
       view: { x: 0, y: 0, zoom: 1, mode: "graph" },
@@ -111,12 +111,31 @@ describe("comm-graph tile schema", () => {
     expect(parsed.view.mode).toBe("graph");
   });
 
+  it("renames a tile saved under the old copy on load, by kind not by name", () => {
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Communication graph",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: { x: 0, y: 0, zoom: 1, mode: "office" },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    // Matched on tile kind, not on the persisted name - a comm-graph tile
+    // saved under any prior name always renders under the current one.
+    expect(parsed.name).toBe("Agent office");
+    // The saved office/graph view mode is untouched by the rename.
+    expect(parsed.view.mode).toBe("office");
+  });
+
   it("recomputes the id on rehydrate rather than trusting the persisted one", () => {
     const parsed = parseTileRef({
       id: "stale-random-uuid",
       instanceId: "inst-1",
       type: "comm-graph",
-      name: "Communication graph",
+      name: "Agent office",
       hostId: UNKNOWN_HOST_PLACEHOLDER,
       epicId: EPIC_ID,
       view: { x: 0, y: 0, zoom: 1 },
@@ -129,7 +148,7 @@ describe("comm-graph tile schema", () => {
       parseTileRef({
         instanceId: "inst-1",
         type: "comm-graph",
-        name: "Communication graph",
+        name: "Agent office",
         hostId: UNKNOWN_HOST_PLACEHOLDER,
         view: { x: 0, y: 0, zoom: 1 },
       }),
@@ -141,7 +160,7 @@ describe("comm-graph tile schema", () => {
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
       type: "comm-graph",
-      name: "Communication graph",
+      name: "Agent office",
       hostId: UNKNOWN_HOST_PLACEHOLDER,
       epicId: EPIC_ID,
       // A zero zoom would render an unrecoverable blank canvas.

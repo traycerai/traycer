@@ -666,6 +666,7 @@ function OnboardingMiniatureColumn(props: {
   readonly agentGuide: OnboardingAgentGuideState;
   readonly hostPicker: OnboardingHostPicker;
   readonly sessionImportScan: SessionImportScanHandle;
+  readonly onBeforeImportedTaskOpen: () => Promise<boolean>;
 }) {
   const { actId, addon, miniature, agentGuide, hostPicker, sessionImportScan } =
     props;
@@ -679,6 +680,7 @@ function OnboardingMiniatureColumn(props: {
       <OnboardingSessionImportStage
         scan={sessionImportScan}
         hostPicker={hostPicker}
+        onBeforeTaskOpen={props.onBeforeImportedTaskOpen}
       />
     );
   } else if (miniature.kind === "login-import") {
@@ -1557,6 +1559,18 @@ function OnboardingTour(props: {
                 agentGuide={agentGuideState}
                 hostPicker={hostPicker}
                 sessionImportScan={sessionImportScan}
+                onBeforeImportedTaskOpen={async () => {
+                  if (!(await saveAgentGuideDraft())) return false;
+                  Analytics.getInstance().track(
+                    AnalyticsEvent.OnboardingCompleted,
+                    { last_step: act.id },
+                  );
+                  consumeAnnouncement("login-import");
+                  // AppShell owns tab-navigation hydration. Finish the tour
+                  // before requesting a task tab so that hydration can run.
+                  complete();
+                  return true;
+                }}
               />
             </div>
             <OnboardingStageEdgeFade
