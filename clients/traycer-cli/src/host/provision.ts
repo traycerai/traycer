@@ -374,6 +374,16 @@ async function provisionUnderLock(
         }
         // Bytes present + at target with host-owned registration: there is
         // nothing to cycle, so no teardown and no busy check are needed.
+        //
+        // This is the SECOND of two independent guards on that outcome - the
+        // first is `isSatisfied`'s own host-owned arm on the fast path above -
+        // and it deliberately re-derives the predicate instead of calling
+        // `isSatisfied`, because by here the service state is no longer the
+        // question. The consequence for anyone editing either one: the pin
+        // that covers this (`provision.test.ts`, "keeps a newer install when
+        // the host is NOT running") stays GREEN under a single-conjunct
+        // change to either guard, since the other still returns `noop`. A
+        // green suite is not evidence that this branch still fires.
         if (
           !opts.force &&
           state.installed &&

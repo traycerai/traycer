@@ -767,6 +767,15 @@ describe("provisionHost - Q7: own-build-minimum satisfaction", () => {
   // the convergence runs, and starting it is the desktop's own job afterwards.
   // If the newer install were only kept while the host happened to be up, Q7
   // would be unfixed for exactly the case it was reported from.
+  //
+  // READ THIS BEFORE EDITING EITHER NO-OP GUARD: the shape below is held by
+  // TWO independent ones - `isSatisfied`'s host-owned arm and the locked
+  // path's `installed && versionSatisfied && !registerService` - and a
+  // single-conjunct mutation of either leaves this row GREEN, because the
+  // other still returns `noop`. Do not read a green suite as proof that the
+  // guard you just changed is covered; it is covered only against the version
+  // predicate both of them route through. See the body for the mutation that
+  // does negate this row.
   it("keeps a newer install when the host is NOT running and registration is host-owned", async () => {
     createServiceControllerMock.mockReturnValue(downController());
     readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
