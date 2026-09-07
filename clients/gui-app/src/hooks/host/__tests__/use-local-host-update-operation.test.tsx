@@ -46,6 +46,8 @@ import type {
   IHostManagement,
   LocalAttemptFacts,
 } from "@traycer-clients/shared/platform/runner-host";
+import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -180,6 +182,69 @@ function bindUnreachableLocalHost(): HostClient<HostRpcRegistry> {
   clientForHostIdMock.current = (hostId) =>
     hostId === LOCAL_HOST_ID ? fixture.client : null;
   return fixture.client;
+}
+
+/**
+ * The other half of the same seam: a REACHABLE local host whose `host.status`
+ * answers, with the handler supplied by the caller so a test can control how
+ * long an individual poll takes to come back.
+ */
+function bindReachableLocalHost(
+  status: () => Promise<ResponseOfMethod<HostRpcRegistry, "host.status">>,
+): HostClient<HostRpcRegistry> {
+  const fixture = buildOverviewHostFixture({
+    hostId: LOCAL_HOST_ID,
+    isLocalMachine: true,
+    overrideHandlers: { "host.status": status },
+  });
+  hostBindingMock.current = {
+    directory: {
+      getLocalHostId: () => LOCAL_HOST_ID,
+      onChange: () => ({ dispose: () => undefined }),
+    },
+  };
+  clientForHostIdMock.current = (hostId) =>
+    hostId === LOCAL_HOST_ID ? fixture.client : null;
+  return fixture.client;
+}
+
+function attemptOperation(
+  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
+): HostStatusUpdateOperation {
+  return {
+    kind: "attempt",
+    attemptId: "attempt-1",
+    generation: 1,
+    sequence: 1,
+    targetVersion: "2.5.0",
+    trigger: "manual",
+    phase: "downloading",
+    execution: "active",
+    continuation: null,
+    progress: null,
+    liveness: "active",
+    livenessCause: null,
+    busySessionCount: null,
+    busyBreakdown: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+function statusWith(
+  operation: HostStatusUpdateOperation,
+): ResponseOfMethod<HostRpcRegistry, "host.status"> {
+  return {
+    ready: true,
+    hostVersion: "1.5.0",
+    protocolVersion: { major: 1, minor: 3 },
+    busy: false,
+    busySessionCount: 0,
+    updateProgress: null,
+    busyBreakdown: null,
+    updateOperation: operation,
+    updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+  };
 }
 
 function renderOperation(management: IHostManagement) {
@@ -384,6 +449,86 @@ describe("useLocalHostUpdateOperation — the 1s renderer tick ages the live-res
 
       expect(result.current.view.kind).not.toBe("restarting");
       expect(holdsLifecycleGate(result.current.view)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * The WIRE half of the same clock, at THIS call site (C-H3, banner leg).
+ *
+ * `projectLocalUpdate` is a shared seam, so the pure suite already pins what
+ * the projector DOES with each instant. What no projector pin can see is which
+ * value a call site drops into which slot: the projector is handed a
+ * `LocalUpdateClock` already filled in, and a consumer that fills both slots
+ * from the tick is a perfectly well-typed call it will honour. That mistake has
+ * to be caught where it is made, so each of the two consumers needs its own
+ * mounted mirror — the Overview's lives in
+ * `host-overview-lifecycle-gate.test.tsx`, and the banner's are here.
+ *
+ * The RECORD slot's mirror is the D13 tick suite above, and it is a mirror in
+ * both directions: feeding `recordNowMs` from `statusQuery.dataUpdatedAt`
+ * (verified) fails its very first assertion, because in that fixture
+ * `host.status` never resolves and `dataUpdatedAt` is `0` — the proof's age
+ * comes out hugely negative and the lower bound rejects it, so the live
+ * `restarting` never appears at all.
+ *
+ * This is the WIRE slot's, and it needs the opposite fixture: a host that
+ * ANSWERS, slowly. Falsifies `clock: { wireNowMs: nowMs, … }` here — F3
+ * re-introduced one file over from where it was found.
+ */
+describe("useLocalHostUpdateOperation — the WIRE leg's freshness is its own read's instant (C-H3)", () => {
+  it("a slow host.status round trip inside the poll window neither demotes the live attempt nor drops the lifecycle gate", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let statusCalls = 0;
+      // The second poll HANGS past the fresh window and then answers normally.
+      // Deferred rather than delayed so the pending window is exact and the
+      // answer is the same live attempt — nothing about the DATA changes across
+      // this test, only how long the wire took to say it.
+      let releaseSlowPoll: () => void = () => undefined;
+      const slowPoll = new Promise<void>((resolve) => {
+        releaseSlowPoll = resolve;
+      });
+      bindReachableLocalHost(async () => {
+        statusCalls += 1;
+        if (statusCalls === 2) await slowPoll;
+        return statusWith(attemptOperation({ phase: "downloading" }));
+      });
+      // NO durable record on the controller status. The record leg is not what
+      // this pin is about, and leaving it out means the wire arm's own
+      // staleness is the only thing that can move the view — under the
+      // mutation there is nothing else for `preferLiveOverRecord` to fall to,
+      // so a red here is unambiguously the wire clock.
+      const management = notImplementedManagement(CONTROLLER_STATUS_BASE);
+
+      const { result } = renderOperation(management);
+
+      // Baseline: the attempt is live and holds the gate.
+      await waitFor(() => {
+        expect(result.current.view.kind).toBe("downloading");
+      });
+      expect(holdsLifecycleGate(result.current.view)).toBe(true);
+
+      // Let the accelerated poll fire and hang, then push the wall clock well
+      // past the fresh window (`dataUpdatedAt` + 2.5 × the 2 s accelerated
+      // poll delay = 5 s) while that request is still outstanding.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      // THE PIN. The read has not failed and nothing newer has landed — the
+      // request is simply still in flight — so the last frame is still the best
+      // evidence there is and must still be treated as live.
+      expect(result.current.view.kind).toBe("downloading");
+      expect(holdsLifecycleGate(result.current.view)).toBe(true);
+
+      // And it recovers normally once the slow answer lands, so the pin is
+      // about the window rather than about wedging the fixture.
+      releaseSlowPoll();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(result.current.view.kind).toBe("downloading");
     } finally {
       vi.useRealTimers();
     }

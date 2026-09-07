@@ -1257,6 +1257,49 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
     );
   });
 
+  it("(C-H2) the different-attempt bound is judged on the RECORD clock, not the wire's", () => {
+    // The three pins around this one all pass `sameClock(NOW_MS)`, which makes
+    // them blind to WHICH slot `recordTimestampIsSane` reads: swapping
+    // `clock.recordNowMs` for `clock.wireNowMs` leaves every one of them
+    // green. This is the case that separates them.
+    //
+    // The split is not contrived, it is the steady state this two-clock design
+    // exists for (round-1 F3): `wireNowMs` is the status query's own
+    // `dataUpdatedAt`, which STOPS ADVANCING exactly when the host goes down,
+    // while `recordNowMs` is a one-second renderer tick that keeps running.
+    // So a current record judged against a frozen wire instant is rejected as
+    // "future-dated" for being what it is — current — which is the failure
+    // `recordTimestampIsSane`'s own doc names.
+    //
+    // Falsifies: `preferLiveOverRecord` passing `clock.wireNowMs` here. Under
+    // that mutation `updatedAt - wireNowMs` is 10 s, far past the 1 s slack,
+    // the record is called insane and the STALE wire keeps the slot.
+    //
+    // `freshUntilMs` sits BEFORE `wireNowMs`, not merely before `NOW_MS`: the
+    // healthy-frame short-circuit at the top of `preferLiveOverRecord` reads
+    // the wire clock too, so a window measured against the tick would let the
+    // frozen instant read as fresh and the pin would never reach the bound it
+    // is about. This is the shape an unhealthy read actually has — the health
+    // is folded into `freshUntilMs`, which is what round-1 F3 established.
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 20_000,
+      operation: attemptOperation({ attemptId: "attempt-1" }),
+    });
+    const currentRecord = recordObservation({
+      attemptId: "attempt-2",
+      updatedAt: new Date(NOW_MS).toISOString(),
+    });
+    expect(
+      preferLiveOverRecord(staleWire, currentRecord, {
+        // Frozen ten seconds ago: the host stopped answering, so the query's
+        // `dataUpdatedAt` stopped moving with it.
+        wireNowMs: NOW_MS - 10_000,
+        // Still ticking, which is the whole point of the second slot.
+        recordNowMs: NOW_MS,
+      }),
+    ).toBe(currentRecord);
+  });
+
   it("an unparseable updatedAt on a different attempt loses to a stale wire", () => {
     // Falsifies: `recordTimestampIsSane` treating `Date.parse`'s `NaN` as
     // "unknown, so allow it" instead of refusing — the doc's explicit
@@ -1833,7 +1876,13 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
     expect(view.kind).toBe("unknown");
     expect(view.lastKnownKind).toBe("waiting-to-activate");
     expect(view.targetVersion).toBe("2.1.0");
-    // Retained, not live: no surface may present this as a current park.
+    // Retained, not live — and THIS is where the "never a live park" half of
+    // the claim actually lives. `kind: "unknown"` says we do not know;
+    // `qualified` is what every surface reads to decide whether to say so
+    // out loud ("last seen …"), so a decay that dropped it would render the
+    // park as though it were current while still passing the two assertions
+    // above.
+    expect(view.qualified).toBe(true);
     expect(isQuietUpdateView(view)).toBe(false);
   });
 });

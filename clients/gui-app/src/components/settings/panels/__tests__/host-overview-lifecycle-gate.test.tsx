@@ -787,3 +787,93 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
     }
   });
 });
+
+/**
+ * C-H3 (cold review C, round 4): the MOUNTED mirror for the WIRE slot of
+ * `LocalUpdateClock`.
+ *
+ * The record slot already has one — the tick-fed integration pin above — so a
+ * mutation to `recordNowMs` reddens at the seam as well as in the projector.
+ * The wire slot had no mounted pin at all: `host-overview-panel.tsx` feeds
+ * `wireNowMs` from `statusQuery.dataUpdatedAt`, and feeding it the same
+ * one-second tick instead left the whole suite green. That mutation IS
+ * round-1 F3 re-introduced at the call site, so the regression it caused once
+ * is the thing this pin exists to catch a second time.
+ */
+describe("HostOverviewPanel — the WIRE leg's freshness is its own read's instant (C-H3)", () => {
+  it("a slow host.status round trip inside the poll window neither demotes the live attempt nor drops the lifecycle gate", async () => {
+    // Falsifies: `clock: { wireNowMs: nowMs, … }` in `host-overview-panel.tsx`
+    // — the tick instead of `statusQuery.dataUpdatedAt`. `freshUntilMs` is
+    // `dataUpdatedAt + 2.5 × the poll delay`, so with the accelerator holding
+    // the poll at 2 s the window is 5 s; a round trip longer than that makes a
+    // TICKING `wireNowMs` cross it while the read is perfectly healthy, and
+    // `preferLiveOverRecord`'s healthy-frame short-circuit stops firing. The
+    // card falls to "Last seen …" and the gate releases, once per cycle, for a
+    // host that is downloading normally. Fed from its own read's instant the
+    // comparison is `dataUpdatedAt <= dataUpdatedAt + window`, which cannot go
+    // stale while the query is healthy however long the trip took.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let statusCalls = 0;
+      // The second poll HANGS past the fresh window and then answers normally.
+      // Deferred rather than delayed so the pending window is exact and the
+      // answer is the same live attempt — nothing about the DATA changes
+      // across this test, only how long the wire took to say it.
+      let releaseSlowPoll: () => void = () => undefined;
+      const slowPoll = new Promise<void>((resolve) => {
+        releaseSlowPoll = resolve;
+      });
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.status": async () => {
+            statusCalls += 1;
+            if (statusCalls === 2) await slowPoll;
+            return statusWith(attemptOperation({ phase: "downloading" }), {
+              busy: false,
+            });
+          },
+        },
+      });
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = { hostClient: fixture.client };
+      scopeOverrides.current = scopeFrom("host-a", fixture);
+      renderPanel();
+
+      // Baseline: the attempt is live and holds the gate.
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toContain("Downloading");
+      });
+      await waitFor(async () => {
+        expect(await editNameDisabled()).toBe(true);
+      });
+
+      // Let the accelerated poll fire and hang, then push the wall clock well
+      // past the 5 s fresh window while that request is still outstanding.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      // THE PIN. The read has not failed and nothing newer has landed — the
+      // request is simply still in flight — so the last frame is still the
+      // best evidence there is and must still be treated as live.
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toContain("Downloading");
+      expect(await editNameDisabled()).toBe(true);
+
+      // And it recovers normally once the slow answer lands, so the pin is
+      // about the window rather than about wedging the fixture.
+      releaseSlowPoll();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toContain("Downloading");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
