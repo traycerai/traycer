@@ -32,6 +32,7 @@ import {
   readCommGraphTimelineEpicState,
   useCommGraphCursor,
   useCommGraphPlaying,
+  useCommGraphReturnCursor,
   useCommGraphSpeed,
   useCommGraphTimelineStore,
 } from "@/stores/epics/comm-graph-timeline-store";
@@ -57,7 +58,16 @@ export interface CommGraphTransport {
   readonly cursorIndex: number;
   readonly togglePlay: () => void;
   readonly cycleSpeed: () => void;
+  /** Re-attach to live, remembering where the cursor was for `returnToReplay`. */
   readonly followLive: () => void;
+  /**
+   * The replay position `followLive` left, or `null` when there is none to go
+   * back to. Live with a return position is what makes the Live button a
+   * toggle rather than a one-way door.
+   */
+  readonly returnCursor: CommGraphTimeCursor | null;
+  /** Detach again onto `returnCursor`; a no-op when there is none. */
+  readonly returnToReplay: () => void;
   /**
    * Seek the cursor onto a row. Detaching is a CONSEQUENCE of landing on a row
    * that is not the newest, not a separate action - which is what keeps "scrub
@@ -76,6 +86,7 @@ export function useCommGraphTransport(
   const cursor = useCommGraphCursor(epicId);
   const playing = useCommGraphPlaying(epicId);
   const speed = useCommGraphSpeed(epicId);
+  const returnCursor = useCommGraphReturnCursor(epicId);
 
   // The playback timer must not restart every time a live frame lands, so the
   // array it reads is reached through a ref and kept out of the effect's
@@ -116,8 +127,23 @@ export function useCommGraphTransport(
 
   const followLive = useCallback(() => {
     const store = useCommGraphTimelineStore.getState();
+    const current = readCommGraphTimelineEpicState(epicId).cursor;
+    // Remember only a real detachment: pressing Live while already live must
+    // not erase the position a previous press saved.
+    if (current !== null) store.setReturnCursor(epicId, current);
     store.setPlaying(epicId, false);
     store.setCursor(epicId, null);
+  }, [epicId]);
+
+  const returnToReplay = useCallback(() => {
+    const store = useCommGraphTimelineStore.getState();
+    const target = readCommGraphTimelineEpicState(epicId).returnCursor;
+    if (target === null) return;
+    // Through `seekToEvent`'s rule rather than a raw set: the remembered row
+    // may have BECOME the newest row (nothing arrived since), and landing
+    // there is live, not a detachment.
+    if (commGraphCursorAtEnd(eventsRef.current, target)) return;
+    store.setCursor(epicId, target);
   }, [epicId]);
 
   const cycleSpeed = useCallback(() => {
@@ -191,6 +217,8 @@ export function useCommGraphTransport(
     togglePlay,
     cycleSpeed,
     followLive,
+    returnCursor,
+    returnToReplay,
     seekToEvent,
     stepForward,
     stepBackward,
