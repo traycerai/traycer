@@ -18,7 +18,7 @@ import type { CommGraphTileRef, CommGraphTileViewState } from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 
-export const COMM_GRAPH_TILE_NAME = "Communication graph";
+export const COMM_GRAPH_TILE_NAME = "Agent office";
 
 /**
  * Neutral starting viewport; the canvas fits the graph on first layout.
@@ -127,7 +127,10 @@ function parseCommGraphTileRef(value: unknown): CommGraphTileRef | null {
     id: commGraphTileId(value.epicId),
     instanceId: readTileInstanceId(value.instanceId),
     type: TILE_KIND_COMM_GRAPH,
-    name: typeof value.name === "string" ? value.name : COMM_GRAPH_TILE_NAME,
+    // Rename previously saved tiles on load: match on tile kind, not on the
+    // persisted name, so a comm-graph tile saved under the old "Communication
+    // graph" copy picks up the current name unconditionally.
+    name: COMM_GRAPH_TILE_NAME,
     hostId:
       typeof value.hostId === "string" && value.hostId.length > 0
         ? value.hostId

@@ -12,7 +12,7 @@
  * the content id (the graph's persisted viewport) would otherwise be written by
  * two tabs at once, so panning one would move the other.
  */
-import { Waypoints } from "lucide-react";
+import { Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -34,13 +34,13 @@ export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
       type="button"
       variant="ghost"
       size="icon-sm"
-      aria-label="Open communication graph"
+      aria-label="Agent office"
       data-testid="epic-sidebar-open-comm-graph"
       disabled={disabled}
       onClick={openGraph}
       className={cn("text-muted-foreground hover:text-foreground", className)}
     >
-      <Waypoints className="size-4" />
+      <Building2 className="size-4" />
     </Button>
   );
 }
@@ -57,8 +57,8 @@ export function CommGraphOpenMenuItem(props: {
       onSelect={openGraph}
       data-testid="epic-sidebar-more-open-comm-graph"
     >
-      <Waypoints className="size-4" />
-      Open communication graph
+      <Building2 className="size-4" />
+      Agent office
     </DropdownMenuItem>
   );
 }
