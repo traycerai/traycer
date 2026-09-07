@@ -8,13 +8,21 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
-import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import {
+  assistantRowId,
+  assistantSliceRowId,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   createChatSessionStore,
+  MAX_PROVISIONAL_CATCH_UP_ROUNDS,
   STREAM_COMPLETION_TIMEOUT_MS,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { appLogger } from "@/lib/logger";
+import {
+  IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+  type StreamFlushCoordinator,
+} from "@/stores/chats/stream-flush-coordinator";
 import {
   isTailHydrated,
   spanMessages,
@@ -182,6 +190,17 @@ function raiseActiveTurn(callbacks: ChatStreamCallbacks, turnId: string): void {
   });
 }
 
+function completeActiveTurn(callbacks: ChatStreamCallbacks): void {
+  callbacks.onTurnStateChanged({
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    runStatus: "idle",
+    activeTurn: null,
+  });
+}
+
 function blockOf(
   message: Message | undefined,
   blockId: string,
@@ -239,7 +258,49 @@ interface WindowedHarness {
   providerAuthNudgeCount(): number;
 }
 
+/**
+ * A harness whose stream deltas are NOT applied at the moment they arrive.
+ *
+ * The real coordinator coalesces: a delta frame is buffered on receipt and
+ * folded on a later tick. `IMMEDIATE_STREAM_FLUSH_COORDINATOR` collapses that
+ * interval to nothing, which is what most of these tests want - but it is also
+ * an interval a range answer can land inside, and a body seated there is
+ * folding into a window that has not yet absorbed the writes the client already
+ * holds. `flushDeltas()` is that tick, under the test's control.
+ */
+interface DeferredFlushHarness extends WindowedHarness {
+  readonly flushDeltas: () => void;
+}
+
+function createDeferredFlushHarness(): DeferredFlushHarness {
+  let pendingFlush: (() => void) | null = null;
+  const harness = createHarnessWith({
+    register: (input) => {
+      pendingFlush = input.flush;
+      return {
+        requestFlush: () => {},
+        setVisible: () => {},
+        unregister: () => {
+          pendingFlush = null;
+        },
+      };
+    },
+  });
+  return {
+    ...harness,
+    flushDeltas: () => {
+      if (pendingFlush !== null) pendingFlush();
+    },
+  };
+}
+
 function createWindowedHarness(): WindowedHarness {
+  return createHarnessWith(IMMEDIATE_STREAM_FLUSH_COORDINATOR);
+}
+
+function createHarnessWith(
+  streamFlushCoordinator: StreamFlushCoordinator,
+): WindowedHarness {
   const rangeRequests: ChatLoadRangeRequest[] = [];
   let resnapshots = 0;
   let providerAuthNudges = 0;
@@ -254,7 +315,7 @@ function createWindowedHarness(): WindowedHarness {
     onProviderAuthError: () => {
       providerAuthNudges += 1;
     },
-    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    streamFlushCoordinator,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
       return {
@@ -1769,12 +1830,132 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
     }
   });
 
-  it("a streaming echo still supersedes when the turn's record is not held", () => {
-    // The cold-row boundary of the exemption: a copy the window does not
-    // hold is not being rewritten - its deltas are dropped - so an answer
-    // generated before them carries blocks the client can never recover.
-    // Accepting it would seat the older body permanently; it must be
-    // discarded and re-asked exactly as before the exemption existed.
+  /** A text block, so an answer's body is distinguishable from its successor's. */
+  function textBlock(blockId: string, text: string): AssistantBlocks[number] {
+    return {
+      type: "text",
+      blockId,
+      status: "streaming",
+      timestamp: 1,
+      text,
+      providerNotice: null,
+    };
+  }
+
+  /**
+   * The streaming turn's body as of some point in the turn, carrying the host's
+   * write counter for that slice.
+   *
+   * The counter is what a settled record's substitution rules read, and it is
+   * the ordinary shape the host serves - so these bodies exercise the versioned
+   * path. It is NOT what decides whether a catch-up is owed: that is the
+   * request's own write mark, which is why the versionless bodies below recover
+   * their content just the same. See `versionlessTurnBody`.
+   */
+  function turnBodyAt(text: string, blocksVersion: number): Message {
+    const base = assistantWithBlocks("assistant-10", 10, "t-9", [
+      textBlock("b-1", text),
+    ]);
+    return base.role === "assistant" ? { ...base, blocksVersion } : base;
+  }
+
+  /**
+   * The streaming turn's body with NO `blocksVersion`, which the wire schema
+   * still allows and delta writers preserve.
+   */
+  function versionlessTurnBody(text: string): Message {
+    return assistantWithBlocks("assistant-10", 10, "t-9", [
+      textBlock("b-1", text),
+    ]);
+  }
+
+  /** One `text.delta` from the host, appended to the turn's text block. */
+  function streamTextDelta(harness: WindowedHarness, delta: string): void {
+    harness.callbacks().onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: { type: "text.delta", blockId: "b-1", timestamp: 5, delta },
+    });
+  }
+
+  /** The text the store is currently publishing for the streaming turn. */
+  function publishedTurnText(harness: WindowedHarness): string | undefined {
+    const message = harness.handle.store
+      .getState()
+      .messages.find((candidate) => candidate.messageId === "assistant-10");
+    const block = blockOf(message, "b-1");
+    return block?.type === "text" ? block.text : undefined;
+  }
+
+  /**
+   * A skeleton whose ordinals 10-12 are ONE steered turn - two assistant slices
+   * with the steer bubble between them - so an echo can name one slice while a
+   * request is in flight for the other.
+   */
+  function splitTurnSkeleton(): Parameters<
+    ChatStreamCallbacks["onSkeletonChunk"]
+  >[0] {
+    const rowIds = new Map([
+      [10, assistantSliceRowId("t-9", 0, true)],
+      [11, "steer:q-9"],
+      [12, assistantSliceRowId("t-9", 1, true)],
+    ]);
+    return {
+      kind: "skeletonChunk",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      chunk: {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: Array.from({ length: 40 }, (_unused, ordinal) => ({
+          rowId: rowIds.get(ordinal) ?? `row-${ordinal}`,
+          createdAt: ordinal,
+          role: "user" as const,
+          byteLength: 64,
+          bodyDigest: `d${ordinal}`,
+        })),
+        isFinal: true,
+      },
+    };
+  }
+
+  /** One per-approval `updated` echo of the streaming row, at `revision`. */
+  function streamingRowEcho(revision: number): IndexChangedFrame {
+    return indexChangedFrame({
+      epoch: 1,
+      rowCount: 40,
+      indexRevision: revision,
+      changes: [
+        {
+          type: "updated",
+          entries: [
+            {
+              ordinal: 10,
+              entry: {
+                rowId: assistantRowId("t-9"),
+                createdAt: 10,
+                role: "assistant",
+                byteLength: 4096 * revision,
+                bodyDigest: `d10-approval-${revision}`,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  it("a storm of streaming echoes against an UNHELD turn seats the row, catches it up, and then leaves it alone", () => {
+    // The loop that left a tool-heavy turn's own row as a placeholder for the
+    // life of the turn. The window holds no copy of the streaming turn (the
+    // tail below does not carry it), the viewport asks for its row, and the
+    // host echoes the row's index entry once per approval while the answer is
+    // in flight. Before the fix each echo superseded the request, the answer
+    // was discarded, the re-plan asked again and the next echo caught that
+    // one too.
     const harness = createWindowedHarness();
     try {
       seatedTail(harness);
@@ -1783,8 +1964,1448 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
       harness.handle.store
         .getState()
         .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
-      const requestId = harness.lastRangeRequestId();
+      const firstRequestId = harness.lastRangeRequestId();
+      expect(harness.rangeRequests).toHaveLength(1);
 
+      // Five approvals land while the first answer is on the wire. None of
+      // them may supersede it, and none may mint a request of its own.
+      for (let revision = 1; revision <= 5; revision += 1) {
+        harness.callbacks().onIndexChanged(streamingRowEcho(revision));
+      }
+      expect(harness.rangeRequests).toHaveLength(1);
+
+      // The body the host sliced BEFORE those five writes - what a pre-echo
+      // answer necessarily carries.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before the approvals", 1)],
+        }),
+      );
+
+      // The answer SEATED - it was not discarded - so the row draws instead of
+      // going back to a placeholder. But it predates writes this client
+      // dropped, so its span is retired to the stale tier (still rendering the
+      // body it carried) and exactly one catch-up request goes out.
+      const afterFirst = harness.handle.store.getState().transcriptWindow;
+      expect(afterFirst.spans.some((span) => span.fromOrdinal === 10)).toBe(
+        false,
+      );
+      expect(
+        afterFirst.staleSpans.some((span) => span.fromOrdinal === 10),
+      ).toBe(true);
+      expect(publishedTurnText(harness)).toBe("before the approvals");
+      expect(harness.rangeRequests).toHaveLength(2);
+      const catchUpRequestId = harness.lastRangeRequestId();
+      expect(catchUpRequestId).not.toBe(firstRequestId);
+      expect(harness.rangeRequests[1]?.fromOrdinal).toBe(10);
+
+      // More approvals while the CATCH-UP is in flight. The host may well have
+      // sliced after them - the client cannot tell - so this is not "the answer
+      // is missing them", it is "the answer has not ESTABLISHED that it covers
+      // them". A body seated around a gap goes on missing the write whatever
+      // lands on it afterwards, so the conservative reading is the only safe
+      // one: seat it, and ask once more across a quiet interval.
+      for (let revision = 6; revision <= 8; revision += 1) {
+        harness.callbacks().onIndexChanged(streamingRowEcho(revision));
+      }
+      expect(harness.rangeRequests).toHaveLength(2);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("after the approvals", 2)],
+        }),
+      );
+      expect(publishedTurnText(harness)).toBe("after the approvals");
+      expect(harness.rangeRequests).toHaveLength(3);
+      const finalRequestId = harness.lastRangeRequestId();
+
+      // This one is asked and answered across a quiet stream: no write happened
+      // between it going out and coming back, so it carries every write up to
+      // its slice and the client has applied every write since. That is the
+      // whole of the turn, and it is what ends the obligation.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: finalRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("all of the approvals", 3)],
+        }),
+      );
+
+      // Final: a further storm of echoes neither retires it nor asks again.
+      const afterCatchUp = harness.handle.store.getState().transcriptWindow;
+      expect(afterCatchUp.spans.some((span) => span.fromOrdinal === 10)).toBe(
+        true,
+      );
+      expect(publishedTurnText(harness)).toBe("all of the approvals");
+      for (let revision = 9; revision <= 14; revision += 1) {
+        harness.callbacks().onIndexChanged(streamingRowEcho(revision));
+      }
+      const settled = harness.handle.store.getState().transcriptWindow;
+      expect(settled.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+      expect(publishedTurnText(harness)).toBe("all of the approvals");
+      expect(harness.rangeRequests).toHaveLength(3);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a second pre-echo answer cannot discharge the catch-up the first one owed", () => {
+    // The dedup slot hides the catch-up when several requests for the same
+    // range are outstanding. A is sent, the viewport moves away and back so B
+    // and C follow, then the echo lands. A seats and asks for a catch-up - but
+    // C already names that range, so the planner suppresses it. C's answer is
+    // just as old as A's, and an obligation keyed on the ordinal would read as
+    // discharged the moment A consumed it, leaving the pre-echo body on screen
+    // with nothing outstanding. The mark is on the REQUEST, so C owes the
+    // catch-up too, and the request that finally settles the row is one sent
+    // after the dropped write.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+      const store = harness.handle.store.getState();
+
+      store.reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestA = harness.lastRangeRequestId();
+      store.reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 13 });
+      store.reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestC = harness.lastRangeRequestId();
+      expect(harness.rangeRequests).toHaveLength(3);
+      expect(requestC).not.toBe(requestA);
+
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: requestA,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("A: before the write", 1)],
+        }),
+      );
+      // A's catch-up is suppressed by C's dedup slot - the state the ordinal
+      // debt could not see.
+      expect(harness.rangeRequests).toHaveLength(3);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: requestC,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("C: also before the write", 1)],
+        }),
+      );
+
+      // C is pre-echo too, so it owes the same catch-up - and its own arrival
+      // freed the slot, so this one is actually sent.
+      expect(harness.rangeRequests).toHaveLength(4);
+      const catchUpRequestId = harness.lastRangeRequestId();
+      expect(harness.rangeRequests[3]?.fromOrdinal).toBe(10);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("after the write", 2)],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("after the write");
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+      expect(harness.rangeRequests).toHaveLength(4);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("an echo naming a SIBLING slice still catches up the answer carrying the turn's records", () => {
+    // A turn's records are shared by every row it produces, so an answer for
+    // slice 0 carries exactly the record slice 1 renders from. An echo naming
+    // only slice 1 therefore stales a body being served under an ordinal it
+    // never mentioned - which an obligation keyed on the echoed ordinal misses
+    // entirely, because ordinal 12 is neither visible nor requested.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      harness.callbacks().onSkeletonChunk(splitTurnSkeleton());
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const sliceRequestId = harness.lastRangeRequestId();
+      expect(harness.rangeRequests).toHaveLength(1);
+
+      // Echoes the OTHER slice of the same turn.
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 12,
+                  entry: {
+                    rowId: assistantSliceRowId("t-9", 1, true),
+                    createdAt: 12,
+                    role: "assistant",
+                    byteLength: 8192,
+                    bodyDigest: "d12-echo",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: sliceRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantSliceRowId("t-9", 0, true)],
+          messages: [turnBodyAt("slice body before the sibling write", 1)],
+        }),
+      );
+
+      // The catch-up is owed by the ANSWER, which carried the turn's records,
+      // not by the ordinal the echo happened to name.
+      expect(harness.rangeRequests).toHaveLength(2);
+      expect(harness.rangeRequests[1]?.fromOrdinal).toBe(10);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("an answer that seats no body leaves the catch-up owed for the row's next answer", () => {
+    // A row can come back listed in `incompleteRowIds`: the host served the row
+    // id but withheld its records, so nothing seats. Spending the obligation
+    // there retires it against a body that never arrived, and the row's real
+    // answer - which can be just as old - then seats permanently. Nothing is
+    // consumed here, so the next answer is judged on its own provenance.
+    const info = vi.spyOn(appLogger, "info").mockImplementation(() => {});
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      const incomplete = rangeFrame({
+        requestId: firstRequestId,
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: [assistantRowId("t-9")],
+        messages: [turnBodyAt("withheld", 1)],
+      });
+      harness.callbacks().onRange({
+        ...incomplete,
+        range: {
+          ...incomplete.range,
+          incompleteRowIds: [assistantRowId("t-9")],
+        },
+      });
+
+      // Nothing seated, so nothing is retired and no catch-up is claimed.
+      const afterIncomplete = harness.handle.store.getState().transcriptWindow;
+      expect(
+        afterIncomplete.spans.some((span) => span.fromOrdinal === 10),
+      ).toBe(false);
+      expect(
+        afterIncomplete.staleSpans.some((span) => span.fromOrdinal === 10),
+      ).toBe(false);
+      // And the log says so. A re-ask logged against an answer that seated
+      // nothing reads, to whoever is debugging this next, as a body corrected
+      // when none was ever drawn.
+      expect(info).not.toHaveBeenCalledWith(
+        expect.stringContaining("predates a dropped write"),
+        expect.anything(),
+      );
+
+      // The row becomes servable again and is re-requested.
+      harness.callbacks().onIndexChanged(streamingRowEcho(2));
+      const retryRequestId = harness.lastRangeRequestId();
+      expect(retryRequestId).not.toBe(firstRequestId);
+
+      // A further echo WHILE that retry is in flight, with the turn still
+      // unheld - the interleaving the whole mark exists for. An obligation
+      // keyed on the echoed ordinal was already spent by the answer that seated
+      // nothing, so the retry's own staleness went unnoticed and its body
+      // seated for good.
+      harness.callbacks().onIndexChanged(streamingRowEcho(3));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: retryRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("stale", 2)],
+        }),
+      );
+
+      // Sliced before that second echo, so it seats provisionally and is asked
+      // for again rather than standing as the turn's body.
+      const thirdRequestId = harness.lastRangeRequestId();
+      expect(thirdRequestId).not.toBe(retryRequestId);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: thirdRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("current", 3)],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("current");
+      const settled = harness.handle.store.getState().transcriptWindow;
+      expect(settled.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      info.mockRestore();
+      harness.handle.dispose();
+    }
+  });
+
+  it("a pre-echo answer carrying no record of the streaming turn is left alone", () => {
+    // The bound on the catch-up. A dropped write stales the turn it was written
+    // for and nothing else, so scrollback fetched in the same window is current
+    // - re-asking for it would spend a round trip per echo on rows the write
+    // could not have touched.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 4, toOrdinal: 5 });
+      const scrollbackRequestId = harness.lastRangeRequestId();
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: scrollbackRequestId,
+          epoch: 1,
+          fromOrdinal: 4,
+          rowIds: ["row-4"],
+          messages: [userMessage("m-4", 4)],
+        }),
+      );
+
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 4)).toBe(true);
+      expect(harness.rangeRequests).toHaveLength(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("recovers a write that a delta overtook the catch-up answer for", () => {
+    // The provisionally seated body is TORN, and that is the whole difficulty.
+    // The catch-up carries the write the client dropped; the deltas that landed
+    // on the provisional body while the catch-up flew carry writes the catch-up
+    // predates. Neither copy is a superset of the other, so a rule that just
+    // picks one loses text either way - the answer is to notice that the seat
+    // was overtaken and ask once more, for a slice taken after both writes.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+
+      // Dropped: nothing holds the turn, so this write has nowhere to land.
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      // Sliced before that write, so it seats provisionally and owes a catch-up.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before", 1)],
+        }),
+      );
+      const catchUpRequestId = harness.lastRangeRequestId();
+      expect(catchUpRequestId).not.toBe(firstRequestId);
+
+      // This one is NOT dropped - the provisional body absorbs it - but it
+      // overtakes the catch-up already in flight, so the answer coming back
+      // cannot contain it.
+      streamTextDelta(harness, " later");
+      expect(publishedTurnText(harness)).toBe("before later");
+      harness.callbacks().onIndexChanged(streamingRowEcho(2));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed", 2)],
+        }),
+      );
+
+      // Equal versions, and the client's counter is its own: it counts the
+      // writes this client applied, from a base already behind the host, so a
+      // tie proves nothing. Certifying the answer here on its request's mark
+      // published `before later` and left ` missed` gone for the turn.
+      const secondCatchUpId = harness.lastRangeRequestId();
+      expect(secondCatchUpId).not.toBe(catchUpRequestId);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: secondCatchUpId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed later", 3)],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("before missed later");
+      // Settled: a slice nothing overtook seats fresh and is asked for no more.
+      const settled = harness.handle.store.getState().transcriptWindow;
+      expect(settled.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+      expect(harness.lastRangeRequestId()).toBe(secondCatchUpId);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("seats a catch-up over a provisional body that carries no version", () => {
+    // `blocksVersion` is optional on the wire and delta writers preserve its
+    // absence, so the catch-up and the body it repairs can both arrive without
+    // one. The held-copy preference cannot prove the provisional body older and
+    // used to keep it - pinning the incomplete text with no gap left to
+    // re-request. A body the client itself flagged as short of the host has no
+    // claim on the stream's authority, so the serve seats.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [versionlessTurnBody("before")],
+        }),
+      );
+      const catchUpRequestId = harness.lastRangeRequestId();
+      expect(catchUpRequestId).not.toBe(firstRequestId);
+
+      // Nothing overtakes this one, so it is the whole truth as of its slice.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [versionlessTurnBody("before missed")],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("before missed");
+      // And it is final: an install discharges the obligation, so no third
+      // request goes out.
+      expect(harness.lastRangeRequestId()).toBe(catchUpRequestId);
+      const settled = harness.handle.store.getState().transcriptWindow;
+      expect(settled.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("leaves a COMPLETE row alone when the same answer withholds the streaming turn", () => {
+    // A mixed answer: one settled row served whole, the active turn's row listed
+    // incomplete. The fold withholds the whole turn's records, so nothing of it
+    // seats - but the raw answer still carries them, and reading the raw records
+    // retired every ordinal the answer served. That threw away the settled row's
+    // valid hydration and re-asked for it, to chase a body the fold had already
+    // refused. What seats is what decides.
+    const info = vi.spyOn(appLogger, "info").mockImplementation(() => {});
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 9, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      const mixed = rangeFrame({
+        requestId,
+        epoch: 1,
+        fromOrdinal: 9,
+        rowIds: [assistantRowId("t-8"), assistantRowId("t-9")],
+        messages: [
+          assistantWithBlocks("assistant-9", 9, "t-8", [
+            textBlock("b-8", "settled"),
+          ]),
+          turnBodyAt("withheld", 1),
+        ],
+      });
+      harness.callbacks().onRange({
+        ...mixed,
+        range: { ...mixed.range, incompleteRowIds: [assistantRowId("t-9")] },
+      });
+
+      // The settled row seated and stays FRESH: no catch-up was owed for it,
+      // and none of the streaming turn seated to owe one.
+      const seated = harness.handle.store.getState().transcriptWindow;
+      expect(seated.spans.some((span) => span.fromOrdinal === 9)).toBe(true);
+      expect(seated.staleSpans.some((span) => span.fromOrdinal === 9)).toBe(
+        false,
+      );
+      // And nothing claims a catch-up it did not perform.
+      expect(info).not.toHaveBeenCalledWith(
+        expect.stringContaining("predates a dropped write"),
+        expect.anything(),
+      );
+      // Nothing is re-requested at all. The withheld row is marked unavailable,
+      // which the planner skips, and the settled row is hydrated - so the
+      // correct amount of traffic here is none. Retiring the served ordinals
+      // asked for the settled row again, wire-inclusive [9,9], purely to
+      // re-fetch a body that had not changed.
+      expect(harness.lastRangeRequestId()).toBe(requestId);
+    } finally {
+      info.mockRestore();
+      harness.handle.dispose();
+    }
+  });
+
+  it("stops asking once the stream has overtaken every catch-up", () => {
+    // The bound. Each catch-up is answered with a slice the next delta
+    // immediately overtakes, which is a live possibility on a fast turn. Asking
+    // again is right up to a point; a request per round trip for the length of
+    // the turn is not, so the client keeps what it has and lets the completion
+    // rebase - which re-seats the turn from the host - finish the repair.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      let requestId = harness.lastRangeRequestId();
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      const requestIds = new Set<string>([requestId]);
+      for (let round = 1; round <= 8; round += 1) {
+        harness.callbacks().onRange(
+          rangeFrame({
+            requestId,
+            epoch: 1,
+            fromOrdinal: 10,
+            rowIds: [assistantRowId("t-9")],
+            messages: [turnBodyAt(`slice-${round}`, round)],
+          }),
+        );
+        const next = harness.lastRangeRequestId();
+        if (next === requestId) break;
+        requestId = next;
+        requestIds.add(next);
+        // Every catch-up is overtaken the moment it is asked for.
+        streamTextDelta(harness, `-${round}`);
+        harness.callbacks().onIndexChanged(streamingRowEcho(round + 1));
+      }
+
+      // The first request plus MAX_PROVISIONAL_CATCH_UP_ROUNDS catch-ups, and
+      // then it stops - not one per delta for the rest of the turn.
+      expect(requestIds.size).toBe(MAX_PROVISIONAL_CATCH_UP_ROUNDS + 1);
+      const settled = harness.handle.store.getState().transcriptWindow;
+      expect(settled.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("charges the repair budget for catch-ups SENT, not for demotions the dedup slot suppresses", () => {
+    // Several requests can be outstanding for the same row at once - ordinary
+    // scrolling does it - and every one of their answers predates the write. The
+    // first demotion asks for a re-plan and gets nothing, because the dedup slot
+    // still names a request covering those rows; so do the second and third.
+    // Charging the budget at the demotion spent all three rounds on suppressed
+    // re-plans and then announced that the client was giving up, having asked
+    // the host exactly nothing. The budget is for requests that reach the wire.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      // Seven outstanding requests, under the ledger's cap of eight; four of
+      // them for row 10, and the last one owns the dedup slot.
+      const rowTenRequestIds: string[] = [];
+      for (const ordinal of [10, 12, 10, 13, 10, 14, 10]) {
+        harness.handle.store.getState().reportVisibleTranscriptRange({
+          fromOrdinal: ordinal,
+          toOrdinal: ordinal + 1,
+        });
+        if (ordinal === 10) rowTenRequestIds.push(harness.lastRangeRequestId());
+      }
+      expect(harness.rangeRequests).toHaveLength(7);
+      expect(rowTenRequestIds).toHaveLength(4);
+
+      // One write, dropped while the turn is unheld. The stream then goes
+      // quiet, so a single corrective request would be answered with the truth.
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      // All four row-10 answers were sliced before that write. Oldest first.
+      for (const requestId of rowTenRequestIds) {
+        harness.callbacks().onRange(
+          rangeFrame({
+            requestId,
+            epoch: 1,
+            fromOrdinal: 10,
+            rowIds: [assistantRowId("t-9")],
+            messages: [turnBodyAt("before", 1)],
+          }),
+        );
+      }
+
+      // Exactly one of those four demotions could actually send, and it did.
+      expect(harness.rangeRequests).toHaveLength(8);
+      const catchUpRequestId = harness.lastRangeRequestId();
+      expect(rowTenRequestIds).not.toContain(catchUpRequestId);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed", 2)],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("before missed");
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("one answer installing a body does not discharge what another still owes", () => {
+    // Two answers for the same row are in flight, both sliced before a write
+    // that overtakes them. The first installs its body; a rule that asked "has
+    // the held body changed since the last seat" then read the second answer as
+    // current, because the first had just reset that baseline - and discharged
+    // the obligation with the write still missing. Each request carries its own
+    // mark, so what one answer does to the body cannot answer for another.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before", 1)],
+        }),
+      );
+      const b = harness.lastRangeRequestId();
+
+      // Scroll away and back: a second request for the same row, which takes
+      // the dedup slot and will suppress the re-plan B's own answer asks for.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 13 });
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const d = harness.lastRangeRequestId();
+      expect(d).not.toBe(b);
+
+      // A write overtakes both of them.
+      streamTextDelta(harness, " later");
+      harness.callbacks().onIndexChanged(streamingRowEcho(2));
+
+      const sentBefore = harness.rangeRequests.length;
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: b,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed", 2)],
+        }),
+      );
+      // B's demotion is suppressed by D's outstanding request, so nothing is
+      // sent and nothing is charged.
+      expect(harness.rangeRequests).toHaveLength(sentBefore);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: d,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed", 2)],
+        }),
+      );
+      // D predates ` later` just as B did, so it owes the repair it cannot make.
+      const repairId = harness.lastRangeRequestId();
+      expect(repairId).not.toBe(d);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: repairId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed later", 3)],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("before missed later");
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("recovers an overtaking write when NO body carries a version", () => {
+    // The two supported shapes at once: the host omits `blocksVersion`, and a
+    // write overtakes the catch-up. A change detector reading that optional
+    // field saw every copy as version zero, so the overtaking write was
+    // invisible and the already-rendered text was overwritten and forgotten.
+    // The request's own mark needs no field on the record.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [versionlessTurnBody("before")],
+        }),
+      );
+      const catchUpRequestId = harness.lastRangeRequestId();
+
+      streamTextDelta(harness, " later");
+      expect(publishedTurnText(harness)).toBe("before later");
+      harness.callbacks().onIndexChanged(streamingRowEcho(2));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [versionlessTurnBody("before missed")],
+        }),
+      );
+      const secondCatchUpId = harness.lastRangeRequestId();
+      expect(secondCatchUpId).not.toBe(catchUpRequestId);
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: secondCatchUpId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [versionlessTurnBody("before missed later")],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("before missed later");
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a late answer from the exhausted episode does not restart the budget", () => {
+    // The cap has to be a per-turn total, so the record of having spent it
+    // outlives the episode. Forgetting it at the cap let an answer that had been
+    // in flight the whole time arrive afterwards, find a fresh budget, and start
+    // the rounds over - with no new write, eviction, boundary or turn change to
+    // justify it.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const stragglerId = harness.lastRangeRequestId();
+      // A second request for the same row, which is the one the episode below
+      // runs on; the first is left in flight throughout.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 13 });
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      let requestId = harness.lastRangeRequestId();
+
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      // Burn the budget: every catch-up is overtaken as soon as it is sent.
+      for (let round = 1; round <= 6; round += 1) {
+        harness.callbacks().onRange(
+          rangeFrame({
+            requestId,
+            epoch: 1,
+            fromOrdinal: 10,
+            rowIds: [assistantRowId("t-9")],
+            messages: [turnBodyAt(`slice-${round}`, round)],
+          }),
+        );
+        const next = harness.lastRangeRequestId();
+        if (next === requestId) break;
+        requestId = next;
+        streamTextDelta(harness, `-${round}`);
+        harness.callbacks().onIndexChanged(streamingRowEcho(round + 1));
+      }
+      const exhausted = harness.rangeRequests.length;
+
+      // The straggler: still eligible, still older than the write, arriving
+      // after the client already gave up.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: stragglerId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("straggler", 1)],
+        }),
+      );
+
+      expect(harness.rangeRequests).toHaveLength(exhausted);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a NEW turn gets its own repair budget", () => {
+    // The exhaustion is the previous turn's, and it must not be charged to the
+    // next one. `turnId` guarded which body the obligation was about but not the
+    // rounds beside it, so a turn raised before any authority movement inherited
+    // an exhausted budget and gave up before asking even once.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      let requestId = harness.lastRangeRequestId();
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      // Spend the whole budget WITHOUT tripping the cap: three catch-ups are
+      // sent, each overtaken as soon as it goes out, and the third is left
+      // outstanding. That leaves the previous turn's record at its limit and
+      // still live, which is the state the next turn must not inherit.
+      for (
+        let round = 1;
+        round <= MAX_PROVISIONAL_CATCH_UP_ROUNDS;
+        round += 1
+      ) {
+        harness.callbacks().onRange(
+          rangeFrame({
+            requestId,
+            epoch: 1,
+            fromOrdinal: 10,
+            rowIds: [assistantRowId("t-9")],
+            messages: [turnBodyAt(`slice-${round}`, round)],
+          }),
+        );
+        const next = harness.lastRangeRequestId();
+        expect(next).not.toBe(requestId);
+        requestId = next;
+        streamTextDelta(harness, `-${round}`);
+        harness.callbacks().onIndexChanged(streamingRowEcho(round + 1));
+      }
+      const afterExhaustion = harness.rangeRequests.length;
+
+      // The turn completes and the next one starts, with no authority boundary
+      // between them - so nothing has re-seated the window and the spent budget
+      // is still the only record of the previous episode.
+      completeActiveTurn(harness.callbacks());
+      raiseActiveTurn(harness.callbacks(), "t-10");
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 13 });
+      const nextTurnRequestId = harness.lastRangeRequestId();
+      // The write reaches the client only as an index echo, with nothing of the
+      // new turn held - so it is dropped, exactly as the first turn's was.
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 5,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 12,
+                  entry: {
+                    rowId: assistantRowId("t-10"),
+                    createdAt: 12,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d12-echo",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: nextTurnRequestId,
+          epoch: 1,
+          fromOrdinal: 12,
+          rowIds: [assistantRowId("t-10")],
+          messages: [
+            assistantWithBlocks("assistant-12", 12, "t-10", [
+              textBlock("b-12", "stale"),
+            ]),
+          ],
+        }),
+      );
+
+      // The new turn asks for its first catch-up rather than inheriting a spent
+      // budget and giving up.
+      expect(harness.rangeRequests.length).toBeGreaterThan(afterExhaustion + 1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not apply a buffered write twice onto a catch-up that already carries it", () => {
+    // The gap between a delta ARRIVING and a delta being APPLIED. The stream
+    // coordinator coalesces, so a frame sits in the buffer for a tick; a range
+    // answer landing inside that tick folds into a window that has not absorbed
+    // it yet. Everywhere else that is harmless, because the active arm keeps the
+    // held copy and the buffered write lands on it a moment later - but the
+    // repair path hands the served body the seat, and the host may have sliced
+    // that body AFTER the very write still sitting in the buffer. Applying it
+    // then writes the same text a second time.
+    const harness = createDeferredFlushHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+
+      streamTextDelta(harness, " missed");
+      harness.flushDeltas();
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before", 1)],
+        }),
+      );
+      const catchUpRequestId = harness.lastRangeRequestId();
+      expect(catchUpRequestId).not.toBe(firstRequestId);
+
+      // Received but deliberately NOT flushed: this write is in the buffer for
+      // the rest of the sequence, and the host has it.
+      streamTextDelta(harness, " later");
+      harness.callbacks().onIndexChanged(streamingRowEcho(2));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed", 2)],
+        }),
+      );
+      const repairId = harness.lastRangeRequestId();
+      expect(repairId).not.toBe(catchUpRequestId);
+
+      // The host slices this one after ` later`, so the served body already
+      // contains the write the client is still holding in its buffer.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: repairId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed later", 3)],
+        }),
+      );
+
+      // The buffer's tick finally runs. Whatever it holds must not re-append
+      // text the seated body already carries.
+      harness.flushDeltas();
+
+      expect(publishedTurnText(harness)).toBe("before missed later");
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("scrolling through history does not spend the streaming row's repair budget", () => {
+    // The reader scrolls away between a demotion and its re-plan, so the request
+    // the planner mints next is for scrollback - which owes nothing and repairs
+    // nothing. Charging the budget for those spent it on history: by the time
+    // the reader came back to the streaming row there were no rounds left, and a
+    // write that overtook its answer went unrepaired. Only a request covering
+    // the rows the demotion opened is a repair.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      // Three row-10 requests outstanding, each followed by a history request
+      // that takes the dedup slot.
+      const rowTenRequestIds: string[] = [];
+      let historyOrdinal = 14;
+      for (let pass = 0; pass < 3; pass += 1) {
+        harness.handle.store
+          .getState()
+          .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+        rowTenRequestIds.push(harness.lastRangeRequestId());
+        historyOrdinal += 1;
+        harness.handle.store.getState().reportVisibleTranscriptRange({
+          fromOrdinal: historyOrdinal,
+          toOrdinal: historyOrdinal + 1,
+        });
+      }
+
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      // Each row-10 answer demotes while the reader is in history, so its
+      // re-plan is deduplicated and the NEXT request minted is scrollback.
+      for (const requestId of rowTenRequestIds) {
+        harness.callbacks().onRange(
+          rangeFrame({
+            requestId,
+            epoch: 1,
+            fromOrdinal: 10,
+            rowIds: [assistantRowId("t-9")],
+            messages: [turnBodyAt("before", 1)],
+          }),
+        );
+        historyOrdinal += 1;
+        harness.handle.store.getState().reportVisibleTranscriptRange({
+          fromOrdinal: historyOrdinal,
+          toOrdinal: historyOrdinal + 1,
+        });
+      }
+
+      // Back to the streaming row, where a write overtakes the answer.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const returnRequestId = harness.lastRangeRequestId();
+      streamTextDelta(harness, " later");
+      harness.callbacks().onIndexChanged(streamingRowEcho(2));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: returnRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed", 2)],
+        }),
+      );
+
+      // Rounds are still available, so the repair goes out and recovers.
+      const repairId = harness.lastRangeRequestId();
+      expect(repairId).not.toBe(returnRequestId);
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: repairId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed later", 3)],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("before missed later");
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("protects the drawn body from an old answer once no repair can follow", () => {
+    // Forfeiting the held copy's authority buys a repair: the served body may be
+    // older than what is drawn, and the catch-up afterwards is what makes that
+    // acceptable. Past the cap no catch-up comes, so an answer still in flight
+    // from before the write would replace the best body the client has with a
+    // worse one and nothing would put it back.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const stragglerId = harness.lastRangeRequestId();
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 13 });
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      let requestId = harness.lastRangeRequestId();
+
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      // Every catch-up is overtaken, so the budget runs out. Versionless
+      // throughout: nothing on the records can order these copies.
+      for (let round = 1; round <= 6; round += 1) {
+        harness.callbacks().onRange(
+          rangeFrame({
+            requestId,
+            epoch: 1,
+            fromOrdinal: 10,
+            rowIds: [assistantRowId("t-9")],
+            messages: [versionlessTurnBody(`slice-${round}`)],
+          }),
+        );
+        const next = harness.lastRangeRequestId();
+        if (next === requestId) break;
+        requestId = next;
+        streamTextDelta(harness, ` later-${round}`);
+        harness.callbacks().onIndexChanged(streamingRowEcho(round + 1));
+      }
+      const exhaustedText = publishedTurnText(harness);
+      const exhaustedRequests = harness.rangeRequests.length;
+
+      // The straggler, sliced before any of it.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: stragglerId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [versionlessTurnBody("before")],
+        }),
+      );
+
+      // The drawn body is not rolled backward, and nothing restarts the rounds.
+      expect(publishedTurnText(harness)).toBe(exhaustedText);
+      expect(harness.rangeRequests).toHaveLength(exhaustedRequests);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("an event the reducer rejects for another turn is not a write to this one", () => {
+    // The mark is evidence about the STREAMING turn's body. A late
+    // `usage.updated` from a previous turn is rejected by the reducer and
+    // changes nothing, so counting it as a write retired a catch-up answer that
+    // was current and spent a round asking the host to re-send an unchanged
+    // body.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before", 1)],
+        }),
+      );
+      const catchUpRequestId = harness.lastRangeRequestId();
+      expect(catchUpRequestId).not.toBe(firstRequestId);
+
+      // Valid frame, previous turn, rejected by the reducer.
+      harness.callbacks().onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "usage.updated",
+          blockId: "usage-t-8",
+          turnId: "t-8",
+          timestamp: 6,
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        },
+      });
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed", 2)],
+        }),
+      );
+
+      // The stream was quiet, so this answer is final: no third request.
+      expect(publishedTurnText(harness)).toBe("before missed");
+      expect(harness.lastRangeRequestId()).toBe(catchUpRequestId);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("installs the LAST authorised repair's own answer", () => {
+    // The boundary between "may I authorise another repair" and "is this answer
+    // the repair I authorised". Rounds are charged when a request is sent, so by
+    // the time the third one's answer arrives the budget already reads as spent.
+    // Asking the budget question there rejected the very body that repair went
+    // out to fetch and certified the torn copy in its place - the whole episode
+    // spending three round trips and then discarding the answer that closed it.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+      streamTextDelta(harness, " missed");
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      // A seats `before` and asks for B.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [versionlessTurnBody("before")],
+        }),
+      );
+
+      // Two overtaken repairs, which spend the first two rounds.
+      const overtaken = [
+        { delta: " later-1", slice: "before missed" },
+        { delta: " later-2", slice: "before missed later-1" },
+      ];
+      let requestId = harness.lastRangeRequestId();
+      overtaken.forEach((step, index) => {
+        streamTextDelta(harness, step.delta);
+        harness.callbacks().onIndexChanged(streamingRowEcho(index + 2));
+        harness.callbacks().onRange(
+          rangeFrame({
+            requestId,
+            epoch: 1,
+            fromOrdinal: 10,
+            rowIds: [assistantRowId("t-9")],
+            messages: [versionlessTurnBody(step.slice)],
+          }),
+        );
+        const next = harness.lastRangeRequestId();
+        expect(next).not.toBe(requestId);
+        requestId = next;
+      });
+
+      // The third and last permitted repair, asked and answered across a quiet
+      // stream, carrying everything.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [versionlessTurnBody("before missed later-1 later-2")],
+        }),
+      );
+
+      expect(publishedTurnText(harness)).toBe("before missed later-1 later-2");
+      // And it settled: no fourth request, and the row is fresh.
+      expect(harness.lastRangeRequestId()).toBe(requestId);
+      const settled = harness.handle.store.getState().transcriptWindow;
+      expect(settled.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("reconciles SEVERAL writes buffered across a whole repair episode", () => {
+    // The flush seam again, widened: two writes sit in the coordinator's buffer
+    // across an entire repair round rather than one across a single seat. The
+    // drain has to apply both before the fold, the version comparison has to see
+    // the body they produced, and the episode still has to converge on the full
+    // text - not on the catch-up's older slice, and not on it twice.
+    const harness = createDeferredFlushHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+
+      // Dropped: flushed while nothing holds the turn.
+      streamTextDelta(harness, " missed");
+      harness.flushDeltas();
+      harness.callbacks().onIndexChanged(streamingRowEcho(1));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before", 1)],
+        }),
+      );
+      const catchUpRequestId = harness.lastRangeRequestId();
+      expect(catchUpRequestId).not.toBe(firstRequestId);
+
+      // Two writes the client has but has not applied, spanning the catch-up.
+      streamTextDelta(harness, " later-1");
+      harness.callbacks().onIndexChanged(streamingRowEcho(2));
+      streamTextDelta(harness, " later-2");
+      harness.callbacks().onIndexChanged(streamingRowEcho(3));
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: catchUpRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed", 2)],
+        }),
+      );
+
+      // The drain applied both buffered writes before the seat, so the drawn
+      // body carries them and the older slice does not displace it.
+      expect(publishedTurnText(harness)).toBe("before later-1 later-2");
+      const repairId = harness.lastRangeRequestId();
+      expect(repairId).not.toBe(catchUpRequestId);
+
+      // The quiet repair carries everything the host has.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: repairId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [turnBodyAt("before missed later-1 later-2", 4)],
+        }),
+      );
+      harness.flushDeltas();
+
+      expect(publishedTurnText(harness)).toBe("before missed later-1 later-2");
+      expect(harness.lastRangeRequestId()).toBe(repairId);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not roll the drawn body back for an answer that can queue no repair", () => {
+    // A STEER row of the streaming turn carries the whole turn's records - its
+    // projection sources the turn's messages - so an answer serving only that
+    // row passes the records test. But it is not one of the turn's ASSISTANT
+    // rows, so it yields no ordinal to retire: the demotion never happens, no
+    // repair is queued, and nothing is logged. Forfeiting the held copy's
+    // authority there installed an older served body over the drawn one with no
+    // gap left to re-request it - silently, and only for versionless bodies.
+    // No repair possible means no forfeit.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      harness.callbacks().onSkeletonChunk(splitTurnSkeleton());
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const firstRequestId = harness.lastRangeRequestId();
+      streamTextDelta(harness, " missed");
+      // Named with the SLICE's row id: a bare `assistant:` id would contradict
+      // this skeleton and void the index instead of echoing.
       harness.callbacks().onIndexChanged(
         indexChangedFrame({
           epoch: 1,
@@ -1797,11 +3418,11 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
                 {
                   ordinal: 10,
                   entry: {
-                    rowId: assistantRowId("t-9"),
+                    rowId: assistantSliceRowId("t-9", 0, true),
                     createdAt: 10,
                     role: "assistant",
                     byteLength: 4096,
-                    bodyDigest: "d10-cold",
+                    bodyDigest: "d10-echo",
                   },
                 },
               ],
@@ -1810,6 +3431,64 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
         }),
       );
 
+      // The turn is unsound and its body is drawn from the stream.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: firstRequestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantSliceRowId("t-9", 0, true)],
+          messages: [versionlessTurnBody("before")],
+        }),
+      );
+      streamTextDelta(harness, " later");
+      const drawn = publishedTurnText(harness);
+      expect(drawn).toBe("before later");
+      const requestsBefore = harness.rangeRequests.length;
+
+      // An answer for the steer row alone, carrying an older copy of the turn.
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: harness.lastRangeRequestId(),
+          epoch: 1,
+          fromOrdinal: 11,
+          rowIds: ["steer:q-9"],
+          messages: [versionlessTurnBody("before missed")],
+        }),
+      );
+
+      // The drawn body survives. Rolling it back would be a regression against
+      // base, and the branch that did it queued nothing to put it right.
+      expect(publishedTurnText(harness)).toBe(drawn);
+      // The steer answer creates no obligation of its own: the only request
+      // minted after it is the re-ask for ordinal 10, the turn's own row, whose
+      // repair was owed before this answer and which this answer did not serve.
+      expect(harness.rangeRequests.length).toBe(requestsBefore + 1);
+      const reAsk = harness.rangeRequests.at(-1);
+      expect(reAsk?.fromOrdinal).toBe(10);
+      expect(reAsk?.toOrdinal).toBe(10);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a streaming echo against a HELD turn owes no refresh", () => {
+    // The refresh exists only for the unheld seat. When the tail already
+    // holds the turn, the deltas rewrote that copy in place, so the answer is
+    // current and seats once with nothing further asked.
+    const harness = createWindowedHarness();
+    try {
+      seatedTailHoldingTurn(harness, "t-9");
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+
+      for (let revision = 1; revision <= 3; revision += 1) {
+        harness.callbacks().onIndexChanged(streamingRowEcho(revision));
+      }
       harness.callbacks().onRange(
         rangeFrame({
           requestId,
@@ -1821,9 +3500,96 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
       );
 
       const window = harness.handle.store.getState().transcriptWindow;
-      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
-      expect(harness.rangeRequests.length).toBeGreaterThan(1);
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+      expect(harness.rangeRequests).toHaveLength(1);
     } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("logs every discarded range answer", () => {
+    // A discarded answer has no other trace on screen or in the desktop log;
+    // the placeholder it would have filled looks like one nothing has asked
+    // for yet. The warning is the only way the loop above is diagnosable
+    // from outside.
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+
+      // A different turn's row: not an echo, so the in-flight request is
+      // superseded and its answer must be discarded - and logged.
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("other-turn"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-other",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("other-turn")],
+          messages: [assistantWithBlocks("assistant-10", 10, "other-turn", [])],
+        }),
+      );
+
+      expect(warn).toHaveBeenCalledWith(
+        "[transcript] discarded a range answer as stale",
+        expect.objectContaining({
+          chatId: CHAT_ID,
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rows: 1,
+          awaited: true,
+        }),
+      );
+
+      // An answer framed against an epoch this window has left never seats
+      // either, and is logged under its own reason.
+      warn.mockClear();
+      const lateRequestId = harness.lastRangeRequestId();
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId: lateRequestId,
+          epoch: 0,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("other-turn")],
+          messages: [assistantWithBlocks("assistant-10", 10, "other-turn", [])],
+        }),
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "[transcript] discarded a range answer unseated",
+        expect.objectContaining({ requestId: lateRequestId, windowEpoch: 1 }),
+      );
+    } finally {
+      warn.mockRestore();
       harness.handle.dispose();
     }
   });
