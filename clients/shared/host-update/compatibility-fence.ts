@@ -135,13 +135,40 @@ export const LOCK_AWARE_DESKTOP_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
  * Minimum HOST version whose `pid.json` carries `processStartIdentity`, read
  * by Ticket 07's verify-leg fallback (Q1).
  *
- * A third NAME rather than a reuse of `LOCK_AWARE_CLI_FLOOR`, though the
- * number is the same one: that floor is about a CLI, this is about the host
- * BINARY, and the host ships from a different repository. The day those
- * numbers diverge, a host predicate reading the CLI floor would be wrong
- * silently — and a reader who met `LOCK_AWARE_CLI_FLOOR` inside a verify leg
- * comparing a host version would reasonably think it a bug. Same number, three
- * actors, one place to change it.
+ * A third NAME rather than a reuse of `LOCK_AWARE_CLI_FLOOR`: that floor is
+ * about a CLI, this is about the host BINARY, and the host ships from a
+ * different repository. A reader who met `LOCK_AWARE_CLI_FLOOR` inside a
+ * verify leg comparing a host version would reasonably think it a bug.
+ *
+ * ## ⚠️ THE VALUE IS HELD — this number is not yet derived
+ *
+ * It currently equals `FIRST_LOCK_AWARE_RELEASE` because it was first derived
+ * from the lock module's presence at each tag. That floors LOCK-AWARENESS, a
+ * different property of a different code path, and the coincidence of a
+ * plausible number with wrong reasoning is worse than a wrong number: the next
+ * person re-deriving inherits the error.
+ *
+ * What is actually known here (the host's writer is not in this repository):
+ * the three `format*ProcessStartIdentity` functions first exist at
+ * `host-v1.1.9`, and **Linux has a failure mode the other platforms do not**,
+ * from that same tag — `formatLinuxProcessStartIdentity` has always required a
+ * boot id (`/proc/sys/kernel/random/boot_id`) and returns `null` for an
+ * unreadable one, where macOS needs only `ps -o lstart=`.
+ *
+ * That matters beyond the number. The Linux lane saw 1.2.0 refused
+ * `pid-start-stamp-missing` even though the formatter is byte-identical at
+ * 1.1.9 and 1.2.0, so either the host's writer lagged on Linux (a version
+ * story, floor in `(1.2.0, 1.3.0-rc.1]`) or the boot id is unreadable in that
+ * environment — in which case **no floor value fixes it**, because a host
+ * there never writes a stamp at any version and a target-version gate never
+ * takes the degraded arm for it.
+ *
+ * Err HIGH while it is unresolved: too high only degrades a stamped target to
+ * version-only verification and records that it did; too low reproduces Q1 as
+ * a hard failure on every rollback into the band. If macOS and Linux differ,
+ * this must become the max across platforms or platform-aware — and it should
+ * not keep a name implying otherwise. Derivation and the deciding readings:
+ * the plan's release checklist.
  */
 export const HOST_START_STAMP_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
 
