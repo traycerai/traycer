@@ -1,3 +1,4 @@
+import { baseDispatchAckReason } from "@traycer/protocol/config/host-update-ack-reason";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   runHostUpdate,
@@ -117,8 +118,20 @@ function humanSummary(outcome: HostUpdateRunOutcome): string {
     return `host already at ${legacy.version} (no-op); the running host is ${outcome.foreignRuntimeVersion}, not a release build, so nothing was activated`;
   }
   if (outcome.releasedReason !== null) {
-    if (outcome.releasedReason === "nothing-to-do") {
-      return `host already at ${legacy.version} (no-op)`;
+    // Compared on the BASE reason (Q26, third site). The release reason may
+    // arrive as `<base>-stale-attempt-closed` when the decline also closed an
+    // interrupted attempt it would otherwise have stranded; the base decides
+    // what the operator is told, the suffix adds one clause. Without the
+    // strip, a successful no-op run exits 0 while printing "did not claim an
+    // attempt (nothing-to-do-stale-attempt-closed)" - a sentence that reads
+    // as a failure. The two `update-run.ts` arms and the GUI's arm set
+    // already strip; this was the last `===` against the raw string.
+    const base = baseDispatchAckReason(outcome.releasedReason);
+    const closedStale = base !== outcome.releasedReason;
+    if (base === "nothing-to-do") {
+      return closedStale
+        ? `host already at ${legacy.version} (no-op); an interrupted update record was also cleaned up`
+        : `host already at ${legacy.version} (no-op)`;
     }
     // The RUNNING host, never the installed version (Q5 defect 3). "host stays
     // at 1.4.3" named the bytes on disk and read as an assurance about the

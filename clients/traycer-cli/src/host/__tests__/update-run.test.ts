@@ -5841,6 +5841,49 @@ describe("acceptance: cells with no legacy ancestor", () => {
     });
   });
 
+  it("Q26: the shell's summary for a no-op that also closed a stale attempt is still the no-op line (third site, cold review C)", async () => {
+    // THE THIRD Q26 SITE. The two `update-run.ts` arms and the GUI's arm set
+    // were fixed; `commands/host-update.ts`'s `humanSummary` still compared
+    // `releasedReason === "nothing-to-do"` on the raw string. Measured before
+    // the fix, this exact world printed
+    //   host update did not claim an attempt (nothing-to-do-stale-attempt-closed); the running host is 3.0.0
+    // with exit code 0 - a successful no-op that reads as a failure.
+    //
+    // Undefended until now: the two rows above prove the reason and the marker
+    // through `runHostUpdate`, and `:852` says why that cannot pin what the
+    // operator reads. This row goes through `buildHostUpdateCommand`.
+    // Falsification: revert `humanSummary` to the raw `===` and this reddens
+    // on the sentence alone; every row above stays green.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      versionRequest: null,
+      ackNonce: null,
+      intent: null,
+      expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
+    })(shellContext());
+
+    // The premise: this is the closing path, and it closed.
+    const closed = await requireRecord();
+    expect(closed.attemptId).toBe(crashed.attemptId);
+    expect(closed.execution).toBe("terminal");
+    // The claim: the base reason decides the sentence; the suffix adds one
+    // clause, the same clause the GUI appends for the same fact.
+    expect(result.human).toBe(
+      "host already at 3.0.0 (no-op); an interrupted update record was also cleaned up",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
   // ---- Q5 / Linux E6L: killed after the swap, host never came back ---------
   //
   // The same crash as the pin above, minus the one thing that made that pin
