@@ -259,6 +259,10 @@ interface Recorded {
     message: string;
     fields: Record<string, unknown>;
   }>;
+  readonly loggerInfos: Array<{
+    message: string;
+    fields: Record<string, unknown>;
+  }>;
 }
 
 /**
@@ -325,6 +329,7 @@ function makeRunStubs(
     lastStderrTee: null,
     stderrTees: [],
     loggerErrors: [],
+    loggerInfos: [],
   };
   // The stub implements only the surface `runHostStart` touches; route it
   // to `ChildProcess` through an explicit `unknown` intermediate rather than a
@@ -333,7 +338,9 @@ function makeRunStubs(
   const childAsProcess: ChildProcess = childAsUnknown as ChildProcess;
   const spyLogger: ILogger = {
     debug: () => undefined,
-    info: () => undefined,
+    info: (message, fields) => {
+      recorded.loggerInfos.push({ message, fields: { ...fields } });
+    },
     warn: () => undefined,
     error: (message, fields, _error) => {
       recorded.loggerErrors.push({
@@ -3887,5 +3894,75 @@ describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it i
 
     expect(recorded.exited).toBe(0);
     expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
+  it("Q9: a relaunch admitted BESIDE a durable attempt announces it once, on the injected logger", async () => {
+    // The supervisor now admits an interrupted record whose own next act is
+    // starting the host, and leaves that record untouched for recovery. The
+    // host simply comes up, so without this line nothing distinguishes "the
+    // host is up" from "the host is up and an update is still outstanding" -
+    // and the record is cleared only by the `host update` claim path, which
+    // nobody has run yet.
+    //
+    // The INJECTED logger is half the assertion. Emitting from inside the
+    // admission would have to build a logger of its own, which writes to the
+    // real `~/.traycer/cli/cli.log`; routing the announcement out through a
+    // callback is what keeps it observable here and inside the sandbox.
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const standing = {
+      schemaVersion: 2 as const,
+      attemptId: "attempt-wedged",
+      generation: 1,
+      sequence: 9,
+      trigger: "manual" as const,
+      targetVersion: "2.0.0",
+      phase: "restarting" as const,
+      execution: "active" as const,
+      continuation: "activate" as const,
+      progress: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: null,
+      error: null,
+    };
+    const admitted: Partial<RunHostStartDeps> = {
+      ...withChildExit(deps, child, 0, null),
+      admitHostStartSpawn: async (_options, run, onAdmittedBeside) => {
+        onAdmittedBeside(standing);
+        return { kind: "ran" as const, result: await run() };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          admitted,
+        ),
+      recorded,
+    );
+
+    const announcements = recorded.loggerInfos.filter((entry) =>
+      entry.message.includes("durable update attempt"),
+    );
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]?.fields).toMatchObject({
+      attemptId: "attempt-wedged",
+      phase: "restarting",
+      execution: "active",
+      continuation: "activate",
+      targetVersion: "2.0.0",
+      // Says what the supervisor did NOT do. It holds no capability that
+      // could advance or terminalize a record, and the line must not read as
+      // though the update were handled.
+      leftForRecovery: true,
+    });
+    // The spawn still happened: the announcement is a note beside an admitted
+    // relaunch, never a substitute for one.
+    expect(recorded.spawnCalls.length).toBeGreaterThan(0);
   });
 });

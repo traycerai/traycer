@@ -75,6 +75,7 @@ describe("host-start parent adoption", () => {
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;
     let callbackCalls = 0;
+    let beside = 0;
 
     const outcome = await withUpdateContender(
       {
@@ -104,8 +105,14 @@ describe("host-start parent adoption", () => {
             child.unref();
             return child;
           },
+          () => {
+            beside += 1;
+          },
         );
         expect(admission.kind).toBe("ran");
+        // No durable attempt stands here, so the supervisor has nothing to
+        // announce and must stay silent rather than log an empty line.
+        expect(beside).toBe(0);
         return admission;
       },
     );
@@ -124,6 +131,7 @@ describe("host-start parent adoption", () => {
     expect(first).toEqual({ kind: "absent" });
 
     let callbackCalls = 0;
+    let beside = 0;
     const admission = await defaultRunHostStartDeps.admitHostStartSpawn(
       { environment: "production", cwd: null },
       async () => {
@@ -131,6 +139,9 @@ describe("host-start parent adoption", () => {
         const child = spawn(process.execPath, ["-e", ""]);
         child.unref();
         return child;
+      },
+      () => {
+        beside += 1;
       },
     );
     expect(admission.kind).toBe("ran");

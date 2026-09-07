@@ -81,6 +81,7 @@ import {
 } from "../store/config-store";
 import {
   withSupervisorRelaunchContender,
+  type HostUpdateAttemptRecord,
   type UpdateContenderOutcome,
 } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
@@ -375,6 +376,19 @@ export type SpawnImpl = (
 export type AdmitHostStartSpawn = (
   options: RunHostStartOptions,
   run: () => Promise<ChildProcess>,
+  /**
+   * Called, once, when the admission was granted while a durable attempt
+   * record stood - and never otherwise, so "no record" and "nothing to say"
+   * are the same silence rather than two.
+   *
+   * A parameter rather than a log statement inside the admission, because the
+   * admission runs in `defaultRunDeps` where the only logger available is a
+   * fresh `createCliLogger` writing to the real `~/.traycer/cli/cli.log`.
+   * `runHostStart` holds the INJECTED logger, so emitting from there is what
+   * makes this line both observable in tests and incapable of escaping a test
+   * sandbox - the same hazard `deps.logger`'s own comment names.
+   */
+  onAdmittedBeside: (record: HostUpdateAttemptRecord) => void,
 ) => Promise<UpdateContenderOutcome<ChildProcess>>;
 
 function describeHostStartAdmission(
@@ -498,7 +512,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
 
 const defaultRunDeps: RunHostStartDeps = {
   ...defaultDeps,
-  admitHostStartSpawn: async (options, run) => {
+  admitHostStartSpawn: async (options, run, onAdmittedBeside) => {
     // A service controller that already owns the outer attempt capability
     // publishes a one-shot, target-home-bound adoption proof immediately
     // before asking the OS manager to launch this supervisor. Reacquiring
@@ -572,30 +586,14 @@ const defaultRunDeps: RunHostStartDeps = {
         },
       },
       async (_capability, context) => {
-        // ONE line, and only when a record actually stood. An admitted
-        // relaunch over a durable attempt is invisible otherwise: the host
-        // simply comes up, and the record it came up beside stays open for a
-        // recovery this supervisor is not performing and holds no capability
-        // to perform. Whoever reads this log next has to be able to tell "the
-        // host is up and an update is still outstanding" from "the host is
-        // up"; the phases below are the ones where starting it was the
-        // record's own next act, never a step taken on the record's behalf.
-        const standing = context.activeAttempt;
-        if (standing !== null) {
-          createCliLogger(options.environment).info(
-            "Supervisor relaunch admitted beside a durable update attempt",
-            {
-              environment: options.environment,
-              attemptId: standing.attemptId,
-              phase: standing.phase,
-              execution: standing.execution,
-              continuation: standing.continuation,
-              targetVersion: standing.targetVersion,
-              // The record is untouched and stays that way: recovery is the
-              // `host update` claim path's, never this command's.
-              leftForRecovery: true,
-            },
-          );
+        // Announced only when a record actually stood. An admitted relaunch
+        // over a durable attempt is invisible otherwise: the host simply comes
+        // up, and the record it came up beside stays open for a recovery this
+        // supervisor is not performing and holds no capability to perform.
+        // Whoever reads the log next has to be able to tell "the host is up
+        // and an update is still outstanding" from "the host is up".
+        if (context.activeAttempt !== null) {
+          onAdmittedBeside(context.activeAttempt);
         }
         return run();
       },
@@ -1485,6 +1483,22 @@ export async function runHostStart(
           layer0Status.on("error", () => undefined);
         }
         return spawnedWhileAdmitting.child;
+      }, (standing) => {
+        // The record is left EXACTLY as found - a supervisor holds no
+        // capability that could advance, terminalize or complete one - so this
+        // line is the only trace that the host came up beside an unfinished
+        // update. `leftForRecovery` says so in the payload rather than only in
+        // this comment, because the reader who needs it is a person reading
+        // `cli.log` after an outage, not a person reading this file.
+        logger.info("Host supervisor relaunched beside a durable update attempt", {
+          environment: opts.environment,
+          attemptId: standing.attemptId,
+          phase: standing.phase,
+          execution: standing.execution,
+          continuation: standing.continuation,
+          targetVersion: standing.targetVersion,
+          leftForRecovery: true,
+        });
       });
       if (admission.kind !== "ran") {
         // `withUpdateContender` performs a post-callback ownership check. If
