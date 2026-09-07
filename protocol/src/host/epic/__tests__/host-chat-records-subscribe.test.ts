@@ -472,12 +472,14 @@ describe("chat record head stamp (@1.2 list row / @1.3 frames)", () => {
     ).toBe(true);
   });
 
-  it("requires a lowercase hex digest and a non-negative integer seq", () => {
+  it("requires a lowercase hex digest, a non-negative integer seq and a non-negative integer publishedAt", () => {
     for (const head of [
       { ...HEAD, headSha256: "A".repeat(64) },
       { ...HEAD, headSha256: "a".repeat(63) },
       { ...HEAD, throughRecordSeq: -1 },
       { ...HEAD, throughRecordSeq: 1.5 },
+      { ...HEAD, publishedAt: -1 },
+      { ...HEAD, publishedAt: 1.5 },
     ]) {
       expect(
         chatRecordSummaryStreamV13Schema.safeParse({ ...OWN_ROW, head })

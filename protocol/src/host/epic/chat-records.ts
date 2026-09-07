@@ -362,8 +362,13 @@ export const chatRecordHeadStampSchema = z.object({
   headSha256: sha256HexSchema,
   /** Sequence the head was pinned at. A projection - never an ordering fact. */
   throughRecordSeq: z.number().int().nonnegative(),
-  /** Server-monotonic publication time. The head's ONLY ordering fact. */
-  publishedAt: z.number(),
+  /**
+   * Server-monotonic publication time. The head's ONLY ordering fact. Bounded
+   * like the row's other timestamps: the server stamps and clamps it as an
+   * integer millisecond count, so a negative or fractional value cannot be a
+   * publication time and is refused at the wire.
+   */
+  publishedAt: z.number().int().nonnegative(),
 });
 export type ChatRecordHeadStamp = z.infer<typeof chatRecordHeadStampSchema>;
 

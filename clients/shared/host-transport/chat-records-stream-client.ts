@@ -6,6 +6,7 @@ import {
   type ChatRecordSummaryStreamV13,
   type HostChatRecordsSubscribeServerFrameV13,
 } from "@traycer/protocol/host/epic/chat-records";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -189,7 +190,7 @@ function parseV11Frame(envelope: StreamFrameEnvelope): ParsedFrame {
 }
 
 function parseNegotiatedFrame(
-  negotiated: { readonly major: number; readonly minor: number } | null,
+  negotiated: SchemaVersion | null,
   envelope: StreamFrameEnvelope,
 ): ParsedFrame {
   if (negotiated === null || negotiated.major !== 1) {
