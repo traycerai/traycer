@@ -77,7 +77,7 @@ function applyActions(
 }
 
 describe("sessionImportWizardReducer - selection defaults as groups stream in", () => {
-  it("pre-selects every importable candidate in an arriving group, skipping already-imported and unreadable ones", () => {
+  it("pre-selects every importable candidate in an arriving group, retaining already-imported and unreadable rows", () => {
     const importableA = candidate({ nativeSessionId: "s1" });
     const importableB = candidate({ nativeSessionId: "s2" });
     const alreadyImported = candidate({
@@ -109,10 +109,10 @@ describe("sessionImportWizardReducer - selection defaults as groups stream in", 
         sessionImportSelectionKey("claude", "s2"),
       ]),
     );
-    // The already-imported row is not merely unticked - it never enters the
-    // state at all (older hosts still send it; current ones hide it).
+    // The imported row remains in state so a compatible host can reveal it;
+    // it is simply never selected.
     expect(state.groups[0]?.sessions.map((one) => one.nativeSessionId)).toEqual(
-      ["s1", "s2", "s4"],
+      ["s1", "s2", "s3", "s4"],
     );
   });
 
@@ -154,7 +154,7 @@ describe("sessionImportWizardReducer - selection defaults as groups stream in", 
     );
   });
 
-  it("is a no-op when a group with the same location kind + path arrives twice", () => {
+  it("refreshes a group with the same location while preserving its existing pick", () => {
     const first = candidate({ nativeSessionId: "s1" });
     const firstArrival = group(folderLocation("/repo/a"), [first]);
     const stateAfterFirst = sessionImportWizardReducer(
@@ -165,23 +165,28 @@ describe("sessionImportWizardReducer - selection defaults as groups stream in", 
     // A distinct object, but the same location kind + path - a re-broadcast
     // of a group the reducer has already applied.
     const secondArrival = group(folderLocation("/repo/a"), [
-      candidate({ nativeSessionId: "s1" }),
+      candidate({ nativeSessionId: "s1", title: "Updated title" }),
     ]);
     const stateAfterSecond = sessionImportWizardReducer(stateAfterFirst, {
       kind: "scanGroupArrived",
       group: secondArrival,
     });
 
-    expect(stateAfterSecond).toBe(stateAfterFirst);
+    expect(stateAfterSecond).not.toBe(stateAfterFirst);
     expect(stateAfterSecond.groups).toHaveLength(1);
+    expect(stateAfterSecond.groups[0]?.sessions[0]?.title).toBe(
+      "Updated title",
+    );
+    expect(
+      stateAfterSecond.selected.has(sessionImportSelectionKey("claude", "s1")),
+    ).toBe(true);
   });
 });
 
 describe("buildSessionImportView - disabled rows", () => {
   it("drops an arriving group that holds nothing but already-imported rows", () => {
-    // An older host still sends already_in_traycer rows; a current one hides
-    // them at the scan. Either way the wizard shows only what is new, so a
-    // group with nothing new never appears.
+    // The default view hides already_in_traycer rows. The reducer still keeps
+    // them so a supported host can reveal them with the opt-in control.
     const alreadyImported = candidate({
       nativeSessionId: "s1",
       state: { kind: "already_in_traycer", epicId: "epic-1", chatId: "chat-1" },
@@ -193,8 +198,123 @@ describe("buildSessionImportView - disabled rows", () => {
       },
     ]);
 
-    expect(state.groups).toHaveLength(0);
+    expect(state.groups).toHaveLength(1);
+    const view = buildSessionImportView(state);
+    expect(view.groups).toHaveLength(0);
+    expect(view.hiddenImportedCount).toBe(1);
+  });
+
+  it("reveals imported rows only after support is negotiated and the user opts in", () => {
+    const imported = candidate({
+      nativeSessionId: "imported",
+      state: { kind: "already_in_traycer", epicId: "epic-1", chatId: "chat-1" },
+    });
+    const fresh = candidate({ nativeSessionId: "fresh" });
+    const arrivingGroup = group(folderLocation("/repo/a"), [fresh, imported]);
+
+    let state = applyActions([
+      { kind: "scanGroupArrived", group: arrivingGroup },
+      { kind: "scanImportedSupportChanged", support: "supported" },
+    ]);
+    expect(buildSessionImportView(state).groups[0]?.rows).toHaveLength(1);
+
+    state = sessionImportWizardReducer(state, {
+      kind: "showImportedChanged",
+      showImported: true,
+    });
+    const view = buildSessionImportView(state);
+    expect(view.groups).toHaveLength(1);
+    expect(view.groups[0]?.rows.map((row) => row.selectionKey)).toEqual([
+      sessionImportSelectionKey("claude", "fresh"),
+      sessionImportSelectionKey("claude", "imported"),
+    ]);
+    expect(view.groups[0]?.rows[1]?.selectable).toBe(false);
+    expect(view.groups[0]?.totalCount).toBe(2);
+    expect(view.groups[0]?.selectableCount).toBe(1);
+    expect(view.selectedCount).toBe(1);
+  });
+
+  it("does not enable imported visibility for an unknown or unsupported scan", () => {
+    const imported = candidate({
+      nativeSessionId: "imported",
+      state: { kind: "already_in_traycer", epicId: "epic-1", chatId: "chat-1" },
+    });
+    const arrivingGroup = group(folderLocation("/repo/a"), [imported]);
+
+    let state = applyActions([
+      { kind: "scanGroupArrived", group: arrivingGroup },
+      { kind: "showImportedChanged", showImported: true },
+    ]);
+    expect(state.showImported).toBe(false);
+    expect(state.importedSupport).toBe("unknown");
+
+    state = sessionImportWizardReducer(state, {
+      kind: "scanImportedSupportChanged",
+      support: "unsupported",
+    });
+    state = sessionImportWizardReducer(state, {
+      kind: "showImportedChanged",
+      showImported: true,
+    });
+    expect(state.showImported).toBe(false);
     expect(buildSessionImportView(state).groups).toHaveLength(0);
+  });
+
+  it("keeps imported-only groups visible but never selectable, and guards the submission", () => {
+    const imported = candidate({
+      nativeSessionId: "imported-only",
+      state: { kind: "already_in_traycer", epicId: "epic-1", chatId: "chat-1" },
+    });
+    let state = applyActions([
+      {
+        kind: "scanGroupArrived",
+        group: group(folderLocation("/repo/a"), [imported]),
+      },
+      { kind: "scanImportedSupportChanged", support: "supported" },
+      { kind: "showImportedChanged", showImported: true },
+    ]);
+
+    const groupKey = sessionImportGroupKey(folderLocation("/repo/a"));
+    state = sessionImportWizardReducer(state, {
+      kind: "groupSelectionSet",
+      groupKey,
+      selected: true,
+    });
+    const view = buildSessionImportView(state);
+    expect(view.groups[0]?.rows[0]?.selectable).toBe(false);
+    expect(view.groups[0]?.rows[0]?.selected).toBe(false);
+    expect(view.groups[0]?.totalCount).toBe(1);
+    expect(view.groups[0]?.selectableCount).toBe(0);
+    expect(buildSessionImportSubmission(state).selections).toEqual([]);
+  });
+
+  it("keeps folder counts stable and preserves picks and expansion when imported visibility changes", () => {
+    const fresh = candidate({ nativeSessionId: "fresh" });
+    const imported = candidate({
+      nativeSessionId: "imported",
+      state: { kind: "already_in_traycer", epicId: "epic-1", chatId: "chat-1" },
+    });
+    const arrivingGroup = group(folderLocation("/repo/a"), [fresh, imported]);
+    const groupKey = sessionImportGroupKey(arrivingGroup.location);
+
+    let state = applyActions([
+      { kind: "scanGroupArrived", group: arrivingGroup },
+      { kind: "scanImportedSupportChanged", support: "supported" },
+      { kind: "showImportedChanged", showImported: true },
+      { kind: "groupExpansionToggled", groupKey },
+    ]);
+    expect(buildSessionImportView(state).groups[0]?.totalCount).toBe(2);
+
+    const pickedBeforeHide = new Set(state.selected);
+    expect(buildSessionImportView(state).groups[0]?.totalCount).toBe(2);
+
+    state = sessionImportWizardReducer(state, {
+      kind: "showImportedChanged",
+      showImported: false,
+    });
+    expect(buildSessionImportView(state).groups[0]?.totalCount).toBe(1);
+    expect(state.selected).toEqual(pickedBeforeHide);
+    expect(state.expandedGroups.has(groupKey)).toBe(true);
   });
 
   it("projects an unreadable row's unavailableDetail with both the reason label and the raw detail", () => {
@@ -245,6 +365,7 @@ describe("buildSessionImportView - group header counts and tri-state", () => {
 
     expect(view.groups).toHaveLength(1);
     expect(view.groups[0]?.rows).toHaveLength(1);
+    expect(view.groups[0]?.totalCount).toBe(1);
     expect(view.groups[0]?.selectableCount).toBe(2);
     expect(view.groups[0]?.selectedCount).toBe(2);
   });
@@ -810,6 +931,67 @@ describe("sessionImportWizardReducer - frame folding into view state", () => {
     expect(state.totals).toBeNull();
   });
 
+  it("pre-selects an unavailable row when it recovers, while preserving a deliberate untick", () => {
+    const deliberatelyUnticked = candidate({ nativeSessionId: "s1" });
+    const unavailable = candidate({
+      nativeSessionId: "s2",
+      state: {
+        kind: "unreadable",
+        reason: "source_unreadable",
+        detail: "temporarily unavailable",
+      },
+    });
+    const firstArrival = group(folderLocation("/repo/a"), [
+      deliberatelyUnticked,
+      unavailable,
+    ]);
+    const recovered = group(folderLocation("/repo/a"), [
+      candidate({ nativeSessionId: "s1" }),
+      candidate({ nativeSessionId: "s2" }),
+    ]);
+    const s1 = sessionImportSelectionKey("claude", "s1");
+    const s2 = sessionImportSelectionKey("claude", "s2");
+
+    const state = applyActions([
+      { kind: "scanGroupArrived", group: firstArrival },
+      { kind: "sessionToggled", selectionKey: s1 },
+      { kind: "scanRestarted", reason: "reconnect" },
+      { kind: "scanGroupArrived", group: recovered },
+    ]);
+
+    expect(state.selected.has(s1)).toBe(false);
+    expect(state.selected.has(s2)).toBe(true);
+  });
+
+  it("does not pre-select recovered rows for a harness disabled before reconnect", () => {
+    const firstArrival = group(folderLocation("/repo/a"), [
+      candidate({ harness: "codex", nativeSessionId: "s1" }),
+      candidate({
+        harness: "codex",
+        nativeSessionId: "s2",
+        state: {
+          kind: "unreadable",
+          reason: "source_unreadable",
+          detail: "temporarily unavailable",
+        },
+      }),
+    ]);
+    const recovered = group(folderLocation("/repo/a"), [
+      candidate({ harness: "codex", nativeSessionId: "s1" }),
+      candidate({ harness: "codex", nativeSessionId: "s2" }),
+    ]);
+
+    const state = applyActions([
+      { kind: "scanGroupArrived", group: firstArrival },
+      { kind: "providerScopeToggled", harness: "codex" },
+      { kind: "scanRestarted", reason: "reconnect" },
+      { kind: "scanGroupArrived", group: recovered },
+    ]);
+
+    expect(state.disabledHarnesses).toEqual(new Set(["codex"]));
+    expect(state.selected).toEqual(new Set());
+  });
+
   it("clears groups/selection/expansion/phase on a fresh scanRestarted but preserves query, disabledHarnesses, and scanWindow", () => {
     const arrivingGroup = group(folderLocation("/repo/a"), [
       candidate({ nativeSessionId: "s1" }),
@@ -1058,8 +1240,9 @@ describe("buildSessionImportView - Deleted Folders group", () => {
     expect(view.groups[0]?.rows.map((row) => row.selectionKey)).toEqual([
       sessionImportSelectionKey("claude", "s1"),
     ]);
-    // The header still counts everything in scope, search or not.
-    expect(view.groups[0]?.totalCount).toBe(2);
+    // The header count follows the visible searched rows; the selectable
+    // denominator still spans both source folders.
+    expect(view.groups[0]?.totalCount).toBe(1);
     expect(view.groups[0]?.selectableCount).toBe(2);
   });
 
@@ -1108,6 +1291,38 @@ describe("buildSessionImportView - Deleted Folders group", () => {
     expect(state.selected.has(sessionImportSelectionKey("claude", "s3"))).toBe(
       true,
     );
+  });
+
+  it("keeps recovered rows unselected when Deleted Folders stays cleared across reconnect", () => {
+    const firstArrival = group(missingLocationA, [
+      candidate({ nativeSessionId: "s1" }),
+      candidate({
+        nativeSessionId: "s2",
+        state: {
+          kind: "unreadable",
+          reason: "source_unreadable",
+          detail: "temporarily unavailable",
+        },
+      }),
+    ]);
+    const recovered = group(missingLocationA, [
+      candidate({ nativeSessionId: "s1" }),
+      candidate({ nativeSessionId: "s2" }),
+    ]);
+
+    const state = applyActions([
+      { kind: "scanGroupArrived", group: firstArrival },
+      {
+        kind: "groupSelectionSet",
+        groupKey: SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY,
+        selected: false,
+      },
+      { kind: "scanRestarted", reason: "reconnect" },
+      { kind: "scanGroupArrived", group: recovered },
+    ]);
+
+    expect(state.deletedFoldersCleared).toBe(true);
+    expect(state.selected).toEqual(new Set());
   });
 
   it("keeps deletedFoldersCleared across a reconnect restart, but resets it on a fresh one", () => {

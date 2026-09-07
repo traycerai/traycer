@@ -120,3 +120,16 @@ export const sessionImportScanV10 = defineStreamRpcContract({
   serverFrameSchema: sessionImportScanServerFrameSchema,
   clientFrameSchema: sessionImportScanClientFrameSchema,
 });
+
+/**
+ * @1.1 includes live imported sessions as `already_in_traycer` candidates.
+ * The payload shapes are unchanged: the negotiated minor is the capability
+ * signal. Hosts retain @1.0 filtering and totals for older subscribers.
+ */
+export const sessionImportScanV11 = defineStreamRpcContract({
+  method: "sessionImport.scan",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: sessionImportScanOpenRequestSchema,
+  serverFrameSchema: sessionImportScanServerFrameSchema,
+  clientFrameSchema: sessionImportScanClientFrameSchema,
+});

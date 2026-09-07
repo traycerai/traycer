@@ -42,10 +42,10 @@ export interface StreamRuntimeBinding {
    * The returned release must be called exactly once, when the run's own need
    * for the transport ends.
    *
-   * `null` when the transport never closes under its consumers - the app-wide
-   * binding, which lives for the window. A `null` here is a promise, not an
-   * absence: it says "nothing to pin", so a caller writes `retain?.()` and is
-   * done rather than guessing which kind of binding it holds.
+   * Both scoped and app-wide transports provide a lease: the app-wide client
+   * can be replaced when the window changes hosts. `null` promises that the
+   * transport cannot close under its consumers. Providers keep this binding
+   * object stable for the lifetime of its client.
    */
   readonly retain: (() => () => void) | null;
 }

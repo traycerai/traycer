@@ -596,7 +596,10 @@ import {
   migrationRunV10,
   phaseMigrateToEpicV10,
 } from "@traycer/protocol/host/migration/contracts";
-import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
+import {
+  sessionImportScanV10,
+  sessionImportScanV11,
+} from "@traycer/protocol/host/session-import/scan";
 import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import {
@@ -9365,10 +9368,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // nothing to fall back to and nothing lost by its absence.
   "sessionImport.scan": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: sessionImportScanV10,
+        },
+        1: {
+          contract: sessionImportScanV11,
         },
       },
     },
