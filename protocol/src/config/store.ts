@@ -259,15 +259,26 @@ function pathScanCandidates(isWindows: boolean): string[] {
  *
  * Exported because the host's managed-command interpreter classifier has to
  * recognise a *configured* Git Bash, and a second copy of this rule would
- * drift from the label the user is looking at in Settings. Separators are
- * normalised because that path is user-typed and may use forward slashes,
- * which detection's own win32-built paths never do.
+ * drift from the label the user is looking at in Settings.
+ *
+ * The path is normalised three ways before matching, and all three matter for
+ * a user-typed value: case, separators (forward slashes, which detection's own
+ * win32-built paths never produce), and DOT SEGMENTS. Without the last one this
+ * searches text the filesystem never will —
+ * `C:\Git\bin\..\..\Windows\System32\bash.exe` contains `\git\bin\`
+ * but resolves to System32, so the rule would report Git Bash for the legacy
+ * WSL launcher: the probe succeeds, the host publishes `git-bash`, and a
+ * command written in Git Bash syntax meets WSL — which this classifier
+ * deliberately treats as unsupported.
  */
 export function isGitBashShellPath(shellPath: string): boolean {
-  const lower = shellPath.toLowerCase().replaceAll("/", "\\");
+  const normalised = nodePath.win32.normalize(
+    shellPath.toLowerCase().replaceAll("/", "\\"),
+  );
   return (
-    nodePath.win32.basename(lower) === "bash.exe" &&
-    (lower.includes("\\git\\bin\\") || lower.includes("\\git\\usr\\bin\\"))
+    nodePath.win32.basename(normalised) === "bash.exe" &&
+    (normalised.includes("\\git\\bin\\") ||
+      normalised.includes("\\git\\usr\\bin\\"))
   );
 }
 

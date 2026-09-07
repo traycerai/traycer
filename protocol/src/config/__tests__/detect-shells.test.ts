@@ -342,6 +342,28 @@ describe("isGitBashShellPath", () => {
     expect(isGitBashShellPath("C:\\Windows\\System32\\bash.exe")).toBe(false);
   });
 
+  it("resolves dot segments before matching, so a path that leaves the Git tree is not Git Bash", () => {
+    // The filesystem resolves `..` and the spawn does too; a substring search
+    // over the raw text does not. `C:\\Git\\bin\\..\\..\\Windows\\System32\\bash.exe`
+    // contains `\\git\\bin\\` but IS System32's legacy WSL launcher - so
+    // without normalisation the host would report git-bash, the probe would
+    // succeed, and a Git-Bash-syntax command would meet WSL, which this
+    // classifier deliberately treats as unsupported.
+    expect(
+      isGitBashShellPath("C:\\Git\\bin\\..\\..\\Windows\\System32\\bash.exe"),
+    ).toBe(false);
+    expect(
+      isGitBashShellPath("C:/Git/bin/../../Windows/System32/bash.exe"),
+    ).toBe(false);
+    // A dot segment that stays inside the Git install is still Git Bash.
+    expect(isGitBashShellPath("C:\\Program Files\\Git\\bin\\.\\bash.exe")).toBe(
+      true,
+    );
+    expect(
+      isGitBashShellPath("C:\\Program Files\\Git\\usr\\..\\bin\\bash.exe"),
+    ).toBe(true);
+  });
+
   it("does not claim a non-bash executable that merely lives under a git directory", () => {
     expect(isGitBashShellPath("C:\\Program Files\\Git\\bin\\sh.exe")).toBe(
       false,
