@@ -191,8 +191,9 @@ export const LOCK_AWARE_DESKTOP_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
  * exactly the band where being wrong is the bad direction. A target there
  * treated as at-or-above the floor keeps the identity check MANDATORY, so if
  * those releases turn out not to stamp, Q1 reproduces as a hard failure on
- * every rollback into them. Shipping `1.1.11` instead costs only a recorded
- * version-only verification for two releases.
+ * every rollback into them. Shipping `1.1.11` instead costs those two releases
+ * NOTHING if they stamp — the arm is gated on the evidence, not on this
+ * constant — and a recorded version-only verification if they do not.
  *
  * So the SHIPPED floor is the proven one. `HOST_START_STAMP_WRITER_FLOOR`
  * below carries the writer-history value with its evidence, and replaces this
