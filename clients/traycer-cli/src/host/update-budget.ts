@@ -68,13 +68,29 @@ const SUPERVISOR_ADMISSION_WAIT_MARGIN_MS = 15_000;
  * ## Why it is safe to wait this long
  *
  * No service manager we register with imposes a start timeout this could
- * cross. The systemd unit is `Type=simple`, which systemd considers started
- * as soon as it forks, and sets no `TimeoutStartSec`; launchd has no start
- * deadline; the Windows Scheduled Task's only duration limit is its
- * execution-time limit, which is measured in days. Pinned rather than
- * asserted - see the unit-text pins - because a future `Type=notify` or an
- * added `TimeoutStartSec` would make this wait fail the unit instead of
- * outlasting the segment.
+ * cross - and each for a different reason, which matters because it decides
+ * what to watch.
+ *
+ * systemd: the unit is `Type=simple`, which systemd considers started as soon
+ * as it forks. There is no start-up completion to report, so no deadline
+ * exists to cross. The unit also sets no `TimeoutStartSec`, but the two are
+ * not equally load-bearing: under `Type=simple` a `TimeoutStartSec` has no
+ * start-up signal to wait for, so ADDING one would not by itself put this wait
+ * at risk. The TYPE is the trigger. `Type=notify` (or `forking`) introduces a
+ * start deadline where none existed, and only then does a `TimeoutStartSec` -
+ * or, in its absence, systemd's 90s default - bound a healthy wait.
+ *
+ * launchd: no start deadline of any kind.
+ *
+ * Windows: the Scheduled Task emits `<ExecutionTimeLimit>PT0S`, and PT0S means
+ * NO limit in Task Scheduler rather than a zero-length one - the task may run
+ * indefinitely. (This paragraph previously said the limit was "measured in
+ * days", which is Task Scheduler's default of P3D for a task that HAS a limit;
+ * ours deliberately does not.)
+ *
+ * All three are pinned rather than asserted - see the unit-text pins beside
+ * each emitter - because each is one line of an emitted file, and the change
+ * that flips it will not look like a change to this constant.
  */
 export const SUPERVISOR_ADMISSION_WAIT_MS =
   VERIFY_BUDGET_MS + SUPERVISOR_ADMISSION_WAIT_MARGIN_MS;

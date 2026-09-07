@@ -3997,6 +3997,45 @@ describe("Scheduled Task XML identity", () => {
       else process.env.USERNAME = prevUser;
     }
   });
+
+  it("declares NO execution time limit, which is what lets a supervisor wait out an update segment", async () => {
+    // CodeRabbit #1773 round 2 (r3951899616). `SUPERVISOR_ADMISSION_WAIT_MS`
+    // is safe to sit through only while no service manager imposes a start
+    // deadline it could cross, and `host/update-budget.ts` argues that
+    // platform by platform and says the three legs are "pinned rather than
+    // asserted - see the unit-text pins".
+    //
+    // That was true for systemd (`Type=simple`, no `TimeoutStartSec`, both
+    // pinned in `linux.test.ts`) and vacuous for Windows: `ExecutionTimeLimit`
+    // had one production occurrence and zero test occurrences. The docblock
+    // was citing a pin that did not exist.
+    //
+    // PT0S is the value that matters and it is a trap to read: in Task
+    // Scheduler it means NO limit - the task may run indefinitely - not a
+    // zero-length one. Task Scheduler's default for a task that HAS a limit is
+    // P3D, which is where the docblock's old "measured in days" came from; a
+    // change to any explicit duration would bound a healthy wait, and this row
+    // is what makes that arrive as a red test rather than as a support ticket.
+    const prevDomain = process.env.USERDOMAIN;
+    const prevUser = process.env.USERNAME;
+    process.env.USERDOMAIN = "TESTBOX";
+    process.env.USERNAME = "testuser";
+    try {
+      const xml = buildScheduledTaskXml({
+        label: serviceLabelFor("staging"),
+        cli: {
+          command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+          args: [],
+        },
+      });
+      expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
+    } finally {
+      if (prevDomain === undefined) delete process.env.USERDOMAIN;
+      else process.env.USERDOMAIN = prevDomain;
+      if (prevUser === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = prevUser;
+    }
+  });
 });
 
 describe("parseSchtasksLastRunResult", () => {

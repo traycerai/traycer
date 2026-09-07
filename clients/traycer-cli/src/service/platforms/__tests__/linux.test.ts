@@ -335,9 +335,16 @@ describe("systemd unit — scaffolding and the token guard", () => {
     // 2. `Type=simple` with no `TimeoutStartSec`. The supervisor now WAITS on
     //    the attempt lock for up to `SUPERVISOR_ADMISSION_WAIT_MS` before it
     //    spawns anything, and that is only safe while systemd imposes no
-    //    start deadline it could cross. `Type=simple` is considered started
-    //    as soon as it forks; adding `TimeoutStartSec`, or moving to
-    //    `Type=notify`, would make a healthy wait fail the unit.
+    //    start deadline it could cross. `Type=simple` is considered started as
+    //    soon as it forks, so no deadline exists.
+    //
+    //    The TYPE is what carries that, not the absent `TimeoutStartSec`: with
+    //    `Type=simple` there is no start-up signal for a `TimeoutStartSec` to
+    //    wait for, so adding one alone would not put the wait at risk. A move
+    //    to `Type=notify` or `forking` is what creates a deadline - and then
+    //    an explicit `TimeoutStartSec`, or systemd's 90s default in its
+    //    absence, bounds a healthy wait. Both lines are still pinned, because
+    //    the dangerous change arrives as the pair.
     const unit = buildSystemdUnit({
       label: labelFor("ai.traycer.host.dev"),
       cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
