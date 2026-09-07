@@ -70,6 +70,12 @@ function observation(
     observedAtMs: NOW_MS,
     freshUntilMs: FRESH_UNTIL_MS,
     operation: attemptOperation({}),
+    // Deliberately NOT `attemptOperation`'s "2.1.0" target: the host is still
+    // on the old version for every test that does not say otherwise. A default
+    // that matched the target would silently route every `verifying` +
+    // `interrupted` case to `finalizing-record`, which is the arm those tests
+    // exist to hold at `failed`.
+    runningVersion: "2.0.0",
     transaction: TRANSACTION,
     coarseProgress: null,
     legacyFacts: null,
@@ -532,6 +538,164 @@ describe("projectFleetUpdateView — liveness", () => {
     });
     expect(view.kind).toBe("applying");
     expect(view.qualified).toBe(false);
+  });
+});
+
+/**
+ * Q11: a refused COMPLETION WRITE must never read as a failed update.
+ *
+ * The situation: the CLI's verify loop breaks only on installed AND running
+ * both verified at the target, host-home-bound. The completion write happens
+ * immediately after that break, so if it is refused the host is provably
+ * serving the new version and only the bookkeeping is outstanding. The CLI
+ * leaves the record untouched on that path (it does NOT stamp `failed`), so
+ * what reaches this projector is a `verifying` record whose executor is gone,
+ * beside a `host.status` reporting the target version.
+ *
+ * The discriminator is the VERSION, not an error code, and that is forced
+ * rather than chosen: the refusal has two causes — a `rejected` intent and a
+ * `durability-unverified` write medium — and the second cannot write anything
+ * at all, so on the path that needs a code most there is none to be had. The
+ * two causes leave the identical shape on disk, which is exactly what lets one
+ * rule cover both.
+ *
+ * Every test here is the difference between "Updated" and "update failed" on a
+ * machine that is running perfectly well, so each one names which direction it
+ * holds.
+ */
+describe("projectFleetUpdateView — a refused completion write is not a failure", () => {
+  /** Interrupted in `verifying`, i.e. the executor died after the loop broke. */
+  function abandonedVerify(
+    overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
+  ): HostStatusUpdateOperation {
+    return attemptOperation({
+      phase: "verifying",
+      liveness: "interrupted",
+      targetVersion: "2.1.0",
+      ...overrides,
+    });
+  }
+
+  it("host RUNNING the target projects finalizing-record, never failed", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("finalizing-record");
+    expect(view.kind).not.toBe("failed");
+    // Nothing failed, so there is no cause to render. A leftover message here
+    // would put a failure's worth of alarm into a success card.
+    expect(view.errorMessage).toBeNull();
+    expect(view.qualified).toBe(false);
+    expect(view.targetVersion).toBe("2.1.0");
+  });
+
+  it("host running the OLD version keeps the existing interrupted failure", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.0.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    // The genuine verify failure: the executor died proving the host healthy
+    // and the host is still on the old version. Swallowing this into the
+    // success arm is the regression the version check exists to prevent.
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).not.toBeNull();
+  });
+
+  it("the two refusal causes are indistinguishable here — an error on the record does not change the routing", () => {
+    // `durability-unverified` writes NOTHING (error stays null); a `rejected`
+    // intent may leave a record carrying one. Both mean the same thing and must
+    // render the same thing, so the discriminator must not consult `error` at
+    // all. This reddens the moment someone "improves" the routing by keying off
+    // an error code — which would silently drop the half that has no code.
+    const views = [
+      null,
+      { code: "verify-timeout", message: "x", phase: "verifying" },
+    ].map((error) =>
+      projectFleetUpdateView({
+        observation: observation({
+          operation: abandonedVerify({ error }),
+          runningVersion: "2.1.0",
+        }),
+        nowMs: NOW_MS,
+        connected: true,
+      }),
+    );
+    expect(views[0]).toEqual(views[1]);
+    for (const view of views) expect(view.kind).toBe("finalizing-record");
+  });
+
+  it("the CLI's leftover 'updating' marker does not preempt the route", () => {
+    // The refusal arm writes NOTHING, so it does not clear its own coarse
+    // marker either: production reports `{state:"updating"}` beside the
+    // untouched `verifying` record. The marker is consulted only for
+    // `operation === null` / `{kind:"none"}`, so a live attempt outranks it —
+    // asserted here rather than assumed, because if that precedence ever
+    // inverted this state would render as a generic "Updating host" forever,
+    // on a host that has already finished updating.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        coarseProgress: { state: "updating", error: null },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("finalizing-record");
+    expect(view.kind).not.toBe("updating");
+  });
+
+  it("an EARLIER phase with a matching version is NOT this state", () => {
+    // A host already on the target when a redundant attempt was started. That
+    // is `E_HOST_UPDATE_NOT_NEWER` territory, not a completed update, and
+    // widening the phase set would dress it up as one.
+    for (const phase of [
+      "downloading",
+      "preparing",
+      "applying",
+      "restarting",
+    ] as const) {
+      const view = projectFleetUpdateView({
+        observation: observation({
+          operation: abandonedVerify({ phase }),
+          runningVersion: "2.1.0",
+        }),
+        nowMs: NOW_MS,
+        connected: true,
+      });
+      expect(view.kind).toBe("failed");
+    }
+  });
+
+  it("holds no lifecycle gate and earns no fast poll", () => {
+    // The update is OVER and the host is serving. A gate here would disable
+    // Restart and Diagnostics on a healthy machine until the NEXT update run
+    // reconciles the record — which may never come.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    // FIRST, and load-bearing: every assertion below also holds for `failed`,
+    // so without this line the whole test passes with the routing deleted. It
+    // did, when it was written — the ablation is what caught it.
+    expect(view.kind).toBe("finalizing-record");
+    expect(holdsLifecycleGate(view)).toBe(false);
+    expect(warrantsFastPoll(view)).toBe(false);
+    // Visible, though: this is a card, not a quiet state.
+    expect(isQuietUpdateView(view)).toBe(false);
   });
 });
 

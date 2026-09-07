@@ -114,15 +114,25 @@ function primarySentence(
  * table instead of growing a parallel one. A second table is how "Downloading
  * update" and "last seen downloading" end up disagreeing about a version suffix.
  */
+/**
+ * Every phase that names a version uses this, and it is empty when the host did
+ * not report one — a sentence must never read "Downloading update to v".
+ *
+ * Hoisted out of {@link phaseSentence} rather than inlined there so the switch
+ * below stays within the complexity budget as the kind union grows; it was
+ * always a single expression with a single reason.
+ */
+function versionSuffix(target: string | null): string {
+  return target === null ? "" : ` to v${target}`;
+}
+
 function phaseSentence(
   kind: FleetUpdateViewKind,
   view: FleetUpdateView,
   cliFloorBlocked: boolean,
 ): string {
   const target = view.targetVersion;
-  // Every phase that names a version uses this, and it is empty when the host
-  // did not report one — a sentence must never read "Downloading update to v".
-  const to = target === null ? "" : ` to v${target}`;
+  const to = versionSuffix(target);
   switch (kind) {
     case "updating":
       // The coarse marker's whole vocabulary: in flight, phase unknown. Never
@@ -152,6 +162,21 @@ function phaseSentence(
       return completeSentence(target);
     case "failed":
       return failedSentence(view.errorMessage);
+    case "finalizing-record":
+      // Two clauses, in this order, because the ORDER is the message: the
+      // update landed, and the leftover is bookkeeping. Leading with the
+      // bookkeeping would read as a qualification on the success.
+      //
+      // "Finalizing", present continuous, on purpose — the next update run's
+      // reconciler concludes the record, so there is nothing for the reader to
+      // do and no remedy to offer. Naming the record at all is still right: it
+      // is why a `traycer host update` in their terminal just exited non-zero,
+      // and a card that said only "Updated" would leave that contradiction
+      // unexplained.
+      // `to` already collapses to "" for an unreported target, so a host that
+      // named no version reads "Updated. Finalizing the update record." rather
+      // than "Updated to v.".
+      return `Updated${to}. Finalizing the update record.`;
     case "unavailable":
       // Deliberately not "failed". The record could not be read; the update may
       // be fine. This wording points at the repair path Diagnostics offers.

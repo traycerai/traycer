@@ -40,6 +40,9 @@ function wireObservation(
     observedAtMs: NOW_MS,
     freshUntilMs: NOW_MS + ACTIVE_FRESH_WINDOW_MS,
     operation: attemptOperation({}),
+    // The old version, not the attempt's "2.1.0" target — see the same default
+    // in `fleet-update-view.test.ts`.
+    runningVersion: "2.0.0",
     transaction: { recordSchemaVersion: 2, authority: "attempt" },
     coarseProgress: null,
     legacyFacts: null,

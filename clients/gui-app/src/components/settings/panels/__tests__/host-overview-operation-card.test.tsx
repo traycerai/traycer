@@ -586,6 +586,95 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
   });
 });
 
+/**
+ * Q11, at the CARD rather than at the projector.
+ *
+ * The projector's own suite pins the routing; this pins that the Overview
+ * actually MOUNTS it — the seam and its consumers are separate failures, and
+ * this epic has already shipped a fix whose call site was unwired.
+ *
+ * The situation: `traycer host update` verified the host healthy at the target
+ * and then could not durably conclude the attempt record. The CLI leaves the
+ * record alone and exits non-zero, so the host reports a `verifying` attempt
+ * whose executor is gone while serving the target version. Before this, that
+ * rendered the destructive failure card — "update failed" over a machine
+ * provably running the new version.
+ */
+describe("HostOverviewOperationCard — a refused completion write is not a failure", () => {
+  /**
+   * `statusWith`, but the running version is the thing under test — and the
+   * COARSE MARKER is present, because that is the production shape.
+   *
+   * The CLI's refusal arm writes nothing at all, which means it also does not
+   * clear its own `{state:"updating"}` marker: what a host actually reports
+   * here is that marker BESIDE the untouched `verifying` record. Pinning with
+   * `updateProgress: null` would have tested a shape that never occurs and
+   * left the marker's precedence unverified — the projector consults the
+   * coarse marker only for `operation === null` / `{kind:"none"}`, and this is
+   * what holds it to that.
+   */
+  function statusRunning(
+    operation: HostStatusUpdateOperation,
+    hostVersion: string,
+  ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
+    return {
+      ...statusWith(operation),
+      hostVersion,
+      updateProgress: { state: "updating", error: null },
+    };
+  }
+
+  const ABANDONED_VERIFY = attemptOperation({
+    phase: "verifying",
+    liveness: "interrupted",
+    targetVersion: "2.1.0",
+  });
+
+  async function renderWithRunningVersion(hostVersion: string) {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => statusRunning(ABANDONED_VERIFY, hostVersion),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+    return screen.findByTestId("host-overview-operation-card");
+  }
+
+  it("running the TARGET renders the success sentence on a non-destructive card", async () => {
+    const card = await renderWithRunningVersion("2.1.0");
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe("Updated to v2.1.0. Finalizing the update record.");
+    });
+    // The failure treatment, asserted as ABSENT rather than assumed: the card
+    // picks its border/fill/text colour off `view.kind === "failed"`, so this
+    // is the difference between a red card and a neutral one.
+    expect(card.className).not.toContain("destructive");
+    // And not announced as an alert — nothing here interrupts anyone.
+    expect(card.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("running the OLD version still renders the destructive failure card", async () => {
+    // The control, and the half that must not regress: an executor that died
+    // in `verifying` on a host still serving the old version IS a failed
+    // update, and it keeps every bit of its failure treatment.
+    const card = await renderWithRunningVersion("2.0.0");
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toContain("Update failed");
+    });
+    expect(card.className).toContain("destructive");
+    expect(card.getAttribute("aria-live")).toBe("assertive");
+  });
+});
+
 // The two record-derived parks (`legacy-update-facts.ts`), mounted end to
 // end through `HostSettingsPanel`: the Overview derives `legacyFacts` from
 // `host.getInstallationInfo` beside `host.status`, and the card renders

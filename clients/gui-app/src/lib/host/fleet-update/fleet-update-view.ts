@@ -60,6 +60,23 @@ export interface FleetUpdateWireObservation {
    * NOT mean "no update": see {@link projectFleetUpdateView}'s `unknown` arm.
    */
   readonly operation: HostStatusUpdateOperation | null;
+  /**
+   * The version the host is RUNNING, from `host.status`'s `hostVersion` — the
+   * SAME read that produced {@link operation}.
+   *
+   * That sameness is the whole value of carrying it here rather than letting a
+   * consumer join a version from some other query: the one question it answers
+   * is "is the machine already serving what this attempt was trying to
+   * install", and pairing a version from one instant with a phase from another
+   * would answer it about two different moments. Identical discipline to
+   * `busySessionCount`'s note in the wire contract.
+   *
+   * Non-nullable because `hostVersion` is required at every `host.status`
+   * minor from @1.0 — there is no peer that answers a status without one, so a
+   * `null` arm here would be an unreachable branch inviting a fabricated
+   * default.
+   */
+  readonly runningVersion: string;
   /** `null` = peer did not say. Every transaction gate fails closed on it. */
   readonly transaction: HostUpdateTransactionCapability | null;
   /**
@@ -304,6 +321,31 @@ export type FleetUpdateViewKind =
   | "verifying"
   | "complete"
   | "failed"
+  /**
+   * The update LANDED and only the bookkeeping did not: the host is verified
+   * running the target, and the attempt record was never concluded.
+   *
+   * A success state, rendered without failure treatment, and the distinction it
+   * draws is not cosmetic. The CLI's verify loop breaks only on installed AND
+   * running both verified at the target with the process host-home-bound, so
+   * reaching the completion write at all PROVES the machine is serving the new
+   * version. When that write is then refused — a rejected intent, or a record
+   * path that cannot be written durably at all — the update is done and the
+   * only thing outstanding is a file. Saying "update failed" over a machine
+   * provably running the new version is false in every part.
+   *
+   * The CLI leaves the record alone on that path rather than stamping `failed`
+   * (the rule `AttemptRecordWriter.supersede()` established for its own sibling
+   * case: "no stale rule clears a `failed` whose target is not the running
+   * version"), which is exactly what leaves this state observable — an
+   * untouched verify-side record beside a healthy host at the target IS the
+   * signal. A stamped `failed` would have destroyed it.
+   *
+   * Terminal for this client's purposes: nothing is executing, so it holds no
+   * lifecycle gate and earns no fast poll. The next update run's reconciler
+   * concludes the record.
+   */
+  | "finalizing-record"
   /** Fail-closed record evidence. Diagnostic and repairable, NOT a failure. */
   | "unavailable";
 
@@ -885,6 +927,39 @@ function attemptOperationView(input: {
   // Liveness is the host's read-side conclusion joining the attempt lock's
   // holder, and a client cannot re-derive it — so it outranks the phase.
   if (operation.liveness === "interrupted") {
+    // BEFORE the failure below, because the same three facts describe two
+    // opposite outcomes and only the version tells them apart.
+    //
+    // An executor that died in `verifying` is ordinarily a failure: it was
+    // proving the new host healthy and never finished. But the CLI's verify
+    // loop breaks ONLY on installed and running both verified at the target,
+    // host-home-bound — so if the machine is now serving the target, the loop
+    // must have broken, and everything after it is bookkeeping. That is the
+    // refused completion write: the update landed, the record did not conclude,
+    // and the CLI deliberately leaves the record untouched rather than stamping
+    // `failed` over a healthy host.
+    //
+    // WHY THE VERSION IS THE DISCRIMINATOR AND NOT A CODE. The refusal has two
+    // causes — a `rejected` intent, and a `durability-unverified` write medium
+    // — and the second one cannot write anything at all, so no error code can
+    // exist on the path that needs it most. Both leave the identical shape on
+    // disk, which is what makes one rule cover both.
+    //
+    // Both halves come from the SAME `host.status` read (`hostVersion` beside
+    // `updateOperation`), so this can never pair a version from one instant
+    // with a phase from another.
+    if (concludesAsFinalizingRecord(operation, observation)) {
+      return {
+        ...base,
+        ...noRetainedPhase,
+        kind: "finalizing-record",
+        qualified: false,
+        // No cause to show: nothing failed. The `errorMessage` slot is for the
+        // `failed` arm, and carrying a refusal reason here would put a red
+        // sentence's worth of alarm into a success card.
+        errorMessage: null,
+      };
+    }
     // The ONLY route to `failed` that the phase alone does not carry: a
     // non-terminal, non-parked attempt with positive proof its executor is
     // gone. `indeterminate` deliberately does not reach here.
@@ -911,6 +986,45 @@ function attemptOperationView(input: {
   // saying. `lastKnownKind` is populated only where `kind` decayed to
   // `unknown` — that is the invariant the field's doc states.
   return { ...view, qualified: operation.liveness === "indeterminate" };
+}
+
+/**
+ * The phases from which a dead executor may still have LANDED the update.
+ *
+ * Exactly one, and the narrowness is the point. `verifying` is the only phase
+ * an executor can be in after the bytes are committed and the new host has been
+ * proven healthy — it is the phase the CLI writes before its evidence loop, and
+ * the completion write is the very next thing that happens after that loop
+ * breaks. Every earlier phase (`downloading`, `preparing`, `applying`) dies
+ * with work genuinely unfinished, and a version match there means something
+ * else entirely: a host that was ALREADY on the target when a redundant attempt
+ * was started, which is a different situation with its own answer
+ * (`E_HOST_UPDATE_NOT_NEWER` → `superseded` → `idle`) and must not be dressed
+ * up as a completed update.
+ *
+ * `restarting` is deliberately excluded too, tempting though it looks: a host
+ * that reports the target version during a restart phase has not yet been
+ * verified — the running process may be the new one with the install record
+ * still disagreeing, which is the activation-debt shape, not this one.
+ */
+const FINALIZING_RECORD_PHASES: ReadonlySet<HostUpdateAttemptPhase> =
+  new Set<HostUpdateAttemptPhase>(["verifying"]);
+
+/**
+ * Whether a dead executor left behind a SUCCESS rather than a failure.
+ *
+ * Both facts come off one `host.status` read, and both are required: the phase
+ * establishes that the executor had got as far as proving the host healthy, and
+ * the version establishes that the host it proved healthy is the one still
+ * running. Either alone is not evidence — a `verifying` corpse on a host still
+ * serving the OLD version is the genuine verify failure this must not swallow.
+ */
+function concludesAsFinalizingRecord(
+  operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>,
+  observation: FleetUpdateWireObservation,
+): boolean {
+  if (!FINALIZING_RECORD_PHASES.has(operation.phase)) return false;
+  return observation.runningVersion === operation.targetVersion;
 }
 
 function coarseKind(coarse: HostStatusUpdateProgress | null): {
@@ -1120,6 +1234,12 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * and the service verbs disabled indefinitely by an update nobody is running.
  * The marker informs (a card, a moving bar); it never stands between a
  * person and their host.
+ *
+ * `finalizing-record` is in the fail-open arm for the strongest form of that
+ * reason: the update is OVER and the host is healthy and serving. A gate there
+ * would disable Restart, Diagnostics and the service verbs on a perfectly good
+ * machine for as long as an unconcluded record sits on disk — which is until
+ * the next update RUN, not until any timer expires, and possibly never.
  */
 export function holdsLifecycleGate(view: FleetUpdateView): boolean {
   switch (view.kind) {
@@ -1135,6 +1255,7 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
     case "waiting-to-activate":
     case "complete":
     case "failed":
+    case "finalizing-record":
     case "unavailable":
     case "idle":
     case "unknown":
@@ -1157,10 +1278,27 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
  * updater would otherwise keep one host on the 2s cadence for as long as any
  * surface observing it stays mounted. The `host.status` 10s baseline still
  * shows the card within one poll of a real legacy update.
+ *
+ * `finalizing-record` does not earn it either: nothing is moving, and nothing
+ * ON THIS HOST will change the record — the reconciliation happens on the next
+ * update RUN. Polling every two seconds would be a retry storm waiting for an
+ * event that cannot arrive.
  */
 export function warrantsFastPoll(view: FleetUpdateView): boolean {
   if (view.qualified) return false;
-  switch (view.kind) {
+  return kindWarrantsFastPoll(view.kind);
+}
+
+/**
+ * Split from {@link warrantsFastPoll} so the qualified guard and the kind table
+ * are separately legible — the same shape `host-option-model.ts` uses for its
+ * badge words, and the same reason `phaseSentence` takes a kind rather than a
+ * view. Kept as an exhaustive switch rather than a lookup table so that adding
+ * a {@link FleetUpdateViewKind} still fails the BUILD until someone decides
+ * what cadence it earns.
+ */
+function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
+  switch (kind) {
     case "downloading":
     case "preparing":
     case "applying":
@@ -1175,6 +1313,7 @@ export function warrantsFastPoll(view: FleetUpdateView): boolean {
     case "waiting-to-activate":
     case "complete":
     case "failed":
+    case "finalizing-record":
     case "unavailable":
       return false;
   }

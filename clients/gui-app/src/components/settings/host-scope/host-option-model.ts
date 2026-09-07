@@ -253,6 +253,14 @@ function liveBadgeWord(kind: FleetUpdateViewKind): string | null {
       return "restart to finish";
     case "failed":
       return "update failed";
+    // No badge, deliberately. The host is up to date and serving; a picker row
+    // is a place to find a machine to work on, and the only thing this state
+    // would tell someone scanning that list is that a file will be tidied up on
+    // its own. The Overview card says it where a person is actually looking at
+    // that host. A badge here would also be one word long and would have to say
+    // something like "updated", which is indistinguishable from `complete` —
+    // which draws no badge either.
+    case "finalizing-record":
     case "unavailable":
     case "restarting":
     case "reconnecting":
@@ -282,6 +290,12 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
     // true after we lose contact rather than becoming merely old.
     case "failed":
       return "update failed";
+    // Unreachable in practice — `finalizing-record` is only ever reached from a
+    // LIVE frame (it needs the running version from the same read), so it can
+    // never be the retained phase of a host we have lost contact with. Kept as
+    // an arm because the switch is exhaustive, and `null` is the answer it
+    // would want anyway: same reasoning as the live badge above.
+    case "finalizing-record":
     case "complete":
     case "idle":
     case "unavailable":
