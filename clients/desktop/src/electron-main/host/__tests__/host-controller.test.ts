@@ -40,6 +40,14 @@ vi.mock("electron", () => ({
     getPath: vi.fn(() => join(process.env.HOME ?? "/tmp", "userData")),
     isPackaged: false,
     getAppPath: vi.fn(() => "/tmp"),
+    // The fence's other half of the identity pair, beside the CLI manifest
+    // version. Deliberately a plain release ABOVE `LOCK_AWARE_DESKTOP_FLOOR`
+    // rather than a `-test`-tagged one: a below-floor stub would still admit
+    // here, but only via the non-release WAIVER arm, so every row past the
+    // cohort gate would be exercising the fence's exception path by accident.
+    // This value admits by the ordinary comparison, which is what a shipped
+    // Desktop does.
+    getVersion: vi.fn(() => "9.9.9"),
   },
 }));
 
@@ -67,6 +75,13 @@ vi.mock("../../cli/traycer-cli", () => ({
 
 vi.mock("../../cli/cli-discovery", () => ({
   resolveBundledCliPath: vi.fn(async () => null),
+  // Q8's compatibility fence reads the installed CLI's version at the
+  // decision (`host-controller.ts`'s `readCompatibilityIdentities`). `null`
+  // is the value production documents as ADMITTED - the fence detects an old
+  // *installed* CLI and is structurally silent about one invoked from
+  // elsewhere on `PATH` - so this stub leaves the fence open and the rows
+  // that exercise it keep testing what they were written to test.
+  readCliManifest: vi.fn(async () => null),
 }));
 
 // Mirrors exactly what production imports from this module across
@@ -636,6 +651,148 @@ function availableSnapshotFixture(
     includePreReleases: false,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The mock-factory census.
+//
+// `vi.mock` with a factory replaces the WHOLE module, so a production file
+// that starts importing one more name from a mocked module does not get a
+// smaller mock - it gets a hard failure the moment that path runs, and the
+// message names vitest rather than the missing symbol. That is how Q8's
+// compatibility fence landed red here: `host-controller.ts` began importing
+// `readCliManifest` from `cli/cli-discovery`, the factory still exported only
+// `resolveBundledCliPath`, and one row failed in 3ms with an `undefined`
+// export it took a bisect to attribute.
+//
+// The `host-login-item` factory above already carries a prose comment saying
+// it "mirrors exactly what production imports". Prose cannot redden. These
+// rows check the same claim mechanically, in both directions, for every mock
+// whose factory enumerates a real module's exports.
+// ---------------------------------------------------------------------------
+const MOCK_FACTORY_CENSUS: readonly {
+  readonly module: string;
+  readonly moduleBasename: string;
+  readonly importers: readonly string[];
+}[] = [
+  {
+    module: "../../cli/cli-discovery",
+    moduleBasename: "cli/cli-discovery",
+    importers: ["../host-controller.ts"],
+  },
+  {
+    module: "../../app/host-login-item",
+    moduleBasename: "app/host-login-item",
+    // The two the prose comment names, plus `substrate-backfill-contender.ts`,
+    // which the comment predates - itself a small demonstration that a hand
+    // -maintained list of importers rots quietly.
+    importers: [
+      "../host-controller.ts",
+      "../update-mutation.ts",
+      "../substrate-backfill-contender.ts",
+    ],
+  },
+];
+
+/** The VALUE names a file imports from a module - type-only specifiers are
+ * erased before runtime, so a factory owes nothing for them. */
+function valueImportsFrom(
+  source: string,
+  moduleBasename: string,
+): readonly string[] {
+  const pattern = new RegExp(
+    String.raw`import\s*\{([^}]*)\}\s*from\s*"[^"]*${moduleBasename}"`,
+    "g",
+  );
+  const names: string[] = [];
+  for (const match of source.matchAll(pattern)) {
+    for (const raw of match[1].split(",")) {
+      const specifier = raw.trim();
+      if (specifier.length === 0) continue;
+      if (specifier.startsWith("type ")) continue;
+      // `a as b` imports `a`; the local alias is not the module's export.
+      names.push(specifier.split(/\s+as\s+/)[0].trim());
+    }
+  }
+  return [...new Set(names)].sort();
+}
+
+describe("mock factory census", () => {
+  it.each(MOCK_FACTORY_CENSUS)(
+    "$module: the factory provides every value production imports",
+    async ({ module, moduleBasename, importers }) => {
+      const mocked = (await import(module)) as Record<string, unknown>;
+      const missing: string[] = [];
+      for (const importer of importers) {
+        const source = readFileSync(join(__dirname, importer), "utf8");
+        for (const name of valueImportsFrom(source, moduleBasename)) {
+          if (!(name in mocked)) missing.push(`${importer} -> ${name}`);
+        }
+      }
+      // Named, not counted: the whole point is that the next added import
+      // reddens with the symbol in the message.
+      expect(missing).toEqual([]);
+    },
+  );
+
+  // The census above reads MODULE exports, and that is not the whole surface
+  // a factory owes. The same Q8 line that added `readCliManifest` also added
+  // `app.getVersion()`, and `app` is one export whose METHODS production calls
+  // - invisible to an export-name check, and it fails the same opaque way
+  // (`app.getVersion is not a function`, 10ms, no clue whose fault). This row
+  // covers that shape for the namespaces this suite stubs by hand.
+  it.each([
+    {
+      module: "electron",
+      namespace: "app",
+      importers: ["../host-controller.ts"],
+    },
+  ])(
+    "$module: the $namespace stub carries every member production reaches",
+    async ({ module, namespace, importers }) => {
+      const mocked = (await import(module)) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      const stub = mocked[namespace];
+      const missing: string[] = [];
+      for (const importer of importers) {
+        const source = readFileSync(join(__dirname, importer), "utf8");
+        // Property reads as well as calls - `app.isPackaged` is a member this
+        // suite already had to stub, and it is never called.
+        const used = new Set(
+          [
+            ...source.matchAll(
+              new RegExp(
+                String.raw`(?<![\w.$])${namespace}\.([A-Za-z_$][\w$]*)`,
+                "g",
+              ),
+            ),
+          ].map((match) => match[1]),
+        );
+        for (const member of [...used].sort()) {
+          if (!(member in stub)) missing.push(`${importer} -> ${member}`);
+        }
+      }
+      expect(missing).toEqual([]);
+    },
+  );
+
+  it.each(MOCK_FACTORY_CENSUS)(
+    "$module: the factory stubs nothing the real module does not export",
+    async ({ module }) => {
+      const mocked = (await import(module)) as Record<string, unknown>;
+      const actual = (await vi.importActual(module)) as Record<string, unknown>;
+      // The other direction, so the factory cannot keep a stub for a name
+      // production renamed or deleted - a dead stub is indistinguishable from
+      // a live one until someone reads both files side by side.
+      const orphaned = Object.keys(mocked)
+        .filter((name) => name !== "default")
+        .filter((name) => !(name in actual))
+        .sort();
+      expect(orphaned).toEqual([]);
+    },
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Headline guardrail: "the screenshot race becomes a test" - `convergeReady`
