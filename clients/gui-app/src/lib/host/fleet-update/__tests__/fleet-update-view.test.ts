@@ -757,6 +757,25 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
  * could not write a code at all.
  */
 describe("projectFleetUpdateView — a host that refused the authenticated check", () => {
+  /**
+   * The `code` here is a LITERAL on purpose, and must stay one.
+   *
+   * Production compares against `HOST_UPDATE_REFUSES_RPC_CODE`, imported from
+   * protocol. Writing that constant into this fixture would compare it to
+   * itself: the pin would then survive any change to its VALUE, which is the
+   * one change that matters, because it silently stops every already-written
+   * record being recognised as a refusal. Spelling the wire string here is
+   * what makes this an end-to-end assertion rather than an identity check —
+   * so a rename of the constant is free and a change to its value reddens.
+   *
+   * `error.phase` below is the same class of hazard with no instance yet:
+   * `phase` is a free `string` on the record schema exactly as `code` is, so
+   * nothing but a literal comparison would catch a drift in it either. This
+   * module compares no `error.phase` today. The next literal that appears
+   * beside one of these fields is not a style question — it is an untyped wire
+   * value that needs a named constant on the protocol side and a spelled-out
+   * string on this side, the same pairing as `code`.
+   */
   function refusedAttempt(
     overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
   ): HostStatusUpdateOperation {

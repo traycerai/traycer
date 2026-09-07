@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/host/status/index";
 import {
   isTerminalPhase,
+  HOST_UPDATE_REFUSES_RPC_CODE,
   type HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 import type { LocalAttemptLiveness } from "@traycer-clients/shared/platform/runner-host";
@@ -1060,32 +1061,36 @@ const FINALIZING_RECORD_PHASES: ReadonlySet<HostUpdateAttemptPhase> =
   new Set<HostUpdateAttemptPhase>(["verifying"]);
 
 /**
- * The record code Q19 stamps when the freshly started target host answers the
+ * Whether this terminal record says the host refused the authenticated check
+ * — the code Q19 stamps when the freshly started target host answers the
  * verify leg's authenticated RPC with two consecutive UNAUTHORIZED/FORBIDDEN
  * frames.
- *
- * A string literal rather than an import: the CLI's
- * `UNCONDITIONALLY_STAMPED_FAILURE_CODES` lives in a package the renderer
- * cannot reach, and the value crosses as record data on the `host.status`
- * mirror regardless. Matching it here is reading the wire, the same way
- * `narrowPhase` reads a phase off an IPC payload rather than trusting the
- * declared type.
- */
-const HOST_REFUSES_RPC_CODE = "host-refuses-rpc";
-
-/**
- * Whether this terminal record says the host refused the authenticated check.
  *
  * Both halves are required. The PHASE guard is not ceremony: a code is only
  * meaningful on a record that actually concluded, and reading one off a
  * non-terminal record would let a mid-flight attempt that happens to carry a
  * stale error jump to a terminal rendering.
+ *
+ * The code was a local literal here, justified by the CLI's
+ * `UNCONDITIONALLY_STAMPED_FAILURE_CODES` living "in a package the renderer
+ * cannot reach". That is true of the CLI and was never true of the module the
+ * constant is now in: it is renderer-safe by design, and the import two lines
+ * from the old literal already proved the renderer reaches it. The
+ * justification was reasoning about the wrong package, so it is gone rather
+ * than edited.
+ *
+ * Still a WIRE read, which the import does not change: `error.code` is a free
+ * `string` on the schema, so this is a comparison against a value a writer
+ * this reader predates may not send, not a narrowing of the record vocabulary.
+ * Renaming the constant is free; changing its VALUE would silently stop every
+ * already-written record being recognised as a refusal, which is why the
+ * protocol pins it as a wire string and this module does not restate it.
  */
 function refusesAuthenticatedCheck(
   operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>,
 ): boolean {
   if (operation.phase !== "failed") return false;
-  return operation.error?.code === HOST_REFUSES_RPC_CODE;
+  return operation.error?.code === HOST_UPDATE_REFUSES_RPC_CODE;
 }
 
 /**
