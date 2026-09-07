@@ -906,9 +906,60 @@ function sameClaimBaseline(
   );
 }
 
+/**
+ * Compared for the same reason `sameRecovery` compares `runtimeIdentity`: this
+ * equality is what proves the record handed back is the one on disk, and a key
+ * left out of it is a key whose divergence the check silently blesses.
+ *
+ * ### Which caller can actually make it differ, and which cannot
+ *
+ * NOT the write-side gate in `encodeValidatedRecord`. `normalizeVerification`
+ * (above) runs on every channel - `commitAttemptMutationInternal` normalizes
+ * the intent before `recomputeIntent`, executor callers included - and it
+ * RECONSTRUCTS the value from the keys it knows, exactly as the decoder's
+ * `parseVerification` does. An unknown mode is already rejected there as
+ * `intent-invalid`, and an extra property is already stripped there. By the
+ * time a record reaches the encode gate its verification is canonical on both
+ * sides, so no input any caller can present makes that comparison fail. This
+ * function does not defend that seam and must not be read as if it did.
+ *
+ * The seam it DOES defend is the post-write re-read: a foreign writer that
+ * lands between our rename and our read-back. Those bytes are not ours and
+ * were never normalized by us, so all three arms below are live there:
+ *
+ *  - a mode this build cannot read is DROPPED by the decoder ("a newer
+ *    writer's vocabulary. Drop the key, keep the record"), which is correct
+ *    for a reader and fatal here - `verification`'s absence is DEFINED to mean
+ *    "a writer that predates the key", so a dropped mode is indistinguishable
+ *    from a completion that was never verified;
+ *  - a different mode, or a `version-only` with a different `reason` or
+ *    `floor`, is a foreign conclusion about how the host was proved. Accepting
+ *    it would report `committed` on a record we did not write.
+ *
+ * Extra properties are deliberately NOT compared by key count: both sides of
+ * every live comparison are decoder or normalizer output, so a count check
+ * could never fire, and an unpinnable mechanism here would invite the next
+ * reader to trust it.
+ */
+function sameVerification(
+  a: HostUpdateAttemptVerification | undefined,
+  b: HostUpdateAttemptVerification | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.mode !== b.mode) return false;
+  if (a.mode === "version-only" && b.mode === "version-only") {
+    return a.reason === b.reason && a.floor === b.floor;
+  }
+  return true;
+}
+
 // Do not reduce this to a JSON-string comparison. We need to compare the
 // transition's semantic value to the decoder's canonical value, not merely
 // prove that a second serializer happens to emit the same representation.
+//
+// EVERY additive optional key belongs here. `recovery`, `claim` and
+// `verification` are each droppable or reshapeable by the decoder, and a key
+// left out is a key whose divergence this check silently blesses.
 function sameRecord(
   a: HostUpdateAttemptRecord,
   b: HostUpdateAttemptRecord,
@@ -927,7 +978,8 @@ function sameRecord(
     a.completedAt === b.completedAt &&
     sameNullableError(a.error, b.error) &&
     sameRecovery(a.recovery, b.recovery) &&
-    sameClaimBaseline(a.claim, b.claim)
+    sameClaimBaseline(a.claim, b.claim) &&
+    sameVerification(a.verification, b.verification)
   );
 }
 

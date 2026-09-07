@@ -25,6 +25,7 @@ import type {
   HostUpdateAttemptClaimBaseline,
   HostUpdateAttemptIdentity,
   HostUpdateAttemptPhase,
+  HostUpdateAttemptVerification,
 } from "../record";
 import {
   HOST_UPDATE_ATTEMPT_PHASES,
@@ -3363,4 +3364,243 @@ describe("AttemptMutationIntent - exhaustive shape", () => {
       "supersede",
     ]);
   });
+});
+
+// `sameRecord` owns `verification` too (CR2 item 1).
+//
+// `encodeValidatedRecord` and the post-write re-read exist to make one
+// sentence true: "the bytes subsequently fsynced and renamed are therefore
+// exactly the record the transition authorized". `sameRecord` enumerated every
+// other key of the record and skipped `verification`, so a record whose
+// verification was not ours compared EQUAL and the commit reported success.
+//
+// The rows are split by WHICH seam they pin, because the two are defended by
+// different code and only one of them is `sameVerification`'s:
+//
+//  - the intent gate. `normalizeVerification` already reconstructs the value
+//    on every channel, executor included, so an unknown mode is refused and an
+//    extra property is stripped BEFORE a record exists. The row below marked
+//    "the intent gate" pins that, not the round trip - deleting
+//    `sameVerification` leaves it green, which is the honest reading.
+//  - the post-write re-read, where the bytes are a FOREIGN writer's and were
+//    never normalized by us. That is `sameVerification`'s seam, and all three
+//    of its arms are reachable there.
+describe("commitExecutorOnlyAttemptMutation - the terminal verification round trip", () => {
+  const IDENTITY = { mode: "identity" } as const;
+  const VERSION_ONLY = {
+    mode: "version-only",
+    reason: "pid-start-stamp-missing",
+    floor: "1.1.5",
+  } as const;
+
+  /**
+   * Builds a verification the compiler would refuse, the way a plugin or a
+   * plain-JavaScript caller actually reaches this channel: property assignment
+   * onto an empty object, never a chained assertion.
+   */
+  function forcedVerification(
+    raw: Readonly<Record<string, unknown>>,
+  ): HostUpdateAttemptVerification {
+    const forced = {} as HostUpdateAttemptVerification;
+    for (const [key, value] of Object.entries(raw)) {
+      Object.defineProperty(forced, key, {
+        value,
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    return forced;
+  }
+
+  /**
+   * `verifying` is the only legal predecessor of `complete`, so the walk is
+   * part of the fixture rather than a detail: an advance that never became
+   * legal would be refused as `intent-not-legal`, and a row asserting only
+   * "not committed" would pass for a reason that has nothing to do with
+   * verification.
+   */
+  async function verifyingHandle(name: string): Promise<{
+    readonly dir: string;
+    readonly handle: UpdateAttemptLockHandle;
+    readonly identity: HostUpdateAttemptIdentity;
+  }> {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, name);
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({}) },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") throw new Error("create failed");
+    let identity = created.identity;
+    for (const phase of ["preparing", "verifying"] as const) {
+      const advanced = await commitAttemptMutation({
+        handle,
+        intent: {
+          kind: "advance",
+          held: identity,
+          advance: {
+            phase,
+            continuation: null,
+            progress: null,
+            error: null,
+            claimRefresh: null,
+            verification: null,
+            nowIso: "2026-01-01T00:01:00.000Z",
+          },
+        },
+      });
+      expect(advanced.kind).toBe("committed");
+      if (advanced.kind !== "committed") throw new Error(`${phase} failed`);
+      identity = advanced.identity;
+    }
+    return { dir, handle, identity };
+  }
+
+  async function completeWith(
+    name: string,
+    verification: HostUpdateAttemptVerification,
+  ): Promise<{ readonly outcome: AttemptCommitOutcome; readonly dir: string }> {
+    const { dir, handle, identity } = await verifyingHandle(name);
+    const outcome = await commitExecutorOnlyAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: identity,
+        advance: {
+          phase: "complete",
+          continuation: null,
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          verification,
+          nowIso: "2026-01-01T00:02:00.000Z",
+        },
+      },
+    });
+    return { outcome, dir };
+  }
+
+  /**
+   * Arms the directory-sync seam - the one hook that fires AFTER the rename
+   * and BEFORE the re-read - to overwrite the canonical record the way a
+   * foreign writer racing this commit would. It rewrites only `verification`,
+   * so every other field the round trip compares is byte-identical by
+   * construction and cannot be what a failure is attributed to.
+   */
+  function foreignWriteDuringSync(
+    dir: string,
+    replacement: Readonly<Record<string, string>>,
+  ): void {
+    __setDirectorySyncHookForTest(async (_dir, stage) => {
+      if (stage !== "sync") return;
+      const path = updateAttemptRecordPath(dir);
+      const record = JSON.parse(await readFile(path, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      record.verification = replacement;
+      await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    });
+  }
+
+  it("writes an `identity` verification and reads back exactly it", async () => {
+    const { outcome, dir } = await completeWith("verify-identity", IDENTITY);
+    expect(outcome.kind).toBe("committed");
+    if (outcome.kind !== "committed") return;
+    expect(outcome.record.verification).toEqual(IDENTITY);
+    const read = await readUpdateAttemptRecord(dir);
+    expect(read.kind).toBe("valid");
+    if (read.kind !== "valid") return;
+    expect(read.value.verification).toEqual(IDENTITY);
+  });
+
+  it("writes a `version-only` verification with its reason and floor intact", async () => {
+    const { outcome, dir } = await completeWith(
+      "verify-version-only",
+      VERSION_ONLY,
+    );
+    expect(outcome.kind).toBe("committed");
+    if (outcome.kind !== "committed") return;
+    expect(outcome.record.verification).toEqual(VERSION_ONLY);
+    const read = await readUpdateAttemptRecord(dir);
+    expect(read.kind).toBe("valid");
+    if (read.kind !== "valid") return;
+    expect(read.value.verification).toEqual(VERSION_ONLY);
+  });
+
+  // The intent gate, NOT the round trip. `normalizeVerification` refuses a
+  // mode it cannot rebuild, so no record is ever constructed and nothing
+  // reaches disk. Kept because that is the guarantee a JS caller actually
+  // meets - but it stays green with `sameVerification` deleted, so it must
+  // never be cited as evidence for the comparison below.
+  it("the intent gate: refuses an unknown verification mode forced past the type boundary", async () => {
+    const { outcome, dir } = await completeWith(
+      "verify-unknown-mode",
+      forcedVerification({ mode: "attested-by-some-future-leg" }),
+    );
+    expect(outcome).toMatchObject({
+      kind: "rejected",
+      reason: "intent-invalid",
+    });
+    const read = await readUpdateAttemptRecord(dir);
+    expect(read.kind).toBe("valid");
+    if (read.kind !== "valid") return;
+    expect(read.value.phase).toBe("verifying");
+    expect(read.value.verification).toBeUndefined();
+  });
+
+  // The three arms of `sameVerification`, each at the only seam that can reach
+  // it: a foreign record landing between our rename and our read-back.
+  // Reporting `committed` here would tell the executor its own verification is
+  // durable when the bytes on disk carry someone else's.
+  // Skipped on Windows for the same reason the durability rows above are:
+  // `syncDirectory` returns before the hook there, so the seam does not exist
+  // and the row would assert nothing.
+  it.skipIf(process.platform === "win32").each([
+    {
+      what: "a mode this build DROPS on decode",
+      ours: VERSION_ONLY,
+      replacement: { mode: "attested-by-some-future-leg" },
+      name: "foreign-dropped-mode",
+    },
+    {
+      what: "the other known mode",
+      ours: IDENTITY,
+      replacement: VERSION_ONLY,
+      name: "foreign-other-mode",
+    },
+    {
+      what: "the same mode with a different floor",
+      ours: VERSION_ONLY,
+      replacement: { ...VERSION_ONLY, floor: "9.9.9" },
+      name: "foreign-other-floor",
+    },
+  ])(
+    "refuses to report committed when a foreign write replaces the verification with $what",
+    async ({ ours, replacement, name }) => {
+      const { dir, handle, identity } = await verifyingHandle(name);
+      foreignWriteDuringSync(dir, replacement);
+      const outcome = await commitExecutorOnlyAttemptMutation({
+        handle,
+        intent: {
+          kind: "advance",
+          held: identity,
+          advance: {
+            phase: "complete",
+            continuation: null,
+            progress: null,
+            error: null,
+            claimRefresh: null,
+            verification: ours,
+            nowIso: "2026-01-01T00:02:00.000Z",
+          },
+        },
+      });
+      expect(outcome).toMatchObject({
+        kind: "durability-unverified",
+        cause: "post-write-roundtrip-mismatch",
+      });
+    },
+  );
 });
