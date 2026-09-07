@@ -199,4 +199,3 @@ describe("resolveTraycerCliInvocation (shipped / non-dev) - CLI discovery model"
     await expect(resolveTraycerCliInvocation()).rejects.toThrow(/no CLI found/);
   });
 });
-

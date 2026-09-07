@@ -408,6 +408,7 @@ function findResolution(
   try {
     decoded = decodeURIComponent(source);
   } catch {
+    // Invalid percent-encoding: keep `source` as the lookup key.
   }
   return (
     resolutions.find(
