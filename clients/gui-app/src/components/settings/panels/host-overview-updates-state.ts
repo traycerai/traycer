@@ -634,6 +634,15 @@ function useBoundUpdateDispatches(input: {
     input.client,
     input.incarnation,
   );
+  // BOTH mutations arrive here — `continueMutation` is passed to a parameter
+  // spelled `typeof activateMutation`, which type-checks only because the two
+  // responses coincide. `typeof activateMutation | typeof continueMutation`
+  // says it properly and is rejected by
+  // `typescript(no-duplicate-type-constituents)` for the same reason the union
+  // in `host-overview-rpc.ts` is, so what guarantees this stays sound is that
+  // module's `BoundDispatchResponsesAgree` assertion, not this annotation.
+  // Worth stating here because this site names no response type at all: no
+  // search for `BoundDispatchResponse` reaches it.
   const dispatch = (
     mutation: typeof activateMutation,
     variables: BoundDispatchInput,

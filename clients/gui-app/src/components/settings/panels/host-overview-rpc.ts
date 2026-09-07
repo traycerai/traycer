@@ -736,7 +736,7 @@ export function useHostUpdateActivate(
   client: HostClient<HostRpcRegistry> | null,
   incarnation: string,
 ): UseMutationResult<
-  BoundDispatchResponse,
+  ActivateDispatchResponse,
   HostRpcError,
   BoundDispatchVariables,
   HostUpdateDispatchContext
@@ -772,7 +772,7 @@ export function useHostUpdateContinue(
   client: HostClient<HostRpcRegistry> | null,
   incarnation: string,
 ): UseMutationResult<
-  BoundDispatchResponse,
+  ContinueDispatchResponse,
   HostRpcError,
   BoundDispatchVariables,
   HostUpdateDispatchContext
@@ -851,11 +851,60 @@ export interface BoundDispatchVariables {
  * module: both bound methods have exactly one minor, so what this client
  * negotiates IS the 1.0 shape and there is no version to state explicitly (the
  * install's annotation exists precisely because it has three).
+ *
+ * ONE PER METHOD, even though the two are identical today. The protocol gives
+ * `host.update.activate` and `host.update.continue` the same
+ * `hostUpdateBoundDispatchResponseSchema` object, deliberately — they differ in
+ * the authority the caller exercises, not in what comes back — so these two
+ * aliases resolve to the same type and nothing narrows. What they buy is that a
+ * continuation's result is no longer described by a type derived from the OTHER
+ * method: the identity is what made that invisible, and it is not a promise the
+ * protocol makes for all time.
  */
-export type BoundDispatchResponse = ResponseOfMethod<
+export type ActivateDispatchResponse = ResponseOfMethod<
   HostRpcRegistry,
   "host.update.activate"
 >;
+export type ContinueDispatchResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "host.update.continue"
+>;
+
+/**
+ * What EITHER bound dispatch answers — the shared settle path's type, as
+ * distinct from the two per-method aliases the hooks use.
+ *
+ * It resolves through ONE of the methods, which is a compromise and not the
+ * shape this wants: a union naming both is what it should say, and the linter
+ * will not have one (see {@link BoundDispatchResponsesAgree} immediately
+ * below). So the name carries the intent, the alias carries a representative,
+ * and the assertion carries the guarantee. The one thing this must not be read
+ * as is "the shared path handles activations": it receives both, and the
+ * assertion is what makes that safe.
+ */
+export type BoundDispatchResponse = ActivateDispatchResponse;
+
+/**
+ * The claim `BoundDispatchResponse` rests on, CHECKED rather than assumed.
+ *
+ * It would read better as `ActivateDispatchResponse | ContinueDispatchResponse`
+ * — that was the first attempt — but `typescript(no-duplicate-type-constituents)`
+ * rejects the union as an error under `--deny-warnings` and its autofix
+ * collapses it, correctly: the two constituents ARE the same type today. So the
+ * agreement is asserted instead. If the protocol ever gives the two methods
+ * different response schemas, this stops compiling and every shared site below
+ * has to say which one it means — which is the whole point, and is exactly what
+ * naming one method for both silently would not do.
+ */
+type AssertTrue<T extends true> = T;
+export type BoundDispatchResponsesAgree = [
+  AssertTrue<
+    ContinueDispatchResponse extends ActivateDispatchResponse ? true : false
+  >,
+  AssertTrue<
+    ActivateDispatchResponse extends ContinueDispatchResponse ? true : false
+  >,
+];
 
 /**
  * What every update dispatch's settle needs, whatever its method.
