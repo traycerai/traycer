@@ -4979,6 +4979,34 @@ describe("acceptance: cells with no legacy ancestor", () => {
   async function crashAtRestarting(
     target: string,
   ): Promise<HostUpdateAttemptRecord> {
+    return crashAtRestartingWithSwapRead(target, "readable");
+  }
+
+  /**
+   * The same crash, parameterized on ONE thing: whether the install record can
+   * be read at `afterSwap`.
+   *
+   * `"readable"` is the ordinary shape and what every existing caller wants -
+   * Q12's refresh lands, so the `restarting` record's claim baseline names the
+   * SWAPPED install.
+   *
+   * `"unreadable"` blacks the record out across the hook and restores it
+   * immediately after, which is the fail-open branch of Q12:
+   * `generationWrittenBySwap` returns `null`, `refreshedClaimBaseline` carries
+   * the PRIOR baseline, and the record is written at `restarting` still naming
+   * the pre-swap install. It uses the production reader rather than a mock -
+   * the file genuinely is not there for the duration of the call - so what is
+   * exercised is the real `readHostInstallRecord === null` path.
+   *
+   * The record written back afterwards is byte-identical (`installRecordOf` is
+   * deterministic in `world`), which is what makes this a READ failure rather
+   * than a different install: the swap's own record is what ends up on disk,
+   * exactly as it would be if the read had merely blipped.
+   */
+  async function crashAtRestartingWithSwapRead(
+    target: string,
+    swapRead: "readable" | "unreadable",
+  ): Promise<HostUpdateAttemptRecord> {
     world.latest = target;
     mocks.applyHostWithAttempt.mockImplementationOnce(
       async (
@@ -4991,7 +5019,15 @@ describe("acceptance: cells with no legacy ancestor", () => {
         await options.hooks.beforeSwapCommit();
         await seedInstalled(target);
         await seedStaged(null);
-        await options.hooks.afterSwap();
+        if (swapRead === "unreadable") {
+          // The file only - `world.installedVersion` stays at the target,
+          // because the SWAP happened. What failed is the read.
+          await deleteHostInstallRecord(ENVIRONMENT);
+          await options.hooks.afterSwap();
+          await writeHostInstallRecord(ENVIRONMENT, installRecordOf(target));
+        } else {
+          await options.hooks.afterSwap();
+        }
         // The host has NOT come back at the target yet, and the process dies
         // here - before the evidence loop and before the completion write.
         throw new AbortSignalError();
@@ -5339,7 +5375,9 @@ describe("acceptance: cells with no legacy ancestor", () => {
     // recovery ACTIVATES the swapped bytes instead of calling them a foreign
     // change, and that outcome must hold on both baselines. The pre-swap
     // baseline still occurs - a swap-time read that fails carries it through -
-    // and it is pinned separately.
+    // and it is pinned separately, by the Q12 fail-open test below. That test
+    // is now the ONLY fixture in this file that reaches
+    // `installedByThisAttempt`; this one no longer does.
     expect(crashed.claim).toMatchObject({ installedVersion: "2.0.0" });
     // The host is DOWN, which is the real wedge: `restarting` is written after
     // the cooperative stop, so a run killed there has already taken the old
@@ -5381,6 +5419,94 @@ describe("acceptance: cells with no legacy ancestor", () => {
       kind: "claimed",
       attemptId: crashed.attemptId,
     });
+  });
+
+  // ---- Q12's fail-open branch: the ONLY route left to the forgiveness clause
+  //
+  // This is the red-watch for `installedByThisAttempt`, and after Q12 it is the
+  // only one the suite can have. Q12 refreshes the claim baseline at
+  // `afterSwap`, so every other fixture in this file reaches
+  // `revalidateInstallIdentity` with a baseline that already names the swapped
+  // install and passes the PRIMARY equality check - the forgiveness clause is
+  // never consulted, and deleting it would redden nothing.
+  //
+  // What keeps the clause alive is that Q12 fails OPEN.
+  // `generationWrittenBySwap` returns `null` when `readHostInstallRecord`
+  // cannot be read, `refreshedClaimBaseline` turns a null refresh into "carry
+  // the prior baseline unchanged", and the record lands at `restarting` still
+  // naming the PRE-swap install - indistinguishable on disk from a pre-Q12
+  // write, as Q12's own docblock says. That record is not a transitional
+  // artifact that ages out; it is what a read failure produces, for ever.
+  //
+  // Ablation, run rather than asserted: delete the three conditions in
+  // `installedByThisAttempt` and the file answers 1 failed / 200 passed of
+  // 201 - this test, and nothing else. That 200 is the number worth writing
+  // down. It is the measurement of how invisible the clause has become, and
+  // the reason someone reading only a green suite would delete it: before
+  // this pin existed, that same deletion was green across the board.
+
+  it("Q12 fail-open: a swap-time read failure leaves the PRE-swap baseline, and the forgiveness clause still admits the recovery", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestartingWithSwapRead("2.0.0", "unreadable");
+
+    // The swap DID happen - the install record on disk is the target's, and
+    // byte-identical to the one the readable variant leaves behind.
+    expect(world.installedVersion).toBe("2.0.0");
+    const live = await readHostInstallRecord(ENVIRONMENT);
+    expect(live?.version).toBe("2.0.0");
+
+    // ...and the baseline did NOT move with it, because the refresh read
+    // nothing. This is the assertion the whole test exists for: it is the
+    // record shape Q12 cannot avoid producing, and the one the equality check
+    // in `revalidateInstallIdentity` cannot satisfy.
+    expect(crashed.claim).toMatchObject({ installedVersion: "1.0.0" });
+    // Stated as the negative too, so the test cannot quietly become a
+    // duplicate of the readable-variant pin if the fixture ever changes: the
+    // baseline and the live record disagree, so the primary equality check in
+    // `revalidateInstallIdentity` cannot be what admits this run.
+    expect(crashed.claim?.installedVersion).not.toBe(live?.version);
+    // A HARNESS GAP, written down rather than papered over. Production mints a
+    // fresh install id at every swap, so in the field the baseline's
+    // GENERATION goes stale too - that is the half Q12 exists to refresh, and
+    // the wedged Linux box showed both ids differing. `installRecordOf` reuses
+    // one `world.installId` for every version, so here the two generations are
+    // equal and only the version differs.
+    //
+    // It does not weaken the pin: `matches` is a conjunction, version
+    // inequality alone defeats it, and `installedByThisAttempt` reads no
+    // generation at all. It would matter to any FUTURE clause that compared
+    // generations here - which the docblock argues is a tautology and must not
+    // be added - so the gap is recorded at the one place someone would go
+    // looking for a fixture to write it against.
+    expect(crashed.claim?.installGeneration).toBe(
+      live === null ? null : encodeInstallGeneration(live),
+    );
+
+    // The same host-down wedge as the Q5 pin above: `restarting` is written
+    // after the cooperative stop, so the old host is already gone.
+    world.runningVersion = null;
+    mocks.applyHostWithAttempt.mockClear();
+
+    const outcome = await runUpdate({
+      versionRequest: "2.0.0",
+      ackNonce: "nonce-abcdefgh",
+    });
+
+    // ADMITTED, on the same attempt: not `failed {install-changed}`, not
+    // superseded. Only `installedByThisAttempt` can produce this outcome from
+    // the record above - the equality check has already said no.
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(crashed.attemptId);
+    expect(record.phase).toBe("complete");
+    expect(record.execution).toBe("terminal");
+    expect(record.error).toBeNull();
+    expect(world.runningVersion).toBe("2.0.0");
+    expect(outcome.legacy.version).toBe("2.0.0");
+    // Activated, never re-applied: the bytes were already placed by the run
+    // that crashed.
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.relaunchHostAfterRestartWithAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("Q5 defect 2: `--intent continue` on the wedged attempt RECOVERS it - a present record whose holder is dead is not `refused-attempt-gone`", async () => {

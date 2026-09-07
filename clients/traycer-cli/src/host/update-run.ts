@@ -1419,9 +1419,11 @@ class AttemptRecordWriter {
    * read this as "the version is always wrong after a swap".
    *
    * Making the parameter required rather than defaulted means each of the
-   * call sites below states which it is. Six of the nine genuinely carry -
+   * call sites below states which it is. Eight of the ten genuinely carry -
    * they advance within one installed state and have nothing new to say - and
-   * that is now visible instead of inherited.
+   * that is now visible instead of inherited. (The count read "six of the
+   * nine" and was simply miscounted; it is ten sites on BOTH lineages, so
+   * this is a correction rather than something the merge moved.)
    *
    * A `null` here is NOT evidence that nothing changed: `generationWrittenBySwap`
    * also returns `null` when the install record cannot be read, which is why
@@ -1784,6 +1786,47 @@ async function revalidateInstallIdentity(
  * verifies at this record's own `targetVersion`; this function then read the
  * same install record as evidence of a stranger.
  *
+ * ## Q12 moved the baseline, and this clause did NOT retire with it
+ *
+ * READ THIS BEFORE DELETING ANYTHING HERE. Q12 refreshes the claim baseline at
+ * the one advance that crosses a change of installed bytes: `afterSwap` writes
+ * `restarting` carrying `generationWrittenBySwap`. So a record written by a
+ * post-Q12 CLI normally reaches `revalidateInstallIdentity` with a baseline
+ * that ALREADY names the swapped install, the primary equality check passes
+ * outright, and execution never arrives here at all.
+ *
+ * Which makes this look like dead code, and it is not. Two constituencies
+ * still route through it, and the second one never goes away:
+ *
+ *  1. Records written BEFORE Q12 and still in flight - a CLI upgraded between
+ *     the crash and the recovery reads a `restarting` record whose baseline is
+ *     the pre-swap one. Transitional, and it does expire.
+ *  2. Post-Q12 records whose swap-time refresh FAILED. `generationWrittenBySwap`
+ *     returns `null` when `readHostInstallRecord` is unreadable at `afterSwap`,
+ *     `refreshedClaimBaseline` turns a `null` refresh into "carry the prior
+ *     baseline unchanged", and the record is written at `restarting` with the
+ *     PRE-swap baseline - the exact shape this clause forgives. Permanent, not
+ *     retiring: it is the fail-open branch of a read that can always fail.
+ *
+ * Q12's own docblock reaches the same conclusion from its end and says so at
+ * `generationWrittenBySwap`: the two records are INDISTINGUISHABLE on disk, so
+ * no reader can separate "Q12 ran and could not read" from "Q12 never ran".
+ * That is the sharper statement of why (2) is permanent - not merely that the
+ * read can fail, but that nothing downstream can ever detect that it did.
+ *
+ * ## The trap, stated because nothing red will state it for you
+ *
+ * With the suite as it stands, deleting these three conditions reddens EXACTLY
+ * ONE test - the one written for case (2), which blacks the install record out
+ * across `afterSwap` on purpose. Every other fixture seeds a readable record,
+ * takes the refreshed baseline, and passes the equality check above without
+ * ever calling this function. Measured, not assumed: the clause was deleted
+ * and the file re-run - 1 failed, 200 passed of 201, and the one failure is
+ * that pin.
+ *
+ * So a green suite after deleting this is not evidence that it is unused. It
+ * is evidence that the one pin holding it was deleted along with it.
+ *
  * ## Why the CONTINUATION is the carrier, and not the phase
  *
  * The rule is "the install equals the attempt's own target AND this attempt
@@ -1854,10 +1897,14 @@ async function revalidateInstallIdentity(
  *
  * The generation is not available to compare against: the pre-swap baseline
  * names the generation this attempt REPLACED, so there is nothing here that
- * records what its own swap wrote. What decides instead is the layer that
- * already looked: `recoveryContinuation` returned `activate` only because the
- * installed artifact verified - hashed under this same lock - at this
- * record's own target. Re-deriving a stricter answer here from a baseline
+ * records what its own swap wrote. Q12 does record it - but not on any path
+ * that arrives HERE, which is the point of the section above: every record
+ * that reaches this function is one whose swap-time refresh never landed.
+ *
+ * What decides instead is the layer that already looked:
+ * `recoveryContinuation` returned `activate` only because the installed
+ * artifact verified - hashed under this same lock - at this record's own
+ * target. Re-deriving a stricter answer here from a baseline
  * that predates the swap would not be a second check; it would be a refusal
  * of the first one.
  *
@@ -2974,8 +3021,10 @@ async function parkForActivation(
  *
  * What covers that case is unchanged and lives elsewhere:
  * `installedByThisAttempt`'s forgiveness clause in `revalidateInstallIdentity`
- * - which is on the merged CLI lineage, NOT in this tree - and it must stay
- * for exactly this reason as well as for genuinely pre-Q12 records.
+ * - which as of this merge is in THIS FILE, a few hundred lines above; the
+ * sentence this replaces said "not in this tree" and was written before the
+ * two lineages met - and it must stay for exactly this reason as well as for
+ * genuinely pre-Q12 records. Its own docblock names this helper back.
  *
  * ## The claimless asymmetry this cannot fix either
  *
