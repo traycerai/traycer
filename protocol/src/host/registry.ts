@@ -267,11 +267,15 @@ import {
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
+  hostUpdateActivateUpgradeV10ToV11,
   hostUpdateActivateV10,
+  hostUpdateActivateV11,
   hostUpdateCheckUpgradeV10ToV11,
   hostUpdateCheckV10,
   hostUpdateCheckV11,
+  hostUpdateContinueUpgradeV10ToV11,
   hostUpdateContinueV10,
+  hostUpdateContinueV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
   hostUpdateInstallV12,
@@ -4476,14 +4480,27 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // ("restart into bytes already placed" vs "carry on with whatever this
   // attempt was authorized to do"), and one capability answer over both would
   // make a host's support for either indistinguishable from support for both.
+  //
+  // `@1.1` adds the OPTIONAL `expected {generation, sequence}` to both, so the
+  // caller can say which position of the attempt it observed. A minor, on
+  // `host.update.check@1.1`'s reasoning: the request only grows an optional
+  // key and the response is untouched, so `upgradeFromPreviousVersion` is the
+  // whole bridge (and here it is the identity) and no
+  // `downgradePathsFromLatest` entry is warranted — those cross majors. `@1.0`
+  // binds the FROZEN request shape, which is what makes the key structurally
+  // absent for a released peer rather than filtered out after the fact.
   "host.update.activate": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateActivateV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateActivateV11,
+          upgradeFromPreviousVersion: hostUpdateActivateUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -4492,11 +4509,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.continue": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateContinueV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateContinueV11,
+          upgradeFromPreviousVersion: hostUpdateContinueUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

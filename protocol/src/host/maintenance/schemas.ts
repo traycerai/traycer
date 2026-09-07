@@ -412,6 +412,42 @@ export type HostUpdateInstallResponseV11 = z.infer<
 >;
 
 /**
+ * The request shape as it SHIPPED at `@1.0`: `attemptId` and `force`, with no
+ * `expected`. A hand-written literal, not `.omit()` over the live schema, for
+ * the reason `managedCommandSchemaPreRelaunch` gives — a future addition to
+ * the live shape must not be able to leak onto the released line this binds.
+ *
+ * Binding `@1.0` to this is what makes the strip STRUCTURAL rather than a
+ * filter applied after the fact: the dispatcher parses against the CALLER's
+ * schema, so an `expected` sent to a `@1.0` peer is unreachable for it, and
+ * that peer's behaviour is exactly what it was before this key existed.
+ */
+export const hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity = z.object(
+  {
+    attemptId: z.string().min(1),
+    force: z.boolean(),
+  },
+);
+
+/**
+ * The record position the dispatcher OBSERVED when it built this request.
+ *
+ * `z.number().int().positive()` is exactly the decoder's `positiveInteger`
+ * (`@traycer/protocol/config/host-update-attempt`): zod 4's `.int()` is
+ * safe-integer bounded, so both reject a counter above `2^53` where `+ 1`
+ * stops advancing. It is also byte-for-byte the rule `host.status` already
+ * applies to the same two fields, which matters because these values are
+ * compared for EQUALITY with the ones that arrived over that route.
+ */
+export const hostUpdateBoundDispatchExpectedIdentitySchema = z.object({
+  generation: z.number().int().positive(),
+  sequence: z.number().int().positive(),
+});
+export type HostUpdateBoundDispatchExpectedIdentity = z.infer<
+  typeof hostUpdateBoundDispatchExpectedIdentitySchema
+>;
+
+/**
  * The request shared by the two BOUND update dispatches,
  * `host.update.activate` and `host.update.continue`.
  *
@@ -421,10 +457,44 @@ export type HostUpdateInstallResponseV11 = z.infer<
  * caller supplies only which attempt it means and whether the user asked to
  * push past a busy host. A version here would be a second, unsynchronised copy
  * of a fact the record already owns — and one a stale UI could get wrong.
+ *
+ * ### Why `expected` is NOT that second copy
+ *
+ * The argument above stands, and it does not reach this key. A version is a
+ * fact about the world; a stale one makes the host do the WRONG THING. A
+ * generation is a cursor into the record's own history whose only use is to be
+ * compared for equality, and a stale one produces a REFUSAL. The two fail in
+ * opposite directions, which is the whole reason one is refused here and the
+ * other is carried.
+ *
+ * It is not new vocabulary either. `host.status` already carries
+ * `attemptId + generation + sequence` and calls it "the ordering key, in full"
+ * (`../status/contracts.ts`); the client receives the triple, orders on it, and
+ * then had no way to say which one it was acting on. This request was the only
+ * place in the round trip that truncated the identity to a third of itself.
+ *
+ * ### Why OPTIONAL, and what its absence means
+ *
+ * Absence is the legacy signal, not a defaulted value. A client that predates
+ * `@1.1` cannot send the key, and a `@1.0` peer parses with
+ * {@link hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity}, where it does
+ * not exist at all. A host that receives no `expected` must therefore behave
+ * exactly as it did before — unbound — because "the caller did not say" and
+ * "the caller says any position will do" have to stay distinguishable, and only
+ * the first of them is true of an old client.
+ *
+ * A host that DOES receive one compares it against the record it observes and
+ * refuses when the attempt has moved. That refusal rides the existing
+ * `dispatch-indeterminate { reason }` arm: `reason` is a free `z.string()` here
+ * and a kebab PATTERN in the ACK grammar, so the new
+ * `refused-attempt-moved` needs no schema anywhere. The reason vocabulary is
+ * the host's (`BOUND_DISPATCH_REASONS`), deliberately — this package never
+ * enumerated these reasons and does not start now.
  */
 export const hostUpdateBoundDispatchRequestSchema = z.object({
   attemptId: z.string().min(1),
   force: z.boolean(),
+  expected: hostUpdateBoundDispatchExpectedIdentitySchema.optional(),
 });
 export type HostUpdateBoundDispatchRequest = z.infer<
   typeof hostUpdateBoundDispatchRequestSchema
