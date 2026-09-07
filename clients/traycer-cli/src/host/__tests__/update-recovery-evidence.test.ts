@@ -1382,6 +1382,71 @@ describe("observeAttemptRecoveryEvidence - Q1: the version-only fallback for a p
     expect(observation.runningDiagnosis).toBe("host-not-ready");
   });
 
+  // ---- X1: the fallback's PRECONDITION, which was shipped unpinned --------
+  //
+  // Reviewer C's finding, and the shape is worth naming because it is now the
+  // third instance this round: a fix whose CONSEQUENCES are pinned while its
+  // PRECONDITION is not. The two rows above prove what the fallback does once
+  // it engages. Nothing proved what makes it engage - so two independent
+  // mutations (gate the arm on the policy instead of on the stamp; let an
+  // UNRECOGNIZED stamp earn the fallback) left all four suites green.
+  //
+  // The precondition is `processStartIdentityRead === "absent"`, and it is
+  // strictly narrower than `stamp === null`: an unparseable stamp also decodes
+  // to `null`. Collapsing the two is exactly the defect Q1 IS, one layer up -
+  // a host whose stamp is corrupt would silently buy the weaker check on the
+  // grounds that it had no stamp at all.
+  //
+  // `"not-a-stamp"` is PRESENT and does not parse: `isProcessStartIdentity`
+  // requires a `linux|darwin|win32` platform tag before the separator, so this
+  // decodes to `unrecognized` rather than to `absent`.
+  function seedUnparseableStampHost(): void {
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "not-a-stamp",
+    });
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: true, hostVersion: "1.2.3" }),
+    );
+  }
+
+  it("X1: an UNPARSEABLE stamp does not buy the fallback, even under version-only", async () => {
+    seedUnparseableStampHost();
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "version-only",
+    );
+
+    // Refused, not verified - and the diagnosis says WHICH of the two `null`
+    // stamps this was. A record that cannot be parsed is not evidence that the
+    // writer predates the field.
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("pid-start-stamp-unrecognized");
+    expect(observation.identityCompared).toBe(false);
+    expect(callHostRpcMock).not.toHaveBeenCalled();
+  });
+
+  it("X1 CONTROL: the same unparseable stamp under identity-required is unchanged", async () => {
+    // The half that pins the mutation "gate the arm on the policy instead of
+    // the stamp". Under that mutation this row and the one above BOTH still
+    // refuse, so it cannot detect it alone - what it establishes is that the
+    // policy makes NO difference to an unparseable stamp, which is what makes
+    // the row above a statement about the stamp rather than about the policy.
+    seedUnparseableStampHost();
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("pid-start-stamp-unrecognized");
+    expect(observation.identityCompared).toBe(false);
+  });
+
   it("the fallback keeps every OTHER check: a dead stamp-less host is caught by the RPC, not by liveness", async () => {
     // Worth its own row because it is the check the fallback appears to lose.
     // Without a stamp there is no identity verdict to report `dead`, but the
