@@ -84,7 +84,10 @@ import {
   relaunchHostAfterRestartWithAttempt,
   stopHostForRestartWithAttempt,
 } from "./update-mutation";
-import { observeAttemptRecoveryEvidence } from "./update-recovery-evidence";
+import {
+  observeAttemptRecoveryEvidence,
+  type AttemptRecoveryEvidenceObservation,
+} from "./update-recovery-evidence";
 import { currentInstallPlatform } from "../installer/install";
 
 // `traycer host update`, on the schema-v2 attempt executor (Plan D1).
@@ -2552,8 +2555,28 @@ async function verifyUnderClaim(
     ) {
       break;
     }
+    // Every attempt, at DEBUG: the whole shape the deadline will otherwise
+    // summarise into one token, so a support log has the sequence and not just
+    // the last frame. No pid and no path - `runningDiagnosis` already names
+    // the pid outcome as a fixed string.
+    args.logger.debug("Host update verify leg observed an unhealthy host", {
+      environment: args.environment,
+      targetVersion: target,
+      installedKind: installed.kind,
+      runningKind: running.kind,
+      diagnosis: verifyDiagnosisToken(observation, target),
+    });
     if (Date.now() >= deadline) {
-      const message = `host update: applied ${target} but the host did not become healthy at that version`;
+      // The REASON, carried into the message rather than thrown away with the
+      // observation (Linux E13). The legacy `probeHostHealth` rendered four
+      // diagnoses and this leg rendered none, so a failed update said "not
+      // healthy" and nothing said why - the 1.2.0 shape. It rides `message`
+      // because that is the field the record's `error` already has: the
+      // string the shell prints and the string `update-attempt.json` retains
+      // are then the same string, with no schema change and nothing to keep
+      // in step.
+      const diagnosis = verifyDiagnosisToken(observation, target);
+      const message = `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`;
       await writer.fail({
         code: "verify-timeout",
         message,
@@ -2562,7 +2585,7 @@ async function verifyUnderClaim(
       throw cliError({
         code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
         message,
-        details: { environment: args.environment, version: target },
+        details: { environment: args.environment, version: target, diagnosis },
         exitCode: 1,
       });
     }
@@ -2584,6 +2607,42 @@ async function verifyUnderClaim(
     });
   }
   await input.mirror.record(committed.record);
+}
+
+/**
+ * The one token the verify leg's failure carries, chosen from a CLOSED set.
+ *
+ * The INSTALLED leg is tested first because it is the running leg's premise: a
+ * host cannot be serving what the record does not say is placed, and reporting
+ * the running symptom over an installed cause would send the reader after the
+ * wrong thing. Only when the bytes are demonstrably the target does the
+ * running leg's own diagnosis answer.
+ *
+ * Every arm returns a fixed string. Nothing read from disk and nothing the
+ * host reported about itself is interpolated, so the token is always safe to
+ * print, to persist in the record, and for the matrix to assert on.
+ */
+function verifyDiagnosisToken(
+  observation: AttemptRecoveryEvidenceObservation,
+  target: string,
+): string {
+  const { installed, running } = observation.evidence;
+  if (installed.kind === "absent") return "install-record-absent";
+  if (installed.kind === "unreadable") return "install-record-unreadable";
+  if (installed.kind === "missing") return "install-bytes-missing";
+  if (installed.version !== target) return "installed-version-mismatch";
+  // The bytes are placed and they are the right ones, so everything left is
+  // about the process.
+  if (running.kind === "verified") {
+    return running.version === target
+      ? "running-not-host-home-bound"
+      : "running-version-mismatch";
+  }
+  if (running.kind === "unbound") return "running-unbound";
+  if (running.kind === "foreign") return "running-foreign";
+  // `absent` and `unreadable` each collapse several causes that no DECISION
+  // may branch on. The observation kept them apart for exactly this line.
+  return observation.runningDiagnosis;
 }
 
 function delay(ms: number): Promise<void> {

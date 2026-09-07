@@ -1020,6 +1020,97 @@ describe("observeAttemptRecoveryEvidence - the running leg is typed AGAINST the 
   });
 });
 
+describe("observeAttemptRecoveryEvidence - the running leg's DIAGNOSIS (Linux E13)", () => {
+  // Several distinct causes are one evidence kind on purpose - no decision may
+  // branch on the difference - so the diagnosis is the only place they are
+  // told apart. It is what the verify leg renders when it gives up, which is
+  // the whole reason a user is no longer told "not healthy" and nothing else.
+  it.each([
+    ["a dead pid", "dead", "absent", "host-process-dead"],
+    ["a RECYCLED pid", "mismatch", "absent", "host-process-recycled"],
+    [
+      "an indeterminate verdict",
+      "indeterminate",
+      "unreadable",
+      "pid-identity-indeterminate",
+    ],
+  ] as const)(
+    "tells %s apart while the evidence kind stays the same",
+    async (_label, verdict, kind, diagnosis) => {
+      // Falsification (the ablation): collapse the `dead` and `mismatch` arms
+      // of `readRunningObservation` back into one `absentRunning` and the
+      // recycled row reddens while the dead row still passes - which is
+      // exactly how the distinction was lost before.
+      writePidMetadata({
+        version: "1.2.3",
+        processStartIdentity: "linux:boot-a 4242",
+      });
+      identityVerdictMock.mockResolvedValue(verdict);
+
+      const observation = await observeAttemptRecoveryEvidence(
+        "production",
+        paths.hostHomeDir("production"),
+      );
+
+      expect(observation.evidence.running.kind).toBe(kind);
+      expect(observation.runningDiagnosis).toBe(diagnosis);
+    },
+  );
+
+  it("names a MISSING start stamp rather than lumping it in with an unreadable record", async () => {
+    // #1763's stamp: a record without it is refused rather than failed open,
+    // and "there is no stamp" is a different thing to fix than "the file is
+    // corrupt".
+    writePidMetadata({ version: "1.2.3", processStartIdentity: null });
+    identityVerdictMock.mockResolvedValue("current");
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("pid-start-stamp-missing");
+  });
+
+  it("names an absent pid record, and a home that is not this environment's", async () => {
+    identityVerdictMock.mockResolvedValue("dead");
+    const absent = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(absent.runningDiagnosis).toBe("pid-metadata-absent");
+
+    const wrongHome = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("dev"),
+    );
+    expect(wrongHome.runningDiagnosis).toBe("host-home-mismatch");
+  });
+
+  it("keeps the diagnosis OUT of the fingerprint, so it can never move an equality", async () => {
+    // It explains a reading; it must never participate in one.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("dead");
+    const first = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    identityVerdictMock.mockResolvedValue("mismatch");
+    const second = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+
+    expect(first.runningDiagnosis).toBe("host-process-dead");
+    expect(second.runningDiagnosis).toBe("host-process-recycled");
+    expect(sameAttemptRecoveryEvidenceObservation(first, second)).toBe(true);
+  });
+});
+
 // KNOWN GAP: `sameRegularFileIdentity` also fails closed when either side's
 // `dev`/`ino` reads as `0` (the Windows convention for "not a meaningful
 // identity"). That branch has no test here: forcing a zero-identity `Stats`

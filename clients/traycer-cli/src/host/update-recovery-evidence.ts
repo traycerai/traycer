@@ -34,9 +34,59 @@ import {
  * recover write. The durable record intentionally receives only `evidence`;
  * paths, pids, hashes, and generation identifiers remain process-local.
  */
+/**
+ * Why the RUNNING leg read the way it did, as a closed set of tokens.
+ *
+ * The evidence union above is what DECIDES; this is what EXPLAINS. Several
+ * distinct causes collapse into one evidence kind on purpose - a dead pid and
+ * a recycled one are both `absent`, and four different refusals are all
+ * `unreadable` - because a decision must not branch on the difference. A user
+ * staring at a failed update still has to be told which one it was, and until
+ * now nobody was: the verify leg reported "did not become healthy" and threw
+ * the reason away (Linux E13).
+ *
+ * Every token is a fixed string chosen here. Nothing read from disk, no pid,
+ * no path and no host-reported identity is interpolated into one, so a token
+ * is always safe to render and to assert against.
+ */
+export type RunningEvidenceDiagnosis =
+  /** `pid.json` is absent - the host was never started, or stopped cleanly. */
+  | "pid-metadata-absent"
+  /** `pid.json` exists but could not be read or parsed. */
+  | "pid-metadata-unreadable"
+  /** The record carries no `processStartIdentity` (#1763's stamp). */
+  | "pid-start-stamp-missing"
+  /** The recorded websocket endpoint is not a valid local host URL. */
+  | "pid-endpoint-invalid"
+  /** The recorded pid names no live process. */
+  | "host-process-dead"
+  /** The pid is alive but is NOT the process the stamp names - recycled. */
+  | "host-process-recycled"
+  /** The identity verdict was neither current, dead, nor a mismatch. */
+  | "pid-identity-indeterminate"
+  /** The host did not answer `host.status` at its recorded endpoint. */
+  | "host-rpc-unreachable"
+  /** The host answered, and said it is not ready. */
+  | "host-not-ready"
+  /** The host answered with a version its own pid record disagrees with. */
+  | "host-version-disagrees-pid"
+  /** The pid record or the process identity moved while the probe ran. */
+  | "host-restarted-during-probe"
+  /** The host home this observation was asked for is not this environment's. */
+  | "host-home-mismatch"
+  /** The leg was classified; the evidence kind beside it is the answer. */
+  | "classified";
+
 export interface AttemptRecoveryEvidenceObservation {
   readonly evidence: AttemptRecoveryEvidence;
   readonly fingerprint: string;
+  /**
+   * Why the running leg read the way it did. Deliberately NOT part of
+   * `evidence` and NOT part of `fingerprint`: it explains a reading, it never
+   * participates in one, so no decision, no equality and nothing persisted can
+   * change because of it.
+   */
+  readonly runningDiagnosis: RunningEvidenceDiagnosis;
   /**
    * The install record's generation inputs exactly as this observation read
    * them, or `null` when no record could be read at all.
@@ -104,10 +154,10 @@ export async function observeAttemptRecoveryEvidence(
     environment,
     installed.runtime,
   );
-  const running =
-    runningBefore.fingerprint === runningAfter.fingerprint
-      ? runningAfter.evidence
-      : { kind: "unreadable" as const };
+  const flapped = runningBefore.fingerprint !== runningAfter.fingerprint;
+  const running = flapped
+    ? { kind: "unreadable" as const }
+    : runningAfter.evidence;
   const evidence = {
     installed: installed.evidence,
     staged: staged.evidence,
@@ -115,6 +165,9 @@ export async function observeAttemptRecoveryEvidence(
   };
   return {
     evidence,
+    runningDiagnosis: flapped
+      ? "host-restarted-during-probe"
+      : runningAfter.diagnosis,
     fingerprint: JSON.stringify({
       installed: installed.fingerprint,
       staged: staged.fingerprint,
@@ -300,6 +353,7 @@ function withoutStageFingerprint(
 type RunningObservation = {
   readonly evidence: AttemptRecoveryRunningEvidence;
   readonly fingerprint: string;
+  readonly diagnosis: RunningEvidenceDiagnosis;
 };
 
 async function readRunningObservation(
@@ -311,20 +365,30 @@ async function readRunningObservation(
     const absent = await pathAbsentOrUnreadable(
       hostPidMetadataPath(environment),
     );
-    return absent ? absentRunning() : unreadableRunning();
+    return absent
+      ? absentRunning("pid-metadata-absent")
+      : unreadableRunning("pid-metadata-unreadable");
   }
-  if (
-    metadata.processStartIdentity === null ||
-    !isValidLocalHostWebsocketUrl(metadata.websocketUrl)
-  ) {
-    return unreadableRunning();
+  if (metadata.processStartIdentity === null) {
+    return unreadableRunning("pid-start-stamp-missing");
+  }
+  if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
+    return unreadableRunning("pid-endpoint-invalid");
   }
   const identity = await getPublishedProcessIdentityVerdict(
     metadata.pid,
     metadata.processStartIdentity,
   );
-  if (identity === "dead" || identity === "mismatch") return absentRunning();
-  if (identity !== "current") return unreadableRunning();
+  // Both are `absent` to every DECISION - there is no live host this record
+  // vouches for either way - and the two are told apart only here, for the
+  // person reading the failure. A recycled pid is the case the #1763 stamp
+  // exists to catch, and "the pid now belongs to another process" is exactly
+  // what the legacy health probe used to print.
+  if (identity === "dead") return absentRunning("host-process-dead");
+  if (identity === "mismatch") return absentRunning("host-process-recycled");
+  if (identity !== "current") {
+    return unreadableRunning("pid-identity-indeterminate");
+  }
 
   let status;
   try {
@@ -334,22 +398,28 @@ async function readRunningObservation(
       { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl },
     );
   } catch {
-    return unreadableRunning();
+    return unreadableRunning("host-rpc-unreachable");
   }
-  if (!status.ready || status.hostVersion !== metadata.version) {
-    return unreadableRunning();
+  if (!status.ready) return unreadableRunning("host-not-ready");
+  if (status.hostVersion !== metadata.version) {
+    return unreadableRunning("host-version-disagrees-pid");
   }
 
   // Bind the successful health response to the same pid-recorded process and
   // endpoint. A restart/recycled pid during the RPC is ambiguity, not proof.
   const after = await readHostPidMetadata(environment);
-  if (!sameRunningMetadata(metadata, after)) return unreadableRunning();
+  if (!sameRunningMetadata(metadata, after)) {
+    return unreadableRunning("host-restarted-during-probe");
+  }
   const afterIdentity = await getPublishedProcessIdentityVerdict(
     metadata.pid,
     metadata.processStartIdentity,
   );
-  if (afterIdentity !== "current") return unreadableRunning();
+  if (afterIdentity !== "current") {
+    return unreadableRunning("host-restarted-during-probe");
+  }
   return {
+    diagnosis: "classified",
     evidence: classifyRunningIdentity(status.hostVersion, installed),
     fingerprint: JSON.stringify({
       pid: metadata.pid,
@@ -525,12 +595,20 @@ function unreadableArtifact(): ArtifactObservation {
   return { evidence: { kind: "unreadable" }, fingerprint: "unreadable" };
 }
 
-function absentRunning(): RunningObservation {
-  return { evidence: { kind: "absent" }, fingerprint: "absent" };
+function absentRunning(
+  diagnosis: RunningEvidenceDiagnosis,
+): RunningObservation {
+  return { evidence: { kind: "absent" }, fingerprint: "absent", diagnosis };
 }
 
-function unreadableRunning(): RunningObservation {
-  return { evidence: { kind: "unreadable" }, fingerprint: "unreadable" };
+function unreadableRunning(
+  diagnosis: RunningEvidenceDiagnosis,
+): RunningObservation {
+  return {
+    evidence: { kind: "unreadable" },
+    fingerprint: "unreadable",
+    diagnosis,
+  };
 }
 
 function unreadableObservation(): AttemptRecoveryEvidenceObservation {
@@ -541,6 +619,9 @@ function unreadableObservation(): AttemptRecoveryEvidenceObservation {
       running: { kind: "unreadable" },
     },
     fingerprint: "unreadable",
+    // The one diagnosis that is not about the host at all: this observation was
+    // asked for a home that is not this environment's canonical one.
+    runningDiagnosis: "host-home-mismatch",
     // Nothing was read, so there is no identity to report. A caller refreshing
     // a claim baseline from this observation carries the record's prior
     // baseline unchanged rather than inventing one.

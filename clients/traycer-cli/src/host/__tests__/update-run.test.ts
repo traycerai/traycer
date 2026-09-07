@@ -414,7 +414,10 @@ import type { CommandContext } from "../../runner/runner";
 import type { ProgressInfo } from "../../runner/output";
 import type { RegistryClient } from "../../registry";
 import type { HostUpdateProgress } from "../update-progress-marker";
-import type { AttemptRecoveryEvidenceObservation } from "../update-recovery-evidence";
+import type {
+  AttemptRecoveryEvidenceObservation,
+  RunningEvidenceDiagnosis,
+} from "../update-recovery-evidence";
 import type { HostPidMetadata } from "../pid-metadata";
 
 const ENVIRONMENT = "production";
@@ -436,6 +439,12 @@ const world = {
   /** Bumped by every staging, so two stages of one version differ by id. */
   stageSerial: 0,
   runningVersion: null as string | null,
+  /**
+   * The running leg's DIAGNOSIS, which production computes from the pid record
+   * and the identity verdict. Settable here so a verify-timeout pin can drive
+   * the exact cause it wants to see rendered (E13).
+   */
+  runningDiagnosis: "pid-metadata-absent" as RunningEvidenceDiagnosis,
   latest: "2.0.0",
 };
 
@@ -554,6 +563,8 @@ function observationOfWorld(): AttemptRecoveryEvidenceObservation {
   };
   return {
     evidence,
+    runningDiagnosis:
+      running === null ? world.runningDiagnosis : ("classified" as const),
     fingerprint: JSON.stringify(evidence),
     installIdentity:
       installed === null
@@ -1082,6 +1093,7 @@ beforeEach(async () => {
   world.stageId = null;
   world.stageSerial = 0;
   world.runningVersion = null;
+  world.runningDiagnosis = "pid-metadata-absent";
   world.latest = "2.0.0";
   logger = fakeLogger();
   armWorld();
@@ -5700,5 +5712,120 @@ describe("fixup: cold review B", () => {
     const record = await requireRecord();
     expect(record.phase).toBe("superseded");
     expect(record.error).toBeNull();
+  });
+});
+
+describe("E13: the verify leg says WHY the host never became healthy", () => {
+  /**
+   * The applied-but-unhealthy shape every case below shares: the swap
+   * succeeds, the record moves to the target, and `after` sets the world the
+   * verify loop then polls until its deadline.
+   */
+  function applyThenLeaveWorld(after: () => void): void {
+    mocks.applyHostWithAttempt.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        const previous = world.installedVersion ?? "1.0.0";
+        options.onProgress(progress("service-stop", null));
+        await options.hooks.beforeSwapCommit();
+        await seedInstalled("2.0.0");
+        await seedStaged(null);
+        await options.hooks.afterSwap();
+        after();
+        return appliedOutcome(previous, "2.0.0");
+      },
+    );
+  }
+
+  it.each([
+    [
+      "the pid names no live process",
+      (): void => {
+        world.runningVersion = null;
+        world.runningDiagnosis = "host-process-dead";
+      },
+      "host-process-dead",
+    ],
+    [
+      "the pid was RECYCLED onto another process",
+      (): void => {
+        world.runningVersion = null;
+        world.runningDiagnosis = "host-process-recycled";
+      },
+      "host-process-recycled",
+    ],
+    [
+      "the pid record carries no start stamp",
+      (): void => {
+        world.runningVersion = null;
+        world.runningDiagnosis = "pid-start-stamp-missing";
+      },
+      "pid-start-stamp-missing",
+    ],
+    [
+      "the host answers, at the version it was supposed to leave",
+      (): void => {
+        world.runningVersion = "1.0.0";
+      },
+      "running-version-mismatch",
+    ],
+  ] as const)(
+    "carries the reason into the message and the record: %s",
+    async (_label, after, token) => {
+      // The gap Linux E13 found: this leg polled the SAME evidence the legacy
+      // `probeHostHealth` used to diagnose four ways, and reported none of it.
+      // "did not become healthy" with no reason is the 1.2.0 shape.
+      // Falsification (the ablation): drop the `: ${diagnosis}` from the
+      // verify-timeout message and every row here reddens.
+      await seedInstalled("1.0.0");
+      world.runningVersion = "1.0.0";
+      applyThenLeaveWorld(after);
+
+      const failure = await runUpdate({}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+        message: `host update: applied 2.0.0 but the host did not become healthy at that version: ${token}`,
+        details: { diagnosis: token },
+      });
+      // The SAME string on the record, so support reads what the shell
+      // printed - `error` has three fields and none of them is a spare one.
+      const record = await requireRecord();
+      expect(record.phase).toBe("failed");
+      expect(record.error).toMatchObject({
+        code: "verify-timeout",
+        phase: "verifying",
+        message: `host update: applied 2.0.0 but the host did not become healthy at that version: ${token}`,
+      });
+    },
+  );
+
+  it("names the INSTALLED leg when that is the one that disagrees", async () => {
+    // The premise before the symptom: a running host cannot be serving what
+    // the record does not say is placed, so reporting the process would send
+    // the reader after the wrong thing.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.installedVersion = null;
+      world.runningVersion = null;
+      world.runningDiagnosis = "host-process-dead";
+    });
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      details: { diagnosis: "install-record-absent" },
+    });
   });
 });

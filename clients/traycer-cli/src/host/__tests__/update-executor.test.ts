@@ -178,6 +178,9 @@ function observationOf(
   // unchanged evidence object between two injected reads.
   return {
     evidence,
+    // Not part of the fingerprint in production either: it explains a reading,
+    // it never participates in one.
+    runningDiagnosis: "classified",
     fingerprint: JSON.stringify({
       evidence,
       installIdentity,
