@@ -1149,9 +1149,20 @@ async function dispositionForAttempt(
  * What makes the two parked shapes safe is that neither asks this supervisor
  * to do anything the attempt did not already authorize:
  *
- *  - `waiting-for-work` has placed no bytes. Starting the installed host is
- *    what the machine did before the attempt began, and the park survives to
- *    be resumed at the idle edge.
+ *  - `waiting-for-work` has placed no bytes, and that is a TABLE fact rather
+ *    than a property of the current writer: `LEGAL_SUCCESSORS`
+ *    (`transition.ts`) admits `waiting-for-work` only from `downloading` and
+ *    `preparing`, and `applying`'s successor set excludes it. `applying` is
+ *    the phase that places bytes, so no record that can exist reached this
+ *    park through one. Starting the installed host is therefore what the
+ *    machine did before the attempt began, and the park survives to be
+ *    resumed at the idle edge. (The single production writer, `parkForWork`
+ *    in `host/update-run.ts`, is the pre-apply busy park and agrees.)
+ *
+ *    CROSS-PACKAGE, so no test in this module can watch it: add
+ *    `applying -> waiting-for-work` to that map and this arm becomes unsafe
+ *    with nothing here reddening. The authority is `LEGAL_SUCCESSORS`; the
+ *    pin has to live beside it.
  *  - `waiting-to-activate` has placed the target's bytes and is waiting for a
  *    restart to run them. When the installed version IS the target and the
  *    claim still matches that install, this relaunch is that restart. The
@@ -1159,11 +1170,34 @@ async function dispositionForAttempt(
  *    "exactly the bytes this attempt placed"; without it a relaunch would be
  *    activating an install nobody in this attempt vouched for.
  *
+ *    The arm is not confined to activation-debt parks, which is what makes it
+ *    worth having: `parkForActivation` refreshes the baseline at park time
+ *    (`readClaimRefresh` re-reads the live install record), so an ordinary
+ *    apply -> busy -> park attempt carries the POST-apply install identity and
+ *    matches here. A reader who assumes the baseline is the pre-apply one
+ *    would wrongly conclude this arm is dead code.
+ *
+ * `stageFingerprint` is deliberately NOT in the comparison, and not merely
+ * because the bytes are installed rather than staged: at `waiting-to-activate`
+ * a stage may LEGITIMATELY hold a different, later version - `parkForActivation`
+ * says so in as many words, and the refresh records that unrelated stage into
+ * the baseline. Comparing it would refuse perfectly good parks over an artifact
+ * that says nothing about the installed bytes.
+ *
  * A claim-less park is REFUSED, deliberately, and it is the same answer a
  * bound `host.update.activate` gives it (`refused-unverifiable`): with no
  * baseline there is nothing to prove the installed generation is the one the
  * claimant placed, and version equality alone cannot tell this attempt's bytes
  * from a different install that happens to carry the same version.
+ *
+ * A park whose baseline could not be REFRESHED is inadmissible for the same
+ * reason, and today it is so silently. `readClaimRefresh` returns
+ * `refresh: null` when the install record is unreadable at park time, which
+ * "carries the record's prior baseline unchanged" - for an apply-born attempt
+ * that prior baseline is the PRE-apply install, so `installedVersion` no
+ * longer matches afterwards and this function refuses. Rare and fail-closed,
+ * but worth naming: the exemption is off for that park, and the reason is a
+ * read that failed at park time rather than anything about this relaunch.
  */
 async function supervisorRelaunchDisposition(
   record: HostUpdateAttemptRecord,
@@ -1173,6 +1207,14 @@ async function supervisorRelaunchDisposition(
   // checked first: a segment that died mid-activation leaves `preparing/
   // activate` or `applying`, and relaunching into those would activate bytes
   // outside the continuation that owns them.
+  //
+  // The sound reason is NOT "a live segment owns the continuation" - by the
+  // time this runs, THIS contender holds the attempt lock. It is that a
+  // supervisor cannot prove the holder ABSENT: the lock is taken in short
+  // spans, so winning it says nothing about a segment between spans, which is
+  // exactly what `decideAttemptRecovery`'s `holder-not-proven-absent` exists
+  // for. An active record is a claim that someone means to come back, and
+  // nothing available here can falsify it.
   //
   // IMPLIED, not an independent conjunct: the decoder derives `execution`
   // from the phase and refuses any record that disagrees, so the two phase

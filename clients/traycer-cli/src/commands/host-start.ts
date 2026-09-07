@@ -256,6 +256,12 @@ const FORWARDED_SHUTDOWN_SIGNALS = [
  * shapes a relaunch legally continues - so what still exits 0 here is the set
  * a retry genuinely cannot clear.
  *
+ * "Cannot clear" is the honest claim; "somebody else will" is not. An
+ * interrupted-active record on a headless CLI-only install has no actor left
+ * to end it either, because the reconciler that would is inside the host this
+ * exit keeps down. That residual is Q9, and it is narrower than what stood
+ * before this change, not gone.
+ *
  * The value only has to be non-zero and unambiguous: launchd assigns no meaning
  * to particular codes, and with `KeepAlive.SuccessfulExit = false` any non-zero
  * exit is what triggers the relaunch. Distinct from the codes already in use
@@ -546,12 +552,15 @@ const defaultRunDeps: RunHostStartDeps = {
           if (record === null) return null;
           return {
             installedVersion: record.version,
-            installGeneration: encodeInstallGeneration({
-              installId: record.installId,
-              installedAt: record.installedAt,
-              archiveSha256: record.archiveSha256,
-              version: record.version,
-            }),
+            // The RECORD, never a rebuilt literal. This string is compared
+            // byte-for-byte against the baseline `installGenerationOf`
+            // (`host/update-run.ts`) wrote at park time, so a per-site field
+            // mapping is the one thing that could silently make the two
+            // disagree - and a disagreement here fails CLOSED: the exemption
+            // stops firing, this command exits 0 again while an update is
+            // parked, and the outage it exists to prevent comes back with
+            // nothing red anywhere.
+            installGeneration: encodeInstallGeneration(record),
           };
         },
       },
@@ -1504,14 +1513,24 @@ export async function runHostStart(
         // only `busy` retries: `held-in-process`, `nonterminal-attempt`,
         // `record-fail-closed` and `lock-not-live` are all states a relaunch
         // cannot clear, so retrying them would be a crash-loop, not a recovery.
-        // `nonterminal-attempt` keeps that classification precisely BECAUSE of
-        // the parked exemption above it: the records a relaunch could have
-        // cleared are admitted and never arrive here, so every one that does
-        // needs a bound activate/continue or another actor's segment to end.
+        // `nonterminal-attempt` keeps that classification because a relaunch
+        // genuinely cannot clear the records that still reach here, and
+        // admitting one mid-`applying` would run half-placed bytes.
         //
-        // This bounds the outage to the transfer's length rather than removing
-        // it; `ThrottleInterval: 10` in the same plist paces the retries. The
-        // permanent wedge is what this fixes.
+        // What that does NOT mean is that the remainder is somebody else's
+        // job. An INTERRUPTED-ACTIVE record - holder dead, phase `applying`/
+        // `restarting`/`verifying` - is cleared only by
+        // `recoverInterruptedAttempt`, which sits on the `host update` claim
+        // path, and the reconciler that would trigger one lives inside the
+        // host this refusal keeps down. On a headless CLI-only install that is
+        // the SAME deadlock the parked exemption fixes, one phase over, with
+        // no actor available to end it. This patch NARROWS the class; it does
+        // not close it. The remainder is tracked as Q9.
+        //
+        // So this bounds the outage to the transfer's length for the `busy`
+        // case (`ThrottleInterval: 10` in the same plist paces the retries),
+        // and removes it for the two parked shapes. The interrupted-active
+        // wedge is still open and is deliberately not widened here.
         const retryableServiceRefusal =
           serviceStarted && admission.kind === "busy";
         if (retryableServiceRefusal) {

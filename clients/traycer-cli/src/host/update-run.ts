@@ -1093,12 +1093,10 @@ function baselineFrom(
 }
 
 function installGenerationOf(record: HostInstallRecord): string {
-  return encodeInstallGeneration({
-    installId: record.installId,
-    installedAt: record.installedAt,
-    archiveSha256: record.archiveSha256,
-    version: record.version,
-  });
+  // The RECORD, not a rebuilt literal: this string is compared byte-for-byte
+  // against the one `host start`'s relaunch admission computes, and a
+  // per-site field mapping is what could drift between them silently.
+  return encodeInstallGeneration(record);
 }
 
 // ---------------------------------------------------------------------------
