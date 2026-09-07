@@ -2208,6 +2208,52 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     ).toBe("Update waits for 2 sessions to finish");
   });
 
+  it("(3b zero count) a BOUND park with NO live work substitutes, and renders no Force at all", async () => {
+    // The cell that isolates the RENDER half of condition 3, and the observed
+    // hardware case besides. `host.update.continue` IS negotiated here, so
+    // `parkForceControl` is non-null exactly as in (3b) — but at a zero count
+    // `offersForceRestart` is false and the card draws no button, so there is
+    // no working control for the sentence to contradict and it must
+    // substitute. Falsifies narrowing condition 3 to the HANDLER alone
+    // (`!(parkForceControl !== null)`), which (3b) and its control both
+    // survive: the first has a live count and the second has no bound method,
+    // so neither one moves when the `offersForceRestart` half is dropped.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () => parkStatus("1.3.0-rc.3", 0),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: floorStagedManifest("1.3.0-rc.3"),
+        }),
+      },
+    });
+    bindFixture(fixture, [...ALL_OVERVIEW_METHODS, "host.update.continue"]);
+    renderPanel();
+
+    await screen.findByRole("button", { name: "Show installation help" });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe(
+        "Update waits for Traycer's command-line tools to be updated — see installation help",
+      );
+    });
+    // The half that makes this cell different from (3b): the handler exists,
+    // the button does not.
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+  });
+
   it("(3b positive control) the RECORD-derived staged wait under the same floor substitutes, and offers no Force", async () => {
     // Same manifest, same count, `host.update.continue` NOT negotiated — so
     // the park routes to `legacyStagedForce`, which the floor withholds

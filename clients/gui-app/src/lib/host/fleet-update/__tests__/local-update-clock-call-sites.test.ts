@@ -31,6 +31,16 @@ import { describe, expect, it } from "vitest";
  * Matching on `recordNowMs` rather than on the type name is deliberate: a call
  * site constructs the clock as an object literal and need never name the type,
  * so a type-name scan would miss exactly the addition this guards against.
+ *
+ * KNOWN HOLE, noted rather than fixed: the guard is TEXTUAL, so a call site
+ * that passes a clock it did not build inline — `clock: someClock`, or one
+ * assembled by a helper — names no field here and is not seen. That is a
+ * narrower hole than the one this closes (today both call sites build the
+ * literal in place, which is also the shape that makes the two-instant mistake
+ * easy to make and easy to miss), and closing it properly means type-aware
+ * analysis rather than a scan. If a helper ever does assemble one, add the
+ * helper to {@link DEFINITION_MODULES} and its callers to
+ * {@link EXPECTED_CALL_SITES} — the mirrors are owed per CALL SITE either way.
  */
 const SRC_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
