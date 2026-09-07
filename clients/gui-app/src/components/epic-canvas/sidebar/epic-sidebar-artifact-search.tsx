@@ -582,9 +582,13 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
     : FileText;
   const title = displayTitle(hit.title, hit.kind);
   // The RPC breadcrumb includes the artifact's own folder slug last; drop it so
-  // only the ancestor trail shows (the title already names the artifact). These
-  // are folder slugs relative to the artifact root - never host-absolute paths.
-  const ancestors = hit.breadcrumb.slice(0, -1);
+  // only the ancestor trail shows (the title already names the artifact) -
+  // unless the path is what matched, in which case the full slug chain IS the
+  // evidence for the hit and must stay visible. These are folder slugs relative
+  // to the artifact root - never host-absolute paths.
+  const ancestors = hit.sources.includes("path")
+    ? hit.breadcrumb
+    : hit.breadcrumb.slice(0, -1);
   const showStatusDot =
     hit.status !== null && Object.hasOwn(STATUS_DOT_CLASSES, hit.status);
 
