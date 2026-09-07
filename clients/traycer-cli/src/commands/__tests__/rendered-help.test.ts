@@ -443,6 +443,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     path: "host update",
     options: [
       { flags: "--release <version>", mandatory: false },
+      { flags: "--allow-downgrade", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
@@ -1151,6 +1152,15 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     expect(help).toContain("Compatibility alias for --release");
     expect(help).toContain("--release <version>");
     expect(help).not.toContain("--host-update-version");
+  });
+
+  it("host update --help (real render) advertises the downgrade capability contract", () => {
+    const program = freshProgram();
+    const hostUpdate = findByPath(program, ["host", "update"]);
+    // Host maintenance probes this literal before dispatching an explicit
+    // lower target. Keep the flag visible so that probe is a real capability
+    // contract rather than an implementation detail hidden from users.
+    expect(renderHelp(hostUpdate)).toContain("--allow-downgrade");
   });
 
   // Encodes the standing user policy: every supported user-facing/invocable

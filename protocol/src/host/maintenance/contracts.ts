@@ -132,6 +132,28 @@ export const hostUpdateInstallV11 = defineRpcContract({
 });
 
 /**
+ * `@1.2` advertises explicit downgrade support. The wire shape is unchanged;
+ * clients gate older-version rows on this version because a pre-1.2 host
+ * dispatches an upgrade-only CLI command even when it accepts the request.
+ */
+export const hostUpdateInstallV12 = defineRpcContract({
+  method: "host.update.install",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: hostUpdateInstallRequestSchema,
+  responseSchema: hostUpdateInstallResponseV11Schema,
+});
+
+export const hostUpdateInstallUpgradeV11ToV12 = defineUpgradePath<
+  typeof hostUpdateInstallV11,
+  typeof hostUpdateInstallV12
+>({
+  from: hostUpdateInstallV11.schemaVersion,
+  to: hostUpdateInstallV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
  * A `@1.0` peer said nothing about attempts, so both arms upgrade to `null` —
  * the same "did not report" convention `busySessionCount` / `busyBreakdown` set
  * on `host.status`, and for the same reason: the upgrade path must not put an

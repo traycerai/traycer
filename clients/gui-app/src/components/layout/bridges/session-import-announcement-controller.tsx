@@ -157,6 +157,9 @@ export function SessionImportAnnouncementController(): ReactNode {
       onClose={() => {
         setDialogOpen(false);
       }}
+      // The toast speaks for the app's active host; the dialog's own picker
+      // is where another machine gets chosen.
+      initialHostId={null}
     />
   );
 }

@@ -577,6 +577,7 @@ async function commitInstall(
         // denied the cooperative shutdown claim and `--force` aborted
         // anyway.
         force: opts.force,
+        onWillStopHost: null,
       })
     : null;
   const lifecycle =
@@ -600,6 +601,7 @@ async function commitInstall(
       staged,
       onProgress: progress,
       lifecycle,
+      onWillSwap: null,
     },
   );
   const post = await readProvisionState(controller, label, opts.runtime);
@@ -967,8 +969,19 @@ async function versionSatisfied(
   // install record we can't reason about look current.
   if (!comparison.comparable) return false;
   if (comparison.ordering === "less") return false;
-  if (comparison.ordering === "equal") return true;
-  // A newer install is normally accepted; only an explicit yank rejects it.
+  // The exact requested string is satisfied outright. Another build of the
+  // same release (`2.0.0+bar` installed, `2.0.0+foo` asked for) is a
+  // DIFFERENT artifact the comparator merely ranks equal: it is accepted the
+  // way a newer install is, unless the registry has withdrawn it - the yank
+  // check a comparator-equal shortcut used to skip.
+  if (
+    comparison.ordering === "equal" &&
+    state.version === satisfaction.version
+  ) {
+    return true;
+  }
+  // A newer install, or another build of the requested release, is normally
+  // accepted; only an explicit yank rejects it.
   return !(await yankLookup.isVersionYanked(state.version));
 }
 

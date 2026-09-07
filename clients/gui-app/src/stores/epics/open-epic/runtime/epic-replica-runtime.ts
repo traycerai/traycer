@@ -1,3 +1,4 @@
+import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The composition root: the object the 3,600-line closure was cut into.
  *
@@ -313,6 +314,7 @@ export interface EpicReplicaRuntime {
   /** Withdraw the record list's authority for a new viewer. */
   markChatRecordListNotAuthoritative(): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
+  applyConfirmedChatMutation(mutation: ConfirmedChatMutation): void;
   applyTuiAgentRecords(
     records: readonly TuiAgentRecordSummaryV12[],
     issuedAtSeq: number | null,
@@ -1547,6 +1549,9 @@ export function createEpicReplicaRuntime(
     },
     markChatRecordListAuthoritative: () => {
       records.markChatRecordListAuthoritative();
+    },
+    applyConfirmedChatMutation: (mutation) => {
+      records.applyConfirmedChatMutation(mutation);
     },
     applyChatRecordDelta: (delta) => {
       records.applyChatRecordDelta(delta);

@@ -35,6 +35,7 @@ import { MobileDeviceDescriber } from "../device-describer";
 import { MobileFileSave, supportsDirectDownload } from "../file-save";
 import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
+import { MobileSystemBack } from "../system-back";
 import {
   MobilePushRegistration,
   pushRegistrationTarget,
@@ -311,6 +312,13 @@ async function mount(input: {
     // would report a success the clipboard never received. The dev web entry
     // is a real browser tab, where the write works.
     canCopyImages: Capacitor.getPlatform() !== "android",
+    // The other place a platform is named. Android is the one shell whose OS
+    // raises a back request - the hardware key and the system back gesture,
+    // which the OS takes before the WebView sees a touch, so the GUI's own
+    // edge swipe never fires there. iOS has neither, and its edge swipe IS
+    // that recognizer; the dev web entry has the browser's own back.
+    systemBack:
+      Capacitor.getPlatform() === "android" ? new MobileSystemBack(App) : null,
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

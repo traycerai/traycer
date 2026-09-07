@@ -272,6 +272,8 @@ import {
   hostUpdateCheckV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
+  hostUpdateInstallV12,
+  hostUpdateInstallUpgradeV11ToV12,
   hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
@@ -4421,7 +4423,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
@@ -4447,6 +4449,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // and neither is "we only call it from new clients": the validator
           // cannot check this, which is exactly why it is written down here.
           responseGrowthProjectionGated: true,
+        },
+        2: {
+          contract: hostUpdateInstallV12,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

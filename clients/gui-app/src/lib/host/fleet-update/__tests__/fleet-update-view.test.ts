@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type {
   HostStatusUpdateOperation,
+  HostStatusUpdateProgress,
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
 import { recordObservationFromLocalAttempt } from "@/lib/host/fleet-update/record-attempt-observation";
 import {
   holdsLifecycleGate,
+  isQuietUpdateView,
   offersForceRestart,
   projectFleetUpdateView,
   warrantsFastPoll,
@@ -66,6 +68,8 @@ function observation(
     freshUntilMs: FRESH_UNTIL_MS,
     operation: attemptOperation({}),
     transaction: TRANSACTION,
+    coarseProgress: null,
+    legacyFacts: null,
     ...overrides,
   };
 }
@@ -97,6 +101,134 @@ describe("projectFleetUpdateView — no observation / operation: null", () => {
       connected: true,
     });
     expect(view.kind).toBe("unknown");
+  });
+});
+
+describe("projectFleetUpdateView — operation: null + coarse updateProgress (pre-1.3 peer)", () => {
+  // A pre-@1.3 peer cannot report an attempt at all, but it CAN report the
+  // coarse `updateProgress` marker (`host.status@1.1`) — for that cohort the
+  // marker is the ONLY update signal there is, and `coarseProgressView` is
+  // now consulted here FIRST, exactly as it already is for `kind: "none"`.
+  // These mirror the assertions in the "coarse updateProgress beside
+  // {kind:'none'}" describe below, because the two arms share one helper and
+  // must not drift on how they render it.
+
+  const UPDATING: HostStatusUpdateProgress = { state: "updating", error: null };
+  const FAILED_WITH_ERROR: HostStatusUpdateProgress = {
+    state: "failed",
+    error: "health probe failed",
+  };
+
+  it("a fresh updating marker projects kind 'updating', indeterminate progress, unqualified, no error", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        coarseProgress: UPDATING,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("updating");
+    expect(view.qualified).toBe(false);
+    expect(view.progress).toEqual({
+      kind: "indeterminate",
+      bytes: null,
+      totalBytes: null,
+    });
+    expect(view.errorMessage).toBeNull();
+  });
+
+  it("a fresh failed marker with error text projects kind 'failed', progress none, and carries the error message", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        coarseProgress: FAILED_WITH_ERROR,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.progress).toEqual({ kind: "none" });
+    expect(view.errorMessage).toBe("health probe failed");
+  });
+
+  it("a fresh failed marker with a null error falls back to the default sentence", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        coarseProgress: { state: "failed", error: null },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe(
+      "The last update attempt failed on this host.",
+    );
+  });
+
+  it("a STALE coarse-updating marker decays to unknown, retaining lastKnownKind 'updating' and the observed time", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        freshUntilMs: NOW_MS - 1,
+        observedAtMs: NOW_MS - 5_000,
+        operation: null,
+        coarseProgress: UPDATING,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("updating");
+    expect(view.lastObservedAtMs).toBe(NOW_MS - 5_000);
+  });
+
+  // `coarseProgress: null` here still falls through to UNKNOWN_FLEET_UPDATE_VIEW
+  // (never `idle`) — already covered above by "operation: null ... projects
+  // unknown - NEVER idle" and the STALE variant right before this describe,
+  // both of which use the `observation()` fixture's `coarseProgress: null`
+  // default. Not duplicated here.
+
+  it("operation: null and operation: {kind:'none'} project IDENTICAL views for the same fresh coarse marker - the two arms share one helper and must not drift", () => {
+    const viaOperationNull = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        coarseProgress: UPDATING,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    const viaKindNone = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: UPDATING,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(viaOperationNull).toEqual(viaKindNone);
+  });
+
+  it("operation: null and operation: {kind:'none'} project IDENTICAL views for the same STALE coarse marker", () => {
+    const staleOverrides = {
+      freshUntilMs: NOW_MS - 1,
+      observedAtMs: NOW_MS - 5_000,
+      coarseProgress: FAILED_WITH_ERROR,
+    };
+    const viaOperationNull = projectFleetUpdateView({
+      observation: observation({ ...staleOverrides, operation: null }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    const viaKindNone = projectFleetUpdateView({
+      observation: observation({
+        ...staleOverrides,
+        operation: { kind: "none" },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(viaOperationNull).toEqual(viaKindNone);
   });
 });
 
@@ -882,5 +1014,391 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
   it("returns the record when there is no wire read at all, and null when there is neither", () => {
     expect(preferLiveOverRecord(null, record, NOW_MS)).toBe(record);
     expect(preferLiveOverRecord(null, null, NOW_MS)).toBeNull();
+  });
+});
+
+// ---- coarse `updateProgress`, carried beside `updateOperation: {kind:"none"}` ----
+//
+// The shipped legacy `traycer host update` path never writes a schema-v2
+// attempt record: it reports through this two-state marker alone. A @1.3 host
+// running it answers `updateOperation: {kind:"none"}` (it looked; there is no
+// attempt) AND `updateProgress: {state:"updating"}` at the same time, and only
+// this field lets the projector tell that host apart from a genuinely quiet
+// one — see `coarseKind`'s doc.
+describe("projectFleetUpdateView — coarse updateProgress beside {kind:'none'}", () => {
+  it("updating: projects kind 'updating', indeterminate progress, unqualified - and is INFORMATIONAL: it neither holds the lifecycle gate nor earns the fast poll", () => {
+    // The marker carries no liveness: a legacy updater that crashed after
+    // writing it leaves a host serving `{state:"updating"}` forever. A gate
+    // held by it would disable Restart / Diagnostics / the service verbs
+    // indefinitely (the fail-open rule `unknown` already follows), and a fast
+    // poll earned by it would be the unbounded cadence the poll policy forbids.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: { state: "updating", error: null },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("updating");
+    expect(view.qualified).toBe(false);
+    expect(view.progress).toEqual({
+      kind: "indeterminate",
+      bytes: null,
+      totalBytes: null,
+    });
+    expect(holdsLifecycleGate(view)).toBe(false);
+    expect(warrantsFastPoll(view)).toBe(false);
+  });
+
+  it("failed with an error: projects kind 'failed', progress none, and carries that error message", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: { state: "failed", error: "health probe failed" },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.progress).toEqual({ kind: "none" });
+    expect(view.errorMessage).toBe("health probe failed");
+  });
+
+  it("failed with a null error: falls back to the default sentence", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: { state: "failed", error: null },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe(
+      "The last update attempt failed on this host.",
+    );
+  });
+
+  it("a STALE coarse-updating read decays to unknown, retaining lastKnownKind 'updating' and the observed time", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        freshUntilMs: NOW_MS - 1,
+        observedAtMs: NOW_MS - 5_000,
+        operation: { kind: "none" },
+        coarseProgress: { state: "updating", error: null },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("updating");
+    expect(view.lastObservedAtMs).toBe(NOW_MS - 5_000);
+    // Invariant holds here too: a retained phase never holds a gate or poll.
+    expect(holdsLifecycleGate(view)).toBe(false);
+    expect(warrantsFastPoll(view)).toBe(false);
+  });
+
+  it("a coarse: null read leaves the old idle behaviour unchanged", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: null,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("idle");
+    expect(view.qualified).toBe(false);
+  });
+
+  it("a coarse: updating marker does NOT override a real attempt record — the attempt's own phase still projects", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({ phase: "applying" }),
+        coarseProgress: { state: "updating", error: null },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    // The coarse-marker branch only fires under `kind: "none"`; a genuine
+    // attempt record is read first and the coarse field is never consulted.
+    expect(view.kind).toBe("applying");
+  });
+});
+
+describe("isQuietUpdateView", () => {
+  function viewOf(overrides: Partial<FleetUpdateView>): FleetUpdateView {
+    return { ...UNKNOWN_FLEET_UPDATE_VIEW, ...overrides };
+  }
+
+  it("is true for a fresh idle view", () => {
+    expect(isQuietUpdateView(viewOf({ kind: "idle" }))).toBe(true);
+  });
+
+  it("is true for unknown with no retained phase at all", () => {
+    expect(
+      isQuietUpdateView(viewOf({ kind: "unknown", lastKnownKind: null })),
+    ).toBe(true);
+  });
+
+  it("is true for unknown whose retained phase is idle", () => {
+    expect(
+      isQuietUpdateView(viewOf({ kind: "unknown", lastKnownKind: "idle" })),
+    ).toBe(true);
+  });
+
+  it("is true for unknown whose retained phase is itself unknown", () => {
+    expect(
+      isQuietUpdateView(viewOf({ kind: "unknown", lastKnownKind: "unknown" })),
+    ).toBe(true);
+  });
+
+  it("is false for unknown with a retained downloading phase — there is real progress to qualify", () => {
+    expect(
+      isQuietUpdateView(
+        viewOf({ kind: "unknown", lastKnownKind: "downloading" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false for a live 'updating' view", () => {
+    expect(isQuietUpdateView(viewOf({ kind: "updating" }))).toBe(false);
+  });
+
+  it("is false for a live 'failed' view", () => {
+    expect(isQuietUpdateView(viewOf({ kind: "failed" }))).toBe(false);
+  });
+});
+
+// ---- record-derived parks (legacyFacts) — Ticket beside 07 §5.2.7 ----------
+//
+// `legacyFactsView` is consulted in BOTH the `operation === null` arm and the
+// `operation.kind === "none"` arm, AFTER the coarse `updateProgress` marker
+// and BEFORE `unknown`/`idle`. See the module's own doc on `legacyFactsView`
+// for the full precedence story; these tests pin it end to end through
+// `projectFleetUpdateView` rather than calling the (unexported) helper
+// directly, so a precedence regression shows up exactly where a surface would
+// see it.
+
+describe("projectFleetUpdateView — record-derived parks (legacyFacts)", () => {
+  it("activation debt under operation:{kind:'none'} projects waiting-to-activate, targetVersion = installed, unqualified, no blocking count", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("1.3.0-rc.3");
+    expect(view.qualified).toBe(false);
+    expect(view.blockingSessionCount).toBeNull();
+  });
+
+  it("SAME activation debt under operation: null (a pre-1.3 peer) - the legacy updater parks the same way on either cohort", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("1.3.0-rc.3");
+    expect(view.qualified).toBe(false);
+    expect(view.blockingSessionCount).toBeNull();
+  });
+
+  it("staged wait projects waiting-for-work, targetVersion = staged, and carries the blocking count - offersForceRestart follows it", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: null,
+          stagedWait: { stagedVersion: "1.3.0-rc.4", blockingSessionCount: 2 },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-for-work");
+    expect(view.targetVersion).toBe("1.3.0-rc.4");
+    expect(view.blockingSessionCount).toBe(2);
+    expect(offersForceRestart(view)).toBe(true);
+  });
+
+  it("staged wait with a null blocking count offers no force - a null count is a claim, not countable work", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: null,
+          stagedWait: {
+            stagedVersion: "1.3.0-rc.4",
+            blockingSessionCount: null,
+          },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-for-work");
+    expect(view.blockingSessionCount).toBeNull();
+    expect(offersForceRestart(view)).toBe(false);
+  });
+
+  it("debt AND staged wait both present - debt wins (the restart is the smaller, always-available step)", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: { stagedVersion: "1.3.0-rc.4", blockingSessionCount: 2 },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("1.3.0-rc.3");
+  });
+
+  it("a coarse 'updating' marker outranks the facts - a live updater is working right now, ahead of its own park", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: { state: "updating", error: null },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("updating");
+  });
+
+  it("a coarse 'failed' marker outranks the facts and keeps its failure text - real evidence, not papered over", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: { state: "failed", error: "health probe failed" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe("health probe failed");
+  });
+
+  it("a genuine attempt record outranks the facts - the kind comes from the attempt's own phase", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({ phase: "applying" }),
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("applying");
+  });
+
+  it("'unavailable' outranks the facts - fail-closed record evidence stays fail-closed", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "unavailable", reason: "corrupt", cause: null },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unavailable");
+  });
+
+  it("a STALE park decays to unknown, retaining lastKnownKind, the observed time, and the target version", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        freshUntilMs: NOW_MS - 1,
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("waiting-to-activate");
+    expect(view.lastObservedAtMs).toBe(NOW_MS);
+    expect(view.targetVersion).toBe("1.3.0-rc.3");
+  });
+
+  it("neither park kind holds the lifecycle gate or earns the fast poll, and neither reads as quiet", () => {
+    const debtView = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    const stagedView = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: null,
+          stagedWait: { stagedVersion: "1.3.0-rc.4", blockingSessionCount: 2 },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(holdsLifecycleGate(debtView)).toBe(false);
+    expect(holdsLifecycleGate(stagedView)).toBe(false);
+    expect(warrantsFastPoll(debtView)).toBe(false);
+    expect(warrantsFastPoll(stagedView)).toBe(false);
+    expect(isQuietUpdateView(debtView)).toBe(false);
+    expect(isQuietUpdateView(stagedView)).toBe(false);
+  });
+
+  // Regression pin: with `legacyFacts: null` (the fixture default) and no
+  // coarse marker, `{kind:"none"}` must still fall through to plain `idle` -
+  // exactly the pre-legacyFacts behaviour. Falsification: a bug that made
+  // `legacyFactsView` return a non-null park for `legacyFacts: null` would
+  // turn this into `waiting-to-activate` or `waiting-for-work`.
+  it("legacyFacts: null with kind:'none' and no coarse marker still projects idle - unchanged from before this feature", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: null,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("idle");
   });
 });

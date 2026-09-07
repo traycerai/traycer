@@ -1,4 +1,7 @@
-import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import {
+  scopedHostReadiness,
+  type ScopedHostReadiness,
+} from "@/components/settings/host-scope/scoped-host-readiness";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
 // The picker's MODEL, apart from its components: fast refresh only keeps state
@@ -38,25 +41,15 @@ export interface OnboardingHostPicker {
   readonly streamOnPickedHost: boolean;
 }
 
-/** What a stage may show: its live content, a spinner, or a dead end. */
-type OnboardingHostReadiness = "ready" | "connecting" | "unavailable";
-
 /**
- * Gated on there being a PICK, not on the status alone: with no pick the tour
- * reads the host it has always read, and an `unreachable` blip on it is not a
- * reason to replace a working wizard with a notice about a machine the user
- * never chose. The same rule the usage popover applies for the same reason.
- *
- * The transport lag is `connecting`, never `unavailable`: nothing is wrong
- * with the host, the surface has simply not finished moving onto it.
+ * What a stage may show: its live content, a spinner, or a dead end. The rule
+ * is the one every surface with its own host picker applies
+ * (`scopedHostReadiness`); the tour only supplies its picker's three inputs.
  */
 export function onboardingHostReadiness(
   picker: OnboardingHostPicker,
-): OnboardingHostReadiness {
-  if (!picker.hasExplicitPick) return "ready";
-  if (picker.scope.status === "connecting") return "connecting";
-  if (!isHostScopeUsable(picker.scope.status)) return "unavailable";
-  return picker.streamOnPickedHost ? "ready" : "connecting";
+): ScopedHostReadiness {
+  return scopedHostReadiness(picker);
 }
 
 /** Whether the stages may show their live content. */

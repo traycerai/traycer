@@ -1,3 +1,5 @@
+import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
+import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The host's store-backed chat records: this plane's answers to
  * `record-table.ts`, plus the pending-creation registry that is chats-only.
@@ -80,6 +82,9 @@ export interface ChatRecordTable {
     issuedAtSeq: number | null,
   ): ChatRecordPublication | null;
   applyDelta(delta: ChatRecordDelta): ChatRecordPublication | null;
+  applyConfirmedMutation(
+    mutation: ConfirmedChatMutation,
+  ): ChatRecordPublication | null;
   beginPendingCreation(
     pending: PendingChatCreation,
   ): ChatRecordPublication | null;
@@ -177,6 +182,12 @@ export function createChatRecordTable(
   sources: ChatRecordTableSources,
 ): ChatRecordTable {
   const { getCurrentUserId, onBeforePublish, now } = sources;
+  const confirmedDeletions = new Set<string>();
+  const identityKey = (row: {
+    readonly ownerUserId: string;
+    readonly originHostId: string;
+    readonly chatId: string;
+  }): string => sessionKeyOf([row.ownerUserId, row.originHostId, row.chatId]);
 
   /**
    * Locally initiated creations with no record back yet, keyed like the record
@@ -330,18 +341,52 @@ export function createChatRecordTable(
     applyRecords: (records, issuedAtSeq) =>
       published(
         table.applySnapshot(
-          records.map((record) => ({
-            ...record,
-            docResident: record.docResident,
-          })),
+          records.flatMap<HeldChatRecordRow>((record) => {
+            if (!confirmedDeletions.has(identityKey(record))) return [record];
+            const held = table.retainedRow(
+              recordKey(record.ownerUserId, record.chatId),
+            );
+            // A stale deleted-host row says nothing about a same-id peer's omission.
+            return held !== null && held.originHostId !== record.originHostId
+              ? [held]
+              : [];
+          }),
           issuedAtSeq,
         ),
       ),
+
+    applyConfirmedMutation: (mutation) => {
+      if (mutation.kind === "upsert") {
+        if (confirmedDeletions.has(identityKey(mutation.record))) return null;
+        const held = table.retainedRow(
+          recordKey(mutation.record.ownerUserId, mutation.record.chatId),
+        );
+        if (held !== null) {
+          if (held.originHostId !== mutation.record.originHostId) return null;
+          if (mutation.record.revision < held.revision) {
+            expirePendingCreationForRecord(mutation.record);
+            return published(table.republish());
+          }
+        }
+        return published(table.applyPointRead(mutation.record));
+      }
+      confirmedDeletions.add(identityKey(mutation));
+      const key = recordKey(mutation.ownerUserId, mutation.chatId);
+      const pending = pendingCreations.get(key);
+      if (pending?.pending.hostId === mutation.originHostId)
+        pendingCreations.delete(key);
+      const held = table.retainedRow(key);
+      if (held !== null && held.originHostId === mutation.originHostId) {
+        return published(table.removeRow(key));
+      }
+      return published(table.republish());
+    },
 
     applyDelta: (delta) => {
       if (delta.kind === "remove") {
         return published(table.applyRemoval(delta.chatId, delta.reason));
       }
+      if (confirmedDeletions.has(identityKey(delta.record))) return null;
       // `host.chatRecords.subscribe` carries the BASE row, which says nothing
       // about the home - and unlike the terminal twin, "a doc-homed row cannot
       // produce a delta" is FALSE here: `ChatRegistryService.acquire` calls
@@ -394,6 +439,16 @@ export function createChatRecordTable(
       // A's real record when it arrives under its actual owner.
       const ownerUserId = pending.ownerUserId;
       if (ownerUserId === null) return null;
+      if (
+        confirmedDeletions.has(
+          identityKey({
+            ownerUserId,
+            originHostId: pending.hostId,
+            chatId: pending.chatId,
+          }),
+        )
+      )
+        return null;
       // NOT gated on whether a served row for this chat is already held. It can
       // be - the owning host pushes its record the moment it commits, so a
       // delta can beat the create's own answer - and retaining anyway is

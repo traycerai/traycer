@@ -141,12 +141,16 @@ export type SessionImportCandidate = z.infer<
  *
  * `missing_folder` is a first-class location rather than a flag, because the
  * wizard treats it as one: those sessions still import, just without a
- * workspace, and the group carries the warning marker. The path is kept
- * either way - it is the only human-readable name that group has.
+ * workspace. The scan reports one such location per folder; the wizard folds
+ * every one of them into a single "Deleted Folders" group and shows each
+ * row's own path, which is why the path is kept - it is the only
+ * human-readable name that work has left.
  *
  * `workspaceId` is null for a folder Traycer does not know yet; the import
  * decides whether to adopt it as a workspace, so the wizard does not have to
- * expose that mapping.
+ * expose that mapping. A current host adopts every folder it binds through the
+ * same registration "add folder" uses, so it no longer looks the folder up and
+ * always reports null; the field stays for older hosts, which still fill it.
  */
 export const sessionImportGroupLocationSchema = z.discriminatedUnion("kind", [
   z.object({

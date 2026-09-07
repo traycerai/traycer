@@ -1,4 +1,6 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { use, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { UseNavigateResult } from "@tanstack/react-router";
+import type { InterviewQuestion } from "@traycer/protocol/persistence/epic/schemas";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -44,7 +46,34 @@ import {
 import {
   publishTileSurfaceEnvironment,
   resetTileSurfaceEnvironmentRegistryForTesting,
+  type ReadyTileSurfaceEnvironment,
 } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
+import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  PaneFocusProbeContext,
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+  usePaneFocusProbe,
+  usePanePortalContainer,
+  usePaneVisible,
+} from "@/components/epic-tabs/pane-visibility-context";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import {
+  PaneActivationFocusIntentContext,
+  usePaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
+import {
+  __resetTabNavigationControllerForTesting,
+  activateTabIntent,
+  navigateToTabIntent,
+} from "@/lib/tab-navigation";
+import {
+  draftTabIntent,
+  existingEpicTabIntent,
+  newDraftTabIntent,
+} from "@/lib/tab-navigation/intents";
+import { tabResolveIntent } from "@/stores/tabs/registry";
 import { resetTileSurfaceMembershipForTesting } from "@/components/epic-canvas/surface-host/tile-surface-membership";
 import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
@@ -58,6 +87,19 @@ import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coord
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 
 const stableTileSurfaceHostTestState = vi.hoisted(() => ({ enabled: false }));
+
+// Two seams the hosted suites steer per test: the body a hosted record
+// renders, and an extra child the mocked Epic surface renders beside its own
+// content (the focus-snapback suite below publishes a real tile environment
+// from there, so the publish lands in the SAME commit as a tab switch).
+const hostedSurfaceBodyTestState = vi.hoisted(() => ({
+  render: null as
+    | ((environment: ReadyTileSurfaceEnvironment) => ReactNode)
+    | null,
+}));
+const epicSurfaceExtraTestState = vi.hoisted(() => ({
+  render: null as ((tabId: string) => ReactNode) | null,
+}));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
@@ -93,9 +135,12 @@ vi.mock(
 vi.mock(
   "@/components/epic-canvas/surface-host/hosted-chat-surface-body",
   () => ({
-    renderHostedChatSurfaceBody: () => (
-      <div data-testid="hosted-wiring-body-stub" />
-    ),
+    renderHostedChatSurfaceBody: (environment: ReadyTileSurfaceEnvironment) =>
+      hostedSurfaceBodyTestState.render === null ? (
+        <div data-testid="hosted-wiring-body-stub" />
+      ) : (
+        hostedSurfaceBodyTestState.render(environment)
+      ),
   }),
 );
 
@@ -132,6 +177,7 @@ vi.mock("@/components/epic-tabs/epic-surface", async () => {
         />
         <input aria-label={`Primary ${props.tabId}`} ref={primaryRef} />
         <div data-testid={`blank-surface-${props.tabId}`} />
+        {epicSurfaceExtraTestState.render?.(props.tabId)}
       </div>
     );
   }
@@ -155,6 +201,7 @@ vi.mock(
 vi.mock("@/components/home/composer/landing-composer", () => ({
   LandingComposer: (props: { readonly draftId: string | null }) => {
     const active = useSurfaceActivity();
+    const isPaneFocusedNow = usePaneFocusProbe();
     const ref = useRef<HTMLButtonElement | null>(null);
     useLayoutEffect(() => {
       const element = ref.current;
@@ -167,8 +214,9 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           isEligible: () => element.isConnected,
         },
         active,
+        isPaneFocusedNow,
       );
-    }, [active, props.draftId]);
+    }, [active, isPaneFocusedNow, props.draftId]);
     return (
       <button
         ref={ref}
@@ -1163,5 +1211,293 @@ describe("TopLevelTabHost re-measures hosted geometry on a position-only placeme
     expect(recordB.style.transform).toBe("translate(0px, 0px)");
     expect(recordA.style.width).toBe("500px");
     expect(recordB.style.width).toBe("500px");
+  });
+});
+
+/**
+ * Desktop 1.3.0-rc.1 "the Start Page tab does nothing": with an Epic tab
+ * active whose hosted chat shows a pending interview card, clicking the Start
+ * Page tab silently snapped straight back to the Epic.
+ *
+ * The card registers itself in the composer focus registry with the hosted
+ * body's raw `isActive` - `tabSelected && canvasPaneActive`, which
+ * deliberately excludes top-level tab focus - so a BACKGROUND Epic tab's card
+ * stays in the registry as an active, eligible composer. When the newly
+ * focused Start Page restores focus it falls through to
+ * `focusRegisteredActiveComposer()`, picks that card, and
+ * `HTMLElement.focus()` runs synchronously - before the hosted record's own
+ * `useSyncExternalStore` re-render has made it inert. The focus bubbles to the
+ * hosted plane's `onFocusCapture`, which reads it as the user working in the
+ * Epic and re-activates that tab, superseding the draft's pending push.
+ *
+ * The publish has to happen from INSIDE the Epic surface's own commit (hence
+ * the publisher below rendered through the mocked Epic surface): a manual
+ * publish in a separate `act` moves the record's re-render out of the switch
+ * commit and erases the race the defect lives in. jsdom does not enforce
+ * `inert`, which costs nothing here - the window this pins is before `inert`
+ * is applied at all.
+ */
+describe("TopLevelTabHost: a background epic's pending interview card cannot snap a Start Page activation back", () => {
+  // The Start Page that reaches the registry is one with no restorable saved
+  // focus target - the freshly created "+" page here, and equally a retained
+  // one whose remembered element is gone. A Start Page that still has one
+  // restores it and returns before the registry is ever consulted, so the
+  // first switch below is the control and the second is the defect.
+  const CHAT_INSTANCE_ID = "interview-snapback-chat";
+  const PANE_ID = "p1";
+  const FREE_TEXT_QUESTION: InterviewQuestion = {
+    questionId: "q1",
+    question: "What should I do next?",
+    header: null,
+    options: [],
+    multiSelect: false,
+  };
+
+  /**
+   * Mirrors `TileSurfaceSlot`: republishes this tile's environment from the
+   * Epic surface's own live pane contexts, so every presentation change is
+   * published in the commit that made it.
+   */
+  function EpicInterviewTilePublisher(props: {
+    readonly viewTabId: string;
+  }): ReactNode {
+    const [base] = useState(() =>
+      buildSyntheticTileSurfaceEnvironment(CHAT_INSTANCE_ID, {}),
+    );
+    const topLevelVisible = usePaneVisible();
+    const topLevelFocused = use(PaneSurfaceActivityContext).focused;
+    const isPaneFocusedNow = usePaneFocusProbe();
+    const panePortalContainer = usePanePortalContainer();
+    const focusIntent = usePaneActivationFocusIntent();
+
+    useLayoutEffect(() => {
+      publishTileSurfaceEnvironment({
+        ...base,
+        identity: { ...base.identity, epicId: props.viewTabId },
+        placement: {
+          epicId: props.viewTabId,
+          viewTabId: props.viewTabId,
+          paneId: PANE_ID,
+          hostId: TEST_HOST_ID,
+        },
+        presentation: { topLevelVisible, topLevelFocused },
+        canvasActivity: { tabSelected: true, canvasPaneActive: true },
+        paneActivation: { focusIntent },
+        services: { ...base.services, isPaneFocusedNow, panePortalContainer },
+      });
+    }, [
+      base,
+      focusIntent,
+      isPaneFocusedNow,
+      panePortalContainer,
+      props.viewTabId,
+      topLevelFocused,
+      topLevelVisible,
+    ]);
+
+    return null;
+  }
+
+  /**
+   * The contexts `HostedChatSurfaceContextBridge` re-provides around a hosted
+   * chat, plus `HostedChatSurfaceBody`'s own `isActive` rule - the raw flag
+   * `chat-tile-lower-surfaces` hands the card.
+   */
+  function HostedInterviewCardBody(props: {
+    readonly environment: ReadyTileSurfaceEnvironment;
+  }): ReactNode {
+    const { environment } = props;
+    const tileActive =
+      environment.canvasActivity.tabSelected &&
+      environment.canvasActivity.canvasPaneActive;
+    return (
+      <PaneSurfaceActivityContext.Provider
+        value={{
+          visible: environment.presentation.topLevelVisible,
+          focused: environment.presentation.topLevelFocused,
+        }}
+      >
+        <PaneVisibilityContext.Provider
+          value={environment.presentation.topLevelVisible}
+        >
+          <PaneActivationFocusIntentContext.Provider
+            value={environment.paneActivation.focusIntent}
+          >
+            <PaneFocusProbeContext.Provider
+              value={environment.services.isPaneFocusedNow}
+            >
+              <TabBodySelectedContext.Provider
+                value={environment.canvasActivity.tabSelected}
+              >
+                <TooltipProvider>
+                  <PendingInterviewCard
+                    chatId="interview-chat"
+                    blockId="interview-block"
+                    questions={[FREE_TEXT_QUESTION]}
+                    isActive={tileActive}
+                    isBusy={false}
+                    onSubmit={() => null}
+                    onSkip={null}
+                    onFork={null}
+                  />
+                </TooltipProvider>
+              </TabBodySelectedContext.Provider>
+            </PaneFocusProbeContext.Provider>
+          </PaneActivationFocusIntentContext.Provider>
+        </PaneVisibilityContext.Provider>
+      </PaneSurfaceActivityContext.Provider>
+    );
+  }
+
+  /** Records what the controller asked the router for; never commits it. */
+  function deferredNavigate(): UseNavigateResult<string> {
+    return () => new Promise<void>(() => undefined);
+  }
+
+  function focusedRefKey(): string | null {
+    const state = useTabsStore.getState();
+    const active = state.items.find((item) => item.id === state.activeItemId);
+    if (active === undefined) return null;
+    if (active.kind === "tab") return tabRefKey(active.ref);
+    const side = active.focusedSide === "left" ? active.left : active.right;
+    return side.kind === "tab" ? tabRefKey(side.ref) : null;
+  }
+
+  async function settle(): Promise<void> {
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useLandingTerminalStore.getState().resetForTests();
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    resetPrimaryFocusCoordinatorForTests();
+    __resetTabNavigationControllerForTesting();
+    stableTileSurfaceHostTestState.enabled = true;
+    epicSurfaceExtraTestState.render = (tabId) => (
+      <EpicInterviewTilePublisher viewTabId={tabId} />
+    );
+    hostedSurfaceBodyTestState.render = (environment) => (
+      <HostedInterviewCardBody environment={environment} />
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    stableTileSurfaceHostTestState.enabled = false;
+    epicSurfaceExtraTestState.render = null;
+    hostedSurfaceBodyTestState.render = null;
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useLandingTerminalStore.getState().resetForTests();
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    resetPrimaryFocusCoordinatorForTests();
+    __resetTabNavigationControllerForTesting();
+  });
+
+  it("keeps a newly opened Start Page activated while the epic tab's interview card is still registered active", async () => {
+    seedSources([EPIC_A, DRAFT_A]);
+    useEpicCanvasStore.setState((state) => ({
+      ...state,
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [EPIC_A.id]: {
+          root: pane(PANE_ID, [CHAT_INSTANCE_ID]),
+          activePaneId: PANE_ID,
+          tilesByInstanceId: {
+            [CHAT_INSTANCE_ID]: {
+              id: CHAT_INSTANCE_ID,
+              instanceId: CHAT_INSTANCE_ID,
+              type: "chat" as const,
+              name: "Interview chat",
+              hostId: TEST_HOST_ID,
+            },
+          },
+          sizesByGroupId: {},
+        },
+      },
+    }));
+    // Start on the Start Page so its lazily loaded surface is resolved before
+    // the switch under test - in the app it has been rendered before too, and
+    // a first-ever lazy resolution would push the mount into a LATER commit
+    // than the tab switch, which is where the defect lives.
+    setSingle(DRAFT_A, [EPIC_A, DRAFT_A]);
+    const navigate = deferredNavigate();
+
+    render(
+      <PrimaryFocusCoordinatorProvider>
+        <TopLevelSurfaceActivationContext.Provider
+          value={(tab) => {
+            navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
+          }}
+        >
+          <TopLevelTabHost />
+        </TopLevelSurfaceActivationContext.Provider>
+      </PrimaryFocusCoordinatorProvider>,
+    );
+    await screen.findByRole("button", { name: `Composer ${DRAFT_A.id}` });
+
+    act(() => {
+      activateTabIntent(
+        navigate,
+        existingEpicTabIntent({
+          epicId: EPIC_A.id,
+          tabId: EPIC_A.id,
+          focus: undefined,
+        }),
+        undefined,
+      );
+    });
+    // The card is live inside the focused epic tab's hosted record, so it is
+    // registered as the active composer.
+    const answer = await screen.findByLabelText("Interview answer");
+    await settle();
+    expect(surfaceRef(EPIC_A).dataset.focused).toBe("true");
+    expect(answer.isConnected).toBe(true);
+
+    // Clicking the Start Page tab in the strip is exactly this activation.
+    act(() => {
+      activateTabIntent(navigate, draftTabIntent(DRAFT_A.id), undefined);
+    });
+    await settle();
+
+    // This one has a saved focus target of its own, so it restores that and
+    // never consults the registry - the control for the step below.
+    expect(focusedRefKey()).toBe(tabRefKey(DRAFT_A));
+    expect(surfaceRef(DRAFT_A).dataset.focused).toBe("true");
+    expect(surfaceRef(EPIC_A).dataset.focused).toBe("false");
+
+    // "+" opens a second Start Page - a surface with no saved focus target of
+    // its own, which is the shape that reaches the composer focus registry.
+    act(() => {
+      activateTabIntent(navigate, newDraftTabIntent(null), undefined);
+    });
+    await settle();
+
+    const secondDraftId = useLandingDraftStore
+      .getState()
+      .drafts.map((draft) => draft.id)
+      .find((id) => id !== DRAFT_A.id);
+    expect(secondDraftId).toBeDefined();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: `Composer ${secondDraftId ?? ""}` }),
+    );
+    expect(focusedRefKey()).toBe(
+      tabRefKey({ kind: "draft", id: secondDraftId ?? "" }),
+    );
   });
 });

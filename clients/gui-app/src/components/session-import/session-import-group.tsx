@@ -1,4 +1,4 @@
-import { Check, ChevronRight, FolderX, Minus } from "lucide-react";
+import { Check, ChevronRight, Minus } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
@@ -9,9 +9,6 @@ import type {
   SessionImportRowView,
 } from "@/components/session-import/session-import-model";
 import type { SessionImportTone } from "@/components/session-import/session-import-tone";
-
-const MISSING_FOLDER_HINT =
-  "This folder no longer exists - this work imports without a workspace.";
 
 /**
  * Checkbox visual with no interactive element of its own: the row around it is
@@ -82,9 +79,14 @@ function groupCountLabel(group: SessionImportGroupView): string {
 function SessionRow(props: {
   readonly row: SessionImportRowView;
   readonly tone: SessionImportTone;
+  /**
+   * Whether to show the folder the session ran in under its title. Only the
+   * Deleted Folders group does: everywhere else the header names the folder.
+   */
+  readonly showFolder: boolean;
   readonly onToggle: (selectionKey: string) => void;
 }) {
-  const { row, tone, onToggle } = props;
+  const { row, tone, showFolder, onToggle } = props;
   const { candidate } = row;
 
   return (
@@ -103,7 +105,12 @@ function SessionRow(props: {
         // unavailable could never open - which is the only explanation the
         // user gets.
         aria-disabled={!row.selectable}
-        aria-label={row.title}
+        // Inside Deleted Folders the header names no folder, so the folder
+        // has to be part of the name: two "Fix the build" rows from different
+        // gone checkouts are otherwise indistinguishable to a screen reader.
+        aria-label={
+          showFolder ? `${row.title} in ${row.folderPath}` : row.title
+        }
         data-testid="session-import-row"
         data-selectable={row.selectable}
         onClick={() => {
@@ -127,8 +134,18 @@ function SessionRow(props: {
           harnessId={candidate.harness}
           className={cn("size-3.5", tone.muted)}
         />
-        <span className={cn("min-w-0 flex-1 truncate text-ui-sm", tone.strong)}>
-          {row.title}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className={cn("min-w-0 truncate text-ui-sm", tone.strong)}>
+            {row.title}
+          </span>
+          {showFolder ? (
+            <span
+              data-testid="session-import-row-folder"
+              className={cn("min-w-0 truncate text-ui-xs", tone.faint)}
+            >
+              {row.folderPath}
+            </span>
+          ) : null}
         </span>
         {row.unavailableLabel !== null ? (
           <span className={cn("shrink-0 text-ui-xs", tone.faint)}>
@@ -227,25 +244,6 @@ export function SessionImportGroupItem(props: {
               >
                 {group.name}
               </span>
-              {group.missingFolder ? (
-                <TooltipWrapper
-                  label={MISSING_FOLDER_HINT}
-                  side="top"
-                  sideOffset={undefined}
-                  align={undefined}
-                >
-                  <span
-                    data-testid="session-import-missing-folder"
-                    className={cn(
-                      "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-ui-xs",
-                      tone.warningSurface,
-                    )}
-                  >
-                    <FolderX aria-hidden className="size-3" />
-                    Folder not found
-                  </span>
-                </TooltipWrapper>
-              ) : null}
             </span>
             <span className={cn("min-w-0 truncate text-ui-xs", tone.faint)}>
               {group.path}
@@ -271,6 +269,7 @@ export function SessionImportGroupItem(props: {
               key={row.selectionKey}
               row={row}
               tone={tone}
+              showFolder={group.missingFolder}
               onToggle={onToggleSession}
             />
           ))}

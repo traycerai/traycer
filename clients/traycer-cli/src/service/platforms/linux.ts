@@ -4,9 +4,11 @@ import {
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
 import { dirname, isAbsolute } from "node:path";
-import { readHostPidMetadata } from "../../host/pid-metadata";
+import {
+  publishedHostProcessGone,
+  readHostPidMetadata,
+} from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
-import { isProcessAlive } from "../../store/cli-lock";
 import { forceStopHostProcess } from "./desktop-agent-shutdown";
 import type { CliInvocation } from "../cli-binary";
 import { buildCompatibleHostStartScript } from "./host-start-script";
@@ -250,7 +252,7 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
     return statusNotInstalled();
   }
   const pidMetadata = await readHostPidMetadata(label.environment);
-  if (pidMetadata !== null && isProcessAlive(pidMetadata.pid)) {
+  if (pidMetadata !== null && !publishedHostProcessGone(pidMetadata)) {
     return {
       state: "running",
       version: pidMetadata.version,

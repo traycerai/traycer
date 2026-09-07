@@ -32,7 +32,10 @@
 import { describe, expect, it } from "vitest";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
-import { createChatRecordTable } from "../runtime/chat-record-table";
+import {
+  createChatRecordTable,
+  type ChatRecordTable,
+} from "../runtime/chat-record-table";
 import type { PendingChatCreation } from "../pending-chat-creations";
 
 const EPIC_ID = "epic-collision";
@@ -297,5 +300,88 @@ describe("createChatRecordTable - a delta reads the home of its OWN row", () => 
     // chat comes back claiming a home it does not have and its rename is
     // routed to a writer that cannot address it.
     expect(settled.docResident).toBe(false);
+  });
+});
+
+describe("createChatRecordTable - a rejected point-read still retires a pending creation", () => {
+  const CHAT_ID = "chat-pointread";
+  const pending: PendingChatCreation = {
+    chatId: CHAT_ID,
+    hostId: "host-1",
+    parentChatId: null,
+    title: "stand-in",
+    ownerUserId: "user-a",
+  };
+  const held = record({
+    chatId: CHAT_ID,
+    ownerUserId: "user-a",
+    title: "Held",
+    revision: 2,
+  });
+
+  function tableWithHeldRowAndPending(): {
+    readonly table: ChatRecordTable;
+    readonly publishes: { value: number };
+  } {
+    const publishes = { value: 0 };
+    const table = createChatRecordTable({
+      getCurrentUserId: () => "user-a",
+      onBeforePublish: () => {
+        publishes.value += 1;
+      },
+      now: () => 0,
+    });
+    const seeded = table.applyRecords([held], null);
+    if (seeded === null) {
+      throw new Error("expected a publication seeding the held row");
+    }
+    // The held row shadows the stand-in, so republish's change gate returns
+    // null even though the pending map accepted the entry.
+    table.beginPendingCreation(pending);
+    expect(table.current().byId[CHAT_ID].title).toBe("Held");
+    return { table, publishes };
+  }
+
+  it("an equal point-read still retires the stand-in so an omitting snapshot cannot resurrect it", () => {
+    const { table, publishes } = tableWithHeldRowAndPending();
+    const publishesBefore = publishes.value;
+    table.applyConfirmedMutation({
+      kind: "upsert",
+      record: record({
+        chatId: CHAT_ID,
+        ownerUserId: "user-a",
+        title: "Equal replay",
+        revision: 2,
+      }),
+    });
+    expect(publishes.value).toBeGreaterThan(publishesBefore);
+    expect(table.current().byId[CHAT_ID].title).toBe("Held");
+
+    const omitted = table.applyRecords([], table.ingestSeq());
+    if (omitted === null) {
+      throw new Error("expected a publication omitting the held row");
+    }
+    expect(omitted.chatRecords.allIds).toEqual([]);
+  });
+
+  it("an older point-read still retires the stand-in so an omitting snapshot cannot resurrect it", () => {
+    const { table, publishes } = tableWithHeldRowAndPending();
+    const publishesBefore = publishes.value;
+    table.applyConfirmedMutation({
+      kind: "upsert",
+      record: record({
+        chatId: CHAT_ID,
+        ownerUserId: "user-a",
+        title: "Older replay",
+        revision: 1,
+      }),
+    });
+    expect(publishes.value).toBeGreaterThan(publishesBefore);
+
+    const omitted = table.applyRecords([], table.ingestSeq());
+    if (omitted === null) {
+      throw new Error("expected a publication omitting the held row");
+    }
+    expect(omitted.chatRecords.allIds).toEqual([]);
   });
 });

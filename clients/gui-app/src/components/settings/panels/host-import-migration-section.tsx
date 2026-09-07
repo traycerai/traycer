@@ -135,10 +135,13 @@ function SessionImportRow(props: {
           </Button>
         }
       />
-      {/* Rendered inline, so the wizard inside it inherits this page's
-          re-provided contexts and submits to the host the row named. */}
+      {/* Opens on the host this row named, so the dialog's own picker agrees
+          with the page behind it; the pick can still be changed there. */}
       {importOpen ? (
-        <SessionImportDialog onClose={() => setImportOpen(false)} />
+        <SessionImportDialog
+          onClose={() => setImportOpen(false)}
+          initialHostId={props.hostId}
+        />
       ) : null}
     </>
   );
