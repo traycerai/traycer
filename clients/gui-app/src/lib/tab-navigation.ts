@@ -613,13 +613,26 @@ export class TabNavigationController {
     options: TabNavigationOptions | undefined,
   ): boolean {
     this.navigator = navigate;
-    if (!this.hydrationReady) return false;
+    if (!this.hydrationReady) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
+      return false;
+    }
     const layoutBefore = currentLayout();
     const focusedRef = command.focusedRef;
     const canonical = this.canonicalIntent(intent, focusedRef);
-    if (canonical === null) return false;
+    if (canonical === null) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
+      return false;
+    }
     const priorRef = backingRefOfLayout(layoutBefore);
     if (priorRef === null || !tabCommandCoordinator.pairTabs(command)) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
       return false;
     }
     const replace =

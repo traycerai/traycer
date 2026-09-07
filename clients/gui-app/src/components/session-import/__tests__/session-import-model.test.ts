@@ -931,6 +931,67 @@ describe("sessionImportWizardReducer - frame folding into view state", () => {
     expect(state.totals).toBeNull();
   });
 
+  it("pre-selects an unavailable row when it recovers, while preserving a deliberate untick", () => {
+    const deliberatelyUnticked = candidate({ nativeSessionId: "s1" });
+    const unavailable = candidate({
+      nativeSessionId: "s2",
+      state: {
+        kind: "unreadable",
+        reason: "source_unreadable",
+        detail: "temporarily unavailable",
+      },
+    });
+    const firstArrival = group(folderLocation("/repo/a"), [
+      deliberatelyUnticked,
+      unavailable,
+    ]);
+    const recovered = group(folderLocation("/repo/a"), [
+      candidate({ nativeSessionId: "s1" }),
+      candidate({ nativeSessionId: "s2" }),
+    ]);
+    const s1 = sessionImportSelectionKey("claude", "s1");
+    const s2 = sessionImportSelectionKey("claude", "s2");
+
+    const state = applyActions([
+      { kind: "scanGroupArrived", group: firstArrival },
+      { kind: "sessionToggled", selectionKey: s1 },
+      { kind: "scanRestarted", reason: "reconnect" },
+      { kind: "scanGroupArrived", group: recovered },
+    ]);
+
+    expect(state.selected.has(s1)).toBe(false);
+    expect(state.selected.has(s2)).toBe(true);
+  });
+
+  it("does not pre-select recovered rows for a harness disabled before reconnect", () => {
+    const firstArrival = group(folderLocation("/repo/a"), [
+      candidate({ harness: "codex", nativeSessionId: "s1" }),
+      candidate({
+        harness: "codex",
+        nativeSessionId: "s2",
+        state: {
+          kind: "unreadable",
+          reason: "source_unreadable",
+          detail: "temporarily unavailable",
+        },
+      }),
+    ]);
+    const recovered = group(folderLocation("/repo/a"), [
+      candidate({ harness: "codex", nativeSessionId: "s1" }),
+      candidate({ harness: "codex", nativeSessionId: "s2" }),
+    ]);
+
+    const state = applyActions([
+      { kind: "scanGroupArrived", group: firstArrival },
+      { kind: "providerScopeToggled", harness: "codex" },
+      { kind: "scanRestarted", reason: "reconnect" },
+      { kind: "scanGroupArrived", group: recovered },
+    ]);
+
+    expect(state.disabledHarnesses).toEqual(new Set(["codex"]));
+    expect(state.selected).toEqual(new Set());
+  });
+
   it("clears groups/selection/expansion/phase on a fresh scanRestarted but preserves query, disabledHarnesses, and scanWindow", () => {
     const arrivingGroup = group(folderLocation("/repo/a"), [
       candidate({ nativeSessionId: "s1" }),
@@ -1230,6 +1291,38 @@ describe("buildSessionImportView - Deleted Folders group", () => {
     expect(state.selected.has(sessionImportSelectionKey("claude", "s3"))).toBe(
       true,
     );
+  });
+
+  it("keeps recovered rows unselected when Deleted Folders stays cleared across reconnect", () => {
+    const firstArrival = group(missingLocationA, [
+      candidate({ nativeSessionId: "s1" }),
+      candidate({
+        nativeSessionId: "s2",
+        state: {
+          kind: "unreadable",
+          reason: "source_unreadable",
+          detail: "temporarily unavailable",
+        },
+      }),
+    ]);
+    const recovered = group(missingLocationA, [
+      candidate({ nativeSessionId: "s1" }),
+      candidate({ nativeSessionId: "s2" }),
+    ]);
+
+    const state = applyActions([
+      { kind: "scanGroupArrived", group: firstArrival },
+      {
+        kind: "groupSelectionSet",
+        groupKey: SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY,
+        selected: false,
+      },
+      { kind: "scanRestarted", reason: "reconnect" },
+      { kind: "scanGroupArrived", group: recovered },
+    ]);
+
+    expect(state.deletedFoldersCleared).toBe(true);
+    expect(state.selected).toEqual(new Set());
   });
 
   it("keeps deletedFoldersCleared across a reconnect restart, but resets it on a fresh one", () => {

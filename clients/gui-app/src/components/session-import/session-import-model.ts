@@ -341,10 +341,14 @@ function applyScanGroup(
   );
   // Refresh states after reconnect without undoing a deliberate untick.
   // A newly imported row must never retain its old selected key.
-  const previousKeys = new Set(
-    previous?.sessions.map((candidate) =>
-      sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
-    ),
+  // An unavailable row could not have been unticked by the user. If it
+  // becomes importable, give it the same initial selection as a new row.
+  const previousImportableKeys = new Set(
+    previous?.sessions
+      .filter(isImportable)
+      .map((candidate) =>
+        sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
+      ),
   );
   // Everything importable arrives pre-selected, missing folders included
   // (spec §5): those still import, just without a workspace. Two
@@ -363,7 +367,7 @@ function applyScanGroup(
         sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
       ),
   );
-  for (const previousKey of previousKeys) {
+  for (const previousKey of previousImportableKeys) {
     if (!nextImportableKeys.has(previousKey)) selected.delete(previousKey);
   }
   for (const candidate of group.sessions) {
@@ -371,7 +375,7 @@ function applyScanGroup(
     if (!isImportable(candidate)) continue;
     if (state.disabledHarnesses.has(candidate.harness)) continue;
     if (
-      previousKeys.has(
+      previousImportableKeys.has(
         sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
       )
     )
