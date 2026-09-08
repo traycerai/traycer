@@ -13,11 +13,13 @@ export function AppearanceWallpaper(props: {
   readonly wallpaper: AppearanceWallpaperImage | null;
   readonly originalUrl: string | null;
   readonly scope: AppearanceScope | null;
+  readonly persistTreatment: boolean;
   readonly onDecodeFailure: (() => void) | null;
 }) {
   const wallpaper = props.wallpaper;
   const url = useWallpaperTreatment({
     scope: props.scope,
+    persist: props.persistTreatment,
     originalUrl: props.originalUrl,
     treatment: wallpaper?.treatment ?? "original",
     strength: wallpaper?.strength ?? 0,

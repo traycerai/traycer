@@ -1,3 +1,4 @@
+import { useTabAppearanceEditor } from "@/components/appearance/appearance-editor-launcher";
 import {
   memo,
   useCallback,
@@ -198,6 +199,11 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const titleGenerationPending = useRegisteredEpicTitleGenerating(tabEpicId);
   const activityStatus = useEpicActivityStatus(tabEpicId);
   const permissionRole = useRegisteredEpicPermissionRole(tabEpicId);
+  const { editor: appearanceEditor, onCustomize } = useTabAppearanceEditor(
+    tab,
+    !isEditableRole(permissionRole),
+    tabRef,
+  );
   const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
   const canClose = tab.kind !== "epic" || tab.canClose;
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
@@ -490,6 +496,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         canCloseOtherTabs={canCloseOtherTabs}
         canOpenInNewWindow={canOpenInNewWindow}
         canEditTitle={canEditTitle}
+        onCustomize={onCustomize}
         taskPinned={taskPinned}
         isTaskPinPending={isTaskPinPending}
         onCloseOtherTabs={onCloseOtherTabs}
@@ -499,6 +506,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         onEditTitle={rename.startEditing}
         onSetTaskPinned={handleSetTaskPinned}
       />
+      {appearanceEditor}
     </ContextMenu>
   );
   if (!includeMotionFrame) return control;

@@ -42,16 +42,21 @@ vi.mock(
 
 type HookModule = typeof import("../use-wallpaper-treatment");
 type ImageBlobCacheModule = typeof import("@/lib/attachments/image-blob-cache");
+type CacheModule = typeof import("@/lib/appearance/appearance-cache");
 
 // A statically-imported `imageBlobCache` would be a different singleton than
 // the one the freshly `vi.resetModules()`-reimported hook module closes
 // over - see `appearance-cache.test.ts`/`use-appearance-assets.test.tsx`'s
-// own doc comments on why every test needs a fresh import chain.
+// own doc comments on why every test needs a fresh import chain. The hook
+// module also closes over `appearance-cache.ts`'s own top-level import, so
+// spying on `readAppearanceBlob`/`writeAppearanceBlob` needs that SAME
+// freshly-reset instance too, not a separately statically-imported one.
 let currentImageBlobCache: ImageBlobCacheModule["imageBlobCache"] | null = null;
 
 interface LoadedHook {
   readonly useWallpaperTreatment: HookModule["useWallpaperTreatment"];
   readonly imageBlobCache: ImageBlobCacheModule["imageBlobCache"];
+  readonly cache: CacheModule;
 }
 
 async function loadHook(): Promise<LoadedHook> {
@@ -60,8 +65,13 @@ async function loadHook(): Promise<LoadedHook> {
   preparationMocks.runAppearanceImageProcessing.mockReset();
   const { imageBlobCache } = await import("@/lib/attachments/image-blob-cache");
   currentImageBlobCache = imageBlobCache;
+  const cache = await import("@/lib/appearance/appearance-cache");
   const mod = await import("../use-wallpaper-treatment");
-  return { useWallpaperTreatment: mod.useWallpaperTreatment, imageBlobCache };
+  return {
+    useWallpaperTreatment: mod.useWallpaperTreatment,
+    imageBlobCache,
+    cache,
+  };
 }
 
 function processedResult(
@@ -119,6 +129,7 @@ describe("useWallpaperTreatment: original/texture need no pixel work", () => {
         originalUrl: ORIGINAL_URL,
         treatment: "original",
         strength: 0,
+        persist: true,
       }),
     );
     expect(result.current).toBe(ORIGINAL_URL);
@@ -139,6 +150,7 @@ describe("useWallpaperTreatment: original/texture need no pixel work", () => {
         originalUrl: ORIGINAL_URL,
         treatment: "texture",
         strength: 0.5,
+        persist: true,
       }),
     );
     expect(result.current).toBe(ORIGINAL_URL);
@@ -153,6 +165,7 @@ describe("useWallpaperTreatment: original/texture need no pixel work", () => {
         originalUrl: ORIGINAL_URL,
         treatment: "dither",
         strength: 0,
+        persist: true,
       }),
     );
     expect(result.current).toBe(ORIGINAL_URL);
@@ -174,6 +187,7 @@ describe("useWallpaperTreatment: dither derivation", () => {
         originalUrl: ORIGINAL_URL,
         treatment: "dither",
         strength: 0.5,
+        persist: true,
       }),
     );
     expect(result.current).toBe(ORIGINAL_URL);
@@ -206,6 +220,7 @@ describe("useWallpaperTreatment: dither derivation", () => {
           originalUrl: ORIGINAL_URL,
           treatment: "dither",
           strength,
+          persist: true,
         }),
       { initialProps: 0.2 },
     );
@@ -236,6 +251,7 @@ describe("useWallpaperTreatment: dither derivation", () => {
       originalUrl: ORIGINAL_URL,
       treatment: "dither" as const,
       strength: 0.4,
+      persist: true,
     };
     const first = renderHook(() => useWallpaperTreatment(input));
     const second = renderHook(() => useWallpaperTreatment(input));
@@ -258,6 +274,7 @@ describe("useWallpaperTreatment: dither derivation", () => {
         originalUrl: ORIGINAL_URL,
         treatment: "dither",
         strength: 0.3,
+        persist: true,
       }),
     );
     unmount();
@@ -291,6 +308,7 @@ describe("useWallpaperTreatment: dither derivation", () => {
           originalUrl: ORIGINAL_URL,
           treatment: "dither",
           strength,
+          persist: true,
         }),
       { initialProps: 0.2 },
     );
@@ -333,6 +351,7 @@ describe("useWallpaperTreatment: dither derivation", () => {
       originalUrl: ORIGINAL_URL,
       treatment: "dither" as const,
       strength: 0.6,
+      persist: true,
     };
     const first = renderHook(() => useWallpaperTreatment(input));
     await waitFor(() => {
@@ -353,5 +372,154 @@ describe("useWallpaperTreatment: dither derivation", () => {
     expect(preparationMocks.runAppearanceImageProcessing).toHaveBeenCalledTimes(
       1,
     );
+  });
+});
+
+describe("useWallpaperTreatment: persist=false (unsaved preview) touches no persisted storage", () => {
+  it("never touches persisted (disk) storage, and a persist=true render of the SAME identity is a genuinely separate lease scope", async () => {
+    // Proves scope separation WITHOUT ever clearing `imageBlobCache`: the
+    // preview stays mounted (its lease is unambiguously live, not merely
+    // grace-retained) while a saved render - same original URL, treatment,
+    // and strength - mounts alongside it. If persist didn't change the
+    // cache's scope key, the saved render would hit the preview's still-live
+    // entry and never derive again; instead it must derive fresh and be the
+    // only one of the two that ever touches disk.
+    const { useWallpaperTreatment, cache } = await loadHook();
+    mockFetchResolving(new Uint8Array([1, 1, 1]));
+    preparationMocks.runAppearanceImageProcessing.mockResolvedValue(
+      processedResult(new Uint8Array([2, 2, 2])),
+    );
+    const readSpy = vi.spyOn(cache, "readAppearanceBlob");
+    const writeSpy = vi.spyOn(cache, "writeAppearanceBlob");
+
+    const input = {
+      scope: null,
+      originalUrl: ORIGINAL_URL,
+      treatment: "dither" as const,
+      strength: 0.5,
+      persist: false,
+    };
+    const preview = renderHook(() => useWallpaperTreatment(input));
+    await waitFor(() => {
+      expect(preview.result.current).not.toBe(ORIGINAL_URL);
+    });
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(preparationMocks.runAppearanceImageProcessing).toHaveBeenCalledTimes(
+      1,
+    );
+
+    const saved = renderHook(() =>
+      useWallpaperTreatment({ ...input, persist: true }),
+    );
+    await waitFor(() => {
+      expect(saved.result.current).not.toBe(ORIGINAL_URL);
+    });
+    expect(preparationMocks.runAppearanceImageProcessing).toHaveBeenCalledTimes(
+      2,
+    );
+    expect(readSpy).toHaveBeenCalledTimes(1); // only the persist=true render ever checked disk
+    expect(writeSpy).toHaveBeenCalledTimes(1); // and only it ever wrote through
+
+    preview.unmount();
+    saved.unmount();
+  });
+
+  it("may reuse the in-memory grace lease on a quick unmount/remount of the same preview, but still never reaches disk", async () => {
+    const { useWallpaperTreatment, cache } = await loadHook();
+    mockFetchResolving(new Uint8Array([6, 6, 6]));
+    preparationMocks.runAppearanceImageProcessing.mockResolvedValue(
+      processedResult(new Uint8Array([7, 7, 7])),
+    );
+    const readSpy = vi.spyOn(cache, "readAppearanceBlob");
+    const writeSpy = vi.spyOn(cache, "writeAppearanceBlob");
+
+    const input = {
+      scope: null,
+      originalUrl: ORIGINAL_URL,
+      treatment: "dither" as const,
+      strength: 0.5,
+      persist: false,
+    };
+    const first = renderHook(() => useWallpaperTreatment(input));
+    await waitFor(() => {
+      expect(first.result.current).not.toBe(ORIGINAL_URL);
+    });
+    // Unmount and remount immediately, WITHOUT clearing `imageBlobCache` -
+    // the grace-retention lease from the first mount is still live, so a
+    // second derivation is not required (and is not asserted against
+    // either way). What must hold regardless of that cache-reuse decision
+    // is the actual contract: no persisted read or write ever happened.
+    first.unmount();
+    const second = renderHook(() => useWallpaperTreatment(input));
+    await waitFor(() => {
+      expect(second.result.current).not.toBe(ORIGINAL_URL);
+    });
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("aborts the pending derivation on unmount while persist=false, without ever attempting a write", async () => {
+    const { useWallpaperTreatment, cache } = await loadHook();
+    const writeSpy = vi.spyOn(cache, "writeAppearanceBlob");
+    const { unmount } = renderHook(() =>
+      useWallpaperTreatment({
+        scope: null,
+        originalUrl: ORIGINAL_URL,
+        treatment: "dither",
+        strength: 0.3,
+        persist: false,
+      }),
+    );
+    unmount();
+
+    await wait(200); // longer than the 100ms debounce, if it had wrongly fired
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(
+      preparationMocks.runAppearanceImageProcessing,
+    ).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("cancels a persist=false derivation still awaiting processing when the component unmounts mid-flight, and never writes the late result", async () => {
+    const { useWallpaperTreatment, cache } = await loadHook();
+    mockFetchResolving(new Uint8Array([4, 4, 4]));
+    const writeSpy = vi.spyOn(cache, "writeAppearanceBlob");
+    const pending: Array<{
+      readonly signal: AbortSignal;
+      readonly resolve: (value: ProcessedAppearanceImage) => void;
+    }> = [];
+    preparationMocks.runAppearanceImageProcessing.mockImplementation(
+      (_request: AppearanceImageRequest, signal: AbortSignal) =>
+        new Promise<ProcessedAppearanceImage>((resolve) => {
+          pending.push({ signal, resolve });
+        }),
+    );
+
+    const { unmount } = renderHook(() =>
+      useWallpaperTreatment({
+        scope: null,
+        originalUrl: ORIGINAL_URL,
+        treatment: "dither",
+        strength: 0.5,
+        persist: false,
+      }),
+    );
+    await waitFor(() => {
+      expect(pending).toHaveLength(1);
+    });
+    const call = pending.at(0);
+    if (call === undefined) throw new Error("expected a process call");
+
+    unmount();
+    expect(call.signal.aborted).toBe(true);
+
+    // A late resolution of the aborted processing call must still never
+    // reach a persisted write, mirroring the Cancel path (the editor
+    // discarding an in-progress preview) exactly.
+    call.resolve(processedResult(new Uint8Array([5, 5, 5])));
+    await wait(0);
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });

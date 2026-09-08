@@ -7,9 +7,13 @@ import {
 
 const wallpaperTreatmentMock = vi.hoisted(() => ({
   url: null as string | null,
+  lastArgs: null as { readonly persist: boolean } | null,
 }));
 vi.mock("@/hooks/appearance/use-wallpaper-treatment", () => ({
-  useWallpaperTreatment: () => wallpaperTreatmentMock.url,
+  useWallpaperTreatment: (args: { readonly persist: boolean }) => {
+    wallpaperTreatmentMock.lastArgs = args;
+    return wallpaperTreatmentMock.url;
+  },
 }));
 
 function wallpaper(
@@ -35,6 +39,7 @@ function queryImage(container: HTMLElement): HTMLImageElement {
 afterEach(() => {
   cleanup();
   wallpaperTreatmentMock.url = null;
+  wallpaperTreatmentMock.lastArgs = null;
 });
 
 describe("AppearanceWallpaper", () => {
@@ -45,6 +50,7 @@ describe("AppearanceWallpaper", () => {
         wallpaper={null}
         originalUrl="blob:original"
         scope={null}
+        persistTreatment
         onDecodeFailure={null}
       />,
     );
@@ -58,6 +64,7 @@ describe("AppearanceWallpaper", () => {
         wallpaper={wallpaper({})}
         originalUrl={null}
         scope={null}
+        persistTreatment
         onDecodeFailure={null}
       />,
     );
@@ -71,6 +78,7 @@ describe("AppearanceWallpaper", () => {
         wallpaper={wallpaper({ focalPoint: [0.2, 0.8], dimming: 0.3 })}
         originalUrl="blob:original"
         scope={null}
+        persistTreatment
         onDecodeFailure={null}
       />,
     );
@@ -91,6 +99,7 @@ describe("AppearanceWallpaper", () => {
         wallpaper={wallpaper({ treatment: "original" })}
         originalUrl="blob:original"
         scope={null}
+        persistTreatment
         onDecodeFailure={null}
       />,
     );
@@ -101,6 +110,7 @@ describe("AppearanceWallpaper", () => {
         wallpaper={wallpaper({ treatment: "texture", strength: 0.5 })}
         originalUrl="blob:original"
         scope={null}
+        persistTreatment
         onDecodeFailure={null}
       />,
     );
@@ -119,6 +129,7 @@ describe("AppearanceWallpaper", () => {
         wallpaper={wallpaper({ treatment: "dither", strength: 0.5 })}
         originalUrl="blob:original"
         scope={null}
+        persistTreatment
         onDecodeFailure={onDecodeFailure}
       />,
     );
@@ -138,6 +149,7 @@ describe("AppearanceWallpaper", () => {
         wallpaper={wallpaper({ treatment: "original" })}
         originalUrl="blob:original"
         scope={null}
+        persistTreatment
         onDecodeFailure={onDecodeFailure}
       />,
     );
@@ -153,11 +165,37 @@ describe("AppearanceWallpaper", () => {
         wallpaper={wallpaper({ treatment: "dither", strength: 0.5 })}
         originalUrl="blob:original"
         scope={null}
+        persistTreatment
         onDecodeFailure={onDecodeFailure}
       />,
     );
     fireEvent.error(queryImage(container)); // derived fails -> falls back to original
     fireEvent.error(queryImage(container)); // original ALSO fails -> reports once
     expect(onDecodeFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards persistTreatment straight through as the treatment hook's persist flag", () => {
+    wallpaperTreatmentMock.url = "blob:original";
+    const { rerender } = render(
+      <AppearanceWallpaper
+        wallpaper={wallpaper({ treatment: "dither", strength: 0.5 })}
+        originalUrl="blob:original"
+        scope={null}
+        persistTreatment={false}
+        onDecodeFailure={null}
+      />,
+    );
+    expect(wallpaperTreatmentMock.lastArgs?.persist).toBe(false);
+
+    rerender(
+      <AppearanceWallpaper
+        wallpaper={wallpaper({ treatment: "dither", strength: 0.5 })}
+        originalUrl="blob:original"
+        scope={null}
+        persistTreatment
+        onDecodeFailure={null}
+      />,
+    );
+    expect(wallpaperTreatmentMock.lastArgs?.persist).toBe(true);
   });
 });

@@ -19,6 +19,7 @@ export function LandingAppearanceWallpaper({
     assets.wallpaperUrl !== null && assets.wallpaperUrl === assets.project.url;
   return (
     <AppearanceWallpaper
+      persistTreatment
       wallpaper={assets.wallpaper?.kind === "image" ? assets.wallpaper : null}
       originalUrl={assets.wallpaperUrl}
       scope={project ? source.scope : null}

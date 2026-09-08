@@ -6,6 +6,7 @@ import {
   PanelLeftClose,
   PanelRightClose,
   Pencil,
+  Paintbrush,
   Pin,
   SplitSquareHorizontal,
   X,
@@ -43,6 +44,7 @@ interface TabContextMenuContentProps {
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   /** Switches the epic tab title into the inline editable input. */
   readonly onEditTitle: () => void;
+  readonly onCustomize: (() => void) | null;
   readonly onSetTaskPinned: (pinned: boolean) => void;
 }
 
@@ -100,6 +102,12 @@ export function TabContextMenuContent(
               />
             ) : null}
           </ContextMenuItem>
+          {props.onCustomize !== null ? (
+            <ContextMenuItem onSelect={props.onCustomize}>
+              <Paintbrush />
+              Customize repository
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuSeparator />
         </>
       ) : null}

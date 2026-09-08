@@ -18,6 +18,7 @@ export interface WallpaperTreatmentInput {
   readonly originalUrl: string | null;
   readonly treatment: "original" | "texture" | "dither";
   readonly strength: number;
+  readonly persist: boolean;
 }
 
 function assertCurrent(
@@ -41,12 +42,15 @@ async function deriveWallpaper(
     readonly identity: string;
     readonly original: Blob;
     readonly strength: number;
+    readonly persist: boolean;
     readonly session: number;
   },
   signal: AbortSignal,
 ): Promise<ImageBytesResult> {
   assertCurrent(args.scope, args.session, signal);
-  let blob = await readAppearanceBlob(args.scope, args.identity);
+  let blob = args.persist
+    ? await readAppearanceBlob(args.scope, args.identity)
+    : null;
   assertCurrent(args.scope, args.session, signal);
   if (blob === null) {
     const { runAppearanceImageProcessing } =
@@ -59,7 +63,10 @@ async function deriveWallpaper(
     assertCurrent(args.scope, args.session, signal);
     blob = result.blob;
     // Quota/private-mode failures must not hide otherwise usable artwork.
-    await writeAppearanceBlob(args.scope, args.identity, blob).catch(() => {});
+    if (args.persist)
+      await writeAppearanceBlob(args.scope, args.identity, blob).catch(
+        () => {},
+      );
   }
   assertCurrent(args.scope, args.session, signal);
   return {
@@ -72,7 +79,7 @@ async function deriveWallpaper(
 export function useWallpaperTreatment(
   input: WallpaperTreatmentInput,
 ): string | null {
-  const { originalUrl, treatment, strength } = input;
+  const { originalUrl, treatment, strength, persist } = input;
   const accountId = input.scope?.accountId ?? null;
   const hostId = input.scope?.hostId ?? null;
   const canonicalSourceRoot = input.scope?.canonicalSourceRoot ?? null;
@@ -83,6 +90,7 @@ export function useWallpaperTreatment(
     originalUrl,
     treatment,
     strength,
+    persist,
   ]);
   const [derived, setDerived] = useState<{
     identity: string;
@@ -118,11 +126,18 @@ export function useWallpaperTreatment(
           {
             scopeKey: appearanceAssetKey(
               scope,
-              `wallpaper-treatment:${session}`,
+              `wallpaper-treatment:${session}:${persist ? "saved" : "preview"}`,
             ),
             fetch: (_key, signal) =>
               deriveWallpaper(
-                { scope, identity: cacheIdentity, original, strength, session },
+                {
+                  scope,
+                  identity: cacheIdentity,
+                  original,
+                  strength,
+                  session,
+                  persist,
+                },
                 signal,
               ),
           },
@@ -147,6 +162,7 @@ export function useWallpaperTreatment(
     treatment,
     strength,
     identity,
+    persist,
   ]);
 
   return treatment === "dither" &&

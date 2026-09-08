@@ -24,6 +24,7 @@ import {
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { LandingCustomizeEntry } from "@/components/appearance/landing-customize-button";
 import { LandingAppearanceWallpaper } from "@/components/home/landing-appearance-wallpaper";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
@@ -160,6 +161,7 @@ export function LandingDraftSurface() {
         ) : null}
         <div className="relative mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
+          <LandingCustomizeEntry draftId={draftId} />
         </div>
 
         <section
