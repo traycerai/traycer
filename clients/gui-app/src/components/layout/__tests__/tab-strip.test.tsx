@@ -1127,9 +1127,15 @@ describe("<TabStrip />", () => {
 
     const tab = await screen.findByTestId("tab-epic-e-a");
     const title = screen.getByTestId("tab-title-epic-e-a");
+    const closeButton = screen.getByTestId("tab-close-epic-e-a");
+
+    const trigger = tab.querySelector('[data-slot="tooltip-trigger"]');
+    if (trigger === null) throw new Error("Expected a tooltip trigger");
 
     expect(tab.getAttribute("data-slot")).not.toBe("tooltip-trigger");
-    expect(title.getAttribute("data-slot")).toBe("tooltip-trigger");
+    expect(trigger).not.toBe(tab);
+    expect(trigger.contains(title)).toBe(true);
+    expect(trigger.contains(closeButton)).toBe(false);
   });
 
   it("shows a spinner while epic title generation is pending", async () => {

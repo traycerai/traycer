@@ -454,11 +454,11 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
                 {...rename.inputProps}
                 aria-label="Edit epic title"
                 data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
-                className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-center text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
+                className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-left text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
               />
             ) : (
               <span
-                className="header-tab-label relative min-w-0 flex-1 text-center"
+                className="header-tab-label relative min-w-0 flex-1 text-left"
                 data-leader-visible={leaderBadge !== null}
               >
                 <Tooltip>
