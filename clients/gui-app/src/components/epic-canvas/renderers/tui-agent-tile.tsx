@@ -106,6 +106,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 /**
  * A bound worktree/folder is gone from disk. The host's prepare-launch
  * resolver rejects with the typed `WORKTREE_MISSING` envelope instead of
@@ -1453,6 +1454,22 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   const exitCode = useStore(handle.store, (s) => s.exitCode);
   const exitReason = useStore(handle.store, (s) => s.exitReason);
   const lastOutputPreview = useStore(handle.store, (s) => s.lastOutputPreview);
+  const restartRequired = useStore(handle.store, (s) => s.restartRequired);
+  // D19/D21 (W5-T4): gate the hint on the host actually being new enough to
+  // have sent it - `terminal.list@2.4` shipped alongside `terminal.
+  // subscribe@1.7` in the same wave, so its minor is the negotiated proxy
+  // for "this host computes restartRequired at all". Belt-and-suspenders:
+  // `restartRequired` already defaults `false` for an older host's frame
+  // shape (see `restartRequiredFromSession`), so this can only ever narrow,
+  // never widen, what the store already reports.
+  const terminalListVersion = useHostMethodSchemaVersion(
+    hostId,
+    "terminal.list",
+  );
+  const hostSupportsRestartRequiredHint =
+    terminalListVersion !== null &&
+    (terminalListVersion.major > 2 ||
+      (terminalListVersion.major === 2 && terminalListVersion.minor >= 4));
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.tileId,
@@ -1630,6 +1647,25 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
           onReconnect={props.recovery.onManualReconnect}
           testId={`terminal-connection-overlay-${props.tileId}`}
         />
+      ) : null}
+      {/* D19/D21 (W5-T4): a hint, not a dialog - no modal, no auto-action,
+          and `pointer-events-none` so it never gates typing into the
+          terminal underneath. The tile has no restart affordance safe to
+          reuse here: `mayRestartAfterWorkspaceBindingChange`'s kill+recreate
+          targets a WORKSPACE-BINDING restart and is refused outright for a
+          cloud replica, which this hint is not scoped to - offering it would
+          promise a mutation the click cannot honor for every agent this
+          banner can show on. Text only; the user restarts the tab
+          themselves. */}
+      {restartRequired && hostSupportsRestartRequiredHint ? (
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-3 pt-2"
+          data-testid={`terminal-agent-restart-required-${props.tileId}`}
+        >
+          <span className="rounded-md bg-foreground/8 px-2 py-1 text-center text-ui-xs text-muted-foreground">
+            Provider settings changed — restart this agent to apply.
+          </span>
+        </div>
       ) : null}
     </>
   );

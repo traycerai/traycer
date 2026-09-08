@@ -29,10 +29,14 @@ export function buildTerminalOutputCommand(opts: {
   return async () => {
     const epicId = resolveEpicId(opts.epicId);
     const result = await toAgentCliError(
-      callHostRpc("terminal.readOutput", {
-        epicId,
-        sessionId: opts.terminalId,
-      }),
+      callHostRpc(
+        "terminal.readOutput",
+        {
+          epicId,
+          sessionId: opts.terminalId,
+        },
+        null,
+      ),
     );
     const { path } = parseCanonicalHostResponse(
       "terminal.readOutput",

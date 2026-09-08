@@ -99,6 +99,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
         windowDays,
         epicId,
         profileId: null,
+        harnessId: null,
       }),
     [epicId, windowDays],
   );

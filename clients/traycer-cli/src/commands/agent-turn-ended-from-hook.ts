@@ -58,7 +58,7 @@ export function buildAgentTurnEndedFromHookCommand(opts: {
     // Host-not-running is benign - the hook fires unconditionally and the
     // host may simply not be up. Other RPC errors (auth, etc.) surface.
     const rpcResult = await toAgentCliError(
-      callHostRpc("agent.tui.turnEnded", request),
+      callHostRpc("agent.tui.turnEnded", request, null),
     ).catch((err: unknown) => {
       if (
         err instanceof CliError &&

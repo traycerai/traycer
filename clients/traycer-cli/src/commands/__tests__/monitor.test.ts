@@ -470,6 +470,7 @@ describe("mixed-version inbox message frames", () => {
     expect(callHostRpcMock).not.toHaveBeenCalledWith(
       "agent.inbox.ack",
       expect.anything(),
+      expect.anything(),
     );
 
     stdoutSpy.mockRestore();
@@ -520,11 +521,15 @@ describe("mixed-version inbox message frames", () => {
     expect(lines.some((line) => line.includes("hello from a new host"))).toBe(
       true,
     );
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
-      epicId: "e1",
-      agentId: "a1",
-      eventIds: ["evt-1"],
-    });
+    expect(callHostRpcMock).toHaveBeenCalledWith(
+      "agent.inbox.ack",
+      {
+        epicId: "e1",
+        agentId: "a1",
+        eventIds: ["evt-1"],
+      },
+      null,
+    );
 
     stdoutSpy.mockRestore();
     void result;
@@ -563,11 +568,15 @@ describe("mixed-version inbox message frames", () => {
     await flush(0);
 
     expect(callHostRpcMock).toHaveBeenCalledTimes(1);
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
-      epicId: "e1",
-      agentId: "a1",
-      eventIds: ["evt-4", "evt-5"],
-    });
+    expect(callHostRpcMock).toHaveBeenCalledWith(
+      "agent.inbox.ack",
+      {
+        epicId: "e1",
+        agentId: "a1",
+        eventIds: ["evt-4", "evt-5"],
+      },
+      null,
+    );
 
     stdoutSpy.mockRestore();
     void result;
@@ -608,11 +617,15 @@ describe("mixed-version inbox message frames", () => {
     await flush(0);
 
     expect(callHostRpcMock).toHaveBeenCalledTimes(1);
-    expect(callHostRpcMock).toHaveBeenLastCalledWith("agent.inbox.ack", {
-      epicId: "e1",
-      agentId: "a1",
-      eventIds: ["evt-retry"],
-    });
+    expect(callHostRpcMock).toHaveBeenLastCalledWith(
+      "agent.inbox.ack",
+      {
+        epicId: "e1",
+        agentId: "a1",
+        eventIds: ["evt-retry"],
+      },
+      null,
+    );
 
     await flush(1_000);
     expect(callHostRpcMock).toHaveBeenCalledTimes(2);
@@ -623,11 +636,15 @@ describe("mixed-version inbox message frames", () => {
     await flush(1);
     await flush(0);
     expect(callHostRpcMock).toHaveBeenCalledTimes(3);
-    expect(callHostRpcMock).toHaveBeenLastCalledWith("agent.inbox.ack", {
-      epicId: "e1",
-      agentId: "a1",
-      eventIds: ["evt-retry"],
-    });
+    expect(callHostRpcMock).toHaveBeenLastCalledWith(
+      "agent.inbox.ack",
+      {
+        epicId: "e1",
+        agentId: "a1",
+        eventIds: ["evt-retry"],
+      },
+      null,
+    );
 
     stdoutSpy.mockRestore();
     void result;
@@ -669,6 +686,7 @@ describe("mixed-version inbox message frames", () => {
     expect(callHostRpcMock).not.toHaveBeenCalledWith(
       "agent.inbox.ack",
       expect.anything(),
+      expect.anything(),
     );
 
     stdoutSpy.mockRestore();
@@ -708,6 +726,7 @@ describe("mixed-version inbox message frames", () => {
 
     expect(callHostRpcMock).not.toHaveBeenCalledWith(
       "agent.inbox.ack",
+      expect.anything(),
       expect.anything(),
     );
 
@@ -751,11 +770,15 @@ describe("mixed-version inbox message frames", () => {
     await flush(0);
     await flush(0);
 
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.inbox.ack", {
-      epicId: "e1",
-      agentId: "a1",
-      eventIds: ["evt-late-write"],
-    });
+    expect(callHostRpcMock).toHaveBeenCalledWith(
+      "agent.inbox.ack",
+      {
+        epicId: "e1",
+        agentId: "a1",
+        eventIds: ["evt-late-write"],
+      },
+      null,
+    );
 
     stdoutSpy.mockRestore();
     void result;

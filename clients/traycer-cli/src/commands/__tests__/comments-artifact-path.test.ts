@@ -85,11 +85,15 @@ describe("comments list artifact path normalization (CLI-022)", () => {
       status: null,
     })(fakeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("comments.listThreads", {
-      epicId: "epic_test",
-      artifactPaths: [absolute],
-      status: "all",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "comments.listThreads",
+      {
+        epicId: "epic_test",
+        artifactPaths: [absolute],
+        status: "all",
+      },
+      null,
+    );
   });
 
   it("resolves a relative path that does not exist on disk against process.cwd() (the regression)", async () => {
@@ -100,11 +104,15 @@ describe("comments list artifact path normalization (CLI-022)", () => {
       status: null,
     })(fakeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("comments.listThreads", {
-      epicId: "epic_test",
-      artifactPaths: [path.resolve(relative)],
-      status: "all",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "comments.listThreads",
+      {
+        epicId: "epic_test",
+        artifactPaths: [path.resolve(relative)],
+        status: "all",
+      },
+      null,
+    );
   });
 
   it("resolves a relative path that DOES exist on disk to the same absolute form", async () => {
@@ -124,11 +132,15 @@ describe("comments list artifact path normalization (CLI-022)", () => {
         process.chdir(originalCwd);
       }
 
-      expect(rpcMock).toHaveBeenCalledWith("comments.listThreads", {
-        epicId: "epic_test",
-        artifactPaths: [existingFile],
-        status: "all",
-      });
+      expect(rpcMock).toHaveBeenCalledWith(
+        "comments.listThreads",
+        {
+          epicId: "epic_test",
+          artifactPaths: [existingFile],
+          status: "all",
+        },
+        null,
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -141,11 +153,15 @@ describe("comments list artifact path normalization (CLI-022)", () => {
       status: null,
     })(fakeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("comments.listThreads", {
-      epicId: "epic_test",
-      artifactPaths: null,
-      status: "all",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "comments.listThreads",
+      {
+        epicId: "epic_test",
+        artifactPaths: null,
+        status: "all",
+      },
+      null,
+    );
   });
 
   it("collapses '.' and '..' segments via path.resolve", async () => {
@@ -156,11 +172,15 @@ describe("comments list artifact path normalization (CLI-022)", () => {
       status: null,
     })(fakeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("comments.listThreads", {
-      epicId: "epic_test",
-      artifactPaths: [path.resolve(messy)],
-      status: "all",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "comments.listThreads",
+      {
+        epicId: "epic_test",
+        artifactPaths: [path.resolve(messy)],
+        status: "all",
+      },
+      null,
+    );
   });
 });
 
@@ -178,16 +198,20 @@ describe("comments set-status artifact path normalization (CLI-022)", () => {
       status: "resolved",
     })(fakeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("comments.setThreadStatus", {
-      epicId: "epic_test",
-      updates: [
-        {
-          artifactPath: path.resolve(relative),
-          threadIds: ["t1"],
-          status: "resolved",
-        },
-      ],
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "comments.setThreadStatus",
+      {
+        epicId: "epic_test",
+        updates: [
+          {
+            artifactPath: path.resolve(relative),
+            threadIds: ["t1"],
+            status: "resolved",
+          },
+        ],
+      },
+      null,
+    );
   });
 
   it("forwards an absolute --artifact unchanged", async () => {
@@ -199,15 +223,19 @@ describe("comments set-status artifact path normalization (CLI-022)", () => {
       status: "open",
     })(fakeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("comments.setThreadStatus", {
-      epicId: "epic_test",
-      updates: [
-        {
-          artifactPath: absolute,
-          threadIds: ["t1", "t2"],
-          status: "open",
-        },
-      ],
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "comments.setThreadStatus",
+      {
+        epicId: "epic_test",
+        updates: [
+          {
+            artifactPath: absolute,
+            threadIds: ["t1", "t2"],
+            status: "open",
+          },
+        ],
+      },
+      null,
+    );
   });
 });

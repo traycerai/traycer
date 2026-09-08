@@ -63,6 +63,7 @@ import {
   ProviderRateLimitForProvider,
   USAGE_COVERAGE_SENTENCE,
 } from "./provider-rate-limit-section";
+import { ProviderUsageTotalsSection } from "./provider-usage-totals-section";
 import { ProviderMcpTab } from "./provider-mcp-tab";
 import { ProviderModelProvidersTab } from "./provider-model-providers-tab";
 import { ProviderPluginsTab } from "./provider-plugins-tab";
@@ -1646,6 +1647,11 @@ function ProviderTabBody({
           {...(detailPaneInert ? { inert: true } : {})}
         >
           <TraycerSubscriptionForProvider providerId={state.providerId} />
+          <ProviderUsageTotalsSection
+            hostId={hostId}
+            providerId={state.providerId}
+            profileId={profileId}
+          />
           {usageInputs.authType === "apiKey" ? (
             <ApiKeyUsageNotice />
           ) : (

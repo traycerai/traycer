@@ -29,7 +29,7 @@ import {
   agentGetProviderProfileRateLimitsResponseSchemaV5,
 } from "@traycer/protocol/host/agent/profiles";
 import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
-import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
+import { listTerminalsResponseSchemaV24 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { worktreeDeleteByPathServerFrameSchemaV12 } from "@traycer/protocol/host/worktree-delete-stream";
 
 /**
@@ -178,11 +178,15 @@ describe("callHostRpc", () => {
   it("throws a friendly error when not signed in", async () => {
     resolveAuthMock.mockResolvedValue(null);
     await expect(
-      callHostRpc(METHOD, {
-        epicId: "e",
-        senderAgentId: "agent-1",
-        scope: "user",
-      }),
+      callHostRpc(
+        METHOD,
+        {
+          epicId: "e",
+          senderAgentId: "agent-1",
+          scope: "user",
+        },
+        null,
+      ),
     ).rejects.toThrow(/traycer login/);
     expect(requestMock).not.toHaveBeenCalled();
   });
@@ -194,7 +198,7 @@ describe("callHostRpc", () => {
       senderAgentId: "agent-1",
       scope: "user" as const,
     };
-    const result = await callHostRpc(METHOD, params);
+    const result = await callHostRpc(METHOD, params, null);
     expect(result).toEqual({ agents: [] });
     expect(requestMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenCalledWith(
@@ -225,11 +229,15 @@ describe("callHostRpc", () => {
   it("dials with an attestation window that outlasts the host's post-openAck deadline", async () => {
     requestMock.mockResolvedValue({ agents: [] });
 
-    await callHostRpc(METHOD, {
-      epicId: "e",
-      senderAgentId: "agent-1",
-      scope: "user",
-    });
+    await callHostRpc(
+      METHOD,
+      {
+        epicId: "e",
+        senderAgentId: "agent-1",
+        scope: "user",
+      },
+      null,
+    );
 
     // The CLI gives up on a response after 15s, but a stalled host only attests
     // that it never dispatched the request once its own 30s post-`openAck`
@@ -278,11 +286,15 @@ describe("callHostRpc", () => {
     });
 
     await expect(
-      callHostRpc(METHOD, {
-        epicId: "e",
-        senderAgentId: "agent-1",
-        scope: "user",
-      }),
+      callHostRpc(
+        METHOD,
+        {
+          epicId: "e",
+          senderAgentId: "agent-1",
+          scope: "user",
+        },
+        null,
+      ),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
     });
@@ -314,11 +326,15 @@ describe("callHostRpc", () => {
       },
     });
 
-    const result = await callHostRpc(METHOD, {
-      epicId: "e",
-      senderAgentId: "agent-1",
-      scope: "user",
-    });
+    const result = await callHostRpc(
+      METHOD,
+      {
+        epicId: "e",
+        senderAgentId: "agent-1",
+        scope: "user",
+      },
+      null,
+    );
 
     expect(result).toEqual({ agents: [] });
     expect(rotateMock).toHaveBeenCalledTimes(1);
@@ -346,11 +362,15 @@ describe("callHostRpc", () => {
     });
 
     await expect(
-      callHostRpc(METHOD, {
-        epicId: "e",
-        senderAgentId: "agent-1",
-        scope: "user",
-      }),
+      callHostRpc(
+        METHOD,
+        {
+          epicId: "e",
+          senderAgentId: "agent-1",
+          scope: "user",
+        },
+        null,
+      ),
     ).rejects.toBeInstanceOf(HostRpcError);
     expect(rotateMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenCalledTimes(1);
@@ -367,11 +387,15 @@ describe("callHostRpc", () => {
       }),
     );
     await expect(
-      callHostRpc(METHOD, {
-        epicId: "e",
-        senderAgentId: "agent-1",
-        scope: "user",
-      }),
+      callHostRpc(
+        METHOD,
+        {
+          epicId: "e",
+          senderAgentId: "agent-1",
+          scope: "user",
+        },
+        null,
+      ),
     ).rejects.toBeInstanceOf(HostRpcError);
     expect(rotateMock).not.toHaveBeenCalled();
     expect(requestMock).toHaveBeenCalledTimes(1);
@@ -447,7 +471,7 @@ describe("canonicalResponseSchemaFor", () => {
       worktreeListAllForHostResponseSchemaV16,
     );
     expect(canonicalResponseSchemaFor("terminal.list")).toBe(
-      listTerminalsResponseSchemaV23,
+      listTerminalsResponseSchemaV24,
     );
     expect(
       canonicalResponseSchemaFor("agent.getProviderProfileRateLimits"),

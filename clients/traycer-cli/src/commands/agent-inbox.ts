@@ -32,7 +32,7 @@ export function buildAgentInboxCommand(opts: {
     const agentId = resolveSenderAgentId(opts.agentId);
     const after = parseCursor(opts.after);
     const result = await toAgentCliError(
-      callHostRpc("agent.inbox.read", { epicId, agentId, after }),
+      callHostRpc("agent.inbox.read", { epicId, agentId, after }, null),
     );
     const { messages, nextCursor } = parseCanonicalHostResponse(
       "agent.inbox.read",

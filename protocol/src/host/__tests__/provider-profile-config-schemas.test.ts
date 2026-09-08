@@ -15,6 +15,7 @@ import {
   providersCreateApiKeyProfileRequestSchema,
   providersCreateApiKeyProfileResponseSchema,
   providersGetProfileConfigResponseSchema,
+  providersResolveLaunchEnvResponseSchema,
   providersSetProfileConfigRequestSchema,
 } from "@traycer/protocol/host/provider-profile-config-schemas";
 
@@ -42,6 +43,34 @@ describe("provider-profile-config-schemas (D21)", () => {
       expect(entry[1].versions[0].upgradeFromPreviousVersion).toBeNull();
       expect(entry[1].downgradePathsFromLatest).toEqual({});
     }
+  });
+
+  it("resolveLaunchEnv's response carries unsetKeys, and requires them", () => {
+    // D01/D18 (wave-5 review H7): the launch wrapper spreads `env` onto the
+    // operator's full `process.env`, which resurrects the base's value for
+    // every key the profile explicitly unset - so the key NAMES have to ride
+    // the response. Required, not optional: this `@1.0` line is unreleased,
+    // and a consumer that silently skipped the deletion is the bug.
+    const withKeys = providersResolveLaunchEnvResponseSchema.safeParse({
+      command: "/profiles/work/bin/claude",
+      args: [],
+      env: { ANTHROPIC_API_KEY: "sk-x" },
+      unsetKeys: ["GH_TOKEN"],
+      cwd: null,
+    });
+    expect(withKeys.success).toBe(true);
+    expect(withKeys.success ? withKeys.data.unsetKeys : []).toEqual([
+      "GH_TOKEN",
+    ]);
+
+    expect(
+      providersResolveLaunchEnvResponseSchema.safeParse({
+        command: "/profiles/work/bin/claude",
+        args: [],
+        env: {},
+        cwd: null,
+      }).success,
+    ).toBe(false);
   });
 
   it("credentialUpdate accepts all three arms and rejects set with no value", () => {

@@ -594,6 +594,27 @@ describe("createTerminalSessionStore", () => {
     });
   });
 
+  it("flips restartRequired from a @1.7 sessionUpdated frame with no re-subscribe (D19/W5-T4, wave-5 review O5)", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    expect(harness.handle.store.getState().restartRequired).toBe(false);
+
+    // The frame the host broadcasts when a provider-config change makes this
+    // live session's spawn config stale. The GUI half of O5 is exactly this:
+    // the store must take the value off an ORDINARY metadata frame, so the
+    // tile's hint appears without the tab being left and re-entered. The
+    // host half - recomputing and broadcasting on `onProvidersChanged` - is
+    // not the client's to fix.
+    const stale = sessionUpdated("vim");
+    harness.callbacks().onSessionUpdated({
+      ...stale,
+      session: { ...stale.session, restartRequired: true },
+    });
+
+    expect(harness.handle.store.getState().restartRequired).toBe(true);
+  });
+
   it("stores live current-directory metadata from v1.5 session updates", () => {
     const harness = createHarness();
 

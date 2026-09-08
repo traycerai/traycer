@@ -34,11 +34,15 @@ export function buildCommentsListCommand(opts: {
         ? null
         : opts.artifactPaths.map(normalizeCliArtifactPath);
     const result = await toAgentCliError(
-      callHostRpc("comments.listThreads", {
-        epicId,
-        artifactPaths,
-        status,
-      }),
+      callHostRpc(
+        "comments.listThreads",
+        {
+          epicId,
+          artifactPaths,
+          status,
+        },
+        null,
+      ),
     );
     const parsed = parseCanonicalHostResponse(
       "comments.listThreads",
@@ -71,16 +75,20 @@ export function buildCommentsSetStatusCommand(opts: {
     const status = parseUserInput(commentThreadStatusSchema, opts.status);
     const artifactPath = normalizeCliArtifactPath(opts.artifactPath);
     const result = await toAgentCliError(
-      callHostRpc("comments.setThreadStatus", {
-        epicId,
-        updates: [
-          {
-            artifactPath,
-            threadIds: [...opts.threadIds],
-            status,
-          },
-        ],
-      }),
+      callHostRpc(
+        "comments.setThreadStatus",
+        {
+          epicId,
+          updates: [
+            {
+              artifactPath,
+              threadIds: [...opts.threadIds],
+              status,
+            },
+          ],
+        },
+        null,
+      ),
     );
     const parsed = parseCanonicalHostResponse(
       "comments.setThreadStatus",

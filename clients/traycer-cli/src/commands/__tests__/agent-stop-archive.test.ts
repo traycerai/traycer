@@ -87,11 +87,15 @@ describe("agent stop command function", () => {
       cascade: false,
     })(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("agent.stop", {
-      epicId: "epic_1",
-      agentId: "agent_1",
-      cascade: false,
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "agent.stop",
+      {
+        epicId: "epic_1",
+        agentId: "agent_1",
+        cascade: false,
+      },
+      null,
+    );
     expect(result.data).toEqual({ stoppedAgentIds: ["agent_1"] });
     expect(result.human).toBe("agent_1");
     expect(result.exitCode).toBe(0);
@@ -109,6 +113,7 @@ describe("agent stop command function", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.stop",
       expect.objectContaining({ cascade: true }),
+      null,
     );
     expect(result.human).toBe("agent_1\nagent_2");
   });
@@ -138,6 +143,7 @@ describe("agent stop command function", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.stop",
       expect.objectContaining({ epicId: "epic-env" }),
+      null,
     );
   });
 
@@ -164,11 +170,15 @@ describe("agent archive command function", () => {
       unarchive: false,
     })(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("epic.setChatArchived", {
-      epicId: "epic_1",
-      chatId: "agent_1",
-      archived: true,
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "epic.setChatArchived",
+      {
+        epicId: "epic_1",
+        chatId: "agent_1",
+        archived: true,
+      },
+      null,
+    );
     expect(result.data).toEqual({ updated: true });
     expect(result.human).toBe("agent_1 archived");
     expect(result.exitCode).toBe(0);
@@ -186,6 +196,7 @@ describe("agent archive command function", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "epic.setChatArchived",
       expect.objectContaining({ archived: false }),
+      null,
     );
     expect(result.human).toBe("agent_1 unarchived");
   });
@@ -397,6 +408,7 @@ describe("agent archive command function", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "epic.setChatArchived",
       expect.objectContaining({ epicId: "epic-env" }),
+      null,
     );
   });
 });

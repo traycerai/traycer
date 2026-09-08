@@ -1,4 +1,4 @@
-import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
+import { listTerminalsResponseSchemaV24 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { CanonicalTerminalSessionInfoWithLifecycleOwner } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   callHostRpc,
@@ -23,13 +23,17 @@ export function buildTerminalListCommand(opts: {
   return async () => {
     const epicId = resolveEpicId(opts.epicId);
     const result = await toAgentCliError(
-      callHostRpc("terminal.list", {
-        scope: { kind: "epic", epicId },
-      }),
+      callHostRpc(
+        "terminal.list",
+        {
+          scope: { kind: "epic", epicId },
+        },
+        null,
+      ),
     );
     const { sessions } = parseCanonicalHostResponse(
       "terminal.list",
-      listTerminalsResponseSchemaV23,
+      listTerminalsResponseSchemaV24,
       result,
     );
     const terminals = sessions

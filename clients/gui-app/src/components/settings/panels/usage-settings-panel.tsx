@@ -151,6 +151,9 @@ function UsageSettingsPanelBody(props: {
       client={props.client}
       hostNames={props.hostNames}
       currentHostId={props.activeHostId}
+      // The account-wide dashboard has no profile in scope (see this
+      // module's own doc comment) - every profile's totals, unscoped.
+      profileId={null}
     />
   );
 }
@@ -181,6 +184,7 @@ export function UsageSettingsPanelForClient(props: {
       client={props.client}
       hostNames={EMPTY_HOST_NAMES}
       currentHostId={hostId}
+      profileId={null}
     />
   );
 }

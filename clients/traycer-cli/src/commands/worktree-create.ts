@@ -121,10 +121,14 @@ export async function resolveWorktreeBranchSelection(
  */
 async function resolveCurrentBranch(workspacePath: string): Promise<string> {
   const response = await toAgentCliError(
-    callHostRpc("worktree.listBranches", {
-      workspacePath,
-      includeRemote: false,
-    }),
+    callHostRpc(
+      "worktree.listBranches",
+      {
+        workspacePath,
+        includeRemote: false,
+      },
+      null,
+    ),
   );
   const current = response.branches.find((branch) => branch.isCurrent);
   if (current === undefined) {
@@ -148,7 +152,7 @@ export function buildWorktreeCreateCommand(
       entries: [{ workspacePath: opts.workspacePath, branch }],
     });
     const result = await toAgentCliError(
-      callHostRpc("worktree.createPaths", request),
+      callHostRpc("worktree.createPaths", request, null),
     );
     const parsed = parseCanonicalHostResponse(
       "worktree.createPaths",

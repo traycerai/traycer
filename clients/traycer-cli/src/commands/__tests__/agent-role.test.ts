@@ -135,12 +135,16 @@ describe("agent role claim command function", () => {
       scope: "auth migration",
     })(makeCtx());
 
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.claim", {
-      epicId: "epic-1",
-      claimantAgentId: "agent-1",
-      role: "Planner",
-      scope: "auth migration",
-    });
+    expect(callHostRpcMock).toHaveBeenCalledWith(
+      "agent.roles.claim",
+      {
+        epicId: "epic-1",
+        claimantAgentId: "agent-1",
+        role: "Planner",
+        scope: "auth migration",
+      },
+      null,
+    );
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual(CLAIM_RESPONSE);
     // Byte-identical to the GUI tool rendering: one formatter, two surfaces.
@@ -160,12 +164,16 @@ describe("agent role claim command function", () => {
     // NFC + whitespace fold + trim happened CLIENT-side: the wire carries the
     // normalized text, so both surfaces persist identical claims for
     // identical raw input.
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.claim", {
-      epicId: "epic-1",
-      claimantAgentId: "agent-1",
-      role: "Planner agent",
-      scope: "auth migration",
-    });
+    expect(callHostRpcMock).toHaveBeenCalledWith(
+      "agent.roles.claim",
+      {
+        epicId: "epic-1",
+        claimantAgentId: "agent-1",
+        role: "Planner agent",
+        scope: "auth migration",
+      },
+      null,
+    );
   });
 
   it("rejects invalid input with a typed E_INVALID_ARGUMENT and sends ZERO frames", async () => {
@@ -202,6 +210,7 @@ describe("agent role claim command function", () => {
         epicId: "epic-env",
         claimantAgentId: "agent-env",
       }),
+      null,
     );
 
     await buildAgentRoleClaimCommand({
@@ -216,6 +225,7 @@ describe("agent role claim command function", () => {
         epicId: "epic-flag",
         claimantAgentId: "agent-flag",
       }),
+      null,
     );
   });
 });
@@ -228,9 +238,13 @@ describe("agent role list command function", () => {
       makeCtx(),
     );
 
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.list", {
-      epicId: "epic-1",
-    });
+    expect(callHostRpcMock).toHaveBeenCalledWith(
+      "agent.roles.list",
+      {
+        epicId: "epic-1",
+      },
+      null,
+    );
     expect(result.human).toBe(formatListRolesResponse(LIST_RESPONSE));
   });
 });
@@ -261,11 +275,15 @@ describe("agent role relinquish command function", () => {
       claimId: CLAIM_ID,
     })(makeCtx());
 
-    expect(callHostRpcMock).toHaveBeenCalledWith("agent.roles.relinquish", {
-      epicId: "epic-1",
-      claimantAgentId: "agent-1",
-      claimId: CLAIM_ID,
-    });
+    expect(callHostRpcMock).toHaveBeenCalledWith(
+      "agent.roles.relinquish",
+      {
+        epicId: "epic-1",
+        claimantAgentId: "agent-1",
+        claimId: CLAIM_ID,
+      },
+      null,
+    );
     expect(result.human).toBe(
       formatRelinquishRoleResponseV11(RELINQUISH_RESPONSE),
     );

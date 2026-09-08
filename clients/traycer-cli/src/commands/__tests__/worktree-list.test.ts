@@ -231,13 +231,18 @@ describe("buildWorktreeListCommand", () => {
     const result = await buildWorktreeListCommand(defaultOpts)(ctx);
 
     expect(rpcMock).toHaveBeenCalledTimes(1);
-    expect(rpcMock).toHaveBeenNthCalledWith(1, "worktree.listAllForHost", {
-      includeActivity: true,
-      activityPaths: null,
-      cursor: null,
-      limit: 32,
-      forceRefresh: true,
-    });
+    expect(rpcMock).toHaveBeenNthCalledWith(
+      1,
+      "worktree.listAllForHost",
+      {
+        includeActivity: true,
+        activityPaths: null,
+        cursor: null,
+        limit: 32,
+        forceRefresh: true,
+      },
+      null,
+    );
     expect(result.data).toEqual({
       worktrees: [{ ...entry({}), tier: "review" }],
       nextCursor: null,
@@ -325,13 +330,18 @@ describe("buildWorktreeListCommand", () => {
       limit: null,
     })(ctx);
 
-    expect(rpcMock).toHaveBeenNthCalledWith(1, "worktree.listAllForHost", {
-      includeActivity: false,
-      activityPaths: null,
-      cursor: null,
-      limit: 32,
-      forceRefresh: true,
-    });
+    expect(rpcMock).toHaveBeenNthCalledWith(
+      1,
+      "worktree.listAllForHost",
+      {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: null,
+        limit: 32,
+        forceRefresh: true,
+      },
+      null,
+    );
     expect(result.data).toEqual({
       worktrees: [
         {
@@ -364,20 +374,30 @@ describe("buildWorktreeListCommand", () => {
     const result = await buildWorktreeListCommand(defaultOpts)(ctx);
 
     expect(rpcMock).toHaveBeenCalledTimes(2);
-    expect(rpcMock).toHaveBeenNthCalledWith(1, "worktree.listAllForHost", {
-      includeActivity: true,
-      activityPaths: null,
-      cursor: null,
-      limit: 32,
-      forceRefresh: true,
-    });
-    expect(rpcMock).toHaveBeenNthCalledWith(2, "worktree.listAllForHost", {
-      includeActivity: true,
-      activityPaths: null,
-      cursor: first.worktreePath,
-      limit: 32,
-      forceRefresh: true,
-    });
+    expect(rpcMock).toHaveBeenNthCalledWith(
+      1,
+      "worktree.listAllForHost",
+      {
+        includeActivity: true,
+        activityPaths: null,
+        cursor: null,
+        limit: 32,
+        forceRefresh: true,
+      },
+      null,
+    );
+    expect(rpcMock).toHaveBeenNthCalledWith(
+      2,
+      "worktree.listAllForHost",
+      {
+        includeActivity: true,
+        activityPaths: null,
+        cursor: first.worktreePath,
+        limit: 32,
+        forceRefresh: true,
+      },
+      null,
+    );
     expect(result.data).toEqual({
       worktrees: [
         { ...first, tier: "review" },
@@ -401,13 +421,18 @@ describe("buildWorktreeListCommand", () => {
     })(ctx);
 
     expect(rpcMock).toHaveBeenCalledTimes(1);
-    expect(rpcMock).toHaveBeenNthCalledWith(1, "worktree.listAllForHost", {
-      includeActivity: true,
-      activityPaths: null,
-      cursor: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
-      limit: 7,
-      forceRefresh: true,
-    });
+    expect(rpcMock).toHaveBeenNthCalledWith(
+      1,
+      "worktree.listAllForHost",
+      {
+        includeActivity: true,
+        activityPaths: null,
+        cursor: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
+        limit: 7,
+        forceRefresh: true,
+      },
+      null,
+    );
     expect(result.data).toEqual({
       worktrees: [{ ...entry({}), tier: "review" }],
       nextCursor: "/Users/dev/.traycer/worktrees/acme__web/feature-y",
@@ -441,20 +466,30 @@ describe("buildWorktreeListCommand", () => {
     })(ctx);
 
     expect(rpcMock).toHaveBeenCalledTimes(2);
-    expect(rpcMock).toHaveBeenNthCalledWith(1, "worktree.listAllForHost", {
-      includeActivity: true,
-      activityPaths: null,
-      cursor: startCursor,
-      limit: 32,
-      forceRefresh: true,
-    });
-    expect(rpcMock).toHaveBeenNthCalledWith(2, "worktree.listAllForHost", {
-      includeActivity: true,
-      activityPaths: null,
-      cursor: first.worktreePath,
-      limit: 32,
-      forceRefresh: true,
-    });
+    expect(rpcMock).toHaveBeenNthCalledWith(
+      1,
+      "worktree.listAllForHost",
+      {
+        includeActivity: true,
+        activityPaths: null,
+        cursor: startCursor,
+        limit: 32,
+        forceRefresh: true,
+      },
+      null,
+    );
+    expect(rpcMock).toHaveBeenNthCalledWith(
+      2,
+      "worktree.listAllForHost",
+      {
+        includeActivity: true,
+        activityPaths: null,
+        cursor: first.worktreePath,
+        limit: 32,
+        forceRefresh: true,
+      },
+      null,
+    );
     expect(result.data).toEqual({
       worktrees: [
         { ...first, tier: "review" },

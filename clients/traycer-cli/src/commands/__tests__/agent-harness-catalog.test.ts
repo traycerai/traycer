@@ -90,11 +90,15 @@ describe("agent harness catalog commands", () => {
       harnessId: "codex",
     })(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("agent.listHarnessModels", {
-      epicId: null,
-      senderAgentId: null,
-      harnessId: "codex",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "agent.listHarnessModels",
+      {
+        epicId: null,
+        senderAgentId: null,
+        harnessId: "codex",
+      },
+      null,
+    );
     expect(result.exitCode).toBe(0);
   });
 
@@ -150,9 +154,10 @@ describe("agent harness catalog commands", () => {
 
     const result = await buildAgentListHarnessesCommand()(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("agent.gui.listHarnesses", {});
+    expect(rpcMock).toHaveBeenCalledWith("agent.gui.listHarnesses", {}, null);
     expect(rpcMock).not.toHaveBeenCalledWith(
       "agent.listHarnessModels",
+      expect.anything(),
       expect.anything(),
     );
     expect(result.data).toMatchObject({

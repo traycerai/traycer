@@ -168,6 +168,7 @@ describe("agent fork", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.fork",
       expect.objectContaining({ profileSelection: { kind: "inherit" } }),
+      null,
     );
   });
 
@@ -179,6 +180,7 @@ describe("agent fork", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.fork",
       expect.objectContaining({ profileSelection: { kind: "ambient" } }),
+      null,
     );
   });
 
@@ -192,6 +194,7 @@ describe("agent fork", () => {
       expect.objectContaining({
         profileSelection: { kind: "profile", profileId: "prof_work" },
       }),
+      null,
     );
   });
 
@@ -203,6 +206,7 @@ describe("agent fork", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.fork",
       expect.objectContaining({ workspace: null }),
+      null,
     );
   });
 
@@ -226,6 +230,7 @@ describe("agent fork", () => {
           ],
         },
       }),
+      null,
     );
   });
 
@@ -236,6 +241,7 @@ describe("agent fork", () => {
     expect(rpcMock).toHaveBeenLastCalledWith(
       "agent.fork",
       expect.objectContaining({ permissionMode: "full_access" }),
+      null,
     );
 
     await buildAgentForkCommand({
@@ -245,6 +251,7 @@ describe("agent fork", () => {
     expect(rpcMock).toHaveBeenLastCalledWith(
       "agent.fork",
       expect.objectContaining({ permissionMode: "supervised" }),
+      null,
     );
   });
 
@@ -265,6 +272,7 @@ describe("agent fork", () => {
         epicId: "epic_env",
         senderAgentId: "agent_env",
       }),
+      null,
     );
   });
 

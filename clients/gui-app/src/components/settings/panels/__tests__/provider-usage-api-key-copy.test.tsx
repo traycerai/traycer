@@ -5,7 +5,10 @@ import type {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   API_KEY_USAGE_NOTICE_TEXT,
@@ -431,5 +434,70 @@ describe("Usage tab API-key copy (D27)", () => {
     await openUsageTab();
 
     expect(screen.getByText(USAGE_COVERAGE_SENTENCE)).not.toBeNull();
+  });
+});
+
+describe("Usage tab per-profile totals (W5-T2, D21/D27)", () => {
+  it("shows an update notice for both authType arms when the host has not negotiated the profileId filter", async () => {
+    providerMocks.listResult = {
+      data: {
+        providers: [
+          claudeStateWithProfiles([
+            ambientProfile(),
+            apiKeyProfile(),
+            oauthProfile(),
+          ]),
+        ],
+      },
+      isPending: false,
+      isError: false,
+      isFetching: false,
+    };
+
+    selectProfile("m1");
+    renderProvidersSettingsPanel();
+    await openUsageTab();
+    expect(
+      screen.getByTestId("provider-usage-totals-unsupported"),
+    ).toBeTruthy();
+
+    selectProfile("m2");
+    cleanup();
+    renderProvidersSettingsPanel();
+    await openUsageTab();
+    expect(
+      screen.getByTestId("provider-usage-totals-unsupported"),
+    ).toBeTruthy();
+  });
+
+  it("stops showing the update notice once the host negotiates host.usage.summary@2", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "host.usage.summary": { major: 2, minor: 0 },
+    });
+    providerMocks.listResult = {
+      data: {
+        providers: [
+          claudeStateWithProfiles([ambientProfile(), oauthProfile()]),
+        ],
+      },
+      isPending: false,
+      isError: false,
+      isFetching: false,
+    };
+    selectProfile("m2");
+    renderProvidersSettingsPanel();
+    await openUsageTab();
+
+    // No live client is wired in this suite (`@/lib/host`'s `useHostClient`
+    // is mocked to `null`), so `host.usage.summary` never actually fires and
+    // the section falls through to its "data unavailable" branch - this
+    // still proves the GATE flips on a negotiated major, which is the one
+    // thing this suite can prove without standing up a live host client.
+    expect(
+      screen.queryByTestId("provider-usage-totals-unsupported"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("provider-usage-totals-unavailable"),
+    ).toBeTruthy();
   });
 });

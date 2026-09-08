@@ -47,6 +47,12 @@ import { buildAgentTurnEndedFromHookCommand } from "./commands/agent-turn-ended-
 import { buildAgentSessionObservedFromHookCommand } from "./commands/agent-session-observed-from-hook";
 import { buildAgentTranscriptCommand } from "./commands/agent-transcript";
 import { buildAgentInboxCommand } from "./commands/agent-inbox";
+import { buildProfileListCommand } from "./commands/profile-list";
+import { buildProfileCreateCommand } from "./commands/profile-create";
+import { buildProfileRemoveCommand } from "./commands/profile-remove";
+import { buildProfileTestCommand } from "./commands/profile-test";
+import { buildProfileCopyCommand } from "./commands/profile-copy";
+import { buildProfileLaunchEnvCommand } from "./commands/profile-launch-env";
 import { buildTerminalListCommand } from "./commands/terminal-list";
 import { buildTerminalOutputCommand } from "./commands/terminal-output";
 import { buildWorkspaceListCommand } from "./commands/workspace-list";
@@ -711,6 +717,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
+  registerProfileCommands(program);
   registerMonitorCommand(program);
 }
 
@@ -3146,6 +3153,224 @@ function registerAgentCommands(
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
       }),
   );
+}
+
+// `traycer profile ...` manages provider profiles (accounts and their
+// configuration) on the machine the CLI runs on - list, create, remove, test,
+// and copy settings between them (D23). These are PUBLIC, human-facing
+// commands, unlike the agent-to-agent surface above: none of them pass
+// `readonlyHidden`. The four mutations (create/remove/test/copy) are still
+// refused on the readonly agent surface via `READONLY_REFUSED_COMMANDS`
+// (`agent-surface.ts`) - `profile list` stays runnable there.
+//
+// D23: local-host only. There is no `--host` flag anywhere in this group (or
+// in this CLI) - `callHostRpc` always resolves the local host's pid
+// metadata, and every command here goes through it.
+//
+// A sixth child (`launch-env`, hidden - W5-T3) registers here too; this
+// function is the one place to add it.
+function registerProfileCommands(program: Command): void {
+  const profile = program
+    .command("profile")
+    .description(
+      "Manage provider profiles (accounts and their configuration) on this machine",
+    );
+
+  withRunner(
+    profile
+      .command("list")
+      .description(
+        "List provider profiles on this host: the Default account plus any managed profiles, optionally filtered to one provider.",
+      )
+      .argument(
+        "[provider]",
+        "Provider id to filter to. Omit to list every provider.",
+      ),
+    (opts, args) =>
+      buildProfileListCommand({
+        provider: typeof args[0] === "string" ? args[0] : null,
+      }),
+  );
+
+  withRunner(
+    profile
+      .command("create")
+      .description(
+        "Create a provider profile, either non-interactively from an API key or by driving a sign-in.",
+      )
+      .requiredOption("--provider <id>", "Provider id")
+      .requiredOption("--label <name>", "Display name for the new profile")
+      .option(
+        "--api-key <key>",
+        "API key for a non-interactive profile. Pass '-' to read it from stdin instead of argv.",
+      )
+      .option("--base-url <url>", "Custom endpoint base URL (--api-key only)")
+      .option(
+        "--model <id>",
+        "Default model for the new profile (--api-key only)",
+      )
+      .option(
+        "--max-context-size <n>",
+        "Context window the endpoint advertises (--api-key only). Required for providers whose endpoint declares it; the host reports which.",
+      )
+      .option(
+        "--credential-kind <api_key|auth_token>",
+        "Which credential var the key fills (Claude only). Defaults to api_key.",
+      )
+      .option(
+        "--start-from <default-account|profile:<id>|empty>",
+        "What the new profile inherits: CLI selection, terminal args, env and MCP servers. Defaults to default-account, matching the app's Add profile dialog. Credentials never copy.",
+      )
+      .option(
+        "--sign-in",
+        "Create the profile by driving a sign-in flow instead of an API key. Browser/device flows only - providers that sign in from their own terminal UI (opencode, kimi, copilot, kilocode) must be signed in from the Traycer app.",
+      )
+      .option(
+        "--mode <browser|device>",
+        "Sign-in mode (--sign-in only): 'browser' (default, loopback auto-login) or 'device' (prints a verification URL and code).",
+      ),
+    (opts) =>
+      buildProfileCreateCommand({
+        provider: typeof opts.provider === "string" ? opts.provider : "",
+        label: typeof opts.label === "string" ? opts.label : "",
+        apiKey: typeof opts.apiKey === "string" ? opts.apiKey : null,
+        baseUrl: typeof opts.baseUrl === "string" ? opts.baseUrl : null,
+        model: typeof opts.model === "string" ? opts.model : null,
+        maxContextSize:
+          typeof opts.maxContextSize === "string" ? opts.maxContextSize : null,
+        credentialKind:
+          typeof opts.credentialKind === "string" ? opts.credentialKind : null,
+        startFrom:
+          typeof opts.startFrom === "string"
+            ? opts.startFrom
+            : "default-account",
+        signIn: opts.signIn === true,
+        mode: typeof opts.mode === "string" ? opts.mode : "browser",
+      }),
+  );
+
+  withRunner(
+    profile
+      .command("remove")
+      .description("Permanently remove a managed provider profile")
+      .requiredOption("--provider <id>", "Provider id")
+      .requiredOption(
+        "--profile <id>",
+        "Managed profile id to remove (not 'ambient' - the Default account cannot be removed)",
+      ),
+    (opts) =>
+      buildProfileRemoveCommand({
+        provider: typeof opts.provider === "string" ? opts.provider : "",
+        profile: typeof opts.profile === "string" ? opts.profile : "",
+      }),
+  );
+
+  withRunner(
+    profile
+      .command("test")
+      .description("Re-run the connection test for a provider profile")
+      .requiredOption("--provider <id>", "Provider id")
+      .requiredOption(
+        "--profile <ambient|id>",
+        "Profile to test. 'ambient' targets the Default account, only when it has an endpoint credential configured.",
+      ),
+    (opts) =>
+      buildProfileTestCommand({
+        provider: typeof opts.provider === "string" ? opts.provider : "",
+        profile: typeof opts.profile === "string" ? opts.profile : "",
+      }),
+  );
+
+  withRunner(
+    profile
+      .command("copy")
+      .description(
+        "Copy settings from one profile to one or more others (previews by default; --yes applies)",
+      )
+      .requiredOption("--provider <id>", "Provider id")
+      .requiredOption(
+        "--from <ambient|id>",
+        "Copy source: 'ambient' for the Default account, or a managed profile id",
+      )
+      .option(
+        "--to <id>",
+        "Target managed profile id (required, never the Default account). Repeatable and/or comma-separated.",
+        collectCommaSeparatedOption,
+        [],
+      )
+      .option(
+        "--categories <list>",
+        "Comma-separated categories to copy (cliArgs,env,mcp,skills,plugins,endpoint). Omit for all.",
+        collectCommaSeparatedOption,
+        [],
+      )
+      .option(
+        "--yes",
+        "Apply the copy after the preview. Without it, only the preview is printed and nothing changes.",
+      ),
+    (opts) =>
+      buildProfileCopyCommand({
+        provider: typeof opts.provider === "string" ? opts.provider : "",
+        from: typeof opts.from === "string" ? opts.from : "",
+        to: Array.isArray(opts.to)
+          ? opts.to.filter(
+              (entry): entry is string => typeof entry === "string",
+            )
+          : [],
+        categories: Array.isArray(opts.categories)
+          ? opts.categories.filter(
+              (entry): entry is string => typeof entry === "string",
+            )
+          : [],
+        yes: opts.yes === true,
+      }),
+  );
+
+  // W5-T3/D23/D24: the sixth, hidden child - the sole body of the three
+  // per-profile launch wrappers the host writes. `--` before the trailing
+  // args is what keeps a dash-prefixed provider CLI flag (e.g. `-p`) from
+  // being parsed as a `launch-env` option of its own - same convention
+  // `config shell set`'s `[shellArgs...]` documents.
+  withRunner(
+    profile
+      .command("launch-env", { hidden: true })
+      .description(
+        "Internal: resolve an API-key profile's spawn env from the local host and exec the provider CLI with it. Never typed directly - the host's per-profile launch wrappers are its only caller.",
+      )
+      .requiredOption("--provider <id>", "Provider id")
+      .requiredOption("--profile <id>", "Managed profile id")
+      .option(
+        "--exec",
+        "Exec the resolved command with the trailing args after `--`. The only supported mode - there is no flag that prints the resolved environment.",
+      )
+      .argument(
+        "[execArgs...]",
+        "Arguments to pass to the launched CLI (pass after `--`)",
+      ),
+    (opts, args) =>
+      buildProfileLaunchEnvCommand({
+        provider: typeof opts.provider === "string" ? opts.provider : "",
+        profile: typeof opts.profile === "string" ? opts.profile : "",
+        exec: opts.exec === true,
+        execArgs: args.filter((entry): entry is string => entry !== undefined),
+      }),
+  );
+}
+
+// Collects a repeatable option's values AND splits each occurrence on commas
+// (`--to a,b --to c` and `--to a --to b --to c` both yield `["a","b","c"]`),
+// for the `profile copy` flags the ticket documents as "repeatable and/or
+// comma-separated". Blank segments (a trailing comma, a bare `--to ,`) are
+// dropped rather than turned into an empty-string target id.
+function collectCommaSeparatedOption(
+  value: string,
+  previous: readonly string[],
+): string[] {
+  const segments = value
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+  return [...previous, ...segments];
 }
 
 // `monitor` is the long-running inbox subscriber the Claude Code plugin

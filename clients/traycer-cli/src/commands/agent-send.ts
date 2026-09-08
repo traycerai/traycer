@@ -40,7 +40,7 @@ export function buildAgentSendCommand(opts: {
       expectReply: opts.expectReply,
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.sendMessage", request),
+      callHostRpc("agent.sendMessage", request, null),
     );
     const { responseId } = parseCanonicalHostResponse(
       "agent.sendMessage",

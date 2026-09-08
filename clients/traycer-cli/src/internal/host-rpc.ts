@@ -60,12 +60,24 @@ const FRAME_TIMEOUT_MS = 15_000;
  * store-backed revalidator - the refresh spend runs inside the shared credentials
  * file lock (`store.rotate`, §7) - rotates the lease, and retries once before the
  * error surfaces.
+ *
+ * `responseTimeoutMs` is this call's own budget for the host's RESPONSE frame
+ * (dial and `openAck` keep the transport defaults either way, so an
+ * unreachable host still fails fast). `null` = {@link FRAME_TIMEOUT_MS}, the
+ * 15s deadline that is right for every ordinary request. It is a REQUIRED
+ * parameter, not a defaulted one: a long-poll method - one whose contract is
+ * to stay silent until a domain event fires - reads as a dead host under the
+ * default and is abandoned mid-flight, and `idempotencyKey: null` means a
+ * post-send miss is not replayable. `providers.awaitLogin` is the case
+ * (`PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS`); making every caller state its
+ * budget is what stops the next one from inheriting the wrong one silently.
  */
 export async function callHostRpc<
   Method extends keyof HostRpcRegistry & string,
 >(
   method: Method,
   params: RequestOfMethod<HostRpcRegistry, Method>,
+  responseTimeoutMs: number | null,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   logger.debug("Host RPC requested", {
@@ -98,6 +110,7 @@ export async function callHostRpc<
     endpoint,
     auth,
     DEFAULT_TRANSPORT_RETRY_POLICY,
+    responseTimeoutMs,
   );
 }
 
@@ -145,6 +158,9 @@ export async function callHostRpcFastFail<
     endpoint,
     auth,
     NO_RETRY_TRANSPORT_POLICY,
+    // Latency-bound by definition - a long-poll budget would defeat the
+    // whole point of this entry point.
+    null,
   );
 }
 
@@ -192,6 +208,8 @@ export async function callHostRpcAtEndpoint<
     endpoint,
     auth,
     DEFAULT_TRANSPORT_RETRY_POLICY,
+    // Doctor probes are ordinary short requests.
+    null,
   );
 }
 
@@ -201,6 +219,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   endpoint: HostTransportEndpoint,
   auth: HostAuth,
   retryPolicy: TransportRetryPolicy,
+  responseTimeoutMs: number | null,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const lease = new MutableBearerLease(auth.token, auth.userId);
@@ -243,13 +262,25 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     abortSignal: callLifetime.signal,
   };
   try {
-    const response = await messenger.request(method, params, {
+    const requestOptions = {
       idempotencyKey: null,
       authority,
       // A caller's FIRST attempt. The replay requirement is raised by the
       // `createRetryingMessenger` wrapper above, per failure, not here.
       replayMustBeKeyed: false,
-    });
+    };
+    // `request` is `requestWithResponseTimeout` bound to the transport's own
+    // `frameTimeoutMs` (`ws-rpc-client.ts`), so the `null` arm is not a
+    // second code path - it is the same call with the default budget.
+    const response =
+      responseTimeoutMs === null
+        ? await messenger.request(method, params, requestOptions)
+        : await messenger.requestWithResponseTimeout(
+            method,
+            params,
+            responseTimeoutMs,
+            requestOptions,
+          );
     logger.debug("Host RPC completed", {
       environment: config.environment,
       method,

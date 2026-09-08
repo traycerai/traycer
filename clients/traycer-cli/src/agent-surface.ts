@@ -88,6 +88,16 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
     "this session can list role claims but cannot release one.",
   "worktree delete":
     "remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
+  "profile create":
+    "manage provider profiles from Settings ▸ Providers, or run this from a full-surface session.",
+  "profile remove":
+    "manage provider profiles from Settings ▸ Providers, or run this from a full-surface session.",
+  "profile test":
+    "manage provider profiles from Settings ▸ Providers, or run this from a full-surface session.",
+  "profile copy":
+    "manage provider profiles from Settings ▸ Providers, or run this from a full-surface session.",
+  "profile launch-env":
+    "this is the internal body of a profile's launch wrapper, not a session-facing command.",
 };
 
 /**

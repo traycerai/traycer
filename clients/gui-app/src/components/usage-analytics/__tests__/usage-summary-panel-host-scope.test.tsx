@@ -119,6 +119,7 @@ function renderPanel(input: {
     | UsageSummaryResponse
     | ((request: UsageSummaryRequest) => UsageSummaryResponse);
   readonly hostNames: ReadonlyMap<string, string>;
+  readonly profileId: string | null;
 }): { readonly requests: UsageSummaryRequest[] } {
   const requests: UsageSummaryRequest[] = [];
   const spine = new HostClient<HostRpcRegistry>({
@@ -156,6 +157,7 @@ function renderPanel(input: {
       client={client}
       hostNames={input.hostNames}
       currentHostId={mockLocalHostEntry.hostId}
+      profileId={input.profileId}
     />,
     { wrapper },
   );
@@ -180,6 +182,7 @@ describe("<UsageSummaryPanel /> activity section", () => {
         });
       },
       hostNames: new Map([["host-a", "Studio Mac"]]),
+      profileId: null,
     });
 
     await screen.findByTestId("usage-cost-figure");
@@ -206,6 +209,7 @@ describe("<UsageSummaryPanel /> activity section", () => {
         });
       },
       hostNames: new Map([["host-a", "Studio Mac"]]),
+      profileId: null,
     });
 
     await screen.findByTestId("usage-cost-figure");
@@ -237,6 +241,7 @@ describe("<UsageSummaryPanel /> activity section", () => {
         });
       },
       hostNames: new Map(),
+      profileId: null,
     });
 
     await screen.findByTestId("usage-activity-heatmap");
@@ -263,6 +268,7 @@ describe("<UsageSummaryPanel /> activity section", () => {
         });
       },
       hostNames: new Map([["host-a", "Studio Mac"]]),
+      profileId: null,
     });
 
     // The dashboard itself still renders - one failed section must not
@@ -289,6 +295,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
         hostBuckets: [hostBucket("host-a", 3), hostBucket("host-b", 1)],
       }),
       hostNames: new Map([["host-a", "Studio Mac"]]),
+      profileId: null,
     });
 
     await screen.findByTestId("usage-host-split");
@@ -309,6 +316,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
         ],
       }),
       hostNames: new Map([["host-a", "Studio Mac"]]),
+      profileId: null,
     });
 
     const split = await screen.findByTestId("usage-host-split");
@@ -327,6 +335,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
         hostBuckets: [hostBucket("host-a", 3)],
       }),
       hostNames: new Map([["host-a", "Studio Mac"]]),
+      profileId: null,
     });
 
     // A one-row "By host" list says nothing the filter did not already say.
@@ -341,6 +350,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
         hostBuckets: [hostBucket(mockLocalHostEntry.hostId, 3)],
       }),
       hostNames: new Map([[mockLocalHostEntry.hostId, "Studio Mac"]]),
+      profileId: null,
     });
 
     // Not a disabled dropdown: there is nothing to choose BETWEEN, because
@@ -359,6 +369,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
         hostBuckets: [hostBucket("host-a", 3), hostBucket("host-b", 1)],
       }),
       hostNames: new Map(),
+      profileId: null,
     });
 
     await screen.findByTestId("usage-cost-figure");
@@ -383,6 +394,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
               : [hostBucket("host-a", 3)],
         }),
       hostNames: new Map(),
+      profileId: null,
     });
 
     await screen.findByTestId("usage-cost-figure");
@@ -409,6 +421,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
               : [hostBucket(request.hostId, 3)],
         }),
       hostNames: new Map(),
+      profileId: null,
     });
 
     await screen.findByTestId("usage-cost-figure");
@@ -432,5 +445,45 @@ describe("<UsageSummaryPanel /> host scope", () => {
     expect(
       await screen.findByTestId("usage-host-filter-option-host-b"),
     ).toBeTruthy();
+  });
+});
+
+describe("<UsageSummaryPanel /> profile scope (D21/D27)", () => {
+  it("sends no profileId when the caller passes null - today's unscoped behavior", async () => {
+    const { requests } = renderPanel({
+      response: response({
+        servedBy: "cloud",
+        hostBuckets: [hostBucket("host-a", 3)],
+      }),
+      hostNames: new Map([["host-a", "Studio Mac"]]),
+      profileId: null,
+    });
+
+    await screen.findByTestId("usage-cost-figure");
+    expect(requests[0].profileId).toBeUndefined();
+  });
+
+  it("forwards a real profileId from the caller onto every request this panel issues", async () => {
+    const { requests } = renderPanel({
+      response: (request) =>
+        response({
+          servedBy: "cloud",
+          hostBuckets:
+            request.profileId === "profile-work"
+              ? [hostBucket("host-a", 3)]
+              : [],
+        }),
+      hostNames: new Map([["host-a", "Studio Mac"]]),
+      profileId: "profile-work",
+    });
+
+    await screen.findByTestId("usage-cost-figure");
+    // Every request this panel issues (the picker's own read and the
+    // activity heatmap's independent read) carries the same profile scope -
+    // it is a property of WHICH panel this is, not of one query among many.
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      expect(request.profileId).toBe("profile-work");
+    }
   });
 });

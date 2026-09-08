@@ -12,6 +12,7 @@ import type {
 import type {
   CanonicalTerminalSessionInfo,
   CanonicalTerminalSessionInfoWithCurrentCwd,
+  CanonicalTerminalSessionInfoWithSpawnConfig,
   TerminalSessionExitReason,
   TerminalSessionInfo,
   TerminalSessionKind,
@@ -151,6 +152,16 @@ export interface TerminalSessionState {
    * progress" (for sleep prevention) but ignores an idle plain shell.
    */
   readonly kind: TerminalSessionKind;
+  /**
+   * D19/D21 (W5-T4): "restart to apply" hint - the host spawned this PTY
+   * under a provider profile config that has since changed. A hint only:
+   * nothing here kills or restarts the session, and the host never fills it
+   * from `terminal.subscribe` alone with full freshness (its frame pipeline
+   * is synchronous; a live re-resolve is async) - `false` for a host/frame
+   * that does not carry the field (pre-`@1.7`), matching the field's own
+   * `null`/`false` "no profile-bound config to compare" reading.
+   */
+  readonly restartRequired: boolean;
   /**
    * `terminal.subscribe@1.6` attachment intent currently on the wire.
    * Follows lease state, not session kind: a leased tile is `presentation`;
@@ -372,6 +383,26 @@ function currentCwdFromSession(
 ): string | null | undefined {
   if (!("currentCwd" in session)) return undefined;
   return session.currentCwd.length === 0 ? null : session.currentCwd;
+}
+
+/**
+ * `undefined` for a session shape pre-`terminal.subscribe@1.7` (D19/D21) -
+ * the caller falls back to the store's current value, same pattern as
+ * {@link currentCwdFromSession}.
+ */
+function restartRequiredFromSession(
+  session:
+    | CanonicalTerminalSessionInfoWithSpawnConfig
+    | CanonicalTerminalSessionInfoWithCurrentCwd
+    | CanonicalTerminalSessionInfo
+    | TerminalSessionInfo,
+): boolean | undefined {
+  // The `@1.7` shape has to be IN the union for the `in` narrowing to
+  // produce `boolean` - without it the property access lands on `unknown`
+  // and the field is unreadable (the gui-app compile catches this; the
+  // vitest suites do not type-check).
+  if (!("restartRequired" in session)) return undefined;
+  return session.restartRequired;
 }
 
 /**
@@ -683,6 +714,8 @@ export function createTerminalSessionStore(
           currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
           currentCwdReported:
             currentCwd === undefined ? get().currentCwdReported : true,
+          restartRequired:
+            restartRequiredFromSession(frame.session) ?? get().restartRequired,
         });
         flushRequestedResize();
       },
@@ -754,6 +787,8 @@ export function createTerminalSessionStore(
           currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
           currentCwdReported:
             currentCwd === undefined ? get().currentCwdReported : true,
+          restartRequired:
+            restartRequiredFromSession(frame.session) ?? get().restartRequired,
         });
       },
       onConnectionStatus: (
@@ -845,6 +880,7 @@ export function createTerminalSessionStore(
       requestedRows: options.rows,
       reattachMode: options.reattachMode,
       kind: options.kind,
+      restartRequired: false,
       viewer: "presentation",
       pendingActions: {},
       lastOutputPreview: null,

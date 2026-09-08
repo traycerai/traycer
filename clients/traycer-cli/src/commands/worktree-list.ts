@@ -157,7 +157,7 @@ async function requestWorktreeListPage(
     forceRefresh: true,
   });
   const result = await toAgentCliError(
-    callHostRpc("worktree.listAllForHost", request),
+    callHostRpc("worktree.listAllForHost", request, null),
   );
   const parsed = parseCanonicalHostResponse(
     "worktree.listAllForHost",

@@ -1,5 +1,6 @@
 /**
- * `host.usage.summary@2.0` (D21/D27): an optional `profileId` filter.
+ * `host.usage.summary@2.0` (D21/D27): optional `profileId` + `harnessId`
+ * filters.
  *
  * Named `-v20`, not `-minors` (discrepancy from the ticket, which asked for
  * an in-place `@1.1` minor): `hostUsageSummaryRequestSchemaV10` is
@@ -44,7 +45,11 @@ describe("host.usage.summary@2.0 profileId (D21/D27)", () => {
   it("@1.0 request upgrades to @2.0 unchanged (profileId: null)", () => {
     const upgraded =
       hostUsageSummaryUpgradeV10ToV20.upgradeRequest(baseV10Request);
-    expect(upgraded).toEqual({ ...baseV10Request, profileId: null });
+    expect(upgraded).toEqual({
+      ...baseV10Request,
+      profileId: null,
+      harnessId: null,
+    });
 
     const viaRegistry = upgradeRequestToVersion(
       hostRpcRegistry["host.usage.summary"],
@@ -52,7 +57,11 @@ describe("host.usage.summary@2.0 profileId (D21/D27)", () => {
       { major: 2, minor: 0 },
       baseV10Request,
     );
-    expect(viaRegistry).toEqual({ ...baseV10Request, profileId: null });
+    expect(viaRegistry).toEqual({
+      ...baseV10Request,
+      profileId: null,
+      harnessId: null,
+    });
   });
 
   it("@2.0 with profileId parses", () => {
@@ -67,6 +76,7 @@ describe("host.usage.summary@2.0 profileId (D21/D27)", () => {
     const downgraded = hostUsageSummaryDowngradeV20ToV10.downgradeRequest({
       ...baseV10Request,
       profileId: "profile-1",
+      harnessId: "codex",
     });
     expect(downgraded).toEqual({ ok: true, value: baseV10Request });
 
@@ -74,8 +84,27 @@ describe("host.usage.summary@2.0 profileId (D21/D27)", () => {
       hostRpcRegistry["host.usage.summary"],
       2,
       1,
-      { ...baseV10Request, profileId: "profile-1" },
+      { ...baseV10Request, profileId: "profile-1", harnessId: "codex" },
     );
     expect(viaRegistry).toEqual({ ok: true, value: baseV10Request });
+  });
+
+  it("hostUsageSummaryRequestSchemaV10.strict() also REJECTS harnessId - the @1.0 line stays frozen", () => {
+    expect(
+      hostUsageSummaryRequestSchemaV10.safeParse({
+        ...baseV10Request,
+        harnessId: "codex",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("@2.0 carries harnessId beside profileId (wave-5 O1: the Default account is not provider-scoped without it)", () => {
+    const parsed = hostUsageSummaryRequestSchemaV20.parse({
+      ...baseV10Request,
+      profileId: "ambient",
+      harnessId: "codex",
+    });
+    expect(parsed.harnessId).toBe("codex");
+    expect(parsed.profileId).toBe("ambient");
   });
 });

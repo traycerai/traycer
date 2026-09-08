@@ -48,7 +48,7 @@ export function buildAgentRoleClaimCommand(opts: {
       scope: opts.scope ?? "",
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.roles.claim", request),
+      callHostRpc("agent.roles.claim", request, null),
     );
     const response = parseCanonicalHostResponse(
       "agent.roles.claim",
@@ -71,7 +71,7 @@ export function buildAgentRoleListCommand(opts: {
       epicId: resolveEpicId(opts.epicId),
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.roles.list", request),
+      callHostRpc("agent.roles.list", request, null),
     );
     const response = parseCanonicalHostResponse(
       "agent.roles.list",
@@ -98,7 +98,7 @@ export function buildAgentRoleRelinquishCommand(opts: {
       claimId: opts.claimId ?? "",
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.roles.relinquish", request),
+      callHostRpc("agent.roles.relinquish", request, null),
     );
     const response = parseCanonicalHostResponse(
       "agent.roles.relinquish",

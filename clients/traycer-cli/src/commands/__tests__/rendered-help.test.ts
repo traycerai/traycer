@@ -219,6 +219,7 @@ const NAMED_PARENT_PATHS: ReadonlyArray<readonly string[]> = [
   ["worktree"],
   ["agent"],
   ["agent", "role"],
+  ["profile"],
 ];
 
 interface ExpectedOption {
@@ -933,6 +934,74 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
+  { path: "profile", options: [], args: [] },
+  {
+    path: "profile list",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "provider", required: false, variadic: false }],
+  },
+  {
+    path: "profile create",
+    options: [
+      { flags: "--api-key <key>", mandatory: false },
+      { flags: "--base-url <url>", mandatory: false },
+      { flags: "--credential-kind <api_key|auth_token>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--label <name>", mandatory: true },
+      { flags: "--max-context-size <n>", mandatory: false },
+      { flags: "--mode <browser|device>", mandatory: false },
+      { flags: "--model <id>", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--provider <id>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--sign-in", mandatory: false },
+      {
+        flags: "--start-from <default-account|profile:<id>|empty>",
+        mandatory: false,
+      },
+    ],
+    args: [],
+  },
+  {
+    path: "profile remove",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--profile <id>", mandatory: true },
+      { flags: "--provider <id>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
+    path: "profile test",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: true },
+      { flags: "--provider <id>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
+    path: "profile copy",
+    options: [
+      { flags: "--categories <list>", mandatory: false },
+      { flags: "--from <ambient|id>", mandatory: true },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--provider <id>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--to <id>", mandatory: false },
+      { flags: "--yes", mandatory: false },
+    ],
+    args: [],
+  },
   {
     path: "monitor",
     options: [
@@ -1198,6 +1267,11 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "agent activity-from-hook",
         "agent turn-ended-from-hook",
         "agent session-observed-from-hook",
+        // W5-T3/D23/D24: the sole body of a profile's launch wrapper scripts -
+        // asks the local host for the resolved spawn env and execs the
+        // provider CLI with it. Never typed by a person; tested as a machine
+        // contract in `profile-launch-env.test.ts`.
+        "profile launch-env",
       ].sort(),
     );
   });

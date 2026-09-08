@@ -42,7 +42,7 @@ export function buildAgentProfileRateLimitsCommand(opts: {
       },
     );
     const result = await toAgentCliError(
-      callHostRpc("agent.getProviderProfileRateLimits", request),
+      callHostRpc("agent.getProviderProfileRateLimits", request, null),
     );
     // The explicit v5.0 schema, not the base `...ResponseSchema` name this
     // used to read. That name is the LIVE line's alias: identical to v5.0

@@ -51,7 +51,7 @@ export function buildAgentConfigureCommand(opts: {
       permissionMode: opts.permissionMode ?? "full_access",
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.configure", request),
+      callHostRpc("agent.configure", request, null),
     );
     const response = parseCanonicalHostResponse(
       "agent.configure",

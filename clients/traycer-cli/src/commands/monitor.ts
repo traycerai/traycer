@@ -583,11 +583,15 @@ class InboxAcknowledgementQueue {
           InboxAcknowledgementQueue.MAX_EVENT_IDS_PER_ACK,
         );
         try {
-          await callHostRpc("agent.inbox.ack", {
-            epicId: this.target.epicId,
-            agentId: this.target.agentId,
-            eventIds,
-          });
+          await callHostRpc(
+            "agent.inbox.ack",
+            {
+              epicId: this.target.epicId,
+              agentId: this.target.agentId,
+              eventIds,
+            },
+            null,
+          );
           this.retryDelayMs = InboxAcknowledgementQueue.INITIAL_RETRY_DELAY_MS;
           for (const eventId of eventIds) this.pendingEventIds.delete(eventId);
         } catch (error) {

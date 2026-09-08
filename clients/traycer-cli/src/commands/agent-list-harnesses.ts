@@ -21,6 +21,7 @@ export function buildAgentListHarnessesCommand(): CommandFn {
       callHostRpc(
         "agent.gui.listHarnesses",
         parseUserInput(listGuiHarnessesRequestSchema, {}),
+        null,
       ),
     );
     const catalog = parseCanonicalHostResponse(

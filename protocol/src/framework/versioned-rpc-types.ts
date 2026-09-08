@@ -42,6 +42,12 @@ export const RPC_ERROR_CODES = [
   // The caller's OWN agent lives on another host; the message names it, so
   // telling the caller where to go discloses nothing across accounts.
   "E_AGENT_NOT_LOCAL",
+  // The method is served only on the host's own loopback transport
+  // (`transportVantage === "local-ws"`) and was reached over a relay/remote
+  // path - D24's launch-env refusal. 403, and additive/degrade-safe like
+  // E_INVALID_ARGUMENT: an older client narrows it to RPC_ERROR and keeps
+  // the status. Never carries anything but the method name.
+  "E_METHOD_LOCAL_ONLY",
   // A claim held by ANOTHER of the caller's own agents - a real authorization
   // error with role-specific copy, distinct from the generic epic-access
   // FORBIDDEN whose "check Task access" guidance would mislead here.

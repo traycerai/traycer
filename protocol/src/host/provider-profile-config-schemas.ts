@@ -328,6 +328,17 @@ export const providersResolveLaunchEnvResponseSchema = z.object({
   command: z.string().min(1),
   args: z.array(z.string()),
   env: z.record(z.string(), z.string()),
+  /**
+   * D01/D18: keys the profile explicitly UNSET. They are already absent from
+   * `env`, which is only sufficient for a consumer that hands `env` to the
+   * child as the WHOLE environment. The launch wrapper does not: it spreads
+   * `env` onto its own `process.env` (an operator's login shell) because
+   * `PATH`/`HOME` are load-bearing for the exec, and a spread resurrects the
+   * base's value for every unset key - reinstating exactly the ambient
+   * credential (`GH_TOKEN`, …) the profile exists to suppress. The consumer
+   * deletes these after the spread.
+   */
+  unsetKeys: z.array(z.string()),
   cwd: z.string().nullable(),
 });
 export type ProvidersResolveLaunchEnvResponse = z.infer<

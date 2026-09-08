@@ -49,7 +49,7 @@ export function buildAgentArchiveCommand(opts: {
       archived,
     });
     const result = await toAgentCliError(
-      callHostRpc("epic.setChatArchived", request),
+      callHostRpc("epic.setChatArchived", request, null),
     ).catch((err: unknown) => {
       throw remapArchiveError(err, opts.agentId);
     });

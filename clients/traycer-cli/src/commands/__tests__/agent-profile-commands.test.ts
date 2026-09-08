@@ -180,6 +180,7 @@ describe("agent create profile selection", () => {
     expect(rpcMock).toHaveBeenLastCalledWith(
       "agent.create",
       expect.objectContaining({ permissionMode: "full_access" }),
+      null,
     );
 
     await buildAgentCreateCommand({
@@ -189,6 +190,7 @@ describe("agent create profile selection", () => {
     expect(rpcMock).toHaveBeenLastCalledWith(
       "agent.create",
       expect.objectContaining({ permissionMode: "supervised" }),
+      null,
     );
   });
 
@@ -200,6 +202,7 @@ describe("agent create profile selection", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.create",
       expect.objectContaining({ profileSelection: { kind: "last_used" } }),
+      null,
     );
   });
 
@@ -211,6 +214,7 @@ describe("agent create profile selection", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.create",
       expect.objectContaining({ profileSelection: { kind: "ambient" } }),
+      null,
     );
   });
 
@@ -224,6 +228,7 @@ describe("agent create profile selection", () => {
       expect.objectContaining({
         profileSelection: { kind: "profile", profileId: "prof_work" },
       }),
+      null,
     );
   });
 
@@ -247,6 +252,9 @@ describe("agent list-profiles", () => {
         rateLimitStatus: "ok",
         usageUpdatedAt: 1_752_400_000_000,
         isEffectiveLastUsed: true,
+        // D27 (`agent.listProviderProfiles@5.1`): required on the live
+        // response schema this command parses against.
+        authType: "oauth",
       },
     ],
   };
@@ -260,11 +268,15 @@ describe("agent list-profiles", () => {
       harnessId: "codex",
     })(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("agent.listProviderProfiles", {
-      epicId: "epic_1",
-      senderAgentId: "agent_1",
-      harnessId: "codex",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "agent.listProviderProfiles",
+      {
+        epicId: "epic_1",
+        senderAgentId: "agent_1",
+        harnessId: "codex",
+      },
+      null,
+    );
     expect(result.exitCode).toBe(0);
   });
 
@@ -314,12 +326,16 @@ describe("agent profile-rate-limits", () => {
       profile: "prof_work",
     })(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("agent.getProviderProfileRateLimits", {
-      epicId: "epic_1",
-      senderAgentId: "agent_1",
-      harnessId: "codex",
-      profileSelection: { kind: "profile", profileId: "prof_work" },
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "agent.getProviderProfileRateLimits",
+      {
+        epicId: "epic_1",
+        senderAgentId: "agent_1",
+        harnessId: "codex",
+        profileSelection: { kind: "profile", profileId: "prof_work" },
+      },
+      null,
+    );
   });
 
   it("reports an unavailable provider read without failing the command", async () => {
@@ -370,17 +386,21 @@ describe("agent configure", () => {
       permissionMode: "supervised",
     })(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("agent.configure", {
-      epicId: "epic_1",
-      senderAgentId: "agent_1",
-      agentId: "agent_target",
-      harnessId: "codex",
-      model: "gpt-5.6-codex",
-      profileSelection: { kind: "ambient" },
-      reasoningEffort: "high",
-      fastMode: false,
-      permissionMode: "supervised",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "agent.configure",
+      {
+        epicId: "epic_1",
+        senderAgentId: "agent_1",
+        agentId: "agent_target",
+        harnessId: "codex",
+        model: "gpt-5.6-codex",
+        profileSelection: { kind: "ambient" },
+        reasoningEffort: "high",
+        fastMode: false,
+        permissionMode: "supervised",
+      },
+      null,
+    );
     expect(result.data).toEqual(response);
     expect(result.human).toContain("profile: --profile ambient");
     expect(result.human).toContain(
@@ -410,6 +430,7 @@ describe("agent configure", () => {
         fastMode: false,
         permissionMode: "full_access",
       }),
+      null,
     );
   });
 

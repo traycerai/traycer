@@ -27,7 +27,7 @@ export function buildAgentSelectionGuideCommand(opts: {
       senderAgentId,
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.selectionGuide", request),
+      callHostRpc("agent.selectionGuide", request, null),
     );
     const response = parseCanonicalHostResponse(
       "agent.selectionGuide",

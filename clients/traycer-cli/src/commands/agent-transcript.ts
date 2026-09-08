@@ -22,10 +22,14 @@ export function buildAgentTranscriptCommand(opts: {
   return async () => {
     const epicId = resolveEpicId(opts.epicId);
     const result = await toAgentCliError(
-      callHostRpc("agent.getTranscript", {
-        epicId,
-        agentId: opts.agentId,
-      }),
+      callHostRpc(
+        "agent.getTranscript",
+        {
+          epicId,
+          agentId: opts.agentId,
+        },
+        null,
+      ),
     );
     const { transcript } = parseCanonicalHostResponse(
       "agent.getTranscript",

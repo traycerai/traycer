@@ -82,7 +82,9 @@ export function buildAgentCreateCommand(opts: {
       }),
       profileSelection: parseCreateProfileSelection(opts.profile),
     });
-    const result = await toAgentCliError(callHostRpc("agent.create", request));
+    const result = await toAgentCliError(
+      callHostRpc("agent.create", request, null),
+    );
     const { agentId, warnings } = parseCanonicalHostResponse(
       "agent.create",
       createAgentResponseSchema,

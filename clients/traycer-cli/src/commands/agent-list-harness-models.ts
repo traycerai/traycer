@@ -44,7 +44,7 @@ async function listSingleHarnessModels(
     harnessId,
   });
   const result = await toAgentCliError(
-    callHostRpc("agent.listHarnessModels", request),
+    callHostRpc("agent.listHarnessModels", request, null),
   );
   return parseCanonicalHostResponse(
     "agent.listHarnessModels",

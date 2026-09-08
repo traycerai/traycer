@@ -63,7 +63,9 @@ export function buildAgentForkCommand(opts: {
       }),
       profileSelection: parseForkProfileSelection(opts.profile),
     });
-    const result = await toAgentCliError(callHostRpc("agent.fork", request));
+    const result = await toAgentCliError(
+      callHostRpc("agent.fork", request, null),
+    );
     const response = parseCanonicalHostResponse(
       "agent.fork",
       forkAgentResponseSchema,

@@ -237,8 +237,27 @@ export type HostUsageSummaryRequestV10 = z.infer<
 >;
 
 /**
- * D21/D27: per-profile totals. Absent or `null` = every profile, today's
- * exact behaviour - only ever a NARROWING, same reasoning as `hostId` above.
+ * D21/D27: per-profile totals, plus the per-harness narrowing the profile
+ * filter is useless without. Absent or `null` = every profile / every
+ * harness, today's exact behaviour - only ever a NARROWING, same reasoning
+ * as `hostId` above.
+ *
+ * `harnessId`, not `providerId` (discrepancy from the wave-5 review's O1
+ * wording): the fact this filter narrows carries `harnessId`
+ * (`UsageSummaryFact.harnessId`), and the response's own
+ * `usageSummaryBucketSchema.harnessId` already rides this wire under that
+ * name. A request key called `providerId` sitting beside response buckets
+ * keyed by `harnessId` would need a provider->harness table on whichever
+ * side did the translation; the two vocabularies differ only for Claude
+ * (`claude-code` the provider, `claude` the harness -
+ * `TUI_HARNESS_ID_TO_PROVIDER_ID`), so the client that HAS that map
+ * (`providerIdToGuiHarnessId`) does the one translation and the host stays
+ * table-free. Bound matches `usageSummaryBucketSchema.harnessId`'s 64.
+ *
+ * Without it the Default account's `"ambient"` sentinel selects EVERY
+ * provider's default-account facts, because `effectiveProfileId === null`
+ * is not provider-scoped - the cross-provider total the review found under
+ * a single provider's Usage tab.
  *
  * A NEW MAJOR, not a minor (discrepancy from the ticket text, which called
  * for `@1.1`): `hostUsageSummaryRequestSchemaV10` is `.strict()`, and the
@@ -268,6 +287,7 @@ export const hostUsageSummaryRequestSchemaV20 = z
     window: z.enum(["epic"]).optional(),
     hostId: z.string().min(1).max(36).nullable().optional(),
     profileId: z.string().min(1).max(191).nullable().optional(),
+    harnessId: z.string().min(1).max(64).nullable().optional(),
   })
   .strict();
 export type HostUsageSummaryRequestV20 = z.infer<

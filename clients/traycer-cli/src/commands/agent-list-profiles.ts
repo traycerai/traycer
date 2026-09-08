@@ -35,7 +35,7 @@ export function buildAgentListProfilesCommand(opts: {
       harnessId: opts.harnessId,
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.listProviderProfiles", request),
+      callHostRpc("agent.listProviderProfiles", request, null),
     );
     const response = parseCanonicalHostResponse(
       "agent.listProviderProfiles",

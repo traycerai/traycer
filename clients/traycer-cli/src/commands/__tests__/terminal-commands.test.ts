@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
-import type { CanonicalTerminalSessionInfoWithLifecycleOwner } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfoWithSpawnConfig } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   buildTerminalListCommand,
   formatTerminalListTable,
@@ -51,8 +51,8 @@ afterEach(() => {
 });
 
 function session(
-  overrides: Partial<CanonicalTerminalSessionInfoWithLifecycleOwner>,
-): CanonicalTerminalSessionInfoWithLifecycleOwner {
+  overrides: Partial<CanonicalTerminalSessionInfoWithSpawnConfig>,
+): CanonicalTerminalSessionInfoWithSpawnConfig {
   return {
     sessionId: "term-1",
     scope: { kind: "epic", epicId: "epic-1" },
@@ -70,6 +70,10 @@ function session(
     title: "build",
     activeProcessName: "vitest",
     lifecycleOwner: "registry",
+    // `terminal.list@2.4` (D19/W5-T4): required on the canonical response
+    // this command parses against - a real row carries both.
+    spawnConfigRevision: null,
+    restartRequired: false,
     ...overrides,
   };
 }
@@ -137,9 +141,13 @@ describe("buildTerminalListCommand", () => {
 
     const result = await buildTerminalListCommand({ epicId: null })(ctx);
 
-    expect(rpcMock).toHaveBeenCalledWith("terminal.list", {
-      scope: { kind: "epic", epicId: "epic-1" },
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "terminal.list",
+      {
+        scope: { kind: "epic", epicId: "epic-1" },
+      },
+      null,
+    );
     expect(result.data).toEqual({
       terminals: [
         {
@@ -214,10 +222,14 @@ describe("buildTerminalOutputCommand", () => {
       terminalId: "term-1",
     })(ctx);
 
-    expect(rpcMock).toHaveBeenCalledWith("terminal.readOutput", {
-      epicId: "epic-1",
-      sessionId: "term-1",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "terminal.readOutput",
+      {
+        epicId: "epic-1",
+        sessionId: "term-1",
+      },
+      null,
+    );
     expect(result.data).toEqual({
       path: "/tmp/traycer-terminal-output/t1.txt",
     });
@@ -232,10 +244,14 @@ describe("buildTerminalOutputCommand", () => {
 
     await buildTerminalOutputCommand({ epicId: null, terminalId: "term" })(ctx);
 
-    expect(rpcMock).toHaveBeenCalledWith("terminal.readOutput", {
-      epicId: "epic-1",
-      sessionId: "term",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "terminal.readOutput",
+      {
+        epicId: "epic-1",
+        sessionId: "term",
+      },
+      null,
+    );
   });
 
   it("addresses the Task the caller names rather than the ambient one", async () => {
@@ -248,9 +264,13 @@ describe("buildTerminalOutputCommand", () => {
 
     // Same allowance `traycer agent transcript` has: the read is Task-scoped,
     // and which Task is the caller's to say.
-    expect(rpcMock).toHaveBeenCalledWith("terminal.readOutput", {
-      epicId: "epic-other",
-      sessionId: "term-1",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "terminal.readOutput",
+      {
+        epicId: "epic-other",
+        sessionId: "term-1",
+      },
+      null,
+    );
   });
 });

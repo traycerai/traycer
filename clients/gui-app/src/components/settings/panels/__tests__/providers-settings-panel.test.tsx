@@ -727,6 +727,26 @@ vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
     isRefreshing: false,
   }),
 }));
+// The Usage tab's totals card (`ProviderUsageTotalsSection`, W5-T2) issues a
+// real `host.usage.summary` query. Same reason as the rate-limit queries
+// above: `useQueryClient()` THROWS with no `QueryClientProvider` in this
+// harness. `buildUsageSummaryRequest` stays REAL (importActual) so the
+// request this panel composes is still the honest one.
+vi.mock("@/hooks/usage-analytics/use-usage-summary-query", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/hooks/usage-analytics/use-usage-summary-query")
+  >("@/hooks/usage-analytics/use-usage-summary-query");
+  return {
+    ...actual,
+    useUsageSummaryForClient: () => ({
+      data: undefined,
+      error: null,
+      isLoading: false,
+      refetch: () => Promise.resolve({}),
+    }),
+  };
+});
+
 // The section also asks whether a read we stopped waiting for still has its
 // delayed follow-up coming. That reads the queue registry through
 // `useRateLimitQueueScope`, which needs the QueryClient this harness has none

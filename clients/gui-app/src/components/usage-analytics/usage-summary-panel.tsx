@@ -79,6 +79,16 @@ export interface UsageSummaryPanelProps {
    * resolved host yet.
    */
   readonly currentHostId: string | null;
+  /**
+   * D21/D27: narrows every read this panel issues to one profile. `null` =
+   * every profile - the account-wide Settings ▸ Usage dashboard's only
+   * caller today (it has no profile in scope; see `UsageSettingsPanel`'s own
+   * doc comment). A profile-scoped caller must have already proven the host
+   * negotiated `host.usage.summary@2`
+   * (`useUsageSummaryProfileFilterSupported`) before passing a real id here -
+   * this panel does not re-check it.
+   */
+  readonly profileId: string | null;
 }
 
 type UsageSummaryQueryResult = UseQueryResult<
@@ -114,9 +124,10 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         windowDays,
         epicId: null,
         hostId,
-        profileId: null,
+        profileId: props.profileId,
+        harnessId: null,
       }),
-    [windowDays, hostId],
+    [windowDays, hostId, props.profileId],
   );
   // The activity heatmap's own fixed-year read (ticket 15) - independent of
   // the 7/30/90 picker (an activity calendar over one month is all padding)
@@ -128,9 +139,10 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         windowDays: USAGE_ACTIVITY_WINDOW_DAYS,
         epicId: null,
         hostId,
-        profileId: null,
+        profileId: props.profileId,
+        harnessId: null,
       }),
-    [hostId],
+    [hostId, props.profileId],
   );
   // Enabled unconditionally: this panel only mounts once its caller has
   // already confirmed `host.usage.summary` is supported (see
@@ -155,9 +167,10 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         windowDays: USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS,
         epicId: null,
         hostId,
-        profileId: null,
+        profileId: props.profileId,
+        harnessId: null,
       }),
-    [hostId],
+    [hostId, props.profileId],
   );
   const activityFallbackQuery = useUsageSummaryForClient(
     props.client,

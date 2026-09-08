@@ -391,9 +391,13 @@ describe("buildWorkspaceListCommand", () => {
 
     const result = await buildWorkspaceListCommand({ epicId: null })(fakeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("worktree.listBindingsForEpic", {
-      epicId: "epic_test",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "worktree.listBindingsForEpic",
+      {
+        epicId: "epic_test",
+      },
+      null,
+    );
     expect(result.data).toEqual(v12Response);
     expect(result.exitCode).toBe(0);
   });

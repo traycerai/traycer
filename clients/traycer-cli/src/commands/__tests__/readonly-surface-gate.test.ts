@@ -206,6 +206,36 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
     "11111111-1111-4111-8111-111111111111",
   ],
   "worktree delete": ["--path", "/tmp/some-worktree"],
+  "profile create": [
+    "--provider",
+    "claude-code",
+    "--label",
+    "test profile",
+    "--api-key",
+    "test-key",
+  ],
+  "profile remove": ["--provider", "claude-code", "--profile", "profile-1"],
+  "profile test": ["--provider", "claude-code", "--profile", "profile-1"],
+  "profile copy": [
+    "--provider",
+    "claude-code",
+    "--from",
+    "ambient",
+    "--to",
+    "profile-1",
+  ],
+  // `--exec` is required so parsing reaches `callHostRpc` rather than this
+  // command's own "no mode that prints the env" refusal - that refusal is a
+  // client-side E_INVALID_ARGUMENT, not the readonly-surface E_FORBIDDEN this
+  // suite is proving, and would masquerade as "reached the body" for the
+  // wrong reason.
+  "profile launch-env": [
+    "--provider",
+    "claude-code",
+    "--profile",
+    "profile-1",
+    "--exec",
+  ],
 };
 
 // Reads that stay runnable on the readonly surface: hidden from `--help`
@@ -220,6 +250,7 @@ const UNGATED_READS: ReadonlyArray<{
   { path: ["agent", "inbox"], args: [] },
   { path: ["agent", "role", "list"], args: [] },
   { path: ["worktree", "list"], args: [] },
+  { path: ["profile", "list"], args: [] },
 ];
 
 describe("readonly-surface gate: table coverage is complete", () => {

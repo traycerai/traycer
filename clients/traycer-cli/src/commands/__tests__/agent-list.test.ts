@@ -120,11 +120,15 @@ describe("agent list run config", () => {
     const result = await buildCommand()(makeCtx(false));
 
     expect(rpcMock).toHaveBeenCalledTimes(1);
-    expect(rpcMock).toHaveBeenCalledWith("agent.list", {
-      epicId: "epic-1",
-      senderAgentId: "agent-parent",
-      scope: "user",
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "agent.list",
+      {
+        epicId: "epic-1",
+        senderAgentId: "agent-parent",
+        scope: "user",
+      },
+      null,
+    );
     expect(result.data).toMatchObject({
       agents: [
         {

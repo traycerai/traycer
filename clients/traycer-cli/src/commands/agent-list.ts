@@ -23,11 +23,15 @@ export function buildAgentListCommand(opts: {
     const epicId = resolveEpicId(opts.epicId);
     const senderAgentId = resolveSenderAgentId(opts.senderAgentId);
     const result = await toAgentCliError(
-      callHostRpc("agent.list", {
-        epicId,
-        senderAgentId,
-        scope: opts.all ? ("all" as const) : ("user" as const),
-      }),
+      callHostRpc(
+        "agent.list",
+        {
+          epicId,
+          senderAgentId,
+          scope: opts.all ? ("all" as const) : ("user" as const),
+        },
+        null,
+      ),
     );
     const response = parseCanonicalHostResponse(
       "agent.list",

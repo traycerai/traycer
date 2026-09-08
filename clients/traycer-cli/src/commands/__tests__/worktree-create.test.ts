@@ -86,10 +86,14 @@ describe("resolveWorktreeBranchSelection", () => {
       carryUncommittedChanges: false,
     });
 
-    expect(rpcMock).toHaveBeenCalledWith("worktree.listBranches", {
-      workspacePath: WORKSPACE,
-      includeRemote: false,
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "worktree.listBranches",
+      {
+        workspacePath: WORKSPACE,
+        includeRemote: false,
+      },
+      null,
+    );
     expect(branch).toEqual({
       type: "new",
       name: "feature/x",
@@ -114,10 +118,14 @@ describe("resolveWorktreeBranchSelection", () => {
     });
 
     // The whitespace value is not used verbatim; the current branch is resolved.
-    expect(rpcMock).toHaveBeenCalledWith("worktree.listBranches", {
-      workspacePath: WORKSPACE,
-      includeRemote: false,
-    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "worktree.listBranches",
+      {
+        workspacePath: WORKSPACE,
+        includeRemote: false,
+      },
+      null,
+    );
     expect(branch).toEqual({
       type: "new",
       name: "feature/x",

@@ -131,6 +131,14 @@ const canonicalSession = {
   createdAt: 1,
   title: null,
   activeProcessName: null,
+  // Additive `terminal.subscribe@1.7` fields (D19/D21, W5-T4). Harmless on
+  // the older-minor tests below - their schemas silently strip unknown keys
+  // - and required for the tests whose default `completeHandshake()` (no
+  // explicit minor override) negotiates the actual latest installed minor,
+  // which is `1.7` now, not `1.5`.
+  lifecycleOwner: "manager" as const,
+  spawnConfigRevision: null,
+  restartRequired: false,
 };
 
 const legacySession = {
@@ -301,6 +309,64 @@ describe("TerminalStreamClient", () => {
     });
 
     expect(currentDirectories).toEqual(["/workspace/next"]);
+    stream.close();
+  });
+
+  it("parses spawnConfigRevision/restartRequired when terminal.subscribe negotiated 1.7", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const snapshots: Array<{
+      readonly spawnConfigRevision: string | null;
+      readonly restartRequired: boolean;
+    }> = [];
+    const stream = new TerminalStreamClient({
+      wsStreamClient: client,
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      callbacks: {
+        onSnapshot: (frame) => {
+          if ("restartRequired" in frame.session) {
+            snapshots.push({
+              spawnConfigRevision: frame.session.spawnConfigRevision,
+              restartRequired: frame.session.restartRequired,
+            });
+          }
+        },
+        onData: () => undefined,
+        onResized: () => undefined,
+        onExit: () => undefined,
+        onActionAck: () => undefined,
+        onSessionUpdated: () => undefined,
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    completeHandshake(sockets[0], {
+      ...buildStreamManifest(
+        hostStreamRpcRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      ),
+      "terminal.subscribe": { major: 1, minor: 7 },
+    });
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...canonicalSession,
+        currentCwd: "/workspace/project",
+        lifecycleOwner: "manager",
+        spawnConfigRevision: "rev-abc123",
+        restartRequired: true,
+      },
+      scrollback: "",
+      ackCreditSupported: true,
+    });
+
+    expect(snapshots).toEqual([
+      { spawnConfigRevision: "rev-abc123", restartRequired: true },
+    ]);
     stream.close();
   });
 

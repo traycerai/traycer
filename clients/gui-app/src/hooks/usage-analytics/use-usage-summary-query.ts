@@ -49,11 +49,26 @@ export function buildUsageSummaryRequest(input: {
   readonly hostId?: string | null;
   /**
    * D21/D27 addition (plan §8): narrows totals to one profile. `null` = every
-   * profile on the provider (today's exact behavior) - a caller that has not
-   * cannot prove the host negotiated major 2 must pass `null`,
-   * never a real id the host cannot yet understand.
+   * profile on the provider (today's exact behavior) - a caller that cannot
+   * prove the host negotiated `host.usage.summary@2`
+   * (`useUsageSummaryProfileFilterSupported`, `use-usage-summary-support.ts`)
+   * must pass `null`, never a real id the host cannot yet understand.
    */
   readonly profileId: string | null;
+  /**
+   * Wave-5 review O1: narrows totals to one HARNESS. `null` = every harness,
+   * which is what every account-wide surface wants.
+   *
+   * Required, not optional, and never inferred from `profileId`: the Default
+   * account is `effectiveProfileId === null` on every provider, so a
+   * provider-scoped card that sets only `profileId` renders every other
+   * provider's tokens and cost under one provider's tab. A caller that has a
+   * `ProviderId` translates it with `providerIdToGuiHarnessId`
+   * (`lib/provider-ordering.ts`) - the harness vocabulary is what the facts
+   * and the response's own `buckets[].harnessId` are keyed by, and the two
+   * differ (`claude-code` vs `claude`).
+   */
+  readonly harnessId: string | null;
 }): UsageSummaryRequest {
   return {
     timezone: getViewerTimeZone(),
@@ -63,6 +78,7 @@ export function buildUsageSummaryRequest(input: {
     hostId: input.hostId ?? undefined,
     window: input.window,
     profileId: input.profileId ?? undefined,
+    harnessId: input.harnessId ?? undefined,
   };
 }
 

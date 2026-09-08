@@ -36,7 +36,7 @@ export function buildWorkspaceListCommand(opts: {
   return async () => {
     const epicId = resolveEpicId(opts.epicId);
     const result = await toAgentCliError(
-      callHostRpc("worktree.listBindingsForEpic", { epicId }),
+      callHostRpc("worktree.listBindingsForEpic", { epicId }, null),
     );
     const parsed = parseCanonicalHostResponse(
       "worktree.listBindingsForEpic",
