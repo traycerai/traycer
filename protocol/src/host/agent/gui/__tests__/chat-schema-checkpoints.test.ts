@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   autonomousResumeBlockSchema,
-  autonomousResumeBlockSchemaPrePlacement,
+  autonomousResumeBlockSchemaV18,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   chatSubscribeV10,
@@ -125,13 +125,13 @@ describe("chat.subscribe placement freeze", () => {
       ],
       wakeTriggers: [{ title: "Wake", status: "failed", summary: "late" }],
     } as const;
-    const old = autonomousResumeBlockSchemaPrePlacement.parse(oldStored);
+    const old = autonomousResumeBlockSchemaV18.parse(oldStored);
     expect(old).not.toHaveProperty("deliveryPlacement");
     expect(old.triggers.map((trigger) => trigger.kind)).toEqual([
       "monitor",
       "wakeup",
     ]);
-    const oldEncoded = autonomousResumeBlockSchemaPrePlacement.encode(old);
+    const oldEncoded = autonomousResumeBlockSchemaV18.encode(old);
     expect(oldEncoded).not.toHaveProperty("deliveryPlacement");
     expect(oldEncoded.wakeTriggers).toEqual([
       {
@@ -144,14 +144,14 @@ describe("chat.subscribe placement freeze", () => {
     ]);
     expect(
       JSON.stringify(
-        z.toJSONSchema(autonomousResumeBlockSchemaPrePlacement, {
+        z.toJSONSchema(autonomousResumeBlockSchemaV18, {
           io: "input",
         }),
       ),
     ).not.toContain("deliveryPlacement");
     expect(
       JSON.stringify(
-        z.toJSONSchema(autonomousResumeBlockSchemaPrePlacement, {
+        z.toJSONSchema(autonomousResumeBlockSchemaV18, {
           io: "output",
         }),
       ),

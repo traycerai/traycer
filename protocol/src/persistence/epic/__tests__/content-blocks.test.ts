@@ -7,7 +7,7 @@ import {
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
   autonomousResumeBlockSchema,
-  autonomousResumeBlockSchemaPrePlacement,
+  autonomousResumeBlockSchemaV18,
   providerNoticeMetadataSchema,
   providerNoticeNormalizedMetadataSchema,
   subAgentBlockSchema,
@@ -530,11 +530,11 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
       expect(autonomousResumeBlockSchema.encode(domain).deliveryPlacement).toBe(
         deliveryPlacement,
       );
-      const frozen = autonomousResumeBlockSchemaPrePlacement.encode(domain);
+      const frozen = autonomousResumeBlockSchemaV18.encode(domain);
       expect("deliveryPlacement" in frozen).toBe(false);
-      expect(
-        autonomousResumeBlockSchemaPrePlacement.decode(frozen),
-      ).not.toHaveProperty("deliveryPlacement");
+      expect(autonomousResumeBlockSchemaV18.decode(frozen)).not.toHaveProperty(
+        "deliveryPlacement",
+      );
     }
   });
 

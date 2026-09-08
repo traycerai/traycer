@@ -937,9 +937,10 @@ export type AutonomousResumeDeliveryPlacement = z.infer<
   typeof autonomousResumeDeliveryPlacementSchema
 >;
 
-// Historical field set for chat.subscribe through 1.8. New fields belong on
-// the live extensions below; do not derive this base from the live schemas.
-const domainAutonomousResumeBlockSchemaPrePlacement = z.object({
+// Checkpoint for chat.subscribe 1.8 (also reused by older wire lines).
+// V18 names in this file refer to that RPC version, not the independent
+// chat-sync storage version. The current schema extends this checkpoint.
+const domainAutonomousResumeBlockSchemaV18 = z.object({
   blockId: z.string(),
   status: z.enum(["streaming", "completed", "errored"]),
   timestamp: z.number(),
@@ -947,18 +948,18 @@ const domainAutonomousResumeBlockSchemaPrePlacement = z.object({
   type: z.literal("autonomous_resume"),
   triggers: z.array(autonomousResumeTriggerSchema),
 });
-const persistedAutonomousResumeBlockSchemaPrePlacement =
-  domainAutonomousResumeBlockSchemaPrePlacement.extend({
+const persistedAutonomousResumeBlockSchemaV18 =
+  domainAutonomousResumeBlockSchemaV18.extend({
     wakeTriggers: z.array(autonomousResumeWakeTriggerSchema).default([]),
   });
-type AutonomousResumeBlockPrePlacement = z.infer<
-  typeof domainAutonomousResumeBlockSchemaPrePlacement
+type AutonomousResumeBlockV18 = z.infer<
+  typeof domainAutonomousResumeBlockSchemaV18
 >;
-type PersistedAutonomousResumeBlockPrePlacement = z.infer<
-  typeof persistedAutonomousResumeBlockSchemaPrePlacement
+type PersistedAutonomousResumeBlockV18 = z.infer<
+  typeof persistedAutonomousResumeBlockSchemaV18
 >;
-type RawStoredAutonomousResumeBlockPrePlacement = Omit<
-  PersistedAutonomousResumeBlockPrePlacement,
+type RawStoredAutonomousResumeBlockV18 = Omit<
+  PersistedAutonomousResumeBlockV18,
   "wakeTriggers"
 > & {
   wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
@@ -967,25 +968,23 @@ type RawStoredAutonomousResumeBlockPrePlacement = Omit<
 // Reinsert the trigger fields after placement to retain the existing JSON
 // Schema property/required order as well as its meaning.
 const persistedAutonomousResumeBlockSchema =
-  persistedAutonomousResumeBlockSchemaPrePlacement
+  persistedAutonomousResumeBlockSchemaV18
     .omit({ triggers: true, wakeTriggers: true })
     .extend({
       deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
-      triggers: persistedAutonomousResumeBlockSchemaPrePlacement.shape.triggers,
-      wakeTriggers:
-        persistedAutonomousResumeBlockSchemaPrePlacement.shape.wakeTriggers,
+      triggers: persistedAutonomousResumeBlockSchemaV18.shape.triggers,
+      wakeTriggers: persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
     });
 export type PersistedAutonomousResumeBlock = z.infer<
   typeof persistedAutonomousResumeBlockSchema
 >;
 
-const domainAutonomousResumeBlockSchema =
-  domainAutonomousResumeBlockSchemaPrePlacement
-    .omit({ triggers: true })
-    .extend({
-      deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
-      triggers: domainAutonomousResumeBlockSchemaPrePlacement.shape.triggers,
-    });
+const domainAutonomousResumeBlockSchema = domainAutonomousResumeBlockSchemaV18
+  .omit({ triggers: true })
+  .extend({
+    deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+    triggers: domainAutonomousResumeBlockSchemaV18.shape.triggers,
+  });
 export type AutonomousResumeBlock = z.infer<
   typeof domainAutonomousResumeBlockSchema
 >;
@@ -1017,16 +1016,16 @@ export function decodeAutonomousResumeBlock(
 ): AutonomousResumeBlock {
   const { deliveryPlacement, ...historical } = stored;
   return {
-    ...decodeAutonomousResumeBlockPrePlacement(historical),
+    ...decodeAutonomousResumeBlockV18(historical),
     deliveryPlacement: deliveryPlacement ?? null,
   };
 }
 
 // Shared historical conversion: newer codecs may add normalization around
-// this function, but must not change how the pre-placement wire is interpreted.
-function decodeAutonomousResumeBlockPrePlacement(
-  stored: RawStoredAutonomousResumeBlockPrePlacement,
-): AutonomousResumeBlockPrePlacement {
+// this function, but must not change how the 1.8 wire is interpreted.
+function decodeAutonomousResumeBlockV18(
+  stored: RawStoredAutonomousResumeBlockV18,
+): AutonomousResumeBlockV18 {
   const { wakeTriggers, ...rest } = stored;
   if (wakeTriggers === undefined || wakeTriggers.length === 0) return rest;
   return {
@@ -1062,14 +1061,14 @@ export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
   return {
-    ...encodeAutonomousResumeBlockPrePlacement(domain),
+    ...encodeAutonomousResumeBlockV18(domain),
     deliveryPlacement: domain.deliveryPlacement,
   };
 }
 
-function encodeAutonomousResumeBlockPrePlacement(
-  domain: AutonomousResumeBlockPrePlacement,
-): PersistedAutonomousResumeBlockPrePlacement {
+function encodeAutonomousResumeBlockV18(
+  domain: AutonomousResumeBlockV18,
+): PersistedAutonomousResumeBlockV18 {
   const triggers = domain.triggers.filter(
     (trigger) => !isWakeupTrigger(trigger),
   );
@@ -1107,14 +1106,14 @@ export const autonomousResumeBlockSchema = z.codec(
 
 // Frozen wire shape for chat.subscribe through 1.8. Keep the field absent
 // on both JSON-schema surfaces; normalization belongs to the live decoder.
-export const autonomousResumeBlockSchemaPrePlacement = z.codec(
-  persistedAutonomousResumeBlockSchemaPrePlacement,
-  domainAutonomousResumeBlockSchemaPrePlacement,
+export const autonomousResumeBlockSchemaV18 = z.codec(
+  persistedAutonomousResumeBlockSchemaV18,
+  domainAutonomousResumeBlockSchemaV18,
   {
-    decode: decodeAutonomousResumeBlockPrePlacement,
+    decode: decodeAutonomousResumeBlockV18,
     encode: (domain) =>
-      encodeAutonomousResumeBlockPrePlacement(
-        domainAutonomousResumeBlockSchemaPrePlacement.parse(domain),
+      encodeAutonomousResumeBlockV18(
+        domainAutonomousResumeBlockSchemaV18.parse(domain),
       ),
   },
 );
@@ -1615,7 +1614,7 @@ export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
   planBlockSchemaPreReasonix,
   errorBlockSchema,
   compactionBlockSchema,
-  autonomousResumeBlockSchemaPrePlacement,
+  autonomousResumeBlockSchemaV18,
   steerBlockSchemaPreReasonix,
   interviewBlockSchemaPreSettlement,
   artifactOperationBlockSchema,
@@ -1643,7 +1642,7 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
   planBlockSchemaPreReasonix,
   errorBlockSchema,
   compactionBlockSchema,
-  autonomousResumeBlockSchemaPrePlacement,
+  autonomousResumeBlockSchemaV18,
   steerBlockSchemaPreReasonix,
   interviewBlockSchemaPreSettlement,
   artifactOperationBlockSchema,
@@ -1664,9 +1663,9 @@ export type PersistedContentBlock =
   | Exclude<ContentBlock, AutonomousResumeBlock>
   | PersistedAutonomousResumeBlock;
 
-/** Notification placement is new on chat.subscribe 1.9. */
-export const contentBlockSchemaPrePlacement = z.discriminatedUnion("type", [
-  autonomousResumeBlockSchemaPrePlacement,
+/** chat.subscribe 1.8 checkpoint; 1.9 adds notification placement. */
+export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
+  autonomousResumeBlockSchemaV18,
   textBlockSchema,
   reasoningBlockSchema,
   toolCallBlockSchema,

@@ -10,7 +10,7 @@ import {
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   messageSchema,
-  messageSchemaPrePlacement,
+  messageSchemaV18,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
   messageSchemaPreReasonix,
@@ -82,7 +82,7 @@ const claudePendingWakeSchemaPreRetryDeadline = z.object({
 
 // Historical field set for chat.subscribe 1.7/1.8. New fields belong on
 // the live extension below, not on this shared historical base.
-export const chatSchemaPrePlacement = z.object({
+export const chatSchemaV18 = z.object({
   parentId: z.string().nullable(),
   id: z.string(),
   userId: z.string(),
@@ -99,7 +99,7 @@ export const chatSchemaPrePlacement = z.object({
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
-  messages: z.array(messageSchemaPrePlacement),
+  messages: z.array(messageSchemaV18),
   events: z.array(chatEventSchema).default([]),
   /**
    * Wall-clock ms when this chat was archived, or `null` while active.
@@ -139,7 +139,7 @@ export const chatSchemaPrePlacement = z.object({
    */
   lastDeliveredRolesDigest: z.string().nullable().default(null),
 });
-export const chatSchema = chatSchemaPrePlacement.extend({
+export const chatSchema = chatSchemaV18.extend({
   messages: z.array(messageSchema),
 });
 export type Chat = z.infer<typeof chatSchema>;

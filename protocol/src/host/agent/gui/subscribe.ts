@@ -31,8 +31,8 @@ import {
   chatRunSettingsSchema,
   chatRunSettingsSchemaPreReasonix,
   chatSchema,
-  chatSchemaPrePlacement,
-  messageSchemaPrePlacement,
+  chatSchemaV18,
+  messageSchemaV18,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
@@ -40,8 +40,7 @@ import {
   interviewDeliveryProjectionSchema,
   userMessagePayloadSchema,
   userMessagePayloadSchemaPreAnnotation,
-  userMessageSchema,
-  userMessageSchemaPrePlacement,
+  userMessageSchemaV18,
   userMessageSchemaPreInReplyTo,
   userMessageSchemaPreReasonix,
   userMessageSchemaV16,
@@ -737,8 +736,8 @@ export type ChatAccess = z.infer<typeof chatAccessSchema>;
 
 // Historical snapshot field set. The live snapshot grows from this base;
 // additions must not flow backwards into chat.subscribe 1.7.
-const chatSnapshotSchemaPrePlacement = z.object({
-  chat: chatSchemaPrePlacement,
+const chatSnapshotSchemaV17 = z.object({
+  chat: chatSchemaV18,
   access: chatAccessSchema,
   queue: chatQueueStateSchema,
   // Authoritative in-progress state (see `chatRunStatusSchema`). The GUI's
@@ -814,7 +813,7 @@ const chatSnapshotSchemaPrePlacement = z.object({
   // be wrong for the whole session against an older host.
   turnInProgress: z.boolean().optional(),
 });
-export const chatSnapshotSchema = chatSnapshotSchemaPrePlacement.extend({
+export const chatSnapshotSchema = chatSnapshotSchemaV17.extend({
   chat: chatSchema,
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
@@ -1032,8 +1031,8 @@ function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
   });
 }
 
-// Fixed pre-placement common frame set, shared by historical and live lines.
-// Add new kinds to the live list, not this historical factory.
+// Common frame membership through chat.subscribe 1.8. Add newer frame kinds
+// to the current list rather than changing this shared historical factory.
 // Order-preserving factory for the common (non-blockDelta) shared frames. The
 // three sender-bearing frames (`messageAccepted`/`queueChanged`/`eventAppended`)
 // are parameterized so the released `chat.subscribe@1.0–1.3` lines can bind the
@@ -1046,7 +1045,7 @@ function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
 // Everything else is byte-identical across live and frozen. Variant order is
 // preserved (the wire-compat differ matches union variants by `kind`, but
 // keeping order avoids churn in any order-sensitive fixture).
-function buildChatSubscribeCommonServerFrameSchemasPrePlacement<
+function buildChatSubscribeCommonServerFrameSchemas<
   MessageSchema extends z.ZodType,
   QueueSchema extends z.ZodType,
   EventSchema extends z.ZodType,
@@ -1177,9 +1176,9 @@ function buildChatSubscribeCommonServerFrameSchemasPrePlacement<
   ];
 }
 
-const chatSubscribeCommonServerFrameSchemas =
-  buildChatSubscribeCommonServerFrameSchemasPrePlacement({
-    message: userMessageSchema,
+const chatSubscribeCommonServerFrameSchemasV18 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchemaV18,
     queue: chatQueueStateSchema,
     event: chatEventSchema,
     action: chatActionSchema,
@@ -1189,7 +1188,7 @@ const chatSubscribeCommonServerFrameSchemas =
 
 // Frozen common frames bound to `chat.subscribe@1.0–1.3` (pre-`inReplyTo`).
 const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
-  buildChatSubscribeCommonServerFrameSchemasPrePlacement({
+  buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreInReplyTo,
     queue: chatQueueStateSchemaPreInReplyTo,
     event: chatEventSchemaPreInReplyTo,
@@ -1203,7 +1202,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
 // queue remains pre-managed-command. Released peers therefore cannot receive
 // either an unknown harness discriminant or a managed-command queue item.
 const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
-  buildChatSubscribeCommonServerFrameSchemasPrePlacement({
+  buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreReasonix,
     queue: chatQueueStateSchemaPreManagedCommand,
     // Frozen on both axes (pre-Reasonix actor, pre-`chat.imported` type):
@@ -1222,23 +1221,14 @@ const chatSubscribeSharedServerFrameSchemasV12 = [
   blockDeltaServerFrameSchema(runtimeEventSchemaV12PreInReplyTo),
 ];
 
-const chatSubscribeSharedServerFrameSchemas = [
-  ...chatSubscribeCommonServerFrameSchemas,
+// The 1.8 common frames are unchanged in 1.9. New frame kinds belong in
+// the current list below; both versions reuse the existing validators.
+const chatSubscribeSharedServerFrameSchemasV18 = [
+  ...chatSubscribeCommonServerFrameSchemasV18,
   blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
-
-// Bind the historical user-message branch as well as the notification-bearing
-// snapshots. Keep additions to the live shared-frame list above.
-const chatSubscribeSharedServerFrameSchemasPrePlacement = [
-  ...buildChatSubscribeCommonServerFrameSchemasPrePlacement({
-    message: userMessageSchemaPrePlacement,
-    queue: chatQueueStateSchema,
-    event: chatEventSchema,
-    action: chatActionSchema,
-    interviewAnswered: interviewAnsweredServerFrameSchema,
-    interviewErrored: interviewErroredServerFrameSchema,
-  }),
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+const chatSubscribeSharedServerFrameSchemas = [
+  ...chatSubscribeSharedServerFrameSchemasV18,
 ];
 
 // Frozen live-shape shared frames for `chat.subscribe@1.3` (workflow-bearing
@@ -2484,7 +2474,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV16 = z.object({
 });
 
 const chatSubscribeCommonServerFrameSchemasV16 =
-  buildChatSubscribeCommonServerFrameSchemasPrePlacement({
+  buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV16,
     queue: chatQueueStateSchemaV16,
     event: chatEventSchemaPreReasonix,
@@ -2601,12 +2591,12 @@ export const chatSubscribeV17 = defineStreamRpcContract({
       kind: z.literal("snapshot"),
       ...textFrameFields,
       ...chatReferenceFields,
-      snapshot: chatSnapshotSchemaPrePlacement,
+      snapshot: chatSnapshotSchemaV17,
     }),
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemasPrePlacement,
+    ...chatSubscribeSharedServerFrameSchemasV18,
   ]),
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
@@ -2665,11 +2655,11 @@ export const chatSubscribeFullSnapshotSchemaVersion =
 // that is not about the transcript) is deliberate and is what keeps the
 // renderer's reducers identical across the two modes.
 
-const chatTranscriptWindowSchemaPrePlacement = z.object({
+const chatTranscriptWindowSchemaV18 = z.object({
   fromOrdinal: z.number().int().nonnegative(),
   rowIds: z.array(z.string()).optional(),
   incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaPrePlacement),
+  messages: z.array(messageSchemaV18),
   events: z.array(chatEventSchema),
   rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
 });
@@ -2691,9 +2681,9 @@ const chatTranscriptWindowSchemaPrePlacement = z.object({
  * for no gain.
  */
 // 1.8's envelope is fixed; 1.9 replaces only the transcript's message schema.
-const chatWindowedSnapshotSchemaPrePlacement = z.object({
+const chatWindowedSnapshotSchemaV18 = z.object({
   /** The chat record WITHOUT `messages` / `events` — see `chatRecordSchema`. */
-  chat: chatSchemaPrePlacement.omit({ messages: true, events: true }),
+  chat: chatSchemaV18.omit({ messages: true, events: true }),
   access: chatAccessSchema,
   queue: chatQueueStateSchema,
   runStatus: chatRunStatusSchema,
@@ -2751,15 +2741,14 @@ const chatWindowedSnapshotSchemaPrePlacement = z.object({
    * The hydrated tail. Always present, because the tail is where a live turn
    * happens and the client must paint it without a round trip.
    */
-  tail: chatTranscriptWindowSchemaPrePlacement,
+  tail: chatTranscriptWindowSchemaV18,
   /** Whole-transcript folds a windowed client cannot compute for itself. */
   derived: chatTranscriptDerivedSchema,
 });
-export const chatWindowedSnapshotSchema =
-  chatWindowedSnapshotSchemaPrePlacement.extend({
-    chat: chatRecordSchema,
-    tail: chatTranscriptWindowSchema,
-  });
+export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV18.extend({
+  chat: chatRecordSchema,
+  tail: chatTranscriptWindowSchema,
+});
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
 
 const chatSubscribeWindowedSnapshotServerFrameSchema = z.object({
@@ -2842,14 +2831,14 @@ const chatSubscribeRangeServerFrameSchema = z.object({
   range: chatRangeResponseSchema,
 });
 
-const chatRangeResponseSchemaPrePlacement = z.object({
+const chatRangeResponseSchemaV18 = z.object({
   // Reuse this unchanged scalar validator, not the live response's field set.
   requestId: chatRangeResponseSchema.shape.requestId,
   epoch: z.number().int().nonnegative(),
   fromOrdinal: z.number().int().nonnegative(),
   rowIds: z.array(z.string()),
   incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaPrePlacement),
+  messages: z.array(messageSchemaV18),
   events: z.array(chatEventSchema),
   rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
   reachedStart: z.boolean(),
@@ -2937,13 +2926,13 @@ export const chatSubscribeV18 = defineStreamRpcContract({
       kind: z.literal("snapshot"),
       ...textFrameFields,
       ...chatReferenceFields,
-      snapshot: chatWindowedSnapshotSchemaPrePlacement,
+      snapshot: chatWindowedSnapshotSchemaV18,
     }),
     z.object({
       kind: z.literal("range"),
       ...textFrameFields,
       ...chatReferenceFields,
-      range: chatRangeResponseSchemaPrePlacement,
+      range: chatRangeResponseSchemaV18,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
     chatSubscribeAccumulatedChangesServerFrameSchema,
@@ -2951,7 +2940,7 @@ export const chatSubscribeV18 = defineStreamRpcContract({
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemasPrePlacement,
+    ...chatSubscribeSharedServerFrameSchemasV18,
   ]),
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
