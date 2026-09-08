@@ -33,8 +33,11 @@ import {
 } from "@/stores/tabs/registry";
 import {
   consumeLegacyTabsSourceActiveSelection,
+  layoutHomeIsActive,
   useTabsStore,
 } from "@/stores/tabs/store";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { HOME_TAB_REF } from "@/stores/tabs/kinds/home";
 import {
   createEmptySplit,
   createLayoutItem,
@@ -170,7 +173,13 @@ export type CoordinatedTabActivationTarget =
       readonly systemKind: "history" | "settings";
       readonly name: string;
       readonly lastPath: string;
-    };
+    }
+  /**
+   * The fixed Home tab. It owns no strip item, so activating it is purely a
+   * selection move: `activeItemId` goes to null and every source-backed active
+   * id is cleared by the transaction's own compatibility projection.
+   */
+  | { readonly kind: "home" };
 
 export interface CoordinatedTabSelection {
   readonly items: ReadonlyArray<StripItem>;
@@ -331,6 +340,9 @@ function sourceHasRef(ref: TabRef): boolean {
       .getState()
       .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
+  // Home owns no source record and no strip item, so it is never a placement
+  // this reconciles - `resolveHomeActivation` is its only entry point.
+  if (ref.kind === "home") return false;
   return currentLayout().systemTabs[ref.kind] !== null;
 }
 
@@ -347,6 +359,24 @@ function canFillSplitRef(ref: TabRef): boolean {
     !isTabStructurallyLocked(ref) &&
     tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible"
   );
+}
+
+/**
+ * `repairLayout`, with a deliberate Home selection carried through it.
+ *
+ * The reducer is pure and reads a null active id as "unset", falling back to
+ * the first item; only the layout being repaired can say whether that null was
+ * an absent selection or Home holding one. Same distinction `committedLayout`
+ * draws at the store's commit boundary, applied to the two places this module
+ * repairs a layout without going through it.
+ */
+function repairedLayoutPreservingHome(
+  layout: PersistedTabStripLayout,
+): PersistedTabStripLayout {
+  const repaired = repairLayout(layout, isRegisteredTabKind);
+  return layoutHomeIsActive(layout)
+    ? { ...repaired, activeItemId: null }
+    : repaired;
 }
 
 function focusedRef(layout: PersistedTabStripLayout): TabRef | null {
@@ -390,6 +420,12 @@ function restoreCoordinatedSelection(
   layout: PersistedTabStripLayout,
   selection: CoordinatedTabSelection,
 ): PersistedTabStripLayout | null {
+  // A rejected navigation that STARTED on Home has to land back on Home. Its
+  // prior selection names no item, so the item lookup below can never recover
+  // it; the selection itself is the whole state to restore.
+  if (selection.activeItemId === null) {
+    return isHomeTabEnabled() ? { ...layout, activeItemId: null } : null;
+  }
   const priorItem = layout.items.find(
     (item) => item.id === selection.activeItemId,
   );
@@ -997,7 +1033,27 @@ export class TabCommandCoordinator {
         return this.resolveMigratedEpicActivation(target, layout);
       case "ref":
         return this.resolveRefActivation(target.ref, layout);
+      case "home":
+        return this.resolveHomeActivation(layout);
     }
+  }
+
+  /**
+   * Home is a selection, not a placement: nothing is created, nothing is
+   * reserved, and the layout keeps every item it had. Refused outright while
+   * the Home tab is off, so a stale intent cannot strand the window on a
+   * selection with no surface behind it.
+   */
+  private resolveHomeActivation(
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation | null {
+    if (!isHomeTabEnabled()) return null;
+    return {
+      ref: HOME_TAB_REF,
+      layout: { ...layout, activeItemId: null },
+      reservedAdditions: [],
+      applySources: () => undefined,
+    };
   }
 
   private resolveSystemActivation(
@@ -1198,6 +1254,7 @@ export class TabCommandCoordinator {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
       });
     }
+    if (ref.kind === "home") return this.resolveHomeActivation(layout);
     if (layout.systemTabs[ref.kind] === null) return null;
     return this.activationForRef(layout, ref, () => undefined);
   }
@@ -1595,9 +1652,8 @@ export class TabCommandCoordinator {
         ref.kind !== "settings" &&
         !sourceKeys.has(tabRefKey(ref)),
     );
-    const repaired = repairLayout(
+    const repaired = repairedLayoutPreservingHome(
       missing.reduce(removeLayoutRef, layout),
-      isRegisteredTabKind,
     );
     const currentKeys = new Set(flattenLayoutRefs(current).map(tabRefKey));
     const reservedAdditions = flattenLayoutRefs(repaired).filter(
@@ -1854,7 +1910,7 @@ export class TabCommandCoordinator {
       return null;
     } catch (error) {
       const primary = transactionError(error);
-      const repaired = repairLayout(currentLayout(), isRegisteredTabKind);
+      const repaired = repairedLayoutPreservingHome(currentLayout());
       const fallbackFailure = this.replaceLayoutWithoutPersistence(repaired);
       this.diagnostics = {
         ...this.diagnostics,

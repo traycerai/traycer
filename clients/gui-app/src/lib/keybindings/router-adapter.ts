@@ -21,9 +21,11 @@ import { historyNavChromeAvailable } from "@/lib/history-navigation/use-history-
 import { LANDING_ROUTE } from "@/lib/routes";
 import {
   existingEpicTabIntent,
+  homeTabIntent,
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
 import {
   navigateNestedFocus,
   navigateNestedFocusToPrimaryEditor,
@@ -51,7 +53,14 @@ export function routerAdapterFor(
 ): KeybindingRouter {
   return {
     getPathname: () => router.state.location.pathname,
+    // "Home" means the Home tab once it exists, and the landing route before
+    // that. Both callers - the Go to Home chord and the last-Epic close - want
+    // whichever of the two this build actually has.
     navigateHome: () => {
+      if (isHomeTabEnabled()) {
+        navigateToTabIntent(router.navigate, homeTabIntent(), undefined);
+        return;
+      }
       void router.navigate(LANDING_ROUTE);
     },
     navigateSettings: () => {

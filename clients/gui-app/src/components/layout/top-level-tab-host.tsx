@@ -1,6 +1,7 @@
 import {
   Suspense,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -12,6 +13,7 @@ import {
   type ReactNode,
 } from "react";
 import { useDroppable } from "@dnd-kit/core";
+import { useNavigate } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import {
@@ -25,6 +27,11 @@ import {
 import { tabSurfaceDescriptor } from "@/stores/tabs/registry";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { homeHeaderTab } from "@/stores/tabs/kinds/home";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import { draftTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
+import { newestLandingDraftId } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   getTabStructuralLockRevision,
@@ -95,6 +102,11 @@ export function TopLevelTabHost() {
     })),
   );
   const headerTabs = useHeaderTabs();
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  // Home holds the selection as `activeItemId === null`, so it is the one
+  // surface whose visibility is not a question about `items`.
+  const homeIsActive = homeTabEnabled && activeItemId === null;
+  useHomeTabDisabledFallback(homeTabEnabled, activeItemId);
   const hostBoundsRef = useRef<HTMLDivElement | null>(null);
   const [previewRatio, setPreviewRatio] = useState<number | null>(null);
   const activeItem = items.find((item) => item.id === activeItemId) ?? null;
@@ -129,6 +141,14 @@ export function TopLevelTabHost() {
     [renderedActiveItem, tabsByRefKey],
   );
   const mountedRefKeys = useMountedSurfaceKeys(availableRefKeys, activeRefKeys);
+  const homeMount = useMemo<MountedTopLevelSurface>(
+    () => ({
+      tab: homeHeaderTab(),
+      placement: homeIsActive ? { kind: "single" } : { kind: "hidden" },
+      activity: { visible: homeIsActive, focused: homeIsActive },
+    }),
+    [homeIsActive],
+  );
   const activateSurface = useTopLevelSurfaceActivator();
   const mounts = mountedRefKeys.flatMap((key) => {
     const tab = tabsByRefKey.get(key);
@@ -174,6 +194,12 @@ export function TopLevelTabHost() {
       data-testid="top-level-tab-host"
     >
       <PhaseMigrationControllerHost />
+      {homeTabEnabled ? (
+        <TopLevelSurfaceMount
+          mount={homeMount}
+          activateSurface={activateSurface}
+        />
+      ) : null}
       {mounts.map((mount) => (
         <TopLevelSurfaceMount
           key={tabRefKey(mount.tab)}
@@ -354,6 +380,53 @@ function TopLevelSurfaceMount(props: {
   );
 }
 
+/**
+ * Turning the Home tab off while Home is the selected surface would leave the
+ * window with `activeItemId === null` and nothing rendering it. Start New is
+ * where that selection goes: it is the other surface reachable with no task
+ * open, and it is what `/` resolved to before Home existed.
+ *
+ * Keyed on the FLIP, not on the flag's value: an app that boots with Home off
+ * and an empty strip is the ordinary pre-Home empty state and must be left
+ * exactly alone.
+ *
+ * IDEMPOTENT, and for the same reason `resolveSteppedLanding`'s draft arm is:
+ * the existing Start New page is named explicitly, so toggling the setting off,
+ * on, and off again re-selects the one draft instead of stacking a fresh tab
+ * per flip. Only a window that has never had one mints.
+ */
+function useHomeTabDisabledFallback(
+  enabled: boolean,
+  activeItemId: string | null,
+): void {
+  const navigate = useNavigate();
+  const previouslyEnabledRef = useRef(enabled);
+  useEffect(() => {
+    const previouslyEnabled = previouslyEnabledRef.current;
+    previouslyEnabledRef.current = enabled;
+    if (enabled || !previouslyEnabled || activeItemId !== null) return;
+    const existingDraftId = newestLandingDraftId();
+    navigateToTabIntent(
+      navigate,
+      existingDraftId === null
+        ? openNewEpicIntent()
+        : draftTabIntent(existingDraftId),
+      undefined,
+    );
+  }, [activeItemId, enabled, navigate]);
+}
+
+/**
+ * The MRU keep-alive set, and the one surface deliberately left out of it.
+ *
+ * Home is mounted unconditionally by `TopLevelTabHost` instead of competing for
+ * a slot here. Two reasons: it reads live cross-task streams (running agents,
+ * pending prompts) whose whole value is being warm the moment the user looks at
+ * them, so an eviction after a few tab switches would defeat the surface's
+ * purpose; and it has no strip ref, so there is no key for it to occupy a slot
+ * with in the first place - `availableRefKeys` derives from `items`, which Home
+ * is never in. It therefore cannot displace a task surface from the cap.
+ */
 function useMountedSurfaceKeys(
   availableRefKeys: ReadonlyArray<string>,
   activeRefKeys: ReadonlyArray<string>,
@@ -504,6 +577,8 @@ function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
       return tabSurfaceDescriptor("history").render(props.tab);
     case "settings":
       return tabSurfaceDescriptor("settings").render(props.tab);
+    case "home":
+      return tabSurfaceDescriptor("home").render(props.tab);
   }
 }
 

@@ -178,11 +178,13 @@ function MobileHeaderTitleSlot(props: MobileHeaderTitleSlotProps): ReactNode {
 type MobileHeaderSurface =
   | { readonly kind: "epic"; readonly tabId: string }
   | { readonly kind: "history" }
+  | { readonly kind: "home" }
   | { readonly kind: "settings"; readonly path: string | null }
   | { readonly kind: "composer" };
 
 const COMPOSER_SURFACE: MobileHeaderSurface = { kind: "composer" };
 const HISTORY_SURFACE: MobileHeaderSurface = { kind: "history" };
+const HOME_SURFACE: MobileHeaderSurface = { kind: "home" };
 
 /**
  * Resolves the presented surface from the tab layout that renders it, NOT from
@@ -198,15 +200,27 @@ const HISTORY_SURFACE: MobileHeaderSurface = { kind: "history" };
  * screen - for an epic, for History and for Settings alike.
  */
 function useMobileHeaderSurface(): MobileHeaderSurface {
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
   return useTabsStore(
     useShallow((state): MobileHeaderSurface => {
       const focused = selectHostFocusedRef(state);
-      if (focused === null) return COMPOSER_SURFACE;
+      // Home is the one presented surface with no focused ref to resolve: it
+      // holds the selection as `activeItemId === null`, which reads here as "no
+      // ref" exactly like an empty layout does.
+      if (focused === null) {
+        return homeTabEnabled && state.activeItemId === null
+          ? HOME_SURFACE
+          : COMPOSER_SURFACE;
+      }
       switch (focused.kind) {
         case "epic":
           return { kind: "epic", tabId: focused.id };
         case "history":
           return HISTORY_SURFACE;
+        // Unreachable: Home is never a strip ref, so `selectHostFocusedRef`
+        // cannot answer with one. Present for the exhaustive switch.
+        case "home":
+          return HOME_SURFACE;
         case "settings":
           return {
             kind: "settings",
@@ -275,6 +289,7 @@ function useMobileHeaderTitle(
   if (surface.kind === "epic") return firstResolvedTitle(liveTitle, tabName);
   if (surface.kind === "settings") return "Settings";
   if (surface.kind === "history") return "History";
+  if (surface.kind === "home") return "Home";
   // Titles name a place you navigated TO. The composer surfaces - landing and
   // drafts - are where you already are, and each one opens with a hero greeting
   // that carries the page, so "Traycer" and "New task" were both labelling the

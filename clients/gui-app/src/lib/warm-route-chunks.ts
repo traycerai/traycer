@@ -43,6 +43,7 @@ export function warmRouteChunks(): void {
     void import("@/providers/draft-surface-provider");
     void import("@/components/epics/history-surface");
     void import("@/components/settings/settings-surface");
+    void import("@/components/home-focus/home-focus-view");
   };
 
   if (typeof window.requestIdleCallback === "function") {

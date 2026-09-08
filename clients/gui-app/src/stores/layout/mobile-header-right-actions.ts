@@ -34,8 +34,11 @@ export function resolveMobileHeaderRightActionsKey(
       return landingTerminalRightActionsKey(focused.id);
     case "epic":
       return epicTabRightActionsKey(focused.id);
+    // Home is never a strip ref, so it cannot be the focused one; it also
+    // presents nothing of its own, which is the same answer either way.
     case "history":
     case "settings":
+    case "home":
       return null;
   }
 }

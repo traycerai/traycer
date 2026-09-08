@@ -286,6 +286,12 @@ export interface SettingsState {
   workspaceFileWordWrap: boolean | null;
   /** App-wide audible cues selected for each notification event type. */
   notificationChimeSounds: NotificationChimeSoundsByEvent;
+  /**
+   * The fixed Home tab and its focus view. Opt-in while the view is still
+   * filling out: with this off the strip, the routes, the chord and the mobile
+   * drawer behave exactly as they did before Home existed.
+   */
+  homeTabEnabled: boolean;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   setComposerMode: (mode: ComposerMode) => void;
@@ -324,6 +330,7 @@ export interface SettingsState {
     eventType: NotificationChimeEventType,
     value: NotificationChimeSound,
   ) => void;
+  setHomeTabEnabled: (value: boolean) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -367,6 +374,7 @@ type PersistedSettingsState = Pick<
   | "diffViewerPreferences"
   | "workspaceFileWordWrap"
   | "notificationChimeSounds"
+  | "homeTabEnabled"
 >;
 
 type SetFn = (
@@ -444,6 +452,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     diffViewerPreferences: state.diffViewerPreferences,
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     notificationChimeSounds: state.notificationChimeSounds,
+    homeTabEnabled: state.homeTabEnabled,
   };
 }
 
@@ -492,6 +501,7 @@ export const useSettingsStore = create<SettingsState>()(
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       workspaceFileWordWrap: null,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+      homeTabEnabled: false,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -608,6 +618,7 @@ export const useSettingsStore = create<SettingsState>()(
               },
         );
       },
+      setHomeTabEnabled: makeSetter(set, "homeTabEnabled"),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -673,11 +684,28 @@ export const useSettingsStore = create<SettingsState>()(
             persisted.notificationChimeSounds,
             persisted.notificationChimeSound,
           ),
+          // Narrowed rather than merged verbatim, for the same reason
+          // `workspaceFileWordWrap` is: this flag gates a tab kind, a route
+          // guard and a chord, so a truthy non-boolean rehydrating as-is would
+          // switch Home on for a user who never asked for it.
+          homeTabEnabled:
+            typeof merged.homeTabEnabled === "boolean"
+              ? merged.homeTabEnabled
+              : false,
         };
       },
     },
   ),
 );
+
+/**
+ * Non-hook read of the Home-tab flag, for the framework-free seams that gate on
+ * it (route guards, the tab command coordinator, the navigation controller and
+ * the keybinding dispatcher). Components read `homeTabEnabled` reactively.
+ */
+export function isHomeTabEnabled(): boolean {
+  return useSettingsStore.getState().homeTabEnabled;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

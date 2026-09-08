@@ -5,6 +5,7 @@ import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
 import { setMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 function ctx(): CommandContext {
   return {
@@ -45,12 +46,14 @@ describe("actionsSource", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useSettingsStore.setState({ homeTabEnabled: false });
   });
 
   afterEach(() => {
     cleanup();
     setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useSettingsStore.setState({ homeTabEnabled: false });
   });
 
   it("emits one item per chord-kind action and skips digit-kind ones", () => {
@@ -116,5 +119,28 @@ describe("actionsSource", () => {
       (row) => row.id === "action:app.settings.open",
     );
     expect(item?.shortcut).toBeNull();
+  });
+
+  // `isPaletteEligible` (actions.source.ts) special-cases app.home.open: its
+  // dispatch handler no-ops while the Home tab is off, so a palette row that
+  // does nothing would be worse than no row. Locks down both sides of that
+  // gate so the row can't reappear stale while the setting is off, or stay
+  // missing once it's on.
+  describe("app.home.open row (gated on the homeTabEnabled setting)", () => {
+    it("omits the row while the Home tab is off", () => {
+      useSettingsStore.setState({ homeTabEnabled: false });
+      const ids = captureItems().map((item) => item.id);
+      expect(ids).not.toContain("action:app.home.open");
+    });
+
+    it("includes the row, with its live shortcut, once the Home tab is on", () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      const item = captureItems().find(
+        (row) => row.id === "action:app.home.open",
+      );
+      expect(item).toBeDefined();
+      expect(item?.label).toBe("Go to Home");
+      expect(item?.shortcut).toBe("mod+shift+h");
+    });
   });
 });

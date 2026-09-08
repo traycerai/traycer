@@ -54,6 +54,7 @@ export const ACTION_IDS = [
   "app.rate-limits.open",
   "app.notifications.open",
   "app.history.open",
+  "app.home.open",
   "app.settings.open",
   "app.settings.section.byDigit",
   "app.palette.open",
@@ -632,6 +633,24 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     secondaryChord: undefined,
     terminalPolicy: "shell",
     secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.home.open": {
+    id: "app.home.open",
+    label: "Go to Home",
+    description:
+      "Show the Home tab: everything running, and everything waiting on you, across every task.",
+    category: "app",
+    kind: "chord",
+    // Free across this map and not a native-menu accelerator on any platform,
+    // in the same mod+shift family as the other global surface openers.
+    defaultChord: "mod+shift+h",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // The mobile app draws Home too - as the first entry in the nav drawer -
+    // so the surface this opens exists there, and the palette gates the row on
+    // the Home setting rather than on the platform.
     desktopOnly: false,
   },
   "app.settings.open": {
