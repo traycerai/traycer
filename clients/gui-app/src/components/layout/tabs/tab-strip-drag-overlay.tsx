@@ -2,7 +2,10 @@ import { type Transition } from "motion/react";
 import * as m from "motion/react-m";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { displayTitle } from "@/lib/display-title";
+import { cn } from "@/lib/utils";
 import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
+import { TabChromeBackground } from "./tab-chrome-background";
+import { TAB_CLASS_BASE } from "./tab-chrome-tokens";
 
 const HEADER_TAB_OVERLAY_TRANSITION = {
   type: "spring",
@@ -42,10 +45,21 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       animate={{ opacity: mergeTargeted ? 0.45 : 1 }}
       transition={HEADER_TAB_OVERLAY_TRANSITION}
       style={props.width === null ? undefined : { width: props.width }}
-      className="pointer-events-none flex h-9 cursor-grabbing select-none items-center gap-2 rounded-t-md border border-b-0 border-border/80 bg-background pl-6 pr-[clamp(0.75rem,10%,1.5rem)] text-ui-sm font-medium text-foreground shadow-lg"
+      className={cn(
+        TAB_CLASS_BASE,
+        "pointer-events-none cursor-grabbing select-none font-medium text-foreground",
+      )}
     >
-      <TabLeadingIcon icon={tab.icon} />
-      <span className="min-w-0 truncate">{displayName}</span>
+      <TabChromeBackground
+        fill="var(--color-background)"
+        borderColor="var(--color-border)"
+        coversBaseline
+        className={undefined}
+      />
+      <span className="relative z-20 flex min-w-0 flex-1 items-center gap-1.5">
+        <TabLeadingIcon icon={tab.icon} />
+        <span className="min-w-0 flex-1 truncate text-left">{displayName}</span>
+      </span>
     </m.div>
   );
 }
