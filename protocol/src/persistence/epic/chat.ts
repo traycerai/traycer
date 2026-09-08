@@ -80,7 +80,9 @@ const claudePendingWakeSchemaPreRetryDeadline = z.object({
  * clone-not-migrate; this id is the clone source.
  */
 
-export const chatSchema = z.object({
+// Historical field set for chat.subscribe 1.7/1.8. New fields belong on
+// the live extension below, not on this shared historical base.
+export const chatSchemaPrePlacement = z.object({
   parentId: z.string().nullable(),
   id: z.string(),
   userId: z.string(),
@@ -97,7 +99,7 @@ export const chatSchema = z.object({
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
-  messages: z.array(messageSchema),
+  messages: z.array(messageSchemaPrePlacement),
   events: z.array(chatEventSchema).default([]),
   /**
    * Wall-clock ms when this chat was archived, or `null` while active.
@@ -136,6 +138,9 @@ export const chatSchema = z.object({
    * this contract.
    */
   lastDeliveredRolesDigest: z.string().nullable().default(null),
+});
+export const chatSchema = chatSchemaPrePlacement.extend({
+  messages: z.array(messageSchema),
 });
 export type Chat = z.infer<typeof chatSchema>;
 
@@ -317,8 +322,4 @@ export const chatSchemaV16 = z.object({
   archivedAt: z.number().nullable().default(null),
   pinnedUserProviderHandle: z.string().nullable().default(null),
   lastDeliveredRolesDigest: z.string().nullable().default(null),
-});
-
-export const chatSchemaPrePlacement = chatSchema.extend({
-  messages: z.array(messageSchemaPrePlacement),
 });
