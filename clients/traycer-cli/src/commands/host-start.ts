@@ -980,21 +980,31 @@ export async function runHostStart(
   // died between its kill and its start, nothing on a CLI-only install ever
   // brought the host back - the E6L wedge, re-created by the exit code.
   //
-  // Read AT MOST ONCE per process, at the site that settles: every consumer
-  // - the refusal in `decideRelaunch`, the child's own 87 - exits the
-  // supervisor with the answer, and a raced read (which sets
-  // `shutdownReason` before the ending can settle, while `shuttingDown` is
-  // still false) is preferred over a fresh one, so the refusal and the exit
-  // code always come from one read (`hasStopIntent`'s contract).
-  // `servedStopIntentAtStartup` is honoured, so a supervisor relaunched to
-  // SERVE a restart does not read the same record as owing another.
-  const resolveShutdownReason = async (): Promise<StopIntentReason | null> =>
-    shutdownReason ??
-    (await deps.hasStopIntent(
+  // ONE read, and the guarantee lives HERE rather than in the exit flow
+  // (CodeRabbit, round 9): a raced read (which sets `shutdownReason` before
+  // the ending can settle, while `shuttingDown` is still false) is preferred,
+  // and otherwise the first call takes the record read and every later call
+  // returns what it found - `null` included, which is why a separate
+  // resolved flag carries it (`??` cannot tell "not read yet" from "read, no
+  // record"). Today every consumer - the refusal in `decideRelaunch`, the
+  // child's own 87 - exits the supervisor with the answer, so a second call
+  // is not reachable; the memo keeps `hasStopIntent`'s contract (the refusal
+  // and the exit code from one read) true by construction rather than by the
+  // exit flow staying that shape. `servedStopIntentAtStartup` is honoured, so
+  // a supervisor relaunched to SERVE a restart does not read the same record
+  // as owing another.
+  let shutdownReasonResolved = false;
+  const resolveShutdownReason = async (): Promise<StopIntentReason | null> => {
+    if (shutdownReason !== null) return shutdownReason;
+    if (shutdownReasonResolved) return null;
+    shutdownReasonResolved = true;
+    shutdownReason = await deps.hasStopIntent(
       opts.environment,
       Date.now(),
       servedStopIntentAtStartup,
-    ));
+    );
+    return shutdownReason;
+  };
   let currentChild: ChildProcess | null = null;
   // Resolves the first time a shutdown signal arrives, so a backoff can be
   // ABANDONED rather than merely re-checked once it finishes.
@@ -2475,8 +2485,9 @@ async function decideRelaunch(input: {
   /**
    * The reason the shutdown was latched with, resolved from the record: the
    * one a raced intent read, or - for a forwarded signal, which reads nothing
-   * when it latches - one memoised read taken now. `null` = no actionable
-   * record stands (a plain teardown).
+   * when it latches - one record read, memoised by the resolver so every
+   * settlement site sees the same answer. `null` = no actionable record
+   * stands (a plain teardown).
    */
   readonly shutdownReason: () => Promise<StopIntentReason | null>;
   readonly servedStopIntentAtStartup: StopIntentIdentity | null;
