@@ -196,6 +196,24 @@ async function closeNetworkClients(): Promise<void> {
   // teardown. `Agent.close()` waits for RUNNING requests and has no timeout of
   // its own, so a stalled response body (a CDN that sends 503 headers and then
   // goes quiet) would park here indefinitely.
+  //
+  // Not on the process-fatal path, and that exception is the whole reason this
+  // step is guarded rather than unconditional. There the exit was
+  // fire-and-forgotten out of an `uncaughtException` / `unhandledRejection`
+  // handler and the interrupted command KEEPS RUNNING by design (see
+  // `markProcessFatal`) - still fetching through this very dispatcher, because
+  // there is only one. undici's `DispatcherBase` rejects every dispatch after a
+  // close with `ClientClosedError`, which `fetch` surfaces as a bare
+  // `TypeError: fetch failed`. So closing here does not tidy up after the
+  // failure, it MANUFACTURES a second one: an in-flight host download burns its
+  // whole retry budget against a registry that was answering fine and reports
+  // `E_REGISTRY_UNAVAILABLE`, and that invented outage is the line the user
+  // reads and reports, not the real fault. Giving the sockets up unclosed costs
+  // nothing here - the process is ending with a failure code either way, and
+  // `DRAIN_WATCHDOG_MS` above already bounds a loop that will not end on its
+  // own. The normal path is unchanged.
+  if (processFatal) return;
+
   const dispatcher = getGlobalDispatcher();
   const closed = await bounded(
     quietly(() => dispatcher.close()),

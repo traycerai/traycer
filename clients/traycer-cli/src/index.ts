@@ -113,7 +113,12 @@ import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
 import { buildWhoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
-import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
+import {
+  createCliLogger,
+  describeErrorOrigin,
+  errorFromUnknown,
+  type ILogger,
+} from "./logger";
 import {
   isRunningFromWellKnownSlot,
   refreshWellKnownSlotForSupervisedStart,
@@ -3473,8 +3478,14 @@ function exitAfterUnhandledFailure(
   const error = errorFromUnknown(cause);
   logger.error(message, { exitCode: 1 }, error);
   Sentry.captureException(cause);
+  // The `[code=...]` token is the machine-readable half and stays exactly as
+  // it was. What follows it is for the human: a fixed sentence told a user
+  // nothing about WHAT failed, so a field report arrived as "it printed
+  // unexpected CLI failure" with no way to tell an out-of-disk from an
+  // assertion inside the HTTP client. One sanitized frame is what separates
+  // them. The full message and stack are in the CLI log, not here.
   writeStderr(
-    `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
+    `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}] (${describeErrorOrigin(error)})\n`,
   );
   // Routed through the same terminator as every other exit. This is the one
   // path where an abrupt teardown could be argued for - the process is already

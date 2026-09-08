@@ -248,6 +248,40 @@ describe("finishAndExit", () => {
       expect(dispatcherClose).toHaveBeenCalledTimes(1);
     });
 
+    it("does not close the global dispatcher when the exit is process-fatal", async () => {
+      // The fatal handlers fire-and-forget `finishAndExit(1)` and the
+      // interrupted command KEEPS RUNNING. It shares this one dispatcher, and
+      // undici answers every dispatch after a close with `ClientClosedError`,
+      // so closing here does not clean up after the failure - it invents a
+      // second one, and the invented one (a registry download that never
+      // reached the network reporting `E_REGISTRY_UNAVAILABLE`) is the line
+      // the user reads.
+      const { finishAndExit, markProcessFatal } = await import("../exit");
+
+      markProcessFatal();
+      await finishAndExit(1);
+
+      expect(dispatcherClose).not.toHaveBeenCalled();
+      expect(dispatcherDestroy).not.toHaveBeenCalled();
+      // Only the dispatcher is skipped. Stdio, Sentry and the recorded code
+      // are unaffected - a fatal exit still has to flush and report.
+      expect(sentryClose).toHaveBeenCalledTimes(1);
+      expect(destroySentryTransportRequests).toHaveBeenCalledTimes(1);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("closes the global dispatcher on a failing exit that is NOT process-fatal", async () => {
+      // The control for the case above, and it deliberately uses the SAME exit
+      // code: the skip has to key on the fatal FLAG, not on "the code is
+      // non-zero". A command that failed normally has finished with its
+      // dispatcher and still wants its keep-alive sockets retired.
+      const { finishAndExit } = await import("../exit");
+
+      await finishAndExit(1);
+
+      expect(dispatcherClose).toHaveBeenCalledTimes(1);
+    });
+
     it("survives a teardown step that rejects", async () => {
       sentryClose.mockRejectedValue(new Error("transport exploded"));
       dispatcherClose.mockRejectedValue(new Error("dispatcher exploded"));
