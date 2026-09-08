@@ -21,10 +21,11 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 
 /**
- * `locateTranscriptRowOrdinal` answers a cross-tile jump for the three target
+ * `locateTranscriptRowOrdinal` answers a cross-tile jump for the four target
  * kinds a windowed client cannot resolve on its own: a `block` (walking the
  * rendered segment tree), a `sent-message` (matching an `agentMessageSend`
- * enrichment), and a `message` naming an ASSISTANT record, whose rows are
+ * enrichment), a `receipt` (matching an `agentMessageReceipt` enrichment),
+ * and a `message` naming an ASSISTANT record, whose rows are
  * turn-keyed and therefore never named by the durable id. The invariant these
  * tests exist to pin is that the ordinal it returns is an index into the SAME
  * enumeration `buildRowSkeleton` publishes - by construction, since both are
@@ -511,6 +512,155 @@ describe("locateTranscriptRowOrdinal: sent-message targets", () => {
           messageText: "nothing matches this",
           timestamp: 60,
         },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("locateTranscriptRowOrdinal: receipt targets", () => {
+  function sendBlock(fields: {
+    readonly blockId: string;
+    readonly timestamp: number;
+    readonly receiptMessageId: string | null;
+    readonly parentBlockId: string | null;
+  }): Record<string, unknown> {
+    return {
+      type: "tool_call",
+      blockId: fields.blockId,
+      status: "completed",
+      timestamp: fields.timestamp,
+      toolName: "SendMessage",
+      error: null,
+      parentBlockId: fields.parentBlockId,
+      agentMessageSend: {
+        receiverAgentId: "agent-recv",
+        message: "ping",
+        responseId: null,
+        expectReply: false,
+      },
+      agentMessageReceipt:
+        fields.receiptMessageId === null
+          ? null
+          : {
+              receiverAgentId: "agent-recv",
+              messageId: fields.receiptMessageId,
+            },
+    };
+  }
+
+  it("resolves to the tool_call block whose agentMessageReceipt names the delivered message", () => {
+    // Two sends of the SAME text to the SAME receiver in different turns:
+    // the text heuristic could not tell them apart without a clock, the
+    // receipt can. The target is the SECOND turn, so a "first send wins"
+    // implementation is observable.
+    const first = assistantMessageWithBlocks({
+      messageId: "m-first",
+      timestamp: 10,
+      turnId: "turn-first",
+      blocks: [
+        sendBlock({
+          blockId: "tc-first",
+          timestamp: 10,
+          receiptMessageId: "recv-msg-1",
+          parentBlockId: null,
+        }),
+      ],
+    });
+    const second = assistantMessageWithBlocks({
+      messageId: "m-second",
+      timestamp: 20,
+      turnId: "turn-second",
+      blocks: [
+        sendBlock({
+          blockId: "tc-second",
+          timestamp: 20,
+          receiptMessageId: "recv-msg-2",
+          parentBlockId: null,
+        }),
+      ],
+    });
+    const input: TranscriptRowProjectionInput = {
+      messages: [first, second],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+    const rows = projectTranscriptRows(input);
+    const skeleton = buildRowSkeleton(input, previewText);
+
+    const ordinal = locateOrThrow(rows, input.messages, {
+      kind: "receipt",
+      messageId: "recv-msg-2",
+    });
+
+    expect(skeleton[ordinal]?.rowId).toBe(assistantRowId("turn-second"));
+  });
+
+  it("finds a subagent-routed send, which is nested only when drawn", () => {
+    const turn = assistantMessageWithBlocks({
+      messageId: "m-sub",
+      timestamp: 30,
+      turnId: "turn-sub",
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "tc-task",
+          status: "completed",
+          timestamp: 30,
+          toolName: "Task",
+          error: null,
+        },
+        sendBlock({
+          blockId: "tc-nested-send",
+          timestamp: 31,
+          receiptMessageId: "recv-msg-nested",
+          parentBlockId: "tc-task",
+        }),
+      ],
+    });
+    const input: TranscriptRowProjectionInput = {
+      messages: [turn],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+    const rows = projectTranscriptRows(input);
+    const skeleton = buildRowSkeleton(input, previewText);
+
+    const ordinal = locateOrThrow(rows, input.messages, {
+      kind: "receipt",
+      messageId: "recv-msg-nested",
+    });
+
+    expect(skeleton[ordinal]?.rowId).toBe(assistantRowId("turn-sub"));
+  });
+
+  it("returns null when no block carries the receipt (a send persisted before receipts existed)", () => {
+    const turn = assistantMessageWithBlocks({
+      messageId: "m-old",
+      timestamp: 40,
+      turnId: "turn-old",
+      blocks: [
+        sendBlock({
+          blockId: "tc-old",
+          timestamp: 40,
+          receiptMessageId: null,
+          parentBlockId: null,
+        }),
+      ],
+    });
+    const input: TranscriptRowProjectionInput = {
+      messages: [turn],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+    const rows = projectTranscriptRows(input);
+
+    expect(
+      locateTranscriptRowOrdinal(
+        { rows, messages: input.messages },
+        { kind: "receipt", messageId: "recv-msg-missing" },
       ),
     ).toBeNull();
   });
