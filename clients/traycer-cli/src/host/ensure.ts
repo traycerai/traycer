@@ -77,6 +77,8 @@ export interface EnsureHostOptions {
   // Skip the busy probe and restart a running host unconditionally (the
   // desktop "Force restart"). Threaded into `provisionHost`.
   readonly force: boolean;
+  /** See `ProvisionHostOptions.acceptStoreFormatLoss`. Forwarded verbatim. */
+  readonly acceptStoreFormatLoss: boolean;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
   // Forwarded to `provisionHost`: runs only once this call has committed to
   // installing, registering or starting a host, never on the no-op fast
@@ -158,6 +160,7 @@ export async function ensureHost(
     registerService: !opts.noServiceRegister,
     lockReason: "host-ensure",
     force: opts.force,
+    acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     onProgress: opts.onProgress,
     beforeMutate: opts.beforeMutate,
   });

@@ -953,6 +953,7 @@ export function HostOverviewPanel(props: {
     // across that swap would apply one machine's decision to another.
     hostId: scope.hostId,
     runningVersion: view.hostVersion,
+    storeFormats: statusQuery.data?.storeFormats ?? null,
     // From the facts as READ, qualified by the record leg's liveness - see
     // `legacyFactsRead`.
     activationDebt:

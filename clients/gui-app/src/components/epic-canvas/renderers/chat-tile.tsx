@@ -124,6 +124,7 @@ import {
   projectQueueWithPendingCancellations,
   type ChatSessionState,
   type ChatSessionStoreHandle,
+  type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
 import type {
   OrdinalRange,
@@ -278,7 +279,10 @@ import {
 } from "./chat-tile-session-state";
 import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
-import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
+import {
+  ChatTileLoading,
+  ChatTilePreSnapshotGate,
+} from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -1221,6 +1225,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
               <ChatSessionMessagesSurface
                 snapshotLoaded={view.snapshotLoaded}
                 fatalClose={view.fatalClose}
+                preSnapshotRetries={view.preSnapshotRetries}
                 onRetry={view.onChatRetry}
                 restoreContext={view.restoreContext}
                 node={view.node}
@@ -1507,6 +1512,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       connectionStatus: s.connectionStatus,
       fatalClose: s.fatalClose,
       snapshotLoaded: s.snapshotLoaded,
+      // Written only while `snapshotLoaded` is false and cleared by the
+      // snapshot, so a loaded tile's renders never move with it.
+      preSnapshotRetries: s.preSnapshotRetries,
       transcriptBaselineEpoch: s.transcriptBaselineEpoch,
       transcriptHydrationSequence: s.transcriptHydrationSequence,
       coldRewrittenMessageIds: s.coldRewrittenMessageIds,
@@ -3073,6 +3081,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     transcriptHydrationSequence: state.transcriptHydrationSequence,
     coldRewrittenMessageIds: state.coldRewrittenMessageIds,
     fatalClose: state.fatalClose,
+    preSnapshotRetries: state.preSnapshotRetries,
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
@@ -3198,6 +3207,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
 interface ChatSessionMessagesSurfaceProps {
   readonly snapshotLoaded: boolean;
   readonly fatalClose: FatalErrorDetails | null;
+  /** Failed pre-snapshot attempts; see `ChatTilePreSnapshotGate`. */
+  readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
   readonly onRetry: () => void;
   readonly restoreContext: ChatRestoreContextValue;
   readonly node: ChatSurfaceNode;
@@ -3273,16 +3284,21 @@ function ContextUsageChipForChat(props: {
 function ChatSessionMessagesSurface(
   props: ChatSessionMessagesSurfaceProps,
 ): ReactNode {
-  // A fatal close before any snapshot (CHAT_INVALID, CHAT_NOT_VISIBLE, …) means
-  // the host will never send one. Surface the reason + a retry instead of an
-  // indefinite spinner.
-  if (!props.snapshotLoaded && props.fatalClose !== null) {
-    return <ChatTileError details={props.fatalClose} onRetry={props.onRetry} />;
+  // Until the real `chat.subscribe` snapshot lands (~0.5s - the host is
+  // local-first) the gate owns this surface: the loading skeleton, the fatal
+  // close the host will never follow with a snapshot, and the streak of failed
+  // attempts a host that never closes fatally would otherwise spin on forever.
+  // The snapshot then renders the user message + real turn state in one
+  // transition; there is no optimistic seed.
+  if (!props.snapshotLoaded) {
+    return (
+      <ChatTilePreSnapshotGate
+        fatalClose={props.fatalClose}
+        retries={props.preSnapshotRetries}
+        onRetry={props.onRetry}
+      />
+    );
   }
-  // Show the loading skeleton until the real `chat.subscribe` snapshot lands
-  // (~0.5s - the host is local-first). The snapshot then renders the user
-  // message + real turn state in one transition; there is no optimistic seed.
-  if (!props.snapshotLoaded) return <ChatTileLoading />;
   // Pick the in-progress "thinking" verb once per turn, seeded on the chat plus
   // the RUNNING TURN's id - NOT the indicator row id, which flips from
   // `assistant:live` to `assistant:<turnId>` mid-turn and would otherwise

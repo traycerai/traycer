@@ -551,6 +551,22 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           // and each guards itself.
           answerProbe("unsupported");
           reportRequiredLaneUnsupported();
+          // And that is ALL this close is. It is an answer to a capability
+          // question, not a transport event about the epic, so it must not
+          // reach the consumers below. Forwarded, it read as a fatal close on
+          // the control cycle: `applyTransportStatus` published
+          // `snapshotFetchError` ("Host update needed", with the method named)
+          // and cleared the write gate. On a cold open the legacy arm's own
+          // root snapshot happened to clear the error a moment later; on a
+          // RE-probe - every reconnect on a relay, whose support is unknown
+          // forever - legacy was already installed, the transition planned no
+          // steps, no snapshot was owed, and the error stayed up over a
+          // healthy `@1` session with the epic read-only until Retry. The two
+          // legitimate responses to this close are the arm install above
+          // (first probe) and the replacement `reportRequiredLaneUnsupported`
+          // requests (a lane going away under an installed arm); both open a
+          // session that reports its own status.
+          return;
         }
         // The CONTROL lane's transitions and not the records lane's, because
         // the policy's reconnect trigger is one fact and two lanes reporting

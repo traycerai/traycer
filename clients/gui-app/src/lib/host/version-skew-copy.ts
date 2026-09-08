@@ -100,6 +100,30 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
   };
 }
 
+/**
+ * Whether the two DTO versions ALONE prove the host is older than this app.
+ *
+ * The question a surface asks when it has no handshake verdict to go on - a
+ * stalled load rather than a refused one - and deliberately not answerable by
+ * calling {@link describeVersionSkew} with `guidance: null`: that function is
+ * a copy chooser for a failure already attributed to a skew, so its last
+ * branch WARNS and falls back to host-update copy for versions it cannot
+ * compare. A surface that is merely wondering must get `false` there, not a
+ * warning and an update offer aimed at a host that may be perfectly current.
+ *
+ * Callers that then want to say something use `describeVersionSkew` for the
+ * words, so one skew is described one way everywhere.
+ */
+export function hostIsBehindClient(input: {
+  readonly hostAppVersion: string | null;
+  readonly clientAppVersion: string | null;
+}): boolean {
+  return (
+    compareAppVersions(input.hostAppVersion, input.clientAppVersion) ===
+    "host-behind"
+  );
+}
+
 export function hostAppVersionFromDirectoryEntry(
   entry: HostDirectoryEntry | null,
 ): string | null {

@@ -71,6 +71,7 @@ import { configShellResetCommand } from "./commands/config-shell-reset";
 import { buildConfigShellRevertArgsCommand } from "./commands/config-shell-revert-args";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
 import { buildHostApplyCommand } from "./commands/host-apply";
+import { buildHostStoreFormatsCommand } from "./commands/host-store-formats";
 import { buildHostPurgeStageCommand } from "./commands/host-purge-stage";
 import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
@@ -199,6 +200,22 @@ function attemptAdoptionOption(): Option {
     "Internal: adopt a parent update segment's live attempt lock instead of acquiring",
   ).hideHelp();
 }
+
+/**
+ * `--accept-store-format-loss` - one help string across `host install`,
+ * `host ensure`, `host apply` and `host update`, so the four commands cannot
+ * describe the same escape hatch differently.
+ *
+ * Visible, not hidden: it is the documented way out of a refusal a user can
+ * legitimately want to override (pinning an old host for compatibility
+ * testing), and an escape hatch nobody can find is a support ticket. Modelled
+ * on the repo's `--accept-data-loss` rule - named after the loss it accepts,
+ * and never implied by a broader flag. The last sentence is load-bearing:
+ * `--force` and `--allow-downgrade` are what people reach for first, and both
+ * deliberately leave the floor standing.
+ */
+const ACCEPT_STORE_FORMAT_LOSS_HELP =
+  "Install the selected host even when a chat store on this machine was written in a newer format than it reads. Those chats are unavailable for as long as that host is installed, and a host that meets a store it cannot open may crash-loop rather than report it. Never implied by --force or --allow-downgrade.";
 
 function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
   const value = opts.attemptAdoption;
@@ -1295,6 +1312,7 @@ function registerHostCommands(program: Command): void {
       )
       // Hidden: the CLI-owned pin gate (Doctor's controller-driven install
       // path), not a user-facing switch - see commands/host-install.ts.
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(
         new Option(
           "--if-idle",
@@ -1361,6 +1379,7 @@ function registerHostCommands(program: Command): void {
           noServiceRegister: opts.serviceRegister === false,
           ifIdle: opts.ifIdle === true,
           force: opts.force === true,
+          acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
         })(ctx);
       };
     },
@@ -1400,6 +1419,7 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Reinstall and restart the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(attemptAdoptionOption()),
     (opts) => {
       const explicitVersion =
@@ -1429,6 +1449,7 @@ function registerHostCommands(program: Command): void {
           // `serviceRegister: false`.
           noServiceRegister: opts.serviceRegister === false,
           force: opts.force === true,
+          acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
         })(ctx);
       };
     },
@@ -1444,6 +1465,7 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Apply even if the host has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(
         new Option(
           "--expected-stage-fingerprint <fingerprint>",
@@ -1484,6 +1506,7 @@ function registerHostCommands(program: Command): void {
     (opts) =>
       buildHostApplyCommand({
         force: opts.force === true,
+        acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
         // commander materialises `--no-service` as `service: false`.
         noService: opts.service === false,
         expectedStageFingerprint:
@@ -1492,6 +1515,15 @@ function registerHostCommands(program: Command): void {
             : null,
         attemptAdoption: attemptAdoptionNonce(opts),
       }),
+  );
+
+  withRunner(
+    host
+      .command("store-formats", { hidden: true })
+      .description(
+        "Internal: report the on-disk chat store format stamp of every epic under this environment's host data root, plus what the installed host reads. Read-only - it never migrates a store.",
+      ),
+    () => buildHostStoreFormatsCommand(),
   );
 
   withRunner(
@@ -1632,6 +1664,7 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Update the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       // Hidden: the host resolver's dispatch-ACK correlation nonce (Ticket 07
       // §5.2.8). A nonce and never a token - it grants nothing, which is why
       // argv is a legitimate carrier. Not a user-facing switch.
@@ -1711,6 +1744,7 @@ function registerHostCommands(program: Command): void {
         return buildHostUpdateCommand({
           force: opts.force === true,
           allowDowngrade: opts.allowDowngrade === true,
+          acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
           // RAW, empty string included. An EXPLICIT empty target is a mistake
           // and not a request for latest - `--version=`, `--release=` and an
           // unset shell variable (`--release "$PIN"`) all arrive as "" - and

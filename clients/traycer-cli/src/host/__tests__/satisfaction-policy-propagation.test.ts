@@ -44,6 +44,7 @@ function makeEnsureOptions(
     allowSelfInvocation: true,
     noServiceRegister: false,
     force: false,
+    acceptStoreFormatLoss: false,
     onProgress: null,
     adoption: undefined,
     beforeMutate: null,

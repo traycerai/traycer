@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   resolveServiceCliInvocationMock: vi.fn(),
   lockHeld: false,
   lockAcquisitions: 0,
+  gateStoreFormatFloorMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -77,6 +78,24 @@ vi.mock("../../installer/install", () => ({
 vi.mock("../../manifest/host-install", () => ({
   readHostInstallRecord: mocks.readHostInstallRecordMock,
 }));
+
+// `gateStoreFormatFloor` (unmocked) resolves `hostHomeDir` from
+// `os.homedir()` at module load and walks it for real - against the
+// operator's actual `~/.traycer/host`, which has real chat stores on it on
+// any machine that has run the CLI. This suite pins lock-scope and branch
+// selection, not the floor's own semantics (that is
+// `store-format-floor.test.ts`, against an explicit temp `hostHome`), so the
+// gate is mocked here; `ungatedStoreFormatFloorEvidence` is kept real (a pure
+// function, nothing to fake).
+vi.mock("../store-format-floor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../store-format-floor")>();
+  return {
+    ...actual,
+    gateStoreFormatFloor: (
+      ...callArgs: Parameters<typeof mocks.gateStoreFormatFloorMock>
+    ) => mocks.gateStoreFormatFloorMock(...callArgs),
+  };
+});
 
 vi.mock("../../service", () => ({
   createServiceController: mocks.createServiceControllerMock,
@@ -183,6 +202,7 @@ function makeOpts(
     lockReason: "test-provision",
     onProgress: null,
     force: false,
+    acceptStoreFormatLoss: false,
     adoption: undefined,
     beforeMutate: null,
     ...overrides,
@@ -239,6 +259,21 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
     },
   };
 }
+
+// Runs before every nested describe's own `beforeEach` (outer-first), so
+// every test gets a clearing default without each describe having to repeat
+// it. `vi.clearAllMocks()` (this file's convention, not `resetAllMocks`)
+// clears call history but keeps a configured implementation, so this default
+// survives between tests; individual tests still override it per-test to
+// exercise a refusal or to assert the exact operands passed.
+beforeEach(() => {
+  mocks.gateStoreFormatFloorMock.mockResolvedValue({
+    clearedVersion: null,
+    publishedStoreFormats: null,
+    acceptStoreFormatLoss: false,
+    site: "host ensure",
+  });
+});
 
 describe("provisionHost - Finding 1: lost fast-path prediction never stages inside cli-lock", () => {
   beforeEach(() => {
@@ -970,5 +1005,67 @@ describe("provisionHost - beforeMutate gate", () => {
     const result = await provisionHost(makeOpts({ beforeMutate: null }));
 
     expect(result.action).toBe("installed");
+  });
+});
+
+// This is the single most important test in the store-format-floor gate-site
+// set: `--force` means "replace a host with work in progress" - it skips the
+// BUSY probe, never the floor. The floor protects data the user cannot get
+// back by waiting, and conflating the two would put the escape hatch behind
+// the exact flag an operator already reaches for when a host misbehaves,
+// which is precisely the desktop's "Force restart" path.
+describe("provisionHost - --force does not bypass the store-format floor", () => {
+  beforeEach(() => {
+    mocks.callOrder = [];
+    mocks.lockHeld = false;
+    mocks.lockAcquisitions = 0;
+    serviceLabelForMock.mockReturnValue({
+      id: "ai.traycer.host",
+      environment: "production",
+    });
+    assertHostNotBusyMock.mockResolvedValue(undefined);
+    discardStagedHostInstallSourceMock.mockResolvedValue(undefined);
+    createServiceInstallLifecycleMock.mockReturnValue(sampleLifecycleHandle());
+    createServiceControllerMock.mockReturnValue({
+      status: async () => ({
+        state: "running" as const,
+        version: "1.8.0",
+        listenUrl: "ws://127.0.0.1:7100/rpc",
+        pid: 4242,
+      }),
+      install: vi.fn(),
+      stop: vi.fn(),
+      start: vi.fn(),
+    });
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("still refuses, and never stages, when the floor rejects even with force: true", async () => {
+    mocks.gateStoreFormatFloorMock.mockRejectedValue(
+      Object.assign(new Error("host ensure: refusing to install host 1.2.0"), {
+        code: "E_HOST_STORE_FORMAT_FLOOR",
+      }),
+    );
+
+    await expect(
+      provisionHost(
+        makeOpts({
+          satisfaction: { kind: "exact", version: "1.2.0" },
+          force: true,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+    expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledTimes(1);
+    expect(mocks.gateStoreFormatFloorMock.mock.calls[0]?.[0]).toMatchObject({
+      targetVersion: "1.2.0",
+      site: "host ensure",
+    });
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
   });
 });

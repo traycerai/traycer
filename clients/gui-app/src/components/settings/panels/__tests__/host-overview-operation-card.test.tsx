@@ -191,6 +191,7 @@ function statusWith(
     busyBreakdown: null,
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
   };
 }
 
@@ -231,6 +232,7 @@ function statusWithBusy(
     busyBreakdown: null,
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
   };
 }
 
@@ -250,6 +252,7 @@ function statusOperationNull(
     busyBreakdown: null,
     updateOperation: null,
     updateTransaction: null,
+    storeFormats: null,
   };
 }
 

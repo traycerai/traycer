@@ -186,6 +186,7 @@ import {
   type InstallPhaseHooks,
 } from "../install";
 import { createBytesOnlyInstallLifecycle } from "../../service/install-lifecycle";
+import { ungatedStoreFormatFloorEvidence } from "../../host/store-format-floor";
 import {
   writeHostInstallRecord,
   type HostInstallRecord,
@@ -367,6 +368,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
         force: false,
         noService: false,
         expectedStageFingerprint: null,
+        acceptStoreFormatLoss: false,
         onProgress: (info) => {
           if (info.stage === "swap") swapProgressSeen.release();
         },
@@ -452,6 +454,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
         force: false,
         noService: false,
         expectedStageFingerprint: null,
+        acceptStoreFormatLoss: false,
         onProgress: () => {},
         expectedStagedVersion: null,
         onWillCommitStaged: null,
@@ -501,6 +504,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
         force: false,
         noService: false,
         expectedStageFingerprint: null,
+        acceptStoreFormatLoss: false,
         onProgress: () => {},
         expectedStagedVersion: null,
         onWillCommitStaged: null,
@@ -555,6 +559,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
         force: false,
         noService: false,
         expectedStageFingerprint: null,
+        acceptStoreFormatLoss: false,
         onProgress: () => {},
         expectedStagedVersion: null,
         onWillCommitStaged: null,
@@ -652,6 +657,7 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
       onCommitted: () => {},
       verifyMutationCapability: async () => undefined,
       onWillSwap: null,
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host apply", false),
     });
 
     await expectReached(commitHookEntered.promise, "beforeSwapCommit");

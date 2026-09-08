@@ -35,6 +35,11 @@ import {
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
+import {
+  gateStoreFormatFloor,
+  readInstalledVersionForFloor,
+  ungatedStoreFormatFloorEvidence,
+} from "../host/store-format-floor";
 
 // `traycer host install [--release <version>]` - registry path (NP-4) /
 // `--from <path>` local-file path (NP-2). There is NO positional argument:
@@ -120,6 +125,14 @@ export interface HostInstallArgs {
   // other kills it). Inert on the bytes-only path (`noServiceRegister`):
   // that path performs no stop for force to escalate.
   readonly force: boolean;
+  /**
+   * Install even when a chat store on this machine is stamped in a format the
+   * target build cannot read, losing access to those chats.
+   *
+   * NOT implied by `--force`, which skips only the busy probe. See
+   * `host/store-format-floor.ts` for why the two are separate flags.
+   */
+  readonly acceptStoreFormatLoss: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
 }
@@ -168,6 +181,36 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             kind: "registry",
             versionRequest: args.versionRequest,
           };
+
+    // The store-format floor, BEFORE staging - this command is the arm the
+    // reported live downgrade took, and it has no verify leg at all
+    // (`admission: "legacy-update-shadow"`, no attempt record), so nothing
+    // downstream of the swap can notice that the landed host cannot open this
+    // machine's chat stores. It reports `ok` over a host that then crash-loops.
+    //
+    // Only an explicit `--release <semver>` can be gated here. `--from` and an
+    // implicit `latest` have no version until the archive is staged or the
+    // manifest resolves, so they carry ungated evidence and are checked by
+    // `commitInstallFromSource` against the version that actually materialised.
+    const storeFormatFloor =
+      args.fromPath === null && args.versionRequest !== "latest"
+        ? await gateStoreFormatFloor({
+            environment: ctx.runtime.environment,
+            hostHome: hostHomeDir(ctx.runtime.environment),
+            targetVersion: args.versionRequest,
+            installedVersion: await readInstalledVersionForFloor(
+              ctx.runtime.environment,
+              ctx.runtime.logger,
+            ),
+            consultRegistry: true,
+            acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+            site: "host install",
+            logger: ctx.runtime.logger,
+          })
+        : ungatedStoreFormatFloorEvidence(
+            "host install",
+            args.acceptStoreFormatLoss,
+          );
 
     // `--no-service-register` must be truly bytes-only: no stop, no
     // register/rewrite, no start - even when a service is already
@@ -249,6 +292,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                   onProgress: (info) => ctx.progress(info),
                   lifecycle,
                   onWillSwap: null,
+                  storeFormatFloor,
                 },
               );
             },

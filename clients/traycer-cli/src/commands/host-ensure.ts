@@ -29,6 +29,12 @@ export interface HostEnsureArgs {
   // Skip the busy check and restart a running host unconditionally
   // (desktop "Force restart" path). Surfaced as `--force`.
   readonly force: boolean;
+  /**
+   * Provision even when a chat store on this machine is stamped in a format
+   * the target build cannot read, losing access to those chats. Never implied
+   * by `--force` - see `host/store-format-floor.ts`.
+   */
+  readonly acceptStoreFormatLoss: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
 }
@@ -71,6 +77,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       allowSelfInvocation: args.allowSelfInvocation,
       noServiceRegister: args.noServiceRegister,
       force: args.force,
+      acceptStoreFormatLoss: args.acceptStoreFormatLoss,
       onProgress: (info) => ctx.progress(info),
       beforeMutate: async () => {
         authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);

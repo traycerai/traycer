@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   resolveHostAuthMock: vi.fn(),
   runDeviceAuthFlowMock: vi.fn(),
   provisionInstalledHostCredentialMock: vi.fn(),
+  gateStoreFormatFloorMock: vi.fn(),
+  readInstalledVersionForFloorMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -109,6 +111,31 @@ vi.mock("../../host/busy-check", () => ({
     return mocks.assertHostNotBusyMock(...callArgs);
   },
 }));
+
+// `gateStoreFormatFloor` (unmocked) resolves `hostHomeDir` from
+// `os.homedir()` at module load and walks it for real - the same hazard as
+// `createServiceController`/`resolveHostAuth` above, against the operator's
+// actual `~/.traycer/host`. This suite is not the floor's suite (that is
+// `store-format-floor.test.ts`, against an explicit temp `hostHome`) - it
+// pins the SITE's wiring, so the gate itself is mocked and `ungatedStore
+// FormatFloorEvidence` is kept real (a pure function, nothing to fake).
+vi.mock("../../host/store-format-floor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/store-format-floor")>();
+  return {
+    ...actual,
+    // NOT pushed into the shared `callOrder` - several existing tests assert
+    // an exact `callOrder` sequence, and this suite's job is the site's
+    // refusal wiring, not this call's position among the others. `.mock.calls`
+    // on the mock itself is enough to prove it ran and with what.
+    gateStoreFormatFloor: (
+      ...callArgs: Parameters<typeof mocks.gateStoreFormatFloorMock>
+    ) => mocks.gateStoreFormatFloorMock(...callArgs),
+    readInstalledVersionForFloor: (
+      ...callArgs: Parameters<typeof mocks.readInstalledVersionForFloorMock>
+    ) => mocks.readInstalledVersionForFloorMock(...callArgs),
+  };
+});
 
 // The real `resolveHostAuth` reads `~/.traycer/cli/credentials` (via
 // `createCliLogger` + `readCredentials`) - genuine filesystem I/O against
@@ -248,6 +275,7 @@ function baseArgs(overrides: Partial<HostInstallArgs>): HostInstallArgs {
     ifIdle: false,
     force: false,
     attemptAdoption: null,
+    acceptStoreFormatLoss: false,
     ...overrides,
   };
 }
@@ -355,6 +383,15 @@ describe("buildHostInstallCommand", () => {
       kind: "active",
       minted: false,
     });
+    // Default: the floor clears. Individual tests override this to prove
+    // the site's refusal wiring.
+    mocks.readInstalledVersionForFloorMock.mockResolvedValue(null);
+    mocks.gateStoreFormatFloorMock.mockResolvedValue({
+      clearedVersion: "2.0.0",
+      publishedStoreFormats: null,
+      acceptStoreFormatLoss: false,
+      site: "host install",
+    });
   });
 
   afterEach(() => {
@@ -404,6 +441,59 @@ describe("buildHostInstallCommand", () => {
       "auth-resolve",
       "credential-provision",
     ]);
+  });
+
+  it("consults the store-format floor with the explicit --release target before staging, and refuses without staging anything when the floor refuses", async () => {
+    mocks.gateStoreFormatFloorMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+        message: "host install: refusing to install host 1.2.0",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+
+    const command = buildHostInstallCommand(
+      baseArgs({ versionRequest: "1.2.0" }),
+    );
+
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    });
+
+    expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledTimes(1);
+    expect(mocks.gateStoreFormatFloorMock.mock.calls[0]?.[0]).toMatchObject({
+      targetVersion: "1.2.0",
+      site: "host install",
+    });
+    // Nothing downstream of the refused gate ran.
+    expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("proceeds to stage when the floor clears, threading --accept-store-format-loss into the gate call", async () => {
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("1.2.0"),
+      previous: sampleRecord("1.0.0"),
+      installGeneration: "id:install-1.2.0",
+    });
+
+    const command = buildHostInstallCommand(
+      baseArgs({ versionRequest: "1.2.0", acceptStoreFormatLoss: true }),
+    );
+    await command(fakeCtx());
+
+    expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledTimes(1);
+    expect(mocks.gateStoreFormatFloorMock.mock.calls[0]?.[0]).toMatchObject({
+      targetVersion: "1.2.0",
+      acceptStoreFormatLoss: true,
+      site: "host install",
+    });
+    expect(mocks.stageHostInstallSourceMock).toHaveBeenCalledTimes(1);
   });
 
   it("--no-service-register skips the service lifecycle entirely: no stop, no register, no start (Finding 4)", async () => {

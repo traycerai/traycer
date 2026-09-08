@@ -49,6 +49,15 @@ export interface HostApplyArgs {
   readonly noService: boolean;
   readonly expectedStageFingerprint: string | null;
   /**
+   * Install the staged bytes even when a chat store on this machine is
+   * stamped in a format they cannot read, losing access to those chats.
+   *
+   * Separate from `--force` on purpose: force skips the BUSY probe, which
+   * protects live work the operator can choose to discard, and this accepts
+   * DATA loss they cannot undo by waiting.
+   */
+  readonly acceptStoreFormatLoss: boolean;
+  /**
    * Nonce naming a parent executor's live-lock proof, when this invocation was
    * spawned from inside a held segment. `null` for every ordinary invocation,
    * which keeps the acquire-or-refuse path exactly as it was.
@@ -62,6 +71,7 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
       environment: ctx.runtime.environment,
       force: args.force,
       noService: args.noService,
+      acceptStoreFormatLoss: args.acceptStoreFormatLoss,
     });
     const adoption = await resolveAttemptAdoptionFromNonce(
       hostHomeDir(ctx.runtime.environment),
@@ -87,6 +97,7 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
           noService: args.noService,
           expectedStageFingerprint: args.expectedStageFingerprint,
           expectedStagedVersion: null,
+          acceptStoreFormatLoss: args.acceptStoreFormatLoss,
           onProgress: (info) => ctx.progress(info),
           onWillCommitStaged: null,
           onWillDisruptHost: null,

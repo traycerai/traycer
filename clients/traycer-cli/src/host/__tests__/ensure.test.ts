@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   createBytesOnlyInstallLifecycleMock: vi.fn(),
   withCliLockMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
+  gateStoreFormatFloorMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -75,6 +76,22 @@ vi.mock("../../installer/bundled-host", () => ({
 vi.mock("../../manifest/host-install", () => ({
   readHostInstallRecord: mocks.readHostInstallRecordMock,
 }));
+
+// `ensureHost` calls the real `provisionHost`, which calls
+// `gateStoreFormatFloor` - unmocked, that resolves `hostHomeDir` from
+// `os.homedir()` at module load and walks it for real. This suite pins the
+// ensure state machine, not the floor's own semantics (that is
+// `store-format-floor.test.ts`, against an explicit temp `hostHome`), so the
+// gate is mocked here.
+vi.mock("../store-format-floor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../store-format-floor")>();
+  return {
+    ...actual,
+    gateStoreFormatFloor: (
+      ...callArgs: Parameters<typeof mocks.gateStoreFormatFloorMock>
+    ) => mocks.gateStoreFormatFloorMock(...callArgs),
+  };
+});
 
 vi.mock("../../service", () => ({
   createServiceController: mocks.createServiceControllerMock,
@@ -151,6 +168,7 @@ function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
     allowSelfInvocation: true,
     noServiceRegister: false,
     force: false,
+    acceptStoreFormatLoss: false,
     onProgress: null,
     adoption: undefined,
     beforeMutate: null,
@@ -268,6 +286,12 @@ beforeEach(() => {
   });
   assertHostNotBusyMock.mockResolvedValue(undefined);
   mocks.currentInstallPlatformMock.mockReturnValue("darwin");
+  mocks.gateStoreFormatFloorMock.mockResolvedValue({
+    clearedVersion: null,
+    publishedStoreFormats: null,
+    acceptStoreFormatLoss: false,
+    site: "host ensure",
+  });
 });
 
 afterEach(() => {

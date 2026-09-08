@@ -42,6 +42,12 @@ import {
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { assertHostNotBusy } from "./busy-check";
+import { hostHomeDir } from "../store/paths";
+import {
+  gateStoreFormatFloor,
+  ungatedStoreFormatFloorEvidence,
+  type StoreFormatFloorEvidence,
+} from "./store-format-floor";
 
 // The single host-provisioning core behind `host ensure` (the desktop's
 // post-auth call and the CLI's convergent provisioning verb). It reads the
@@ -179,6 +185,17 @@ export interface ProvisionHostOptions {
   // unconditionally (the desktop's "Force restart"). Default callers pass
   // false so in-progress chat/terminal/CLI work is protected.
   readonly force: boolean;
+  /**
+   * Provision even when a chat store on this machine is stamped in a format
+   * the target build cannot read, losing access to those chats.
+   *
+   * Deliberately NOT folded into `force`. `--force` is the desktop's "Force
+   * restart" and the CLI's "replace a busy host", and Force restart is what a
+   * user presses when their chats hang - which IS this failure's symptom. A
+   * force that also waived the floor would make the recovery button the thing
+   * that completes the data loss.
+   */
+  readonly acceptStoreFormatLoss: boolean;
   // Invoked once this call has committed to MUTATING the host (install,
   // register or start) and never on the no-op fast path - so a caller can
   // run a step that is only warranted when a host will actually be started.
@@ -281,6 +298,17 @@ export async function provisionHost(
       opts.force ||
       !fast.installed ||
       !(await versionSatisfied(fast, opts.satisfaction, yankLookup));
+    // THE STORE-FORMAT FLOOR, before staging - and reached on the `--force`
+    // branch above like every other. This is the path the desktop's Force
+    // restart drives (`host ensure --force`), and force is exactly what skips
+    // the version check here, so without this gate the recovery button is an
+    // ungated downgrade onto data the bundled build may not be able to read.
+    const storeFormatFloor = predictedInstall
+      ? await gateProvisionStoreFormatFloor(opts, fast)
+      : ungatedStoreFormatFloorEvidence(
+          "host ensure",
+          opts.acceptStoreFormatLoss,
+        );
     const preStaged = predictedInstall
       ? await prepareInstallStage(opts, progress, capability, contenderOptions)
       : null;
@@ -294,7 +322,44 @@ export async function provisionHost(
       yankLookup,
       capability,
       contenderOptions,
+      storeFormatFloor,
     );
+  });
+}
+
+/**
+ * The floor's operands for a provisioning run, derived from the satisfaction
+ * policy - the one place this core states which version it is converging to.
+ *
+ * `presence` (a registry `latest`) names no version, so nothing can be gated
+ * before the manifest resolves and the run carries ungated evidence to the
+ * commit tail. `own-build-minimum` is this CLI's own bundled/`--from` archive:
+ * a build stamp with no manifest entry behind it, so the registry is not
+ * consulted and the fixed table decides. The two registry policies name a real
+ * catalog version and may have published formats.
+ */
+async function gateProvisionStoreFormatFloor(
+  opts: ProvisionHostOptions,
+  fast: ProvisionState,
+): Promise<StoreFormatFloorEvidence> {
+  if (opts.satisfaction.kind === "presence") {
+    return ungatedStoreFormatFloorEvidence(
+      "host ensure",
+      opts.acceptStoreFormatLoss,
+    );
+  }
+  return gateStoreFormatFloor({
+    environment: opts.runtime.environment,
+    hostHome: hostHomeDir(opts.runtime.environment),
+    targetVersion: opts.satisfaction.version,
+    // The fast read's record, not a fresh one: this runs outside the lock,
+    // and the locked re-read below re-derives the install branch anyway. The
+    // commit tail asks again against whatever record is there at the swap.
+    installedVersion: fast.version,
+    consultRegistry: opts.satisfaction.kind !== "own-build-minimum",
+    acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
+    site: "host ensure",
+    logger: opts.runtime.logger,
   });
 }
 
@@ -328,6 +393,7 @@ async function provisionUnderLock(
     readonly pollIntervalMs: number;
     readonly admission: "legacy-update-shadow";
   },
+  storeFormatFloor: StoreFormatFloorEvidence,
 ): Promise<HostProvisionResult> {
   let stagedConsumed = false;
   opts.runtime.logger.debug("Host provisioning entering CLI lock", {
@@ -485,6 +551,7 @@ async function provisionUnderLock(
               preStaged,
               capability,
               contenderOptions,
+              storeFormatFloor,
             ),
           };
         }
@@ -549,6 +616,7 @@ async function provisionUnderLock(
       yankLookup,
       capability,
       contenderOptions,
+      storeFormatFloor,
     );
   } finally {
     // Anything staged in anticipation of the install branch that the lock
@@ -623,6 +691,7 @@ async function commitInstall(
     readonly pollIntervalMs: number;
     readonly admission: "legacy-update-shadow";
   },
+  storeFormatFloor: StoreFormatFloorEvidence,
 ): Promise<HostProvisionResult> {
   // When the host owns service registration, install the bytes without service
   // bootstrap. On Windows, still stop the slot first so stale processes do not
@@ -671,6 +740,7 @@ async function commitInstall(
       onProgress: progress,
       lifecycle,
       onWillSwap: null,
+      storeFormatFloor,
     },
   );
   const post = await readProvisionState(controller, label, opts.runtime);

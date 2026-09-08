@@ -29,6 +29,11 @@ import { preserveLegacyProviders } from "./legacy-providers";
 import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
 import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
+import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
+import {
+  assertStoreFormatFloorAtCommit,
+  type StoreFormatFloorEvidence,
+} from "../host/store-format-floor";
 import {
   invalidateAsideDir,
   legacyMutationVerifier,
@@ -204,6 +209,8 @@ export interface InstallHostOptions {
   // identity that the freshness check can compare. `null` keeps the derived
   // default (registry installs ignore it - they record the registry version).
   readonly recordVersionOverride: string | null;
+  /** See `CommitInstallFromSourceOptions.storeFormatFloor`. Passed straight through. */
+  readonly storeFormatFloor: StoreFormatFloorEvidence;
 }
 
 export interface InstallHostResult {
@@ -251,6 +258,7 @@ export async function installHost(
     lifecycle: opts.lifecycle,
     verifyMutationCapability: legacyMutationVerifier,
     onWillSwap: null,
+    storeFormatFloor: opts.storeFormatFloor,
   });
   logger.info("Host install completed", {
     environment: opts.environment,
@@ -492,6 +500,8 @@ export interface CommitHostInstallSourceOptions {
   readonly verifyMutationCapability: () => Promise<void>;
   /** See `CommitInstallFromSourceOptions.onWillSwap`. */
   readonly onWillSwap: (() => void) | null;
+  /** See `CommitInstallFromSourceOptions.storeFormatFloor`. Passed straight through. */
+  readonly storeFormatFloor: StoreFormatFloorEvidence;
 }
 
 export interface CommitHostInstallSourceResult {
@@ -543,6 +553,7 @@ export async function commitHostInstallSource(
       lifecycle: opts.lifecycle,
       verifyMutationCapability: opts.verifyMutationCapability,
       onWillSwap: opts.onWillSwap,
+      storeFormatFloor: opts.storeFormatFloor,
       onCommitted: () => {
         swapped = true;
       },
@@ -684,6 +695,22 @@ export interface CommitInstallFromSourceOptions {
    * tracking it treats the two as one edge. `null` when no caller is.
    */
   readonly onWillSwap: (() => void) | null;
+  /**
+   * The store-format floor's LAST fail-closed check, run here from the version
+   * actually being committed and the record actually on disk.
+   *
+   * Its home is this function and not only the commands because this is the
+   * single funnel every path that places host bytes goes through - `host
+   * install`, `host ensure`'s provisioning core, every `host update` arm, and
+   * `host apply`. The early gates each refuse before a byte is transferred,
+   * which is where a refusal belongs; this one exists so that coverage is a
+   * property of the code rather than of every caller having remembered.
+   *
+   * It sits BEFORE `lifecycle.beforeSwap()`, so a refusal here still leaves
+   * the running host untouched. `beforeSwapCommit` would have been the wrong
+   * hook by construction: its failure is captured and the swap proceeds.
+   */
+  readonly storeFormatFloor: StoreFormatFloorEvidence;
 }
 
 export interface CommitInstallFromSourceResult {
@@ -716,6 +743,26 @@ export async function commitInstallFromSource(
     opts.lifecycle.setMutationVerifier(verifyMutationCapability);
   }
   const previous = await readHostInstallRecord(opts.environment);
+  // Before the record is materialized and before the lifecycle stops
+  // anything: a refusal here has moved nothing and taken nothing down.
+  await assertStoreFormatFloorAtCommit({
+    environment: opts.environment,
+    hostHome: hostHomeDir(opts.environment),
+    committingVersion: opts.version,
+    // The archive's own answer, read from the tree this commit is about to
+    // swap in. For a build that is not a release - the host a local desktop
+    // install bundles - this is the ONLY thing that can place it, so without
+    // it the floor would stand aside on exactly the convergence a developer
+    // runs daily.
+    declaredStoreFormats: await readExtractedStoreFormats(
+      dirname(opts.executablePath),
+      opts.environment,
+      logger,
+    ),
+    installedVersion: previous?.version ?? null,
+    evidence: opts.storeFormatFloor,
+    logger,
+  });
 
   const finalExecutablePath = opts.executablePath.replace(
     opts.sourceDir,
@@ -1446,6 +1493,71 @@ export async function readExtractedRuntimeVersion(
     // fall through
   }
   return null;
+}
+
+/**
+ * The store formats an ARCHIVE declares about itself, from the same
+ * `version.json` sidecar that carries its runtime version.
+ *
+ * This is the third source of format knowledge, and the only one that can
+ * speak for a build which is not a release. A local desktop install bundles a
+ * host stamped `<target>.<epochMs>.<sha>`: the registry manifest has no entry
+ * for it and the fixed table has no line for it, so before archives declared
+ * their own formats the floor could only stand aside. With a declaration such
+ * a build is judged exactly like a published one.
+ *
+ * NEVER THROWS, and malformed is `null` rather than a refusal - the one place
+ * this module's fail-closed instinct is deliberately relaxed. An undeclared
+ * archive is already a supported state (every archive built before the writer
+ * landed is one), so a typo in the sidecar must land the caller in that same
+ * state and not brick a local convergence. What it must not do is invent a
+ * format, which is why every arm returns `null` instead of a default.
+ *
+ * Validated by the same rule as the manifest's `parseNullableStoreFormats`:
+ * `chatDb` must be a positive safe integer.
+ */
+export async function readExtractedStoreFormats(
+  extractedDir: string,
+  environment: Environment,
+  logger: ILogger,
+): Promise<HostStoreFormats | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(extractedDir, "version.json"), "utf8");
+  } catch {
+    // Absent sidecar: an archive older than the writer, or a hand-rolled tree.
+    // Not worth a log line - it is the ordinary state of every archive built
+    // before this field existed.
+    return null;
+  }
+  let declared: unknown;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") return null;
+    declared = (parsed as Record<string, unknown>).storeFormats;
+  } catch {
+    return null;
+  }
+  if (declared === undefined || declared === null) return null;
+  const chatDb =
+    typeof declared === "object" && !Array.isArray(declared)
+      ? (declared as Record<string, unknown>).chatDb
+      : undefined;
+  if (
+    typeof chatDb !== "number" ||
+    !Number.isSafeInteger(chatDb) ||
+    chatDb <= 0
+  ) {
+    // Present and unusable IS worth saying out loud: the archive tried to
+    // declare something and this build could not read it, which is a packaging
+    // bug rather than an old archive.
+    logger.warn(
+      "Host archive declared an unreadable storeFormats; treating it as undeclared",
+      { environment, extractedDir },
+    );
+    return null;
+  }
+  return { chatDb };
 }
 
 function deriveLocalVersion(sourcePath: string): string {

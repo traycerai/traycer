@@ -1393,6 +1393,13 @@ class StreamSession<
   private slowClientReconnectStreak = 0;
   private lastCloseWasSlowClient = false;
   /**
+   * The last retryable close this session logged, so a host that refuses the
+   * same subscribe on every reconnect (once per backoff, indefinitely) costs
+   * one warn line rather than a log flood. A different refusal is logged
+   * again; a change in the reason is worth a line of its own.
+   */
+  private lastLoggedRetryableClose: string | null = null;
+  /**
    * Bounds the rare "valid-but-rejected" loop: AuthnV3 keeps accepting the
    * bearer (revalidation returns "rotated") yet the host keeps rejecting the
    * open frame with `UNAUTHORIZED` because the token never actually changed
@@ -2384,6 +2391,18 @@ class StreamSession<
       // streak left by a prior genuine `UNAUTHORIZED` episode so a later real
       // rejection starts from a clean slate.
       this.noProgressUnauthorizedReconnects = 0;
+      // The details go no further than this branch: the reconnect below is
+      // reported to consumers as a bare `reconnecting` transition, and a
+      // retryable close is by definition one the client does not act on. That
+      // is right for the transport, but it made a host that retries forever
+      // (a shipped 1.2.0 host refusing a chat store written by 1.3, once per
+      // reconnect) silent everywhere - the tile spun, and no log named the
+      // host's reason. One line here is what support has to go on.
+      const retryableClose = `[stream] host closed the stream as retryable; reconnecting (method=${this.config.method}, code=${details.code}): ${details.reason}`;
+      if (retryableClose !== this.lastLoggedRetryableClose) {
+        this.lastLoggedRetryableClose = retryableClose;
+        console.warn(retryableClose);
+      }
       this.teardownSocket(1000, "host-retryable");
       this.onTransportDrop();
       return;

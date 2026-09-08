@@ -63,6 +63,7 @@ const mocks = vi.hoisted(() => ({
   // a publisher at all, which is exactly what the contender wrapper does
   // and a direct `applyHost` call does not.
   hostStartAdoptionPublisher: null as HostStartAdoptionPublisher | null,
+  assertHostStoreFormatFloorMock: vi.fn(),
 }));
 
 // `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
@@ -88,6 +89,29 @@ vi.mock("../../host/busy-check", () => ({
     }
   },
 }));
+
+// Real by default - the sandboxed `hostHomeDir` above points it at an empty
+// temp tree, which the floor clears unconditionally, so every existing test
+// here runs the genuine gate. Only the one test proving "the gate runs BEFORE
+// the busy check" configures a rejection.
+vi.mock("../../host/store-format-floor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/store-format-floor")>();
+  return {
+    ...actual,
+    assertHostStoreFormatFloor: async (
+      ...callArgs: Parameters<typeof actual.assertHostStoreFormatFloor>
+    ) => {
+      if (mocks.assertHostStoreFormatFloorMock.getMockImplementation()) {
+        return mocks.assertHostStoreFormatFloorMock(...callArgs);
+      }
+      // No override configured: still record the call (for the ordering/
+      // operand assertions) but delegate to the real gate.
+      mocks.assertHostStoreFormatFloorMock(...callArgs);
+      return actual.assertHostStoreFormatFloor(...callArgs);
+    },
+  };
+});
 
 vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: (options: {
@@ -220,7 +244,8 @@ type ApplyDefaultedOptions =
   | "expectedStagedVersion"
   | "onWillCommitStaged"
   | "onWillDisruptHost"
-  | "hooks";
+  | "hooks"
+  | "acceptStoreFormatLoss";
 const applyHost = (
   options: Omit<ApplyOptions, ApplyDefaultedOptions> &
     Partial<Pick<ApplyOptions, ApplyDefaultedOptions>>,
@@ -233,6 +258,7 @@ const applyHost = (
     onWillCommitStaged: options.onWillCommitStaged ?? null,
     onWillDisruptHost: options.onWillDisruptHost ?? null,
     hooks: options.hooks ?? NO_INSTALL_PHASE_HOOKS,
+    acceptStoreFormatLoss: options.acceptStoreFormatLoss ?? false,
   });
 
 const ENV: Environment = "production";
@@ -310,6 +336,7 @@ describe("applyHost", () => {
     mocks.lifecycleStopHooks = [];
     mocks.verifyCapabilityCalls = 0;
     mocks.hostStartAdoptionPublisher = null;
+    mocks.assertHostStoreFormatFloorMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -325,6 +352,38 @@ describe("applyHost", () => {
     });
 
     expect(result).toEqual({ outcome: "no-op", installedVersion: "1.0.0" });
+    expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
+  it("consults the store-format floor BEFORE the busy check, and refuses without ever probing busy when the floor refuses - even with force: true", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("1.2.0", {});
+    mocks.assertHostStoreFormatFloorMock.mockRejectedValue(
+      Object.assign(new Error("host apply: refusing to install host 1.2.0"), {
+        code: "E_HOST_STORE_FORMAT_FLOOR",
+      }),
+    );
+
+    await expect(
+      applyHost({
+        environment: ENV,
+        force: true,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+    expect(mocks.assertHostStoreFormatFloorMock).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+    ).toMatchObject({
+      targetVersion: "1.2.0",
+      site: "host apply",
+    });
+    // `--force` bypasses the busy PROBE, never the floor - "busy-check"
+    // must not appear in the order at all.
+    expect(mocks.callOrder).not.toContain("busy-check");
     expect(mocks.lifecycleCalls).toHaveLength(0);
   });
 
@@ -945,6 +1004,7 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
     mocks.lifecycleStopHooks = [];
     mocks.verifyCapabilityCalls = 0;
     mocks.hostStartAdoptionPublisher = null;
+    mocks.assertHostStoreFormatFloorMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -997,6 +1057,7 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
         onWillCommitStaged,
         onWillDisruptHost: null,
         hooks,
+        acceptStoreFormatLoss: false,
       },
     );
 
@@ -1054,6 +1115,7 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
         onWillCommitStaged,
         onWillDisruptHost: null,
         hooks,
+        acceptStoreFormatLoss: false,
       }),
     ).rejects.toThrow("simulated stop failure");
 

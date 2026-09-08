@@ -41,6 +41,7 @@ import type {
   StagedHostInstallSource,
 } from "../../installer/install";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
+import { ungatedStoreFormatFloorEvidence } from "../store-format-floor";
 
 const roots: string[] = [];
 
@@ -436,6 +437,10 @@ describe("CLI capability-consuming mutation facades", () => {
             onProgress: () => undefined,
             lifecycle: null,
             onWillSwap: null,
+            storeFormatFloor: ungatedStoreFormatFloorEvidence(
+              "host update",
+              false,
+            ),
           }),
         ).rejects.toMatchObject({ code: "E_CLI_LOCK_BUSY" });
         return "must-not-report-ran";

@@ -173,6 +173,17 @@ export interface HostUpdateRunArgs {
   readonly versionRequest: string | null;
   readonly allowDowngrade: boolean;
   readonly force: boolean;
+  /**
+   * `--accept-store-format-loss`: land the target even when a chat store on
+   * this machine is stamped in a format it cannot read.
+   *
+   * Rides beside `allowDowngrade` and never inside it. `--allow-downgrade`
+   * authorizes a move to an older VERSION, which is an ordinary supported
+   * operation; this authorizes the DATA loss a particular such move would
+   * cause, which is not. Nor is it implied by `--force`, which authorizes
+   * interrupting live work.
+   */
+  readonly acceptStoreFormatLoss: boolean;
   readonly ackNonce: string | null;
   /**
    * The bound intent, from ARGV only (Plan D16). Never read from the
@@ -2504,6 +2515,11 @@ async function applyArm(
           environment: args.environment,
           force: args.force,
           noService: false,
+          // The apply arm can land older bytes too: a stage this executor did
+          // not promote may be incomparable to the install, which reconcile's
+          // stale-or-equal rule does not remove and no version test can prove
+          // is an upgrade. `applyHost` gates it before its busy check.
+          acceptStoreFormatLoss: args.acceptStoreFormatLoss,
           expectedStageFingerprint,
           // The ONE version binding (#1752 round 10/14, ticket 08 decision 2).
           // The executor feeds the installer the CLAIM's target - not the
@@ -2945,6 +2961,7 @@ async function downgradeArm(
         environment: args.environment,
         version: target,
         force: args.force,
+        acceptStoreFormatLoss: args.acceptStoreFormatLoss,
         onProgress: input.onProgress,
         // The coarse marker is record-driven here as on the apply arm, so
         // there is nothing to take over at this hook. See the field's doc.

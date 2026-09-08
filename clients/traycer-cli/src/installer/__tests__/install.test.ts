@@ -63,6 +63,7 @@ const mocks = vi.hoisted(() => ({
   // pin sets it; every other test in this file stages from a local
   // directory and never reaches the registry at all.
   registryClient: null as RegistryClient | null,
+  assertStoreFormatFloorAtCommitMock: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -170,6 +171,27 @@ vi.mock("../../store/paths", async () => {
   };
 });
 
+// Real by default - `hostHomeDir` above is sandboxed to an empty temp tree,
+// which the commit-tail floor clears unconditionally, so every existing
+// test here runs the genuine check. Only the one test proving "the floor
+// runs BEFORE `lifecycle.beforeSwap()`" configures a rejection.
+vi.mock("../../host/store-format-floor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/store-format-floor")>();
+  return {
+    ...actual,
+    assertStoreFormatFloorAtCommit: async (
+      ...callArgs: Parameters<typeof actual.assertStoreFormatFloorAtCommit>
+    ) => {
+      if (mocks.assertStoreFormatFloorAtCommitMock.getMockImplementation()) {
+        return mocks.assertStoreFormatFloorAtCommitMock(...callArgs);
+      }
+      mocks.assertStoreFormatFloorAtCommitMock(...callArgs);
+      return actual.assertStoreFormatFloorAtCommit(...callArgs);
+    },
+  };
+});
+
 import {
   commitHostInstallSource as commitHostInstallSourceWithAuthority,
   commitInstallFromSource as commitInstallFromSourceWithAuthority,
@@ -194,6 +216,7 @@ import type {
   HostVersionsManifest,
   RegistryClient,
 } from "../../registry";
+import { ungatedStoreFormatFloorEvidence } from "../../host/store-format-floor";
 import {
   expectReached,
   expectStillGated,
@@ -291,6 +314,7 @@ function fakeRegistryClient(opts: FakeRegistryOptions): RegistryClient {
     deprecationReason: null,
     requiredCliVersion: null,
     minimumEpoch: null,
+    storeFormats: null,
     platforms: { [platformKey]: asset },
   };
   const manifest: HostVersionsManifest = {
@@ -345,6 +369,7 @@ describe("sweepOldTrash", () => {
     mocks.forceRenameFailureForDestination = null;
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
+    mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -393,6 +418,7 @@ describe("installHost", () => {
     mocks.forceRenameFailureForDestination = null;
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
+    mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -406,6 +432,7 @@ describe("installHost", () => {
       onProgress: () => {},
       lifecycle: null,
       recordVersionOverride: "1.0.0",
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(record.installId).not.toBeNull();
@@ -423,6 +450,7 @@ describe("installHost", () => {
       onProgress: () => {},
       lifecycle: null,
       recordVersionOverride: "1.0.0",
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     const secondSource = join(sandboxRoot, "source-2");
@@ -433,6 +461,7 @@ describe("installHost", () => {
       onProgress: () => {},
       lifecycle: null,
       recordVersionOverride: "2.0.0",
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(second.previous?.version).toBe("1.0.0");
@@ -463,6 +492,7 @@ describe("commitInstallFromSource", () => {
     mocks.forceRenameFailureForDestination = null;
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
+    mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -495,6 +525,10 @@ describe("commitInstallFromSource", () => {
         lifecycle: null,
         onWillSwap: null,
         onCommitted: () => {},
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       }),
     ).rejects.toThrow();
 
@@ -507,6 +541,52 @@ describe("commitInstallFromSource", () => {
     >;
     expect(parsed.version).toBe("1.0.0");
     expect(typeof parsed.installId).toBe("string");
+  });
+
+  it("the late fallback: a refused store-format floor at the commit tail runs BEFORE lifecycle.beforeSwap, and nothing is stopped or swapped", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    mocks.assertStoreFormatFloorAtCommitMock.mockRejectedValue(
+      Object.assign(new Error("host install: refusing to install host 1.0.0"), {
+        code: "E_HOST_STORE_FORMAT_FLOOR",
+      }),
+    );
+    let beforeSwapCalled = false;
+
+    await expect(
+      commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: "1.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {
+            beforeSwapCalled = true;
+          },
+          beforeSwapCommit: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: null,
+        },
+        onWillSwap: null,
+        onCommitted: () => {},
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+    expect(mocks.assertStoreFormatFloorAtCommitMock).toHaveBeenCalledTimes(1);
+    expect(beforeSwapCalled).toBe(false);
+    expect(existsSync(installDirFor(ENV))).toBe(false);
   });
 
   it("invokes onCommitted only after the rename succeeds, never on a failed swap", async () => {
@@ -534,6 +614,10 @@ describe("commitInstallFromSource", () => {
         onCommitted: () => {
           committed = true;
         },
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       }),
     ).rejects.toThrow();
 
@@ -574,6 +658,7 @@ describe("commitInstallFromSource", () => {
         swapLockRecovery: null,
       },
       onCommitted: () => {},
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(order).toEqual(["beforeSwap", "beforeSwapCommit", "afterSwap"]);
@@ -613,6 +698,10 @@ describe("commitInstallFromSource", () => {
           swapLockRecovery: null,
         },
         onCommitted: () => {},
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       }),
     ).rejects.toThrow("host busy");
 
@@ -649,6 +738,7 @@ describe("commitInstallFromSource", () => {
       onProgress: () => {},
       lifecycle: null,
       onCommitted: () => {},
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(record.version).toBe("1.0.0");
@@ -871,6 +961,7 @@ describe("atomicSwap - swap-lock recovery", () => {
       onProgress: () => {},
       lifecycle: null,
       recordVersionOverride: version,
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
   }
 
@@ -900,6 +991,7 @@ describe("atomicSwap - swap-lock recovery", () => {
         },
       },
       recordVersionOverride: "2.0.0",
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(record.version).toBe("2.0.0");
@@ -939,6 +1031,10 @@ describe("atomicSwap - swap-lock recovery", () => {
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -991,6 +1087,10 @@ describe("atomicSwap - swap-lock recovery", () => {
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -1056,6 +1156,10 @@ describe("atomicSwap - swap-lock recovery", () => {
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -1114,6 +1218,10 @@ describe("atomicSwap - swap-lock recovery", () => {
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -1159,6 +1267,10 @@ describe("atomicSwap - swap-lock recovery", () => {
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -1197,6 +1309,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
     mocks.forceRenameFailureForDestination = null;
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
+    mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -1275,6 +1388,10 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       }),
     ).rejects.toThrow();
 
@@ -1298,6 +1415,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
       onProgress: () => {},
       lifecycle: null,
       onWillSwap: null,
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(result.record.version).toBe("2.0.0");
@@ -1321,6 +1439,10 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       }),
     ).rejects.toMatchObject({ code: "E_HOST_INSTALL_RECORD_INVALID" });
 

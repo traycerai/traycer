@@ -18,7 +18,7 @@ import {
   type HostUpdateCheckRequestV11,
   type HostUpdateCheckResponseV11,
   type HostUpdateInstallRequest,
-  type HostUpdateInstallResponseV11,
+  type HostUpdateInstallResponseV13,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { appLogger } from "@/lib/logger";
@@ -131,7 +131,7 @@ function isFallbackMethod(
  */
 export function mapInstallVersionOutcome(
   outcome: MutationOutcome<InstallVersionOk>,
-): HostUpdateInstallResponseV11 {
+): HostUpdateInstallResponseV13 {
   switch (outcome.kind) {
     case "ok":
       // `attemptId: null`, and structurally so rather than by omission: this
@@ -180,7 +180,7 @@ export function mapInstallVersionOutcome(
         kind: outcome.kind,
         message: outcome.message,
       });
-      return { outcome: "cli-failed" };
+      return { outcome: "cli-failed", reason: null, storeFloor: null };
   }
 }
 
@@ -239,7 +239,7 @@ export interface MaintenanceFallbackServeMap {
   ) => Promise<HostUpdateCheckResponseV11>;
   readonly "host.update.install": (
     params: HostUpdateInstallRequest,
-  ) => Promise<HostUpdateInstallResponseV11>;
+  ) => Promise<HostUpdateInstallResponseV13>;
   readonly "host.doctor": () => Promise<HostDoctorResponse>;
   readonly "host.getInstallationInfo": () => Promise<HostGetInstallationInfoResponse>;
 }
@@ -348,7 +348,7 @@ function serveFallbackRequest<Method extends keyof HostRpcRegistry & string>(
   const request: unknown = params;
   const answer = ((): Promise<
     | HostUpdateCheckResponseV11
-    | HostUpdateInstallResponseV11
+    | HostUpdateInstallResponseV13
     | HostDoctorResponse
     | HostGetInstallationInfoResponse
   > => {

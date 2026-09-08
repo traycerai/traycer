@@ -156,6 +156,8 @@ describe("mapInstallVersionOutcome", () => {
   ])("maps $kind to cli-failed", (outcome) => {
     expect(mapInstallVersionOutcome(outcome)).toEqual({
       outcome: "cli-failed",
+      reason: null,
+      storeFloor: null,
     });
   });
 });
@@ -360,7 +362,11 @@ describe("buildMaintenanceFallbackServeMap", () => {
     const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: false }),
-    ).resolves.toEqual({ outcome: "cli-failed" });
+    ).resolves.toEqual({
+      outcome: "cli-failed",
+      reason: null,
+      storeFloor: null,
+    });
     expect(management.getHostControllerStatus).not.toHaveBeenCalled();
     expect(management.installVersion).not.toHaveBeenCalled();
   });
@@ -532,6 +538,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
             // which is exactly what host.status@1.2-and-older peers send.
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
           };
         },
       },
@@ -683,6 +690,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
     await client.request("host.update.install", {
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
     });
 
     expect(rpcCalls).toEqual([
@@ -712,6 +720,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
     const install = await client.request("host.update.install", {
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
     });
 
     expect(rpcCalls).toEqual([]);

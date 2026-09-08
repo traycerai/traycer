@@ -86,6 +86,7 @@ function runApply(outcome: ApplyHostOutcome): Promise<{
     noService: false,
     expectedStageFingerprint: null,
     attemptAdoption: null,
+    acceptStoreFormatLoss: false,
   })(fakeCtx());
 }
 

@@ -1,4 +1,5 @@
 import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
+import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
   HostPlatformAsset,
@@ -214,6 +215,10 @@ function parseVersionEntry(
   // throws: this parser is the boundary, and silently mapping "not a number" to
   // "no floor" is the one reading that fails permissively.
   const minimumEpoch = parseNullableEpoch(obj.minimumEpoch, sourceLabel);
+  // Same additive-nullable rule as `minimumEpoch`, for the same reason: every
+  // entry published before 1.3.0 omits the field, and the downgrade floor
+  // covers those from its fixed table. Present-but-malformed still throws.
+  const storeFormats = parseNullableStoreFormats(obj.storeFormats, sourceLabel);
   if (
     obj.platforms === null ||
     typeof obj.platforms !== "object" ||
@@ -243,8 +248,40 @@ function parseVersionEntry(
     deprecationReason,
     requiredCliVersion,
     minimumEpoch,
+    storeFormats,
     platforms,
   };
+}
+
+/**
+ * A nullable, absent-tolerant `{ chatDb }` object. `undefined` and `null` both
+ * mean the entry was published before the field existed; anything else must
+ * be an object whose `chatDb` is a positive safe integer.
+ */
+function parseNullableStoreFormats(
+  raw: unknown,
+  sourceLabel: string,
+): HostStoreFormats | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw manifestInvalid(
+      sourceLabel,
+      "'storeFormats' must be an object, null, or absent",
+    );
+  }
+  const obj = raw as Record<string, unknown>;
+  const chatDb = obj.chatDb;
+  if (
+    typeof chatDb !== "number" ||
+    !Number.isSafeInteger(chatDb) ||
+    chatDb <= 0
+  ) {
+    throw manifestInvalid(
+      sourceLabel,
+      "'storeFormats.chatDb' must be a positive integer",
+    );
+  }
+  return { chatDb };
 }
 
 /**

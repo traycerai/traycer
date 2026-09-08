@@ -675,6 +675,7 @@ function fakeRegistry(): RegistryClient {
     deprecationReason: null,
     requiredCliVersion: null,
     minimumEpoch: null,
+    storeFormats: null,
     platforms: {
       "darwin-arm64": {
         available: true,
@@ -733,6 +734,7 @@ interface RunOverrides {
   readonly versionRequest?: string | null;
   readonly allowDowngrade?: boolean;
   readonly force?: boolean;
+  readonly acceptStoreFormatLoss?: boolean;
   readonly ackNonce?: string | null;
   /**
    * RAW, exactly as argv delivers it - `HostUpdateRunArgs.intent` is a
@@ -756,6 +758,7 @@ function runArgs(overrides: RunOverrides): HostUpdateRunArgs {
     versionRequest: overrides.versionRequest ?? null,
     allowDowngrade: overrides.allowDowngrade ?? false,
     force: overrides.force ?? false,
+    acceptStoreFormatLoss: overrides.acceptStoreFormatLoss ?? false,
     ackNonce: overrides.ackNonce ?? null,
     intent: overrides.intent ?? null,
     expectAttempt: overrides.expectAttempt ?? null,
@@ -2598,6 +2601,7 @@ describe("runHostUpdate - the dispatch ACK and the trigger", () => {
       buildHostUpdateCommand({
         force: false,
         allowDowngrade: false,
+        acceptStoreFormatLoss: false,
         versionRequest: null,
         ackNonce: "nonce-abcdefgh",
         intent: "activate",
@@ -3028,6 +3032,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       ackNonce: null,
       intent: null,
@@ -3051,6 +3056,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       ackNonce: null,
       intent: null,
@@ -3091,6 +3097,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       ackNonce: null,
       intent: null,
@@ -3120,6 +3127,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: "2.0.0",
       ackNonce: null,
       intent: "activate",
@@ -5864,6 +5872,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       ackNonce: null,
       intent: null,
@@ -7311,6 +7320,7 @@ describe("fixup: cold review B", () => {
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: "2.0.0",
       ackNonce: null,
       intent: null,
@@ -7485,6 +7495,7 @@ describe("fixup: cold review B", () => {
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: "2.0.0",
       ackNonce: null,
       intent: "continue",
@@ -7521,6 +7532,7 @@ describe("fixup: cold review B", () => {
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: "2.0.0",
       ackNonce: null,
       intent: null,
