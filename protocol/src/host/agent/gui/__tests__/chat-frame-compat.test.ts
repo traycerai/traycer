@@ -14,7 +14,7 @@ import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content
 import {
   INTERVIEW_SETTLEMENT_METADATA_KEY,
   normalizeV16BrowserPayloadsInFrame,
-  normalizeV16InterviewDeltaFrame,
+  normalizeV16InterviewFieldsInFrame,
   normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   projectChatServerFrameForVersion,
@@ -705,7 +705,7 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
  * matter: those frames get no frozen parse, so `normalizeV16BrowserPayloadsInFrame`
  * is what neutralizes them, pinned in `chat-stream-client.test.ts`.
  */
-describe("normalizeV16InterviewDeltaFrame", () => {
+describe("normalizeV16InterviewFieldsInFrame", () => {
   function requestedDelta(
     allowsCustomAnswer: unknown,
   ): Record<string, unknown> {
@@ -750,16 +750,16 @@ describe("normalizeV16InterviewDeltaFrame", () => {
     // Neutralizing to `false` would let the smuggled byte WIN - it would
     // withdraw the free-text channel, which IS the harm.
     //
-    // FALSIFICATION: drop the `normalizeV16InterviewDeltaFrame` call from
+    // FALSIFICATION: drop the `normalizeV16InterviewFieldsInFrame` call from
     // `chat-stream-client` and `false` survives to the renderer.
     const frame = requestedDelta(false);
-    normalizeV16InterviewDeltaFrame(frame);
+    normalizeV16InterviewFieldsInFrame(frame);
     expect(questionOf(frame).allowsCustomAnswer).toBeNull();
 
     // A smuggled `true` is equally off-line and equally neutralized: the pass
     // restores the line's own behaviour, it does not pick the friendlier value.
     const permissive = requestedDelta(true);
-    normalizeV16InterviewDeltaFrame(permissive);
+    normalizeV16InterviewFieldsInFrame(permissive);
     expect(questionOf(permissive).allowsCustomAnswer).toBeNull();
 
     // Only the off-line key moves.
@@ -790,12 +790,68 @@ describe("normalizeV16InterviewDeltaFrame", () => {
       },
     };
 
-    normalizeV16InterviewDeltaFrame(frame);
+    normalizeV16InterviewFieldsInFrame(frame);
 
     const answers = recordAnswers(asRecord(frame.event, "event").answers);
     expect(answers[0].selection).toBeNull();
     // The answer the provider actually receives is untouched.
     expect(answers[0].values).toEqual(["date-fns"]);
+  });
+
+  it("neutralizes a snapshot that matched NEITHER fast path", () => {
+    // `1.0`-`1.5`. Both snapshot fast paths are exact-version checks - one for
+    // the current full-snapshot line, one for `1.6` - so those minors match
+    // neither and their snapshots reach the generic live parse with every
+    // interview block intact. The `1.6` message pass is wired only to the
+    // branch they skip, so before this arm nothing neutralized them at all.
+    //
+    // FALSIFICATION: drop the `snapshot` case and the smuggled `false` reaches
+    // the renderer for every pre-`1.6` peer, while the `blockDelta` arms above
+    // stay green - which is exactly why this needed its own arm.
+    const block = legacyInterviewBlock("iv-old-line");
+    const seeded = block.questions;
+    if (!Array.isArray(seeded)) throw new Error("expected questions array");
+    const base = asRecord(seeded[0], "question");
+    block.questions = [{ ...base, allowsCustomAnswer: false }];
+    const frame = {
+      kind: "snapshot",
+      snapshot: {
+        chat: { messages: [assistantMessage("assistant-1", [block])] },
+      },
+    };
+
+    normalizeV16InterviewFieldsInFrame(frame);
+
+    const normalized = block.questions;
+    if (!Array.isArray(normalized)) throw new Error("expected questions array");
+    expect(asRecord(normalized[0], "q").allowsCustomAnswer).toBeNull();
+    // The settlement siblings ride along, which is the point of delegating to
+    // the message pass rather than writing a second, narrower rule here.
+    expect(block.settlement).toBeNull();
+  });
+
+  it("neutralizes an ASSISTANT message smuggled onto messageAccepted", () => {
+    // `messageAccepted.message` is the live message union, so an assistant
+    // message carrying interview blocks is well-formed there even though the
+    // frame means "your send was accepted" - and the browser pass beside this
+    // one returns early on anything that is not a user message.
+    //
+    // FALSIFICATION: drop the `messageAccepted` case and this reddens while the
+    // snapshot arm above stays green.
+    const block = legacyInterviewBlock("iv-accepted");
+    const seeded = block.questions;
+    if (!Array.isArray(seeded)) throw new Error("expected questions array");
+    const base = asRecord(seeded[0], "question");
+    block.questions = [{ ...base, allowsCustomAnswer: false }];
+
+    normalizeV16InterviewFieldsInFrame({
+      kind: "messageAccepted",
+      message: assistantMessage("assistant-1", [block]),
+    });
+
+    const normalized = block.questions;
+    if (!Array.isArray(normalized)) throw new Error("expected questions array");
+    expect(asRecord(normalized[0], "q").allowsCustomAnswer).toBeNull();
   });
 
   it("leaves every other frame kind, event type and malformed shape alone", () => {
@@ -806,12 +862,12 @@ describe("normalizeV16InterviewDeltaFrame", () => {
       event: { type: "text.delta", blockId: "b-1", text: "hi" },
     };
     const before = textDelta.event;
-    normalizeV16InterviewDeltaFrame(textDelta);
+    normalizeV16InterviewFieldsInFrame(textDelta);
     expect(textDelta.event).toBe(before);
 
     const otherKind = { kind: "queueChanged", queue: { items: [] } };
     expect(() => {
-      normalizeV16InterviewDeltaFrame(otherKind);
+      normalizeV16InterviewFieldsInFrame(otherKind);
     }).not.toThrow();
 
     // A non-array `questions` is a shape the live union would have rejected;
@@ -819,10 +875,10 @@ describe("normalizeV16InterviewDeltaFrame", () => {
     const malformed = requestedDelta(false);
     asRecord(malformed.event, "event").questions = "nope";
     expect(() => {
-      normalizeV16InterviewDeltaFrame(malformed);
+      normalizeV16InterviewFieldsInFrame(malformed);
     }).not.toThrow();
     expect(() => {
-      normalizeV16InterviewDeltaFrame(null);
+      normalizeV16InterviewFieldsInFrame(null);
     }).not.toThrow();
   });
 });

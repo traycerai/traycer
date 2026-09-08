@@ -273,32 +273,58 @@ export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
 }
 
 /**
- * Neutralize the `1.7`-only interview fields on a `blockDelta` that arrived on
- * a pre-`1.7` line.
+ * Neutralize the `1.7`-only interview fields on a frame that arrived on a
+ * pre-`1.7` line and was parsed with the LIVE union.
  *
  * The third receive door, and the one the two passes above do not reach.
- * `messageAccepted` and `queueChanged` carry USER-authored payloads; an
- * interview block belongs to an assistant message, so no interview field can
- * arrive through them. Snapshots are covered by the pass above. Interview
- * deltas take neither route: they are parsed with the LIVE union whatever line
- * was negotiated, so a mislabeled, stale or hostile "`1.6`" peer's `1.7`
- * interview fields arrive VALIDATED - the same smuggling
- * `normalizeV16BrowserPayloadsInFrame` refuses for browser payloads, through
- * the door beside it.
+ * `normalizeV16BrowserPayloadsInFrame` owns the USER-authored browser payloads;
+ * `normalizeV16MessagesInShallowSnapshot` is wired only to the exact-`1.6`
+ * snapshot fast path. Everything else on a pre-`1.7` line falls through to the
+ * live parse, so a mislabeled, stale or hostile peer's `1.7` interview fields
+ * arrive VALIDATED - the same smuggling the two passes above refuse, through
+ * the doors beside them.
  *
- * BOTH carriers, deliberately. Questions travel on `interview.requested` and
- * answers on `interview.resolved` - two event types on one frame kind - so a
- * pass written for either one alone silently leaves the other open. That is the
- * exact defect the outbound projector's `blockDelta` case was fixed for, and
- * this is its inbound mirror.
+ * EVERY carrier of an interview, because a pass written for one of them
+ * silently leaves the rest open - which is the exact defect the outbound
+ * projector's `blockDelta` case was fixed for, and this is its inbound mirror:
+ *
+ * - `snapshot` on `1.0`-`1.5`. Those minors match NEITHER snapshot fast path
+ *   (one is exact-current, the other exact-`1.6`), so their snapshots reach the
+ *   generic parse with every interview block intact.
+ * - `messageAccepted`, whose `message` is the live message union - an assistant
+ *   message with interview blocks is well-formed there even though the frame
+ *   means "your send was accepted".
+ * - `blockDelta`, on BOTH its arms: questions ride `interview.requested`,
+ *   answer selection rides `interview.resolved`.
+ *
+ * `eventAppended` needs nothing: a durable chat event carries interview
+ * SETTLEMENT metadata (`INTERVIEW_SETTLEMENT_METADATA_KEY`) and no questions.
+ *
+ * The message cases delegate to the pass above, so all seven message-level
+ * fields are neutralized together rather than by two rules that could drift.
+ * Its overlap with the browser pass on a user-authored `messageAccepted` is
+ * idempotent by construction - both write the same empty arrays.
  *
  * Same OVERWRITE reading as the passes above: a legal pre-`1.7` frame cannot
  * carry these fields, so on this line they are absent whatever bytes arrived.
  * Mutates in place and ignores every other frame kind, so a caller can hand it
  * each parsed frame unconditionally.
  */
-export function normalizeV16InterviewDeltaFrame(frame: unknown): void {
-  if (!isRecord(frame) || frame.kind !== "blockDelta") return;
+export function normalizeV16InterviewFieldsInFrame(frame: unknown): void {
+  if (!isRecord(frame)) return;
+  if (frame.kind === "snapshot") {
+    const snapshot = frame.snapshot;
+    if (!isRecord(snapshot)) return;
+    const chat = snapshot.chat;
+    if (!isRecord(chat) || !Array.isArray(chat.messages)) return;
+    normalizeV16MessagesInShallowSnapshot(chat.messages);
+    return;
+  }
+  if (frame.kind === "messageAccepted") {
+    normalizeV16MessagesInShallowSnapshot([frame.message]);
+    return;
+  }
+  if (frame.kind !== "blockDelta") return;
   const event = frame.event;
   if (!isRecord(event)) return;
   if (event.type === "interview.requested") {
