@@ -36,6 +36,7 @@ export const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
   stagedVersion: null,
   heldInstall: null,
   installedInstallId: null,
+  installedYanked: false,
   installedRuntimeVersion: "1.0.0",
   runningRuntimeVersion: "1.0.0",
   updateReady: false,

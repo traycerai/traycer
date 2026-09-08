@@ -33,6 +33,7 @@ function fakeStatus(
     stagedVersion: null,
     heldInstall: null,
     installedInstallId: null,
+    installedYanked: false,
     installedRuntimeVersion: null,
     runningRuntimeVersion: null,
     updateReady: false,

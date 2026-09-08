@@ -575,6 +575,12 @@ interface AvailableSnapshotShape {
   readonly versions: ReadonlyArray<{
     readonly version: string;
     readonly available: boolean;
+    // Withdrawn by curation, independent of whether a platform asset still
+    // physically exists. Kept apart from `available` (which also folds in
+    // platform availability) because a yanked INSTALLED version is the one
+    // condition that voids the launch-time version hold - see
+    // `HostControllerStatus.installedYanked`.
+    readonly yanked: boolean;
   }>;
 }
 
@@ -636,6 +642,7 @@ function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
           entry.yanked !== true &&
           isPlainObject(asset) &&
           asset.available === true,
+        yanked: entry.yanked === true,
       },
     ];
   });
@@ -961,6 +968,10 @@ export class HostController {
   private eligibleStage: EligibleStage | null = null;
 
   private latestVersionCache: string | null = null;
+  // Versions the last parsed registry listing marked withdrawn. Empty until a
+  // listing has been parsed this session, which reads as "nothing known to be
+  // yanked" - the same fail-open bias as the CLI's viability yank check.
+  private yankedVersionsCache: ReadonlySet<string> = new Set();
 
   // Session quarantine for the pending-LaunchAgent-revision fast-path
   // refresh (see `applyPendingLoginItemRevisionIfIdle` below). Instance-
@@ -1147,6 +1158,9 @@ export class HostController {
       latestVersion: this.latestVersionCache,
       stagedVersion: staged?.version ?? null,
       heldInstall: await readDesktopHeldHostVersion(this.layout),
+      installedYanked:
+        installedVersion !== null &&
+        this.yankedVersionsCache.has(installedVersion),
       installedRuntimeVersion,
       runningRuntimeVersion,
       updateReady: deriveUpdateReady(installedVersion, staged?.version ?? null),
@@ -3222,6 +3236,7 @@ export class HostController {
           "--json",
           ...(requiresPreReleaseListing({
             mode,
+            installedVersion,
             stagedVersion: staged?.version ?? null,
           })
             ? ["--include-pre-releases"]
@@ -3241,6 +3256,16 @@ export class HostController {
       return;
     }
     this.latestVersionCache = latestVersionFromSnapshot(snapshot);
+    // Remembered beside `latestVersionCache` for the same reason: `getStatus`
+    // must answer "is the INSTALLED version withdrawn?" without a registry
+    // round-trip of its own. Only a parsed listing may replace the set - a
+    // failed probe (caught above) keeps the previous answer, and an invalid
+    // one, which lists nothing, reads as "nothing known to be yanked".
+    this.yankedVersionsCache = new Set(
+      snapshot.versions
+        .filter((entry) => entry.yanked)
+        .map((entry) => entry.version),
+    );
     if (!snapshot.valid) {
       if (staged?.stageId !== null && staged?.stageId !== undefined) {
         this.eligibleStage = {

@@ -117,6 +117,7 @@ function fakeStatus(
     stagedVersion: updateReady ? "1.4.1" : null,
     heldInstall: null,
     installedInstallId: "install-a",
+    installedYanked: false,
     installedRuntimeVersion: null,
     runningRuntimeVersion: null,
     updateReady,
@@ -348,6 +349,31 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     // `activation: "unavailable"` on an installed host falls through to the
     // recovery arm - the held host still comes up, just on its own bytes.
     expect(controller.convergeReadyCalls).toEqual([false]);
+  });
+
+  // A hold protects a deliberate choice from client preference, never from
+  // curation: a held host the registry has since yanked is not viable, so
+  // the hold is void and the eligible stage applies exactly as for an
+  // unheld host.
+  it("applies the staged update when the installed (held) version has been yanked", async () => {
+    const heldYanked = {
+      ...fakeStatus(true, "unavailable", false),
+      installedVersion: "1.4.0",
+      heldInstall: { version: "1.4.0", installId: "install-a" },
+      installedYanked: true,
+    };
+    const controller = fakeHostController(
+      heldYanked,
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
   });
 
   // Finding 1 (cold review): a held host whose apply is parked but which

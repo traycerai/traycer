@@ -86,9 +86,17 @@ function isUnavailableInstalledHost(status: HostControllerStatus): boolean {
 // and the stage stays on disk either way, so the GUI still advertises the
 // update and a user click still applies it fast - the hold parks the APPLY,
 // never the download.
+//
+// A hold protects a deliberate choice from client PREFERENCE, never from
+// curation: a held host the registry has since YANKED is not viable, so the
+// hold is void and the eligible stage applies at launch exactly as for an
+// unheld host. `installedYanked` is false when unknown, which keeps the hold
+// (fail-open, like the CLI's viability yank check); `host apply
+// --respect-hold` re-asks the same question under the CLI lock.
 function isStagedApplyHeldBack(status: HostControllerStatus): boolean {
   return (
     status.updateReady &&
+    !status.installedYanked &&
     status.heldInstall !== null &&
     status.installedInstallId !== null &&
     status.heldInstall.installId === status.installedInstallId

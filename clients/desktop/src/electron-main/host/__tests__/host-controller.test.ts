@@ -2538,6 +2538,162 @@ describe("canonical status: heldInstall / installedInstallId", () => {
   });
 });
 
+// Variant of `availableSnapshotFixture` above that lets a caller mark
+// specific versions withdrawn - the fixed-shape original always emits
+// `yanked: false`, which cannot exercise `HostControllerStatus.installedYanked`.
+function availableSnapshotFixtureWithYanked(
+  latest: string,
+  availableVersions: readonly string[],
+  yankedVersions: readonly string[],
+): unknown {
+  return {
+    manifest: {
+      schemaVersion: 1,
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      latest,
+      versions: availableVersions.map((version) => ({
+        version,
+        releasedAt: "2026-01-01T00:00:00.000Z",
+        releaseNotesUrl: `https://github.com/traycerai/traycer/releases/tag/host-v${version}`,
+        yanked: yankedVersions.includes(version),
+        deprecationReason: null,
+        requiredCliVersion: null,
+        platforms: {
+          "darwin-arm64": {
+            available: true,
+            unavailableReason: null,
+            url: `https://example.com/host-${version}.tar.gz`,
+            sizeBytes: 1,
+            sha256: "a".repeat(64),
+            signatureUrl: `https://example.com/host-${version}.tar.gz.minisig`,
+            signatureAlgorithm: "minisign",
+            publicKeyId: "test-key",
+          },
+        },
+      })),
+    },
+    manifestUrl: "https://example.com/versions.json",
+    platformKey: "darwin-arm64",
+    includePreReleases: false,
+  };
+}
+
+describe("canonical status: installedYanked", () => {
+  it("is false before any registry listing has been parsed", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    const status = await newController("production").getStatus();
+
+    expect(status.installedYanked).toBe(false);
+  });
+
+  it("is true once a parsed listing marks the installed version yanked", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        return availableSnapshotFixtureWithYanked(
+          "1.8.0",
+          ["1.7.0", "1.8.0"],
+          ["1.7.0"],
+        );
+      }
+      return {};
+    });
+
+    await controller.stageLatest();
+    const status = await controller.getStatus();
+
+    expect(status.installedYanked).toBe(true);
+  });
+
+  it("is false when a parsed listing carries the installed version without yanking it", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        return availableSnapshotFixtureWithYanked(
+          "1.8.0",
+          ["1.7.0", "1.8.0"],
+          [],
+        );
+      }
+      return {};
+    });
+
+    await controller.stageLatest();
+    const status = await controller.getStatus();
+
+    expect(status.installedYanked).toBe(false);
+  });
+
+  // Cold-review follow-up: `host available` filters out non-RC prereleases
+  // unless asked with `--include-pre-releases`. An installed beta that the
+  // catalog would otherwise hide can never be observed as yanked, so a hold
+  // on it (`heldInstall.installId === installedInstallId`) would keep a
+  // withdrawn build forever - `requiresPreReleaseListing` must widen the
+  // QUERY for an installed prerelease even in stable-only mode.
+  it("widens the available query to observe a yank on an installed, held prerelease in stable-only mode", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.9.0-beta.1",
+      runtimeVersion: "1.9.0-beta.1",
+      installId: "install-held",
+    });
+    writeHeldVersion("production", "1.9.0-beta.1", "install-held");
+    writeStagedRecord("production", "1.9.0", "1.9.0");
+    let requestedArgs: readonly string[] | null = null;
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        requestedArgs = args;
+        return availableSnapshotFixtureWithYanked(
+          "1.9.0",
+          ["1.9.0-beta.1", "1.9.0"],
+          ["1.9.0-beta.1"],
+        );
+      }
+      return {};
+    });
+
+    await controller.stageLatest();
+    const status = await controller.getStatus();
+
+    expect(requestedArgs).not.toBeNull();
+    expect(requestedArgs).toContain("--include-pre-releases");
+    expect(status.installedYanked).toBe(true);
+  });
+
+  it("does not widen the available query for a stable install with nothing staged", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0",
+      runtimeVersion: "2.0.0",
+    });
+    let requestedArgs: readonly string[] | null = null;
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        requestedArgs = args;
+        return availableSnapshotFixtureWithYanked("2.0.0", ["2.0.0"], []);
+      }
+      return {};
+    });
+
+    await controller.stageLatest();
+
+    expect(requestedArgs).not.toBeNull();
+    expect(requestedArgs).not.toContain("--include-pre-releases");
+  });
+});
+
 // Ticket 07 §5.2.7 / retention (`isTerminalRetentionExpired`): `getStatus()`'s
 // `localAttempt` is the host-DOWN window's only observation, so an aged-out
 // terminal record must not resurface a week-old failure as the freshest

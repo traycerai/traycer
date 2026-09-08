@@ -60,25 +60,39 @@ export function resolveHostChannelMode(input: {
 /**
  * Whether `host available` must be asked for the pre-release view.
  *
- * Two independent reasons, and the second is NOT a mode:
+ * Three independent reasons, and only the first is a mode:
  *
  *   - the mode allows pre-releases (implicit following or an explicit opt-in);
  *   - a pre-release is ALREADY STAGED. Its row has to be in the listing for
  *     `stageIsEligible` to revalidate it; asked stable-only, the row is absent,
  *     the stage reads as yanked, and a perfectly good verified artifact is
- *     purged. This widens the QUERY only - it changes neither the selection
- *     mode nor the persisted preference, so an RC staged before an opt-out is
- *     revalidated without silently putting the user back on prereleases.
+ *     purged;
+ *   - a pre-release is INSTALLED - not only a canonical RC (which derives its
+ *     own following mode above) but any build the catalog filter would hide: a
+ *     beta the user deliberately downgraded to, an RC carrying build metadata.
+ *     Its row is what `HostControllerStatus.installedYanked` is read from, and
+ *     that answer is what voids a version hold on a build the registry has
+ *     withdrawn. Asked stable-only, the row is absent forever, the install
+ *     reads as never yanked, and the hold keeps a withdrawn host in place.
+ *
+ * All three widen the QUERY only - they change neither the selection mode nor
+ * the persisted preference (`resolveHostStageTarget` still answers `null` under
+ * `stable-only`, so `--automatic` keeps following the stable pointer), so an RC
+ * staged or a beta installed before an opt-out is revalidated without silently
+ * putting the user back on prereleases.
  */
 export function requiresPreReleaseListing(input: {
   readonly mode: DesktopUpdateChannelMode;
+  readonly installedVersion: string | null;
   readonly stagedVersion: string | null;
 }): boolean {
   if (modeAllowsPrerelease(input.mode)) {
     return true;
   }
   return (
-    input.stagedVersion !== null && isPreReleaseVersion(input.stagedVersion)
+    (input.installedVersion !== null &&
+      isPreReleaseVersion(input.installedVersion)) ||
+    (input.stagedVersion !== null && isPreReleaseVersion(input.stagedVersion))
   );
 }
 

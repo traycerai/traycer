@@ -25,7 +25,11 @@ import { createCliLogger } from "../logger";
 //     it simply leaves a new install whose id no longer matches); and
 //   - the desktop's launch-time staged-apply stands down while the installed
 //     host is the held instance - the launch reconcile via the status gate,
-//     and `host apply --respect-hold` re-checking under the CLI lock.
+//     and `host apply --respect-hold` re-checking under the CLI lock. Both
+//     void the hold for a held host the registry has since YANKED: the hold
+//     protects a deliberate choice from client preference, never from
+//     curation, and a yanked host is not viable (fail-open on a registry
+//     miss, exactly like the `viability` yank check).
 //
 // WRITTEN ONLY AT A COMMITTED DOWNGRADE, and only under the same CLI mutation
 // lock that wrote the install record, keyed on the ACTUAL committed vs previous

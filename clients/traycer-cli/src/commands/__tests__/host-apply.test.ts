@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   applyHostCalls: 0,
   readHostHeldVersionMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
+  isVersionYankedMock: vi.fn(),
+  createRegistryYankLookupMock: vi.fn(),
 }));
 
 vi.mock("../../installer/apply", () => ({
@@ -58,6 +60,19 @@ vi.mock("../../manifest/host-install", async (importOriginal) => {
     ) => mocks.readHostInstallRecordMock(...callArgs),
   };
 });
+
+// Void-if-yanked check (CodeRabbit follow-up): the `respectHold` gate consults
+// this lookup only once it has already matched the held instance, so the
+// factory must be controllable here rather than reaching the real network -
+// mirrors the pattern in `host/__tests__/provision.test.ts`.
+vi.mock("../../registry/client", () => ({
+  createRegistryYankLookup: (
+    ...callArgs: Parameters<typeof mocks.createRegistryYankLookupMock>
+  ) => {
+    mocks.createRegistryYankLookupMock(...callArgs);
+    return { isVersionYanked: mocks.isVersionYankedMock };
+  },
+}));
 
 import { buildHostApplyCommand } from "../host-apply";
 import type { CommandContext } from "../../runner/runner";
@@ -130,6 +145,11 @@ beforeEach(() => {
   mocks.applyHostCalls = 0;
   mocks.readHostHeldVersionMock.mockReset().mockResolvedValue(null);
   mocks.readHostInstallRecordMock.mockReset().mockResolvedValue(null);
+  mocks.createRegistryYankLookupMock.mockReset();
+  // Not-yanked by default so every test outside the "respectHold - yank"
+  // describe block below (which overrides this per case) reaches its
+  // outcome without a real network fetch.
+  mocks.isVersionYankedMock.mockReset().mockResolvedValue(false);
 });
 
 describe("host apply - activation", () => {
@@ -297,6 +317,39 @@ describe("host apply - respectHold", () => {
       installedVersion: "1.2.0",
     });
     expect(mocks.applyHostCalls).toBe(0);
+    expect(mocks.isVersionYankedMock).toHaveBeenCalledWith("1.2.0");
+  });
+
+  it("respectHold:true + installed.installId===held.installId but the held version has since been yanked applies normally", async () => {
+    mocks.readHostHeldVersionMock.mockResolvedValue({
+      version: "1.2.0",
+      installId: "install-held",
+    });
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      record("1.2.0", "install-held"),
+    );
+    mocks.isVersionYankedMock.mockResolvedValue(true);
+
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: true,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: null,
+      },
+      { respectHold: true },
+    );
+
+    expect(result.data).toMatchObject({ outcome: "applied" });
+    expect(mocks.applyHostCalls).toBe(1);
+    expect(mocks.isVersionYankedMock).toHaveBeenCalledWith("1.2.0");
   });
 
   it("respectHold:true + same version but a DIFFERENT installId (a reinstall of the held version) applies normally", async () => {
@@ -414,6 +467,8 @@ describe("host apply - respectHold", () => {
     expect(mocks.applyHostCalls).toBe(1);
     // `respectHold: false` never consults the hold at all - not even to read it.
     expect(mocks.readHostHeldVersionMock).not.toHaveBeenCalled();
+    // Nor the yank lookup, which only matters once a hold is being consulted.
+    expect(mocks.createRegistryYankLookupMock).not.toHaveBeenCalled();
   });
 
   // Final hold model: an apply never writes the hold record at all - it is

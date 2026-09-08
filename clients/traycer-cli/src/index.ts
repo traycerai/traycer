@@ -1467,7 +1467,7 @@ function registerHostCommands(program: Command): void {
       .addOption(
         new Option(
           "--respect-hold",
-          "Internal: for an implicit (launch/reconcile) apply - no-op instead of applying when the installed version is the deliberately-held one, re-checked under the CLI lock",
+          "Internal: for an implicit (launch/reconcile) apply - no-op instead of applying when the installed host is the deliberately-held install instance and is still viable (a held build the registry has yanked is applied over), re-checked under the CLI lock",
         ).hideHelp(),
       )
       .addOption(attemptAdoptionOption())

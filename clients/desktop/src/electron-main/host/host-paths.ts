@@ -155,7 +155,8 @@ export interface HostFsLayout {
    * naming the specific install INSTANCE the user deliberately downgraded to.
    * The launch-time staged-apply stands down while the installed record's
    * `installId` matches it (never by version: a later reinstall of the same
-   * version has a fresh id and inherits nothing). Liveness converges - the
+   * version has a fresh id and inherits nothing) and the installed host is
+   * still viable (a yanked held host is applied over). Liveness converges - the
    * reconciler and Doctor's "converge-ready" alike - never consult it: they
    * keep whatever non-yanked host is installed via `--keep-installed`. A
    * sibling of `install/`/`staged/` (NOT inside `install/`, so an atomic swap

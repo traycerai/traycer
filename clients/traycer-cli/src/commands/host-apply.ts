@@ -7,6 +7,7 @@ import { hostHomeDir } from "../store/paths";
 import { applyHostWithAttempt } from "../host/update-mutation";
 import { readHostHeldVersion } from "@traycer/protocol/config/installation";
 import { readHostInstallRecord } from "../manifest/host-install";
+import { createRegistryYankLookup } from "../registry/client";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
 // `traycer host apply [--force] [--no-service]` - promotes the single-slot
@@ -54,7 +55,9 @@ export interface HostApplyArgs {
    * IMPLICIT apply: honour the version hold. When true, this command re-reads
    * the installed and held records UNDER its own CLI mutation lock and no-ops
    * instead of applying when the installed host IS the deliberately-held
-   * instance (`installId` match). The desktop passes it for its launch-time
+   * instance (`installId` match) and is still viable - a held host the
+   * registry has yanked voids its hold and is applied over (fail-open: an
+   * unreachable registry keeps the hold). The desktop passes it for its launch-time
    * (implicit) apply, whose preflight decision can be stale: a terminal
    * downgrade that lands during the stage's download/eligibility window would
    * otherwise be reverted by a launch apply that decided to run before the hold
@@ -113,14 +116,32 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
             // a later reinstall of the same version is never mistaken for the
             // held one.
             if (installed !== null && installed.installId === held.installId) {
-              ctx.runtime.logger.info(
-                "Host apply skipped: installed host is the held one",
+              // A hold protects a deliberate choice from client PREFERENCE,
+              // never from curation: a held host the registry has since YANKED
+              // is not viable, so the hold is void and the apply proceeds. The
+              // lookup fails open (offline / malformed / timed out reads as
+              // not yanked), the same bias as `viability`'s yank check - a
+              // network blip keeps the hold rather than reverting it.
+              const yanked = await createRegistryYankLookup(
+                ctx.runtime.environment,
+              ).isVersionYanked(installed.version);
+              if (!yanked) {
+                ctx.runtime.logger.info(
+                  "Host apply skipped: installed host is the held one",
+                  {
+                    environment: ctx.runtime.environment,
+                    version: held.version,
+                  },
+                );
+                return {
+                  outcome: "no-op" as const,
+                  installedVersion: installed.version,
+                };
+              }
+              ctx.runtime.logger.warn(
+                "Host apply overriding the version hold: the held host is yanked",
                 { environment: ctx.runtime.environment, version: held.version },
               );
-              return {
-                outcome: "no-op" as const,
-                installedVersion: installed.version,
-              };
             }
           }
         }

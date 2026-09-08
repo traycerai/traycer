@@ -129,14 +129,32 @@ export interface HostControllerStatus {
    * `held-host-version.json`: its `{ version, installId }`), or `null` when
    * nothing is held. Consulted ONLY to make the implicit staged-apply stand
    * down while `heldInstall.installId === installedInstallId` (the SAME install
-   * instance, so a later reinstall of the same version never matches); it never
-   * changes `updateReady`, so the GUI still advertises an available update and
-   * an explicit apply still moves forward.
+   * instance, so a later reinstall of the same version never matches) AND the
+   * installed host is still viable (`!installedYanked`); it never changes
+   * `updateReady`, so the GUI still advertises an available update and an
+   * explicit apply still moves forward.
    */
   readonly heldInstall: {
     readonly version: string;
     readonly installId: string;
   } | null;
+  /**
+   * `true` when the registry listing most recently parsed this session
+   * (`stageLatest`'s `host available` probe, which the launch reconcile joins
+   * before sampling status) marks the INSTALLED version as yanked. A yanked
+   * host is not viable, so it is the one thing that voids a matching
+   * {@link heldInstall}: the hold protects a deliberate choice from client
+   * preference, never from curation, and the launch-time apply of the eligible
+   * stage proceeds. `false` until a listing has been parsed this session, and
+   * a probe that fails afterwards retains the previous parsed answer - so an
+   * unknown state keeps the hold in force, the same fail-open bias as the
+   * CLI's own viability yank check (which `host apply --respect-hold` re-asks
+   * under the CLI lock, and which no-ops again if the registry has un-yanked
+   * the build since). The listing is widened to pre-releases whenever the
+   * installed version is one (`requiresPreReleaseListing`), so a withdrawn
+   * beta the catalog filter would otherwise hide is still seen.
+   */
+  readonly installedYanked: boolean;
   readonly installedRuntimeVersion: string | null;
   readonly runningRuntimeVersion: string | null;
   readonly updateReady: boolean;

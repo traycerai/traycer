@@ -247,6 +247,7 @@ function fakeHostController(updateReady: boolean): IpcHostController & {
         stagedVersion: null,
         heldInstall: null,
         installedInstallId: null,
+        installedYanked: false,
         installedRuntimeVersion: null,
         runningRuntimeVersion: null,
         updateReady: currentUpdateReady,
