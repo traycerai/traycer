@@ -26,6 +26,9 @@ export interface SetProfileEndpointVariables {
   readonly baseUrl: string | null;
   readonly credentialKind: ProfileCredentialKind;
   readonly defaultModel: string | null;
+  /** D06's `extraFields` extra. `null` when the provider does not declare it
+   *  (`endpointCapabilities.extraFields`) or the user left it blank. */
+  readonly maxContextSize: number | null;
   readonly credentialUpdate: SetProfileEndpointCredentialUpdate;
 }
 
@@ -83,6 +86,7 @@ export function useProvidersSetProfileEndpoint(): UseMutationResult<
             credentialConfigured:
               current.config.endpoint?.credentialConfigured ?? false,
             defaultModel: variables.defaultModel,
+            maxContextSize: variables.maxContextSize,
             lastTest: current.config.endpoint?.lastTest ?? null,
           },
         },

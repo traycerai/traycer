@@ -32,6 +32,7 @@ import { useProvidersCreateApiKeyProfileForClient } from "@/hooks/providers/use-
 import { ProfileEndpointForm } from "./profile-account-tab";
 import {
   emptyProfileEndpointDraft,
+  parseMaxContextSize,
   type ProfileEndpointDraft,
 } from "./profile-endpoint-draft";
 import {
@@ -190,6 +191,7 @@ export function AddProfileDialog({
             apiKeyDraft.defaultModel.trim().length === 0
               ? null
               : apiKeyDraft.defaultModel.trim(),
+          maxContextSize: parseMaxContextSize(apiKeyDraft.maxContextSize),
         },
         credential: apiKeyDraft.credential,
       },

@@ -13,6 +13,13 @@ export interface ProfileEndpointDraft {
   readonly credential: string;
   readonly credentialKind: ProfileCredentialKind;
   readonly defaultModel: string;
+  /**
+   * D06's `extraFields`: rendered only when the provider's
+   * `endpointCapabilities.extraFields` names `"maxContextSize"` (kimi today).
+   * A STRING because it is an input's value - the submit path parses it, and
+   * an empty string means "not set" (`null` on the wire).
+   */
+  readonly maxContextSize: string;
 }
 
 export function emptyProfileEndpointDraft(): ProfileEndpointDraft {
@@ -21,5 +28,20 @@ export function emptyProfileEndpointDraft(): ProfileEndpointDraft {
     credential: "",
     credentialKind: "api_key",
     defaultModel: "",
+    maxContextSize: "",
   };
+}
+
+/**
+ * D06's `extraFields` extra, parsed out of its form input. Empty (or anything
+ * not a positive integer, which the wire schema rejects anyway) is `null` -
+ * "not set", so kimi's projection writes no `max_context_size` key rather
+ * than a fabricated one. The one string->`number | null` seam, shared by both
+ * submit paths (the Account tab and the add-profile dialog).
+ */
+export function parseMaxContextSize(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }

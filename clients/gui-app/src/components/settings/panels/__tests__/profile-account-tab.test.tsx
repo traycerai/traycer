@@ -223,6 +223,7 @@ describe("ProfileAccountTab - apiKey arm", () => {
           credentialKind: "api_key",
           credentialConfigured: true,
           defaultModel: "claude-3.5",
+          maxContextSize: null,
           lastTest: null,
         },
       },
@@ -296,6 +297,49 @@ describe("ProfileAccountTab - apiKey arm", () => {
     expect(
       screen.queryByRole("combobox", { name: "Credential kind" }),
     ).toBeNull();
+  });
+
+  it("W4 review H3: renders the Max context size input only when endpointCapabilities.extraFields names it", () => {
+    const { unmount } = render(
+      <ProfileAccountTab
+        state={providerState({
+          providerId: "claude-code",
+          profiles: [apiKeyProfile({})],
+        })}
+        hostId="host-1"
+        profileId="profile-1"
+        isSelectedHostLocal
+        apiKeyDraft=""
+        onApiKeyDraftChange={() => undefined}
+      />,
+    );
+    // `extraFields: []` on the claude-code fixture - no input.
+    expect(screen.queryByLabelText("Max context size")).toBeNull();
+    unmount();
+
+    render(
+      <ProfileAccountTab
+        state={providerState({
+          providerId: "kimi",
+          // The only descriptor that declares it today. The component reads
+          // the wire field, never a provider id, so this is what drives it.
+          endpointCapabilities: {
+            supportsBaseUrl: true,
+            credentialKinds: ["api_key"],
+            requiresModel: true,
+            extraFields: ["maxContextSize"],
+            credentialStoredInNativeConfig: false,
+          },
+          profiles: [apiKeyProfile({ profileId: "profile-3" })],
+        })}
+        hostId="host-1"
+        profileId="profile-3"
+        isSelectedHostLocal
+        apiKeyDraft=""
+        onApiKeyDraftChange={() => undefined}
+      />,
+    );
+    expect(screen.getByLabelText("Max context size")).toBeDefined();
   });
 
   it("renders the destructive badge with the reason verbatim for a failed test", () => {

@@ -42,6 +42,7 @@ import {
 import { providerCanStartProfileOauth } from "@/components/providers/provider-signin-availability";
 import {
   emptyProfileEndpointDraft,
+  parseMaxContextSize,
   type ProfileEndpointDraft,
 } from "./profile-endpoint-draft";
 import { ProviderApiKeySection } from "./provider-api-key-section";
@@ -80,6 +81,7 @@ export function ProfileEndpointForm(props: {
   const credentialId = useId();
   const credentialKindId = useId();
   const modelId = useId();
+  const maxContextSizeId = useId();
   const {
     providerId,
     endpointCapabilities,
@@ -98,6 +100,12 @@ export function ProfileEndpointForm(props: {
   const nativeConfigLabel = endpointCapabilities?.credentialStoredInNativeConfig
     ? PROVIDER_DISPLAY_NAMES[providerId]
     : null;
+  // D06's per-provider extras, read off the wire exactly like
+  // `showBaseUrl`/`showCredentialKind` above - never a provider table here
+  // (kimi is the only descriptor that names it today, and this component must
+  // not know that).
+  const showMaxContextSize =
+    endpointCapabilities?.extraFields.includes("maxContextSize") ?? false;
 
   return (
     <div className="flex flex-col gap-3">
@@ -169,6 +177,25 @@ export function ProfileEndpointForm(props: {
           }
         />
       </div>
+      {showMaxContextSize ? (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={maxContextSizeId}>Max context size</Label>
+          <Input
+            id={maxContextSizeId}
+            type="number"
+            min={1}
+            step={1}
+            inputMode="numeric"
+            value={draft.maxContextSize}
+            placeholder="e.g. 131072"
+            autoComplete="off"
+            disabled={disabled}
+            onChange={(event) =>
+              onDraftChange({ ...draft, maxContextSize: event.target.value })
+            }
+          />
+        </div>
+      ) : null}
       {nativeConfigLabel !== null ? (
         <p className="text-ui-xs text-muted-foreground">
           Stored in {nativeConfigLabel}&apos;s own config.
@@ -242,6 +269,11 @@ function useHydratedEndpointDraft(
       credential: "",
       credentialKind: endpoint?.credentialKind ?? "api_key",
       defaultModel: endpoint?.defaultModel ?? "",
+      maxContextSize:
+        endpoint?.maxContextSize === null ||
+        endpoint?.maxContextSize === undefined
+          ? ""
+          : String(endpoint.maxContextSize),
     });
   }
   return [draft, setDraft];
@@ -309,6 +341,7 @@ function ApiKeyProfileAccountArm({
         baseUrl: trimmedBaseUrl.length === 0 ? null : trimmedBaseUrl,
         credentialKind: draft.credentialKind,
         defaultModel: trimmedModel.length === 0 ? null : trimmedModel,
+        maxContextSize: parseMaxContextSize(draft.maxContextSize),
         credentialUpdate:
           trimmedCredential.length === 0
             ? { kind: "unchanged" }
@@ -426,6 +459,10 @@ function DefaultAccountEndpointSection({
       credentialKind:
         configQuery.data?.config.endpoint?.credentialKind ?? "api_key",
       defaultModel: trimmedModel.length === 0 ? null : trimmedModel,
+      // The Default account has no `extraFields` of its own - its projection
+      // table is env-only (`DEFAULT_ACCOUNT_ENDPOINT_PROJECTION`), and the
+      // host maps this to `null` on read for the same reason.
+      maxContextSize: null,
       credentialUpdate: { kind: "unchanged" },
     });
   };

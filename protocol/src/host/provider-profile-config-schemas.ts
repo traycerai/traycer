@@ -56,6 +56,16 @@ export const profileEndpointConfigSchema = z.object({
   credentialKind: profileCredentialKindSchema,
   credentialConfigured: z.boolean(),
   defaultModel: z.string().nullable(),
+  /**
+   * D06's `extraFields` (`providers.list@9.0`'s `endpointCapabilities`): the
+   * one per-provider extra any descriptor declares today. `null` everywhere
+   * it is not declared, and the GUI renders an input for it only when the
+   * provider's `endpointCapabilities.extraFields` names it - there is no
+   * provider table on the client. Kimi's `[models.<alias>]` table requires
+   * `max_context_size` (`research/probes.md` §2), which is why a typed field
+   * exists rather than a free-form bag.
+   */
+  maxContextSize: z.number().int().positive().nullable(),
   lastTest: profileEndpointTestVerdictSchema.nullable(),
 });
 export type ProfileEndpointConfig = z.infer<typeof profileEndpointConfigSchema>;
@@ -168,6 +178,8 @@ export const providersCreateApiKeyProfileRequestSchema = z.object({
     baseUrl: z.string().nullable(),
     credentialKind: profileCredentialKindSchema,
     defaultModel: z.string().nullable(),
+    /** See {@link profileEndpointConfigSchema}'s own field. */
+    maxContextSize: z.number().int().positive().nullable(),
   }),
   credential: z.string().min(1),
 });

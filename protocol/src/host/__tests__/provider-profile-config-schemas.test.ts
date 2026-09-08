@@ -10,6 +10,7 @@ import {
 import {
   profileCliSelectionSchema,
   profileConfigSchema,
+  profileEndpointConfigSchema,
   profileSeedSourceSchema,
   providersCreateApiKeyProfileRequestSchema,
   providersCreateApiKeyProfileResponseSchema,
@@ -96,6 +97,64 @@ describe("provider-profile-config-schemas (D21)", () => {
     );
   });
 
+  it("D06 (W4 review H3): maxContextSize is a required, nullable positive integer on both the config row and the create request", () => {
+    const endpoint = {
+      baseUrl: "https://api.example.com",
+      credentialKind: "api_key" as const,
+      credentialConfigured: false,
+      defaultModel: "k2",
+      lastTest: null,
+    };
+    // Required, not optional: a client that omits it is rejected rather than
+    // silently landing `undefined` where the host writes a TOML value.
+    expect(profileEndpointConfigSchema.safeParse(endpoint).success).toBe(false);
+    expect(
+      profileEndpointConfigSchema.safeParse({
+        ...endpoint,
+        maxContextSize: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      profileEndpointConfigSchema.safeParse({
+        ...endpoint,
+        maxContextSize: 131_072,
+      }).success,
+    ).toBe(true);
+    // A context window is a positive whole number of tokens; 0, a negative
+    // and a float are all shapes kimi's `[models.<alias>]` table rejects.
+    for (const bad of [0, -1, 1.5]) {
+      expect(
+        profileEndpointConfigSchema.safeParse({
+          ...endpoint,
+          maxContextSize: bad,
+        }).success,
+      ).toBe(false);
+    }
+
+    const createRequest = {
+      providerId: "kimi" as const,
+      label: "Work",
+      accentColor: null,
+      startFrom: { kind: "empty" as const },
+      endpoint: {
+        baseUrl: "https://api.example.com",
+        credentialKind: "api_key" as const,
+        defaultModel: "k2",
+      },
+      credential: "sk-abc",
+    };
+    expect(
+      providersCreateApiKeyProfileRequestSchema.safeParse(createRequest)
+        .success,
+    ).toBe(false);
+    expect(
+      providersCreateApiKeyProfileRequestSchema.safeParse({
+        ...createRequest,
+        endpoint: { ...createRequest.endpoint, maxContextSize: 131_072 },
+      }).success,
+    ).toBe(true);
+  });
+
   it("no response schema here models a credential: a stray key is dropped on parse", () => {
     const parsed = providersGetProfileConfigResponseSchema.parse({
       config: {
@@ -122,6 +181,7 @@ describe("provider-profile-config-schemas (D21)", () => {
           baseUrl: null,
           credentialKind: "api_key",
           defaultModel: null,
+          maxContextSize: null,
         },
         credential: "sk-abc",
       }).success,
