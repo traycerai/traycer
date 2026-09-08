@@ -652,6 +652,7 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
       onCommitted: () => {},
       verifyMutationCapability: async () => undefined,
       onWillSwap: null,
+      onSwapCommitted: null,
     });
 
     await expectReached(commitHookEntered.promise, "beforeSwapCommit");

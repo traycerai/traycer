@@ -838,7 +838,7 @@ describe("headline: convergeReady during an in-flight mutation resolves, never r
 
     let convergeSettled = false;
     const convergePromise = controller
-      .convergeReady(false, { kind: "background" })
+      .convergeReady(false, { kind: "background" }, "keep-installed")
       .then((outcome) => {
         convergeSettled = true;
         return outcome;
@@ -1052,7 +1052,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -1411,8 +1411,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
       return { data: {} };
     });
 
-    const first = controller.activateInstalled(false);
-    const second = controller.activateInstalled(false);
+    const first = controller.activateInstalled(false, true);
+    const second = controller.activateInstalled(false, true);
     expect(first).toBe(second);
     await Promise.all([first, second]);
 
@@ -1708,9 +1708,13 @@ describe("two lanes: mutation vs download independence", () => {
     const applyPromise = controller.applyStaged("manual", false);
     await downloadStarted.promise;
 
-    const convergePromise = controller.convergeReady(false, {
-      kind: "background",
-    });
+    const convergePromise = controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
     // The download is still gated (unresolved) while convergeReady reaches
     // its own CLI call - real fs reads (readRunningHostIdentity et al.) are
     // in the path first, so poll rather than assume a fixed number of
@@ -1772,12 +1776,16 @@ describe("two lanes: mutation vs download independence", () => {
       return { data: {} };
     });
 
-    const activatePromise = controller.activateInstalled(false);
+    const activatePromise = controller.activateInstalled(false, true);
     await downloadStarted.promise;
 
-    const convergePromise = controller.convergeReady(false, {
-      kind: "background",
-    });
+    const convergePromise = controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
     await vi.waitFor(() => {
       if (!ensureCalled) throw new Error("ensure not reached yet");
     });
@@ -2009,7 +2017,7 @@ describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)"
       return { outcome: "stamped" };
     });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("ok");
     const stampCalls = vi
@@ -2058,7 +2066,7 @@ describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup
       throw new Error("failed to seed a held lock for this test");
     }
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("deferred");
     await held.handle.release();
@@ -2113,9 +2121,13 @@ describe("lock-contention terminal contract: convergeReady defers like every oth
     // force: true - skips the "noop && !force" early return (same as B6's
     // force test above) so this genuinely reaches the locked activation
     // cycle's desktop-lock acquisition instead of short-circuiting first.
-    const outcome = await controller.convergeReady(true, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      true,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome.kind).toBe("deferred");
     await held.handle.release();
@@ -2430,7 +2442,7 @@ describe("canonical status: activation-state derivation", () => {
     // observed pid/startedAt/version - publish it as the CLI-owned restart
     // "would" once the host is actually up.
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    const activated = await launch1.activateInstalled(false);
+    const activated = await launch1.activateInstalled(false, true);
     expect(activated.kind).toBe("ok");
     expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.arrayContaining(["stamp-runtime"]),
@@ -2959,7 +2971,7 @@ describe("yank/apply ordering", () => {
       controller.applyStaged("manual", false),
     ).resolves.toMatchObject({
       kind: "ok",
-      value: { appliedVersion: "1.8.0", runningActivated: true },
+      value: { appliedVersion: "1.8.0", runningActivated: true, applied: true },
     });
     expect(downloadCalls).toBe(1);
     expect(applyCalls).toBe(1);
@@ -3107,8 +3119,49 @@ describe("yank/apply ordering", () => {
       reason: "ready",
     });
 
-    expect((await controller.activateInstalled(false)).kind).toBe("ok");
+    expect((await controller.activateInstalled(false, true)).kind).toBe("ok");
     expect(applyFingerprints).toEqual(["stage-1.8.0", "stage-replaced"]);
+  });
+
+  // Finding 1 (cold review, version-hold design): `promoteReadyStage: false`
+  // must NEVER promote a ready newer stage, even when one is genuinely ready -
+  // this is the guard the launch reconcile relies on to keep a held host from
+  // being reverted through activateInstalled's own "ready update supersedes
+  // debt" optimisation. Pinned at the controller level (not just the launch
+  // module's call site) because the promotion decision lives here.
+  it("promoteReadyStage: false activates the installed bytes and never shells `host apply`, even with a ready newer stage", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    const streamedArgs: (readonly string[])[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      streamedArgs.push(opts.args);
+      if (opts.args.includes("restart")) {
+        return { data: { activated: true } };
+      }
+      return { data: {} };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const outcome = await controller.activateInstalled(false, false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(streamedArgs).not.toContainEqual(expect.arrayContaining(["apply"]));
+    expect(streamedArgs).toContainEqual(
+      expect.arrayContaining(["restart", "--if-idle"]),
+    );
   });
 
   it("uses the prerelease registry view when the stage is an RC", async () => {
@@ -3681,7 +3734,7 @@ describe("yank/apply ordering", () => {
       return { data: {} };
     });
 
-    const outcome = await controller.activateInstalled(false);
+    const outcome = await controller.activateInstalled(false, true);
 
     expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -4462,7 +4515,11 @@ describe("platform matrix", () => {
       data: { action: "installed", version: "1.8.0", runtimeVersion: null },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -4481,7 +4538,11 @@ describe("platform matrix", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    await controller.convergeReady(true, { kind: "background" });
+    await controller.convergeReady(
+      true,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -4564,11 +4625,15 @@ describe("platform matrix", () => {
     await markHostRemovedByUser();
     expect(await isHostRemovedByUser()).toBe(true);
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
 
     // Not merely "the sentinel is gone afterwards" — the converge must have
     // actually RUN. A short-circuit would also leave kind "ok".
@@ -4576,6 +4641,124 @@ describe("platform matrix", () => {
     expect(streamBundledTraycerCliJson).toHaveBeenCalled();
     expect(outcome.kind).toBe("ok");
   });
+  // Finding (final hold model): `convergeReady` is now UNCONDITIONALLY
+  // liveness-only - `isInstalledVersionHeld()` is gone, and both a
+  // background and a user-repair converge always pass `--keep-installed`.
+  // Version movement is never this path's job (an explicit update or `host
+  // ensure --release` owns that); the version-hold record is consulted only
+  // by the CLI's own `host apply --respect-hold`, under its mutation lock -
+  // never from a desktop-side snapshot here (see `host-launch-converge.ts`
+  // and `host-apply.ts` in the CLI).
+  it("a user-repair converge always passes --keep-installed (liveness-only, unconditionally)", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
+  it("a user-repair converge on packaged macOS also passes --keep-installed", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.2.0", action: "noop" },
+    });
+
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
+  // Doctor's "Install host" repair (`converge-latest`) is the ONE explicit,
+  // version-seeking converge - it must NOT keep a too-old host installed, so
+  // it requests `pinned-minimum` and the CLI-owned route omits
+  // `--keep-installed` entirely (unlike every `keep-installed` case above).
+  it("a user-repair with pinned-minimum omits --keep-installed (CLI-owned route)", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "pinned-minimum",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.not.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
+  it("a user-repair with pinned-minimum omits --keep-installed (packaged-mac route)", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.4.0", action: "installed" },
+    });
+
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "pinned-minimum",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.not.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
   it("a user-repair whose guard abandons mutates nothing", async () => {
     // The host was replaced while the repair waited in the lane. Nothing may
     // run — and critically the sentinel must NOT be cleared, since clearing
@@ -4587,12 +4770,16 @@ describe("platform matrix", () => {
     });
     await markHostRemovedByUser();
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () =>
-        Promise.resolve({ kind: "abandon", message: "host changed" }),
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () =>
+          Promise.resolve({ kind: "abandon", message: "host changed" }),
+      },
+      "keep-installed",
+    );
 
     // `abandoned`, not `failed`: the refusal classification travels in the
     // settled outcome so every coalesced waiter reads the same verdict, and
@@ -4617,7 +4804,11 @@ describe("platform matrix", () => {
       await installGate.promise;
       return { data: { action: "noop", version: "1.7.0" } };
     });
-    const occupy = controller.convergeReady(false, { kind: "background" });
+    const occupy = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     let guardAsked = false;
     const repair = controller.registerService({
@@ -4652,16 +4843,24 @@ describe("platform matrix", () => {
     });
     await markHostRemovedByUser();
 
-    const background = controller.convergeReady(false, { kind: "background" });
+    const background = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
     let guardAsked = false;
-    const repair = controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => {
-        guardAsked = true;
-        return Promise.resolve({ kind: "proceed" });
+    const repair = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => {
+          guardAsked = true;
+          return Promise.resolve({ kind: "proceed" });
+        },
       },
-    });
+      "keep-installed",
+    );
 
     expect(await background).toEqual({
       kind: "ok",
@@ -4672,6 +4871,102 @@ describe("platform matrix", () => {
     // job's short-circuit and never asked.
     expect(guardAsked).toBe(true);
     expect(await isHostRemovedByUser()).toBe(false);
+  });
+
+  // The version policy is in the coalesce key for the same reason the intent
+  // is: a version-seeking "Install host" repair (`pinned-minimum`) that
+  // joined a queued liveness converge (`keep-installed`) would inherit that
+  // job's policy and report "applied" having moved nothing.
+  it("two concurrent user-repairs for the same host with DIFFERENT version policies do not coalesce", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const streamedArgs: (readonly string[])[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      streamedArgs.push(opts.args);
+      return {
+        data: { running: true, version: "1.7.0", action: "noop" },
+      };
+    });
+
+    const keepInstalled = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
+    const pinnedMinimum = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "pinned-minimum",
+    );
+
+    await keepInstalled;
+    await pinnedMinimum;
+
+    // Two genuinely separate jobs, each honoring its OWN policy - not one
+    // job whose CLI call ran once under whichever policy joined first.
+    expect(streamedArgs).toHaveLength(2);
+    expect(streamedArgs.some((args) => args.includes("--keep-installed"))).toBe(
+      true,
+    );
+    expect(
+      streamedArgs.some((args) => !args.includes("--keep-installed")),
+    ).toBe(true);
+  });
+
+  it("two concurrent user-repairs for the same host with the SAME version policy still coalesce onto one job", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    let cliCalls = 0;
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      cliCalls += 1;
+      return {
+        data: { running: true, version: "1.7.0", action: "noop" },
+      };
+    });
+    let secondGuardAsked = false;
+
+    const first = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
+    const second = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => {
+          secondGuardAsked = true;
+          return Promise.resolve({ kind: "proceed" });
+        },
+      },
+      "keep-installed",
+    );
+
+    await first;
+    await second;
+
+    expect(cliCalls).toBe(1);
+    // Proves the two really were ONE job - the joiner's own guard never ran.
+    expect(secondGuardAsked).toBe(false);
   });
 
   it("two coalesced user-repairs for the same host both receive the guard's refusal", async () => {
@@ -4687,20 +4982,28 @@ describe("platform matrix", () => {
       runtimeVersion: "1.7.0",
     });
     const guardGate = deferred<ReprovisionGuardVerdict>();
-    const first = controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => guardGate.promise,
-    });
-    let secondGuardAsked = false;
-    const second = controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => {
-        secondGuardAsked = true;
-        return Promise.resolve({ kind: "proceed" });
+    const first = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => guardGate.promise,
       },
-    });
+      "keep-installed",
+    );
+    let secondGuardAsked = false;
+    const second = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => {
+          secondGuardAsked = true;
+          return Promise.resolve({ kind: "proceed" });
+        },
+      },
+      "keep-installed",
+    );
 
     guardGate.resolve({ kind: "abandon", message: "host changed" });
     await expect(first).resolves.toEqual({
@@ -4732,7 +5035,11 @@ describe("platform matrix", () => {
       await installGate.promise;
       return { data: { action: "noop", version: "1.7.0" } };
     });
-    const occupy = controller.convergeReady(false, { kind: "background" });
+    const occupy = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     let guardAsked = false;
     const restart = controller.respawn({
@@ -5534,7 +5841,7 @@ describe("packaged-macOS null-runtime readiness budget", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.activateInstalled(false);
+    const outcome = await controller.activateInstalled(false, true);
 
     expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -5570,9 +5877,13 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       },
     });
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome.kind).toBe("failed");
   });
@@ -5603,9 +5914,13 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       reason: "timeout",
     });
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome.kind).toBe("failed");
   });
@@ -5634,9 +5949,13 @@ describe("convergeReady E_HOST_BUSY classification (fixup B8)", () => {
       new TraycerCliError("E_HOST_BUSY", "host busy"),
     );
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome).toEqual({
       kind: "busy",
@@ -5702,11 +6021,18 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
+    // A background converge is liveness-only (the mid-session revert guard),
+    // so `--keep-installed` accompanies `--from` here - the archive is only
+    // the first-install source, never a reason to move a viable install.
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "ensure", "--from", archive],
+        args: ["host", "ensure", "--keep-installed", "--from", archive],
       }),
     );
   });
@@ -5731,11 +6057,15 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "ensure", "--from", archive],
+        args: ["host", "ensure", "--keep-installed", "--from", archive],
       }),
     );
   });
@@ -5754,10 +6084,14 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["host", "ensure"] }),
+      expect.objectContaining({ args: ["host", "ensure", "--keep-installed"] }),
     );
   });
   it("omits --from on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
@@ -5777,10 +6111,14 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["host", "ensure"] }),
+      expect.objectContaining({ args: ["host", "ensure", "--keep-installed"] }),
     );
   });
 });
@@ -6382,7 +6720,11 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     await vi.waitFor(() => {
       if (!registerCalled) throw new Error("revision cycle did not start");
     });
-    const convergence = controller.convergeReady(false, { kind: "background" });
+    const convergence = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
     await vi.waitFor(() => {
       // A reachability probe is only an earlier asynchronous prerequisite.
       // Wait for the real production join edge: the reentrant caller has
@@ -6536,9 +6878,13 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome.kind).toBe("ok");
     expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
@@ -6798,9 +7144,13 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(outcome).toEqual({
       kind: "ok",
@@ -6979,6 +7329,87 @@ describe("Class B no-op liveness", () => {
       kind: "installed-not-converged",
     });
   });
+
+  // Final hold model (Codex P2 series): `host apply --respect-hold`'s no-op
+  // outcome (nothing to apply, or the CLI kept a held-and-viable install) is
+  // what `applyStaged("launch", ...)` reaches - the CLI-owned route, under
+  // the same "trust nothing without a live endpoint" rule as the `manual`
+  // no-op tests above.
+  it("--respect-hold no-op with a live endpoint reports ok/applied:false, never a real apply", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    writePidMetadata("production", { version: "1.2.0", pid: process.pid });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.2.0" },
+    });
+
+    await expect(controller.applyStaged("launch", false)).resolves.toEqual({
+      kind: "ok",
+      value: {
+        appliedVersion: "1.2.0",
+        runningActivated: true,
+        applied: false,
+      },
+    });
+  });
+
+  it("--respect-hold no-op without a live endpoint reports installed-not-converged, naming the install left unchanged", async () => {
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.2.0" },
+    });
+
+    await expect(
+      controller.applyStaged("launch", false),
+    ).resolves.toMatchObject({
+      kind: "installed-not-converged",
+      message: expect.stringContaining("The installed host was left unchanged"),
+    });
+  });
+
+  it("--respect-hold no-op on packaged macOS with a live endpoint also reports ok/applied:false", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    writePidMetadata("production", { version: "1.2.0", pid: process.pid });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.2.0" },
+    });
+
+    await expect(controller.applyStaged("launch", false)).resolves.toEqual({
+      kind: "ok",
+      value: {
+        appliedVersion: "1.2.0",
+        runningActivated: true,
+        applied: false,
+      },
+    });
+  });
 });
 
 // `completeServiceStart` owns the one post-start publication reload. These
@@ -7013,7 +7444,9 @@ describe("Class B CLI-owned caller publication", () => {
     });
     configureRestartAndStamp();
 
-    await expect(controller.activateInstalled(false)).resolves.toMatchObject({
+    await expect(
+      controller.activateInstalled(false, true),
+    ).resolves.toMatchObject({
       kind: "ok",
       value: { activated: true },
     });
@@ -8573,7 +9006,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         data: { restarted: true, version: "1.7.0" },
       });
 
-      const outcome = await controller.activateInstalled(true);
+      const outcome = await controller.activateInstalled(true, true);
 
       expect(outcome.kind).toBe("ok");
       const argv = takeoverCallArgv();
@@ -9016,7 +9449,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     });
     configureStampAndServiceAttestation();
 
-    expect((await controller.activateInstalled(false)).kind).toBe("ok");
+    expect((await controller.activateInstalled(false, true)).kind).toBe("ok");
     expectCommandGenerationWasStamped();
   });
 
@@ -9178,8 +9611,13 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     );
 
     expect(
-      (await convergeController.convergeReady(false, { kind: "background" }))
-        .kind,
+      (
+        await convergeController.convergeReady(
+          false,
+          { kind: "background" },
+          "keep-installed",
+        )
+      ).kind,
     ).toBe("failed");
     expect(convergeLifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
 
@@ -9348,7 +9786,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
         reason: "ready",
       });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("ok");
     // The retry is a FULL cycle - a second register, not a second wait on
@@ -9361,7 +9799,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     const controller = stagePackagedMacWorld();
     vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -9400,7 +9838,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
       return NOT_READY;
     });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("ok");
     // The point of the guard: no second bootout, no second wait.
@@ -9415,7 +9853,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     // host being evicted, still answering because teardown has not finished.
     // Reachable, and worth nothing as evidence.
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     expect(waitForHostReady).toHaveBeenCalledTimes(2);
@@ -9478,7 +9916,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -9511,7 +9949,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       new Error("takeover exploded"),
     );
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     // The raw `Error` path classifies to `failed` before enrichment; the
     // helper must preserve that kind, not just append text to it.
@@ -9541,7 +9979,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       ),
     );
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     // Fixup B8 (already shipped) classifies workload-busy as `busy` with
     // retry guidance, distinct from `deferred` (lock contention). The
@@ -9570,7 +10008,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       reason: "pid metadata never appeared",
     });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -9607,7 +10045,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
         : "enabled",
     );
 
-    const activateOutcome = await controller.activateInstalled(true);
+    const activateOutcome = await controller.activateInstalled(true, true);
 
     expect(activateOutcome.kind).toBe("failed");
     // Guards against a vacuous pass: the pre-bootout `requires-approval`
@@ -9624,7 +10062,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     // resurrect the exact registration the user just removed.
     vi.mocked(registerHostLoginItem).mockResolvedValue("removed-by-user");
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
