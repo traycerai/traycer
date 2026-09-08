@@ -1,6 +1,7 @@
 import type { HostActivationState } from "./host-state";
 import type {
   HostUpdateAttemptContinuation,
+  HostUpdateAttemptError,
   HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 
@@ -79,6 +80,9 @@ export interface DownloadLaneStatus {
   readonly lastError: string | null;
 }
 
+/** Mirror of `@traycer-clients/shared`'s `LocalAttemptLiveness` - see there. */
+export type LocalAttemptLiveness = "live" | "interrupted" | "unknown";
+
 /**
  * Mirror of `@traycer-clients/shared`'s `LocalAttemptFacts`.
  *
@@ -97,6 +101,12 @@ export interface LocalAttemptFacts {
   // `HostUpdateAttemptContinuation` already includes `null`.
   readonly continuation: HostUpdateAttemptContinuation;
   readonly updatedAt: string;
+  /** The record's terminal cause, `null` on every non-failed record. See the shared declaration. */
+  readonly error: HostUpdateAttemptError;
+  /** Probed, never inferred (D13). See the shared declaration. */
+  readonly liveness: LocalAttemptLiveness;
+  /** Desktop's clock at the probe; `null` when no probe ran. */
+  readonly livenessObservedAtMs: number | null;
 }
 
 // Two independent lanes, per the Tech Plan's canonical status shape.

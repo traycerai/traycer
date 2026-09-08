@@ -157,6 +157,8 @@ export function SessionImportAnnouncementController(): ReactNode {
       onClose={() => {
         setDialogOpen(false);
       }}
+      // The dialog captures the active host once when it opens.
+      initialHostId={null}
     />
   );
 }

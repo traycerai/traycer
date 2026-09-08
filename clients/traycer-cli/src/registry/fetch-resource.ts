@@ -186,6 +186,12 @@ export async function fetchText(
     } catch (err) {
       controller.abort();
       if (isCliError(err)) throw err;
+      // Our own HTTP client is gone, not the registry's. No later attempt can
+      // succeed and none of them reaches the network, so stop here and say so.
+      const shutdownCode = httpClientShutdownCode(err);
+      if (shutdownCode !== null) {
+        throw httpClientShutdownError(url, shutdownCode);
+      }
       // A caller-supplied abort signal is a deliberate cancellation (e.g. the
       // yank lookup's fail-open watchdog), not a transient network failure:
       // stop immediately instead of burning the remaining retry budget.
@@ -307,6 +313,15 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
       restarted = true;
       lastError = new Error(result.reason);
     } catch (err) {
+      // Same shutdown class as in `fetchText`, and it stays FIRST - but for a
+      // different reason than the one it arrived with. On `main` it had to
+      // precede the CliError branch because that branch discarded the partial;
+      // here nothing below discards, so what keeps it first is the error
+      // CONVERSION it performs, which the branch below would swallow.
+      const shutdownCode = httpClientShutdownCode(err);
+      if (shutdownCode !== null) {
+        throw httpClientShutdownError(opts.url, shutdownCode);
+      }
       // Terminal, but the partial is NOT this loop's to judge. `isCliError` is
       // a bare name check, so it cannot tell "these bytes are poisoned" from
       // "the request could not be made at all" - and both shapes reach here.
@@ -317,6 +332,10 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
       // above already draws that line correctly (`isTrustFailure` in
       // registry/client.ts keeps the file for everything but a sha256
       // mismatch); deleting here silently contradicted it.
+      //
+      // `main` added the shutdown branch above as a narrow exemption from that
+      // same discard. Both sides were removing a wrong discard; this keeps the
+      // general answer and the conversion.
       if (isCliError(err)) throw err;
       lastError = err;
     }
@@ -644,6 +663,68 @@ function exhaustedNetworkError(
 
 function isCliError(err: unknown): err is Error {
   return err instanceof Error && err.name === "CliError";
+}
+
+// undici retires a dispatcher by making it REFUSE work, not by making it
+// disappear: once `Agent.close()` or `.destroy()` has been called, every
+// subsequent dispatch rejects with `ClientClosedError` / `ClientDestroyedError`
+// for the life of the process. The CLI has exactly one global dispatcher, and
+// its normal exit path closes it. The process-fatal path no longer does (it
+// leaves the interrupted command alive by design and the dispatcher open for
+// it; see runner/exit.ts), so a request meets these only when some other exit
+// closed the client first - the non-runner paths, or a fatal that fired after
+// the command settled - and the classification stays for exactly those.
+//
+// `fetch` does not surface them directly. It reports its own opaque
+// `TypeError: fetch failed` and hangs the real error off `cause`, so the code
+// is the only reliable identifier and it lives one level down. Walked, rather
+// than read at a fixed depth, because a proxying dispatcher can add a link -
+// and bounded, because nothing stops a `cause` chain from being cyclic.
+const HTTP_CLIENT_SHUTDOWN_CODES: ReadonlySet<string> = new Set([
+  "UND_ERR_CLOSED",
+  "UND_ERR_DESTROYED",
+]);
+const MAX_CAUSE_DEPTH = 4;
+
+function httpClientShutdownCode(err: unknown): string | null {
+  let current: unknown = err;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth += 1) {
+    if (current === null || typeof current !== "object") return null;
+    if (
+      "code" in current &&
+      typeof current.code === "string" &&
+      HTTP_CLIENT_SHUTDOWN_CODES.has(current.code)
+    ) {
+      return current.code;
+    }
+    if (!("cause" in current)) return null;
+    current = current.cause;
+  }
+  return null;
+}
+
+/**
+ * Fail a registry request that the CLI's own HTTP client refused to carry.
+ *
+ * Deliberately NOT `REGISTRY_UNAVAILABLE`, and deliberately not retried. The
+ * retry budget exists for a peer that might answer differently in 750ms; a
+ * closed dispatcher will not, ever, so retrying only spends four attempts to
+ * arrive at a verdict about a registry that was never asked. That verdict was
+ * the visible failure: a Mac install died of an unrelated uncaught exception,
+ * the exit path closed the dispatcher out from under the download that was
+ * still running, and what the user was told - what the support report led with
+ * - was that the release registry was unreachable. It was not.
+ *
+ * The message is fixed text plus the URL and the closed-set undici code, so
+ * nothing an origin controls reaches the terminal through it.
+ */
+function httpClientShutdownError(url: string, shutdownCode: string): Error {
+  return cliError({
+    code: CLI_ERROR_CODES.UNEXPECTED,
+    message: `host registry: GET ${url} was abandoned because this CLI's HTTP client was shut down mid-request (${shutdownCode}) - the registry was not asked and is not implicated`,
+    details: { url, shutdownCode },
+    exitCode: 1,
+  });
 }
 
 async function partialSize(path: string): Promise<number> {

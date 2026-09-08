@@ -424,20 +424,6 @@ export const EMPTY_COMMENT_THREADS_SLICE: CommentThreadsSlice = Object.freeze({
   ),
 });
 
-/**
- * The empty tree, shared by the union below and by the provider-optional tree
- * read in `lib/epic-selectors.ts`, for the same identity reason as
- * {@link EMPTY_CHATS_SLICE} and one more that is specific to it: the
- * provider-optional read hands this straight back from a `useSyncExternalStore`
- * snapshot, and a freshly allocated empty tree there would read as a new
- * snapshot on every render.
- */
-export const EMPTY_TREE_SLICE: TreeSlice = Object.freeze({
-  rootIds: EMPTY_ARRAY,
-  childrenByParent: Object.freeze({} as Record<string, readonly string[]>),
-  nodeById: Object.freeze({} as Record<string, TreeNode>),
-});
-
 export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
   epic: Object.freeze({
     title: "",
@@ -456,5 +442,9 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
   docTuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
   tuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
   agentRoles: EMPTY_AGENT_ROLES_SLICE,
-  tree: EMPTY_TREE_SLICE,
+  tree: Object.freeze({
+    rootIds: EMPTY_ARRAY,
+    childrenByParent: Object.freeze({} as Record<string, readonly string[]>),
+    nodeById: Object.freeze({} as Record<string, TreeNode>),
+  }),
 });

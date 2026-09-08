@@ -430,6 +430,9 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     const busyDialog = await screen.findByTestId(
       "host-busy-force-defer-dialog",
     );
+    // The tray's busy verdict is the UPDATE commands' (apply / activate);
+    // its restart command confirms through `LocalHostRestartFlow`.
+    expect(busyDialog.dataset.purpose).toBe("update");
     expect(busyDialog.textContent).toContain(
       "Another Traycer process is applying an update.",
     );

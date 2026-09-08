@@ -10,14 +10,11 @@ import type {
   BrowserViewBridge,
   BrowserViewNativeTabCapability,
 } from "@traycer-clients/shared/platform/browser-view";
-import { browserSessionsStreamKeyId } from "@traycer-clients/shared/platform/browser-view";
-import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { appLogger } from "@/lib/logger";
 import { surfaceHostOpenedTab } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { browserSessionsReducer } from "@/lib/browser-view/sessions/browser-sessions-stream";
-import { recordIndependentPageOpenedTab } from "@/lib/browser-view/sessions/independent-page-open-registry";
 import {
   openBrowserSessionsSession,
   type BrowserSessionsSession,
@@ -52,46 +49,18 @@ export interface BrowserSessionsState {
     url: string,
   ) => Promise<BrowserTabIdentity>;
   readonly closeTab: (sessionId: string, tabId: string) => Promise<void>;
-  /**
-   * "Attach this tab on MY window's route" - the electron-capable tile's ask
-   * when it becomes visible with no local binding. Resolves on the host's
-   * `actionAck` and rejects on a refusal (the tab is bound in another window,
-   * the session is closing) or on {@link ATTACH_TAB_TIMEOUT_MS}.
-   *
-   * Nothing calls it yet; the tile does in the multi-window states step. It
-   * lives here rather than on the stream client because the correlation - a
-   * request id, a pending entry, a timeout - is the coordinator's job.
-   */
-  readonly attachTab: (tabId: string) => Promise<void>;
-  /**
-   * "Show this tab HERE" - the same ask for a tab whose native binding is
-   * held by a route in ANOTHER window of this desktop, which `attachTab` is
-   * refused for by construction (it rejects, never relocates). Resolves on the
-   * host's `actionAck` and rejects with its reason on a refusal - an agent is
-   * driving the tab, a birth is in flight, the session is closing - or on
-   * {@link ATTACH_TAB_TIMEOUT_MS}.
-   *
-   * Unlike `attachTab` the caller SHOWS the outcome: it is a button press, so
-   * a refusal is toasted and the button comes back. A resolve needs nothing -
-   * the binding arrives through this window's ordinary `createElectronTab`
-   * path, exactly as any other native birth does.
-   */
-  readonly moveTab: (tabId: string) => Promise<void>;
 }
 
 /**
- * One inventory - an epic's, or the device's `independent` one - keyed by
- * {scope, host, authenticated owner}. The registry is module-global because
- * several React surfaces (the canvas tiles, the sidebar, the PiP bridge)
- * subscribe to the same stream and must not each open one - consumers refcount
- * into a single coordinator. Two scopes on one host and identity are two
- * inventories and therefore two streams; that is the point of the key.
+ * One epic's browser inventory, keyed by {epic, host, authenticated owner}.
+ * The registry is module-global because several React surfaces (the canvas
+ * tiles, the sidebar, the PiP bridge) subscribe to the same stream and must
+ * not each open one - consumers refcount into a single coordinator.
  *
  * On the desktop the SOCKET is not here: main owns it, and this coordinator
  * holds the UX projection of it (browser-security-hardening H10). What the
  * coordinator kept is exactly what it is for - which streams should exist, the
- * session inventory it renders, and the user-initiated tab requests with the
- * request correlation they need.
+ * session inventory it renders, and the three user-initiated tab requests.
  */
 export interface BrowserSessionsOwner {
   readonly hostId: string;
@@ -212,7 +181,7 @@ type PendingRequests<T> = Map<
 
 interface BrowserSessionsCoordinator {
   readonly owner: BrowserSessionsOwner;
-  readonly scope: HostResourceScope;
+  readonly epicId: string;
   state: BrowserSessionsState;
   /**
    * Snapshot-only capture of one tab on this coordinator's host, for a chat
@@ -242,26 +211,11 @@ const browserSessionsCoordinatorListeners = new Map<string, Set<() => void>>();
  */
 const browserSessionsRegistryListeners = new Set<() => void>();
 
-/**
- * The registry key every consumer acquires by: the stream key's own encoding,
- * computed BY that encoder rather than re-spelled here.
- *
- * `browserSessionsStreamKeyId` exists because main and the renderer used to
- * spell this separately, and a third spelling would reopen exactly the drift
- * it closed - a coordinator and the main-process stream it drives have to be
- * named identically on both sides of the desktop's IPC, and the encoding is
- * load-bearing (it flattens the scope, because `JSON.stringify` would
- * otherwise let two orderings of one scope literal become two keys).
- */
 export function browserSessionsCoordinatorKey(
-  scope: HostResourceScope,
+  epicId: string,
   owner: BrowserSessionsOwner,
 ): string {
-  return browserSessionsStreamKeyId({
-    scope,
-    hostId: owner.hostId,
-    identityKey: owner.identityKey,
-  });
+  return JSON.stringify([epicId, owner.hostId, owner.identityKey]);
 }
 
 export function hasBrowserSessionsCoordinator(key: string): boolean {
@@ -274,24 +228,6 @@ export function hasBrowserSessionsCoordinator(key: string): boolean {
  * no other way out.
  */
 const TAB_PREVIEW_TIMEOUT_MS = 5_000;
-
-/**
- * Bound on one `attachTab` or `moveTab` ack.
- *
- * `closeTab` is deliberately unbounded and this is not, because the two have
- * different evidence behind them: a close is followed by a `sessionUpdated` or
- * `sessionClosed` frame whatever happens to the ack, while an attach's ONLY
- * answer is the ack - a host that declines to move a tab changes nothing in
- * the inventory. The caller is a tile that fires once on activation and never
- * re-sends, so an unbounded promise here is one that is awaited and never
- * settles. Long enough to cover a dormant tab's wake and a native guest's
- * birth on the far side.
- *
- * A move is bounded by the same number for a stronger reason: a reader is
- * watching a disabled button, and the whole cost of a move that never answers
- * is that button never coming back.
- */
-const ATTACH_TAB_TIMEOUT_MS = 10_000;
 
 export function browserSessionsCoordinatorState(
   key: string | null,
@@ -311,7 +247,7 @@ export function upsertBrowserSessionsCoordinatorConsumer(
 export function acquireBrowserSessionsCoordinator(args: {
   readonly key: string;
   readonly consumerId: symbol;
-  readonly scope: HostResourceScope;
+  readonly epicId: string;
   readonly owner: BrowserSessionsOwner;
   readonly runtime: BrowserSessionsCoordinatorRuntime;
   readonly createIfMissing: boolean;
@@ -368,49 +304,31 @@ export interface BrowserSessionsCoordinatorEntry {
   readonly state: BrowserSessionsState;
 }
 
-/**
- * Every live coordinator for `epicId`, in registry (insertion) order.
- *
- * Epic-scoped by name and by narrow: an `independent` coordinator belongs to no
- * epic, so it is not "every coordinator that happens to be open" - it is the
- * ones this epic's surfaces may read.
- */
+/** Every live coordinator for `epicId`, in registry (insertion) order. */
 export function browserSessionsCoordinatorsForEpic(
   epicId: string,
 ): readonly BrowserSessionsCoordinatorEntry[] {
   const out: BrowserSessionsCoordinatorEntry[] = [];
   browserSessionsCoordinators.forEach((coordinator, key) => {
-    if (
-      coordinator.scope.kind === "epic" &&
-      coordinator.scope.epicId === epicId
-    )
+    if (coordinator.epicId === epicId)
       out.push({ key, state: coordinator.state });
   });
   return out;
 }
 
 /**
- * The live session with this id on ANY host whose EPIC-scoped coordinator is
- * open, or `null`.
+ * The live session with this id on ANY host whose coordinator is open, or
+ * `null`.
  *
  * Composer chips (browser-tab mentions, annotation cards) carry a
  * `sessionId`/`tabId` and no host, and they render inside a chat tile that is
  * bound to ONE host's sessions stream. Session ids are host-minted uuids, so
- * scanning the registry cannot resolve the wrong session by collision.
- *
- * Independent coordinators are skipped, and that is a SCOPE decision rather
- * than a collision one - the two arguments are different, and only the first
- * is answered by uuids. A Start Page browser session belongs to the device,
- * not to any task: agent visibility is derived from the chat's epic on the
- * host, so an independent session is invisible to an agent by construction,
- * and the GUI's epic surfaces should not be the seam that hands one back. A
- * chip cannot name a session the user never put in a task.
+ * scanning the registry cannot resolve the wrong session.
  */
 export function browserSessionAcrossCoordinators(
   sessionId: string,
 ): BrowserSessionInfo | null {
   for (const coordinator of browserSessionsCoordinators.values()) {
-    if (coordinator.scope.kind !== "epic") continue;
     const session = coordinator.state.items.find(
       (item) => item.sessionId === sessionId,
     );
@@ -446,13 +364,11 @@ export function subscribeToBrowserSessionsCoordinators(
 function createBrowserSessionsCoordinator(args: {
   readonly key: string;
   readonly consumerId: symbol;
-  readonly scope: HostResourceScope;
+  readonly epicId: string;
   readonly owner: BrowserSessionsOwner;
   readonly runtime: BrowserSessionsCoordinatorRuntime;
 }): BrowserSessionsCoordinator {
   const pendingCloses: PendingRequests<void> = new Map();
-  const pendingAttaches: PendingRequests<void> = new Map();
-  const pendingMoves: PendingRequests<void> = new Map();
   const pendingOpens: PendingRequests<BrowserTabIdentity> = new Map();
   const pendingPreviews: PendingRequests<BrowserTabPreview> = new Map();
   const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
@@ -554,22 +470,6 @@ function createBrowserSessionsCoordinator(args: {
       tabId,
     }));
 
-  const attachTab = (tabId: string): Promise<void> =>
-    sendRequest(pendingAttaches, ATTACH_TAB_TIMEOUT_MS, (requestId) => ({
-      kind: "attachTab",
-      hasBinaryPayload: false,
-      requestId,
-      tabId,
-    }));
-
-  const moveTab = (tabId: string): Promise<void> =>
-    sendRequest(pendingMoves, ATTACH_TAB_TIMEOUT_MS, (requestId) => ({
-      kind: "moveTab",
-      hasBinaryPayload: false,
-      requestId,
-      tabId,
-    }));
-
   const openTab = (
     sessionId: string | null,
     url: string,
@@ -593,8 +493,6 @@ function createBrowserSessionsCoordinator(args: {
   const rejectEveryPendingRequest = (): void => {
     const closed = new Error("Browser sessions stream closed.");
     rejectPendingRequests(pendingCloses, closed);
-    rejectPendingRequests(pendingAttaches, closed);
-    rejectPendingRequests(pendingMoves, closed);
     rejectPendingRequests(pendingOpens, closed);
     rejectPendingRequests(pendingPreviews, closed);
   };
@@ -605,12 +503,7 @@ function createBrowserSessionsCoordinator(args: {
   ): void => {
     const wasLive = lifecycle === "live";
     lifecycle = next;
-    // The PiP store is keyed by epic, and an `independent` stream has no epic
-    // to key by. Nothing downstream would break on a sentinel; the store would
-    // just grow a bucket no PiP surface ever reads.
-    if (args.scope.kind === "epic") {
-      applyPipHostLifecycle(args.scope.epicId, args.owner.hostId, next);
-    }
+    applyPipHostLifecycle(args.epicId, args.owner.hostId, next);
     if (next !== "live" && wasLive) {
       rejectEveryPendingRequest();
       removeOwnedElectronTabBindings(tabBindingOwner);
@@ -625,7 +518,7 @@ function createBrowserSessionsCoordinator(args: {
   const onFrame = (frame: BrowserSessionsUxServerFrame): void => {
     handleBrowserSessionsFrame({
       frame,
-      scope: args.scope,
+      epicId: args.epicId,
       hostId: args.owner.hostId,
       setItems: (items) => {
         patchState({
@@ -635,8 +528,6 @@ function createBrowserSessionsCoordinator(args: {
         });
       },
       pendingCloses,
-      pendingAttaches,
-      pendingMoves,
       pendingOpens,
       pendingPreviews,
       presenters: selectBrowserSessionsPresenters(runtimes),
@@ -664,7 +555,7 @@ function createBrowserSessionsCoordinator(args: {
     lifecycle = "connecting";
     session = openBrowserSessionsSession({
       key: {
-        scope: args.scope,
+        epicId: args.epicId,
         hostId: args.owner.hostId,
         identityKey: args.owner.identityKey,
       },
@@ -698,7 +589,7 @@ function createBrowserSessionsCoordinator(args: {
 
   const coordinator: BrowserSessionsCoordinator = {
     owner: args.owner,
-    scope: args.scope,
+    epicId: args.epicId,
     captureTabPreview,
     state: {
       hostId: args.owner.hostId,
@@ -713,8 +604,6 @@ function createBrowserSessionsCoordinator(args: {
       retry: restart,
       openTab,
       closeTab,
-      attachTab,
-      moveTab,
     },
     upsertConsumer: (consumerId, nextRuntime) => {
       runtimes.set(consumerId, nextRuntime);
@@ -759,24 +648,14 @@ function runtimeChanged(
   );
 }
 
-/**
- * `actionAck` answers every void-result request on this stream, so it routes by
- * REQUEST ID across each pending map rather than assuming a close. Request ids
- * are `crypto.randomUUID()`, so at most one map holds any given one; reading
- * only `pendingCloses` would drop an `attachTab` ack on the floor and leave its
- * promise to time out as though the host had never answered.
- */
-function handleActionAck(
+function handleCloseAck(
   frame: Extract<BrowserSessionsUxServerFrame, { readonly kind: "actionAck" }>,
-  pendingByRequestId: readonly PendingRequests<void>[],
+  pendingCloses: PendingRequests<void>,
 ): void {
-  for (const pendingRequests of pendingByRequestId) {
-    const pending = pendingRequests.get(frame.requestId);
-    if (pending === undefined) continue;
-    if (frame.ok) pending.resolve();
-    else pending.reject(new Error(frame.reason ?? "Browser action failed."));
-    return;
-  }
+  const pending = pendingCloses.get(frame.requestId);
+  if (pending === undefined) return;
+  if (frame.ok) pending.resolve();
+  else pending.reject(new Error(frame.reason ?? "Browser action failed."));
 }
 
 /**
@@ -786,13 +665,11 @@ function handleActionAck(
  */
 function handleBrowserSessionsFrame(args: {
   readonly frame: BrowserSessionsUxServerFrame;
-  readonly scope: HostResourceScope;
+  readonly epicId: string;
   readonly hostId: string;
   readonly currentItems: () => readonly BrowserSessionInfo[];
   readonly setItems: (items: readonly BrowserSessionInfo[]) => void;
   readonly pendingCloses: PendingRequests<void>;
-  readonly pendingAttaches: PendingRequests<void>;
-  readonly pendingMoves: PendingRequests<void>;
   readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly presenters: readonly BrowserSessionsPresenter[];
@@ -808,11 +685,7 @@ function handleBrowserSessionsFrame(args: {
       return;
     }
     case "actionAck":
-      handleActionAck(frame, [
-        args.pendingCloses,
-        args.pendingAttaches,
-        args.pendingMoves,
-      ]);
+      handleCloseAck(frame, args.pendingCloses);
       return;
     case "openTabResult":
       handleOpenTabResult(frame, args.pendingOpens);
@@ -830,10 +703,30 @@ function handleBrowserSessionsFrame(args: {
       return;
     }
     case "caption":
-      applyCaptionFrame(frame, args.scope, args.hostId);
+      applyPipCaption({
+        epicId: args.epicId,
+        hostId: args.hostId,
+        sessionId: frame.sessionId,
+        tabId: frame.tabId,
+        cellTitle: frame.cellTitle,
+      });
       return;
     case "tabOpened":
-      surfaceTabOpenedFrame(frame, args.scope, args.hostId, args.presenters);
+      for (const presenter of args.presenters) {
+        if (
+          surfaceHostOpenedTab({
+            epicId: args.epicId,
+            viewTabId: presenter.viewTabId,
+            hostId: args.hostId,
+            sessionId: frame.sessionId,
+            tabId: frame.tabId,
+            source: frame.source,
+            navigateNested: presenter.navigateNested,
+          })
+        ) {
+          break;
+        }
+      }
       return;
     case "burstStarted":
     case "burstEnded":
@@ -847,76 +740,6 @@ function handleBrowserSessionsFrame(args: {
       appLogger.warn("[browser] unhandled browser.sessions frame", {
         frameKind: args.frame.kind,
       });
-    }
-  }
-}
-
-/**
- * Captions ride an agent burst and the PiP store is keyed by epic, so this arm
- * is epic-scoped twice over. An independent stream never receives one - agents
- * are epic-scoped on the host - and the narrow is what makes that readable
- * here rather than assumed.
- */
-function applyCaptionFrame(
-  frame: Extract<BrowserSessionsUxServerFrame, { readonly kind: "caption" }>,
-  scope: HostResourceScope,
-  hostId: string,
-): void {
-  if (scope.kind !== "epic") return;
-  applyPipCaption({
-    epicId: scope.epicId,
-    hostId,
-    sessionId: frame.sessionId,
-    tabId: frame.tabId,
-    cellTitle: frame.cellTitle,
-  });
-}
-
-/**
- * Where a host-opened tab is surfaced, which is a different place per scope.
- *
- * An epic stream's surface is that Epic's canvas, reached through a registered
- * presenter. An independent stream has no canvas - its tabs belong to the
- * device's Start Page - and the frame carries no scope restriction of its own,
- * so the arm below routes it rather than dropping it. What it can do there is
- * narrower: the panel is not necessarily mounted, and its tab list is built
- * from the device's inventory, so the identity is recorded for the panel's
- * reconciler to consume when it adopts the row.
- *
- * `source` is the whole decision on that side. A page opening a tab is a
- * gesture the reader made and expects to land on; an agent's is not - and an
- * agent has no business on an independent stream anyway, since agents are
- * epic-scoped on the host, which is exactly why the arm asserts it instead of
- * surfacing whatever arrives.
- */
-function surfaceTabOpenedFrame(
-  frame: Extract<BrowserSessionsUxServerFrame, { readonly kind: "tabOpened" }>,
-  scope: HostResourceScope,
-  hostId: string,
-  presenters: readonly BrowserSessionsPresenter[],
-): void {
-  if (scope.kind !== "epic") {
-    if (frame.source !== "page") return;
-    recordIndependentPageOpenedTab({
-      hostId,
-      sessionId: frame.sessionId,
-      tabId: frame.tabId,
-    });
-    return;
-  }
-  for (const presenter of presenters) {
-    if (
-      surfaceHostOpenedTab({
-        epicId: scope.epicId,
-        viewTabId: presenter.viewTabId,
-        hostId,
-        sessionId: frame.sessionId,
-        tabId: frame.tabId,
-        source: frame.source,
-        navigateNested: presenter.navigateNested,
-      })
-    ) {
-      return;
     }
   }
 }

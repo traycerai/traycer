@@ -11,7 +11,6 @@ import type {
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useScreencastSession } from "@/lib/browser-view/sessions/use-screencast-session";
-import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 function unusedClientMethod(): never {
   throw new Error("not exercised by this test");
@@ -96,7 +95,7 @@ function Harness(props: {
 }): React.JSX.Element {
   const session = useScreencastSession({
     client: props.client,
-    scope: epicScope("epic-1"),
+    epicId: "epic-1",
     hostId: "host-1",
     sessionId: "session-1",
     tabId: "tab-1",

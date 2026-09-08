@@ -1,14 +1,20 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useId, useMemo } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { History, Search } from "lucide-react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
 import type {
   SessionImportGroup,
   SessionImportSelection,
 } from "@traycer/protocol/host/session-import/candidate";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { SessionImportImportedSupport } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -37,7 +43,11 @@ import {
 } from "@/components/session-import/session-import-group";
 import { SessionImportProgress } from "@/components/session-import/session-import-progress";
 import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
-import { startSessionImportRun } from "@/components/session-import/session-import-run-handle";
+import {
+  attachSessionImportRun,
+  startSessionImportRun,
+} from "@/components/session-import/session-import-run-handle";
+import { useSessionImportCheckStatus } from "@/hooks/session-import/use-session-import-check-status-query";
 import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   sessionImportTone,
@@ -76,6 +86,8 @@ export function SessionImportWizard(props: {
   readonly scan: SessionImportScanHandle;
   /** Called once a run has been submitted, so the caller can move on. */
   readonly onImportStarted: () => void;
+  readonly onTaskOpened: () => void;
+  readonly onBeforeTaskOpen: (() => Promise<boolean>) | null;
   readonly secondaryAction: SessionImportSecondaryAction | null;
 }) {
   const { surface, scan, onImportStarted, secondaryAction } = props;
@@ -87,6 +99,24 @@ export function SessionImportWizard(props: {
   const hostId = streamBinding?.hostId ?? null;
   const runStatus = useSessionImportRun(hostId).status;
   const runIdle = runStatus === "idle";
+  const statusQuery = useSessionImportCheckStatus(streamBinding, runIdle);
+  const activeRun = statusQuery.isSuccess ? statusQuery.data.active : null;
+  const canSubmit = sessionImportHostIsIdle(statusQuery);
+  const checkingStatus = !statusQuery.isError && !canSubmit;
+  // The controller only probes the app's host on its own. A wizard on any
+  // other host checks through Query first and attaches without selections.
+  // Submission stays disabled until an idle answer arrives, including when
+  // the onboarding scan was populated before this wizard mounted.
+  useEffect(() => {
+    if (!runIdle || !statusQuery.isSuccess || statusQuery.isFetching) return;
+    if (activeRun !== null) attachSessionImportRun(streamBinding, activeRun);
+  }, [
+    activeRun,
+    runIdle,
+    statusQuery.isFetching,
+    statusQuery.isSuccess,
+    streamBinding,
+  ]);
   // Meeting the wizard on any surface - the tour act, the Settings dialog,
   // the release toast's own dialog - is the announcement: the id is consumed
   // on mount so the toast never follows for a user who has already opened
@@ -129,7 +159,7 @@ export function SessionImportWizard(props: {
   const submit = (): void => {
     // A run already under way owns the screen, and the button is not rendered
     // then - this guards a click that raced the store.
-    if (!runIdle) return;
+    if (!runIdle || !canSubmit) return;
     const submission = buildSessionImportSubmission(state);
     if (submission.selections.length === 0) return;
     Analytics.getInstance().track(AnalyticsEvent.SessionImportStarted, {
@@ -160,6 +190,11 @@ export function SessionImportWizard(props: {
         providers={view.providers}
         scanning={state.phase === "scanning"}
         scanWindow={state.scanWindow}
+        showImported={state.showImported}
+        importedSupport={state.importedSupport}
+        onShowImportedChange={(showImported) =>
+          dispatch({ kind: "showImportedChanged", showImported })
+        }
         onQueryChange={(query) => dispatch({ kind: "queryChanged", query })}
         onToggleProvider={(harness) =>
           dispatch({ kind: "providerScopeToggled", harness })
@@ -169,7 +204,7 @@ export function SessionImportWizard(props: {
         }
       />
 
-      {view.groups.length > 0 ? (
+      {view.groups.length > 0 && view.selectableSessions > 0 ? (
         <div className="flex shrink-0 items-center gap-1 px-4 pt-2">
           <button
             type="button"
@@ -179,7 +214,7 @@ export function SessionImportWizard(props: {
                 ? "mixed"
                 : visibleSelection === "all"
             }
-            aria-label="Select all listed work"
+            aria-label="Select all available tasks shown"
             data-testid="session-import-visible-selection"
             disabled={view.visibleSelectionKeys.length === 0}
             onClick={() =>
@@ -209,8 +244,8 @@ export function SessionImportWizard(props: {
               data-testid="session-import-selection-count"
               className={cn("text-ui-xs tabular-nums", tone.faint)}
             >
-              {view.selectedCount.toLocaleString()} of{" "}
-              {view.selectableSessions.toLocaleString()} selected
+              {view.selectedCount.toLocaleString()}{" "}
+              {view.selectedCount === 1 ? "task" : "tasks"} selected for import
             </span>
           ) : null}
         </div>
@@ -254,6 +289,8 @@ export function SessionImportWizard(props: {
             onSetGroupSelection={(groupKey, selected) =>
               dispatch({ kind: "groupSelectionSet", groupKey, selected })
             }
+            onTaskOpened={props.onTaskOpened}
+            onBeforeTaskOpen={props.onBeforeTaskOpen}
             onToggleSession={(selectionKey) =>
               dispatch({ kind: "sessionToggled", selectionKey })
             }
@@ -276,27 +313,79 @@ export function SessionImportWizard(props: {
             </span>
           </div>
         ) : null}
-        {state.phase !== "scanning" && view.groups.length === 0 ? (
-          <p
-            data-testid="session-import-empty"
-            className={cn(
-              "mx-auto max-w-[26rem] px-1 py-10 text-center text-ui-sm",
-              tone.muted,
-            )}
-          >
-            {emptyMessage(state, view)}
-          </p>
-        ) : null}
+        <SessionImportEmptyState
+          state={state}
+          view={view}
+          tone={tone}
+          onShowImported={() =>
+            dispatch({ kind: "showImportedChanged", showImported: true })
+          }
+        />
       </div>
 
+      {statusQuery.isError ? (
+        <div role="alert" className="flex items-center gap-2 px-4 py-2">
+          <p className={cn("text-ui-xs", tone.muted)}>
+            Traycer could not check whether an import is already running.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={statusQuery.isFetching}
+            onClick={() => void statusQuery.refetch()}
+          >
+            Try again
+          </Button>
+        </div>
+      ) : null}
       <SessionImportFooter
         tone={tone}
         view={view}
+        canSubmit={canSubmit}
+        checkingStatus={checkingStatus}
         secondaryAction={secondaryAction}
         onSubmit={submit}
       />
     </div>
   );
+}
+
+function SessionImportEmptyState(props: {
+  readonly state: SessionImportWizardState;
+  readonly view: SessionImportWizardView;
+  readonly tone: SessionImportTone;
+  readonly onShowImported: () => void;
+}) {
+  const { state, view, tone, onShowImported } = props;
+  if (state.phase === "scanning" || view.groups.length > 0) return null;
+  return (
+    <div
+      data-testid="session-import-empty"
+      className={cn(
+        "mx-auto max-w-[26rem] px-1 py-10 text-center text-ui-sm",
+        tone.muted,
+      )}
+    >
+      <p>{emptyMessage(state, view)}</p>
+      {view.hiddenImportedCount > 0 && state.importedSupport === "supported" ? (
+        <Button
+          variant="link"
+          className="block mx-auto"
+          onClick={onShowImported}
+        >
+          Show imported
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** A pending, failed, or refetching status cannot authorize a new import. */
+function sessionImportHostIsIdle(
+  query: UseQueryResult<SessionImportStatusResponse, HostRpcError>,
+): boolean {
+  return query.isSuccess && !query.isFetching && query.data.active === null;
 }
 
 /**
@@ -309,6 +398,9 @@ function SessionImportFilters(props: {
   readonly providers: ReadonlyArray<SessionImportProviderView>;
   readonly scanning: boolean;
   readonly scanWindow: SessionImportScanWindow;
+  readonly showImported: boolean;
+  readonly importedSupport: SessionImportImportedSupport;
+  readonly onShowImportedChange: (showImported: boolean) => void;
   readonly onQueryChange: (query: string) => void;
   readonly onToggleProvider: (harness: GuiHarnessId) => void;
   readonly onScanWindowChange: (window: SessionImportScanWindow) => void;
@@ -365,7 +457,68 @@ function SessionImportFilters(props: {
             onToggle={onToggleProvider}
           />
         ))}
+        <ImportedVisibilityToggle
+          tone={tone}
+          showImported={props.showImported}
+          support={props.importedSupport}
+          onChange={props.onShowImportedChange}
+        />
       </div>
+    </div>
+  );
+}
+
+function importedVisibilityNotice(
+  support: SessionImportImportedSupport,
+): string | null {
+  switch (support) {
+    case "unsupported":
+      return "Update this host to view imported tasks";
+    case "unknown":
+      return "Checking host support…";
+    case "supported":
+      return null;
+  }
+}
+
+function ImportedVisibilityToggle(props: {
+  readonly tone: SessionImportTone;
+  readonly showImported: boolean;
+  readonly support: SessionImportImportedSupport;
+  readonly onChange: (showImported: boolean) => void;
+}) {
+  const { tone, showImported, support, onChange } = props;
+  const switchId = useId();
+  const disabled = support !== "supported";
+  const checked = showImported && !disabled;
+  return (
+    <div
+      className={cn(
+        "ml-auto flex items-center gap-1.5 px-2 py-1 text-ui-xs",
+        disabled && "opacity-55",
+        tone.muted,
+      )}
+    >
+      <TooltipWrapper
+        label={importedVisibilityNotice(support)}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Switch
+          id={switchId}
+          checked={checked}
+          aria-label="Show imported"
+          // Keep unavailable controls focusable so the host-support tooltip
+          // is also accessible from the keyboard.
+          aria-disabled={disabled}
+          data-testid="session-import-show-imported"
+          onCheckedChange={(next) => {
+            if (!disabled) onChange(next);
+          }}
+        />
+      </TooltipWrapper>
+      <label htmlFor={switchId}>Show imported</label>
     </div>
   );
 }
@@ -441,10 +594,13 @@ function ScanWindowSelect(props: {
 function SessionImportFooter(props: {
   readonly tone: SessionImportTone;
   readonly view: SessionImportWizardView;
+  readonly canSubmit: boolean;
+  readonly checkingStatus: boolean;
   readonly secondaryAction: SessionImportSecondaryAction | null;
   readonly onSubmit: () => void;
 }) {
-  const { tone, view, secondaryAction, onSubmit } = props;
+  const { tone, view, canSubmit, checkingStatus, secondaryAction, onSubmit } =
+    props;
   return (
     <div
       className={cn(
@@ -466,11 +622,18 @@ function SessionImportFooter(props: {
         type="button"
         size="sm"
         data-testid="session-import-submit"
-        disabled={view.selectedCount === 0}
+        disabled={!canSubmit || view.selectedCount === 0}
         onClick={onSubmit}
       >
+        {checkingStatus ? (
+          <AgentSpinningDots
+            className={tone.muted}
+            testId="session-import-status-spinner"
+            variant={undefined}
+          />
+        ) : null}
         Import {view.selectedCount}{" "}
-        {view.selectedCount === 1 ? "session" : "sessions"}
+        {view.selectedCount === 1 ? "task" : "tasks"}
       </Button>
     </div>
   );
@@ -553,6 +716,8 @@ function emptyMessage(
 ): string {
   if (state.phase === "failed")
     return "Traycer could not read your work folders.";
+  if (view.hiddenImportedCount > 0 && state.importedSupport === "supported")
+    return "All matching tasks have already been imported.";
   if (view.totalSessions === 0) {
     // A bounded scan finding nothing is not "you have no work" - the window
     // picker above can look further back, and the copy points at it.

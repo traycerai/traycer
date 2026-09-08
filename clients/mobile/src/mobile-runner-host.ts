@@ -75,6 +75,7 @@ import type {
   IPushPermissionHost,
   IRunnerHost,
   ISecureStorage,
+  ISystemBackHost,
   ITokenStore,
   ITrayState,
   IWorkspaceFoldersHost,
@@ -188,6 +189,12 @@ export interface MobileRunnerHostOptions {
    * may branch on the answer.
    */
   readonly canCopyImages: boolean;
+  /**
+   * The OS back request, or `null` where the OS raises none - see
+   * `IRunnerHost.systemBack`. Decided by the entry point like the members
+   * above: which platform this is stays the entry's business.
+   */
+  readonly systemBack: ISystemBackHost | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -253,6 +260,7 @@ export class MobileRunnerHost implements IRunnerHost {
    * wherever it would have nothing to report or no working button.
    */
   readonly pushPermission: IPushPermissionHost | null;
+  readonly systemBack: ISystemBackHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
   // One evidence pair per platform - see `resumeEvidenceModeFor` and the
   // MobileSystemResume class doc for why the same Capacitor event names mean
@@ -296,6 +304,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.linkLoginDeepLinks = options.linkLoginDeepLinks;
     this.fileSave = options.fileSave;
     this.canCopyImages = options.canCopyImages;
+    this.systemBack = options.systemBack;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,

@@ -10,7 +10,17 @@ import type {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 
-function hostControllerStatusQueryOptions(management: IHostManagement | null) {
+/**
+ * Exported so a caller that may render OUTSIDE a `<RunnerHostProvider>` can
+ * build the same query from a nullable management port — same key, same
+ * event-sourced entry, no second copy of the disabled-arm rules. The Overview
+ * panel is that caller (`useRunnerHostOrNull`), and a private query there would
+ * have split the controller status into two cache entries with two priming
+ * reads.
+ */
+export function hostControllerStatusQueryOptions(
+  management: IHostManagement | null,
+) {
   return queryOptions<HostControllerStatus>({
     queryKey:
       management !== null

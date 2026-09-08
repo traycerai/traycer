@@ -17,6 +17,7 @@ import {
   hostDevIdentityPoolRoot,
   hostIdentityNeedsReauthPath,
   hostNeedsReauthPath,
+  hostUpdateProgressMarkerLockPath,
 } from "../store/paths";
 import {
   pendingUpgradeFinalisable,
@@ -33,6 +34,7 @@ import {
 } from "../host/bootstrap-log";
 import { isFatalSignal } from "../host/crash-diagnostics";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   type HostLayer0Record,
   type HostPidMetadata,
@@ -58,6 +60,7 @@ import {
 import { readCliFeedCompatibilityEpoch } from "../registry/cli-versions";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { Environment } from "../runner/environment";
+import { probeUpdateMarkerLock } from "./update-marker-lock";
 import { CliError } from "../runner/errors";
 import {
   createServiceController,
@@ -73,7 +76,6 @@ import {
   createRealSystemdProbeRunner,
   probeLinuxSystemdHealth,
 } from "./systemd-health";
-import { isProcessAlive } from "../store/cli-lock";
 import {
   DOCTOR_ISSUE_CODES,
   type DoctorIssue,
@@ -265,8 +267,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // carries the repair that actually works there.
   const isExternallyManaged = serviceStatus?.state === "externally-managed";
   const pidMetadata = await readHostPidMetadata(opts.environment);
+  // Liveness AND identity: a crashed host's pid recycled onto an unrelated
+  // process is "alive" to a signal probe and would otherwise pass every
+  // pid-keyed check below as the host, including the port-conflict path's
+  // "that pid is the host, not a conflict" exclusion.
   const hostProcessAlive =
-    pidMetadata !== null && isProcessAlive(pidMetadata.pid);
+    pidMetadata !== null && !publishedHostProcessGone(pidMetadata);
   if (!hostProcessAlive && stoppedServiceIssue !== null) {
     issues.push(stoppedServiceIssue);
   }
@@ -288,7 +294,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       code: DOCTOR_ISSUE_CODES.PID_METADATA_STALE,
       severity: "warning",
       title: "Stale host pid metadata",
-      message: `pid.json references pid=${pidMetadata.pid} which is no longer alive.`,
+      message: `pid.json references pid=${pidMetadata.pid} which is no longer alive, or now belongs to an unrelated process.`,
       fixAction: "host-restart",
       terminalCommand: `traycer host restart`,
       details: { pid: pidMetadata.pid, version: pidMetadata.version },
@@ -800,6 +806,19 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     hostProcessAlive,
   );
   if (identityIssue !== null) issues.push(identityIssue);
+
+  // ---- 4e. Host update progress-marker lock ----
+  // `host update` takes a short lock beside its progress marker for every
+  // conditional write and answers `failed` for a write it could not make
+  // after a bounded wait. A holder that stays - a hung updater, or a lock
+  // whose holder cannot be verified and so is never broken - fails the
+  // marker step of every later update with nothing on disk that says why
+  // but the lock file itself. Read-only: doctor never breaks it.
+  const markerLockIssue = await probeUpdateMarkerLock({
+    lockPath: hostUpdateProgressMarkerLockPath(opts.environment),
+    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  if (markerLockIssue !== null) issues.push(markerLockIssue);
 
   // ---- 5. Windows credentials ACL ----
   // Windows ignores POSIX mode bits on the credentials file. On a

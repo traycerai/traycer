@@ -1,4 +1,4 @@
-import type { BrowserPeekNode } from "@/components/browser-tile/browser-peek-tile";
+import type { BrowserPeekNode } from "@/components/epic-canvas/renderers/browser-peek-tile";
 import type {
   MediaPeer,
   MediaPeerHandlers,
@@ -23,6 +23,7 @@ export interface PeekHookState {
 
 /** The one `BrowserPeekNode` every non-WebRTC suite renders against. */
 export const PEEK_NODE: BrowserPeekNode = {
+  id: "browser-peek-headless-1",
   instanceId: "peek-instance-1",
   hostId: "host-test",
   sessionId: "headless-1",
@@ -42,6 +43,7 @@ export function makeFreshPeekNode(
   return () => {
     counter += 1;
     return {
+      id: "browser-peek-headless-1",
       instanceId: "peek-instance-1",
       hostId: "host-test",
       sessionId: `${sessionPrefix}-${counter}`,
@@ -64,6 +66,12 @@ export function liveStream(hookState: {
 
 export function tabHostIdModule(): { useTabHostId: () => string } {
   return { useTabHostId: () => "host-test" };
+}
+
+export function tileBodyVisibleModule(hookState: PeekHookState): {
+  useTileBodyVisible: () => boolean;
+} {
+  return { useTileBodyVisible: () => hookState.visible };
 }
 
 export function hostDirectoryEntryModule(): {

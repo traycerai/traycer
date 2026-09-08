@@ -121,7 +121,19 @@ export function providerSignInUnavailableHint(
     return `${providerDisplayName(state.providerId)} is signed in from a terminal. Use the sign-in option in the chat composer.`;
   }
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
-  if (oauthArgs === null || oauthArgs.length === 0) {
+  // `null` alone, NOT `null || length === 0`. An EMPTY argv is a real headless
+  // sign-in for the ACP-authenticate providers: the host spawns the server and
+  // drives the ACP `authenticate` method rather than a login subcommand, so
+  // the argv it needs is genuinely empty (antigravity's `agy_acp_server`;
+  // Devin's `["acp"]` is non-empty only by accident of its binary layout).
+  // Which providers those are is the HOST's table, invisible from here, so the
+  // only honest client-side reading of a non-null argv is "the host declares a
+  // headless path". An argv that is empty AND inert is refused by the host with
+  // its own error, which is where that judgement belongs - a client-side
+  // `length === 0` guess instead hid the button, disabled Create profile, and
+  // stripped the reauth banner's OAuth option, with no way for the user to
+  // discover why.
+  if (oauthArgs === null) {
     // A permanent property of the provider, so it outranks the situational
     // reasons below: telling this user to switch hosts would waste their time.
     // Unreachable today for profile-capable providers (they all ship

@@ -321,7 +321,7 @@ function flushMicrotasks(): Promise<void> {
 }
 
 const STREAM_KEY = {
-  scope: { kind: "epic", epicId: "epic-1" },
+  epicId: "epic-1",
   hostId: "host-1",
   identityKey: "identity-1",
 };

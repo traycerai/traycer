@@ -443,6 +443,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     path: "host update",
     options: [
       { flags: "--release <version>", mandatory: false },
+      { flags: "--allow-downgrade", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
@@ -1153,6 +1154,15 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     expect(help).not.toContain("--host-update-version");
   });
 
+  it("host update --help (real render) advertises the downgrade capability contract", () => {
+    const program = freshProgram();
+    const hostUpdate = findByPath(program, ["host", "update"]);
+    // Host maintenance probes this literal before dispatching an explicit
+    // lower target. Keep the flag visible so that probe is a real capability
+    // contract rather than an implementation detail hidden from users.
+    expect(renderHelp(hostUpdate)).toContain("--allow-downgrade");
+  });
+
   // Encodes the standing user policy: every supported user-facing/invocable
   // command and flag must appear in rendered help. Hidden visibility must
   // not paper over confusing public behavior - genuinely machine-only
@@ -1226,6 +1236,19 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // Update ACK correlation nonce - the host echoes it back so the
         // dispatcher can tell THIS update's ack from an unrelated one.
         "traycer host update --ack-nonce",
+        // The BOUND intent (Plan D16) and the attempt it is bound to. Machine
+        // contracts of the same family: a reconciler resuming a parked
+        // attempt names both, and a person running `host update` names
+        // neither. They are argv rather than env precisely so a CLI too old
+        // to honour them refuses instead of running a plain install, which is
+        // a broader authorization than the caller asked for.
+        "traycer host update --intent",
+        "traycer host update --expect-attempt",
+        // The other two thirds of that identity (P1 window B). Same family,
+        // same reason for being argv: an attempt that re-parks keeps its id,
+        // so an id alone cannot say which park was authorized.
+        "traycer host update --expect-generation",
+        "traycer host update --expect-sequence",
         "traycer host restart --if-idle",
         "traycer host install --if-idle",
         "traycer host apply --expected-stage-fingerprint",

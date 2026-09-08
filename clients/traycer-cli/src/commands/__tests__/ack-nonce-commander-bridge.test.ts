@@ -91,7 +91,16 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
     // translate every option, and a test watching one field would not notice a
     // sibling being dropped or crossed over in the same callback.
     expect(captured.args).toEqual([
-      { force: false, versionRequest: null, ackNonce: "nonce-abcdefgh" },
+      {
+        force: false,
+        allowDowngrade: false,
+        versionRequest: null,
+        ackNonce: "nonce-abcdefgh",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
+      },
     ]);
   });
 
@@ -101,7 +110,16 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
   it("forwards null when the flag is absent", async () => {
     await buildProgram().parseAsync(["host", "update"], { from: "user" });
     expect(captured.args).toEqual([
-      { force: false, versionRequest: null, ackNonce: null },
+      {
+        force: false,
+        allowDowngrade: false,
+        versionRequest: null,
+        ackNonce: null,
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
+      },
     ]);
   });
 
@@ -114,7 +132,43 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
       { from: "user" },
     );
     expect(captured.args).toEqual([
-      { force: true, versionRequest: null, ackNonce: "nonce-abcdefgh" },
+      {
+        force: true,
+        allowDowngrade: false,
+        versionRequest: null,
+        ackNonce: "nonce-abcdefgh",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
+      },
+    ]);
+  });
+
+  it("forwards an explicit downgrade flag with its exact version and nonce", async () => {
+    await buildProgram().parseAsync(
+      [
+        "host",
+        "update",
+        "--release",
+        "1.2.0",
+        "--allow-downgrade",
+        "--ack-nonce",
+        "nonce-downgrade",
+      ],
+      { from: "user" },
+    );
+    expect(captured.args).toEqual([
+      {
+        force: false,
+        allowDowngrade: true,
+        versionRequest: "1.2.0",
+        ackNonce: "nonce-downgrade",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
+      },
     ]);
   });
 });

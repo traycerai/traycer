@@ -118,7 +118,19 @@ export const CLI_ERROR_CODES = {
   // rollback to the previous version (or, with nothing to roll back to on
   // a first-ever install, left the marker as `failed` without one).
   HOST_UPDATE_HEALTH_CHECK_FAILED: "E_HOST_UPDATE_HEALTH_CHECK_FAILED",
+  /**
+   * The update WORKED and the bookkeeping did not: the host verified healthy at
+   * the new version, and the record's completion write was then refused.
+   *
+   * Deliberately not `..._HEALTH_CHECK_FAILED`, which is what this used to
+   * report. No health check failed - the verify loop passed, which is the only
+   * way to reach it - and a client routing this to a failure card tells the
+   * operator their update failed while their host runs the new version.
+   */
+  HOST_UPDATE_RECORD_NOT_CONCLUDED: "E_HOST_UPDATE_RECORD_NOT_CONCLUDED",
   HOST_UPDATE_NOT_NEWER: "E_HOST_UPDATE_NOT_NEWER",
+  HOST_UPDATE_CONCURRENT_LEGACY_UPDATER:
+    "E_HOST_UPDATE_CONCURRENT_LEGACY_UPDATER",
   // The selected host version declares a `requiredCliVersion` this CLI does
   // not meet (or one it cannot parse). Distinct from HOST_INCOMPATIBLE, which
   // is a RUNNING host answering a handshake: this fires before anything is
