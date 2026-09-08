@@ -9,6 +9,7 @@ import {
 } from "@/lib/epic-selectors";
 import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
 import { useCloudLinkGrace } from "@/components/epic-canvas/panels/use-cloud-link-grace";
+import type { EpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
 import type {
   EpicSyncPillState,
   EpicWriteCommandAlert,
@@ -35,11 +36,15 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
  * Small inline status pill that the active Epic header renders. It selects the
- * highest-severity signal across artifact/Yjs durability, chat publication,
- * remote-terminal discovery, the communication-graph feed, and agent-activity
- * presence. Secondary-plane failures live here rather than only in the panel
- * whose data happened to expose them - or, in the graph's case, captioned onto
- * every agent node, and in presence's, nowhere at all.
+ * highest-severity signal across artifact/Yjs durability, the host's routing
+ * truth for the epic (local, promoting, an offline mirror, a stale local copy
+ * - `epic-durability-plane.tsx`), chat publication, remote-terminal
+ * discovery, the communication-graph feed, and agent-activity presence.
+ * Secondary-plane failures live here rather than only in the panel whose data
+ * happened to expose them - or, in the graph's case, captioned onto every
+ * agent node, and in presence's, nowhere at all. The routing plane used to be
+ * its own pill beside this one, saying everything inline; it is one dot now,
+ * and its sentence rides the hover like every other secondary plane.
  *
  * It is deliberately NOT a connection indicator. It used to be one - it read
  * the renderer↔host stream status alone - and that is why it read "All changes
@@ -71,6 +76,13 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
  */
 export interface EpicConnectionPillProps {
   readonly epicId: string;
+  /**
+   * The host's routing truth for the epic, or `null` when there is nothing
+   * to say (or before the snapshot that would say it has loaded - the status
+   * row gates it, because a not-yet-loaded epic must not read as "Storage
+   * status unknown" for the second it takes to load).
+   */
+  readonly durability: EpicDurabilityPlane | null;
 }
 
 export function EpicConnectionPill(props: EpicConnectionPillProps) {
@@ -117,6 +129,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // verdict so it can truthfully say synced during the positive settle hold.
   const secondarySignals = {
     writeCommandAlert,
+    durability: props.durability,
     chatBackupStatus,
     terminalCatalogUnavailable,
     commGraphFeedHealth,
@@ -275,6 +288,7 @@ interface PillIndicator {
 type PillSource =
   | "artifact"
   | "write-command"
+  | "durability"
   | "chat-backup"
   | "terminal-catalog"
   | "comm-graph"
@@ -416,13 +430,14 @@ const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
 
 /**
  * The secondary planes weighed against the artifact/Yjs verdict. An object
- * rather than a parameter list: there are six of them now, and a positional
+ * rather than a parameter list: there are seven of them now, and a positional
  * call site stops being readable (and trips `max-params`) well before the
  * pill runs out of planes to report.
  */
 interface PillSignals {
   readonly artifactIndicator: PillIndicator;
   readonly writeCommandAlert: EpicWriteCommandAlert | null;
+  readonly durability: EpicDurabilityPlane | null;
   readonly chatBackupStatus: EpicChatBackupStatus | null;
   readonly terminalCatalogUnavailable: boolean;
   readonly commGraphFeedHealth: CommGraphFeedHealth | null;
@@ -454,6 +469,15 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
     secondary.push({
       source: "write-command",
       indicator: indicatorForWriteCommandAlert(signals.writeCommandAlert),
+    });
+  }
+  // Second: it is about the user's DATA (where the epic lives, whether this
+  // session's edits are held anywhere) where every plane below is about a
+  // feed that heals by itself.
+  if (signals.durability !== null) {
+    secondary.push({
+      source: "durability",
+      indicator: indicatorForDurability(signals.durability),
     });
   }
   if (signals.chatBackupStatus !== null) {
@@ -558,6 +582,38 @@ function indicatorForWriteCommandAlert(
     pulse: null,
     tooltip: copy.message,
     ariaLabel: copy.message,
+  };
+}
+
+/**
+ * Dot-only, deliberately: the routing truth used to be its own pill beside
+ * this one and said its whole three-clause reading inline for the length of
+ * an outage. The sentence is the hover and the accessible name now, and the
+ * dot keeps the pill's palette - red for a stated loss, amber for doubt, the
+ * idle pulse for a promotion or reconciliation in flight. A steady reading
+ * ("Stored locally") is never selected over the artifact leg's own steady
+ * verdict, which already says the same thing in its tooltip.
+ */
+function indicatorForDurability(plane: EpicDurabilityPlane): PillIndicator {
+  return {
+    severity: plane.severity,
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName:
+      plane.severity === "danger"
+        ? "bg-red-500"
+        : plane.severity === "warning"
+          ? "bg-amber-500"
+          : "",
+    label: null,
+    showAgentSpinner: false,
+    pulse:
+      plane.severity === "activity"
+        ? "idle"
+        : plane.severity === "steady"
+          ? "active"
+          : null,
+    tooltip: plane.sentence,
+    ariaLabel: plane.sentence,
   };
 }
 

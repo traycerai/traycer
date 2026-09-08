@@ -781,6 +781,48 @@ describe("epic.status.subscribe@1.0", () => {
     expect(result.success).toBe(true);
   });
 
+  describe("the durability legs ride on the snapshot and on cloudSyncStatus, every key optional", () => {
+    const legs = {
+      durability: "promoting",
+      promotionState: "active",
+      localProtection: "armed",
+      freshness: { kind: "freshnessUnknown", state: "local-copy" },
+    };
+
+    it("parses a snapshot carrying the legs", () => {
+      const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+        kind: "snapshot",
+        ...snapshotBase,
+        ...legs,
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("parses a cloudSyncStatus transition carrying the legs", () => {
+      const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+        kind: "cloudSyncStatus",
+        authorityEpoch: "epoch-1",
+        status: "connected",
+        ...legs,
+        pauseReason: undefined,
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("refuses a durability member the @1.6 enum does not have - the lane shares that closed union", () => {
+      const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+        kind: "cloudSyncStatus",
+        authorityEpoch: "epoch-1",
+        status: "connected",
+        durability: "a-member-a-newer-host-invented",
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe("dirty is a tri-state on the snapshot: null | true | false, never omitted", () => {
     it.each([null, true, false])("parses dirty: %s", (dirty) => {
       const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({

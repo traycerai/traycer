@@ -6,7 +6,10 @@
  * wrong in a way nothing downstream would notice, and they get the detail.
  */
 import { describe, expect, it } from "vitest";
-import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import {
+  NO_CLOUD_SYNC_DURABILITY,
+  type EpicCloudSyncDurability,
+} from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { isWritablePermissionRole } from "@traycer-clients/shared/epic/permission-role";
 import type { ControlEvent } from "@traycer-clients/shared/replica-runtime";
 import { legacyControlEventOf } from "../lane-control-translation";
@@ -112,6 +115,7 @@ describe("cloud sync status", () => {
           kind: "cloud-sync-status",
           status,
           observedAtMs: 0,
+          durability: NO_CLOUD_SYNC_DURABILITY,
         }),
       ).toEqual({
         kind: "cloud-sync-status",
@@ -119,6 +123,29 @@ describe("cloud sync status", () => {
         durability: NO_CLOUD_SYNC_DURABILITY,
       });
     }
+  });
+
+  it("passes the adapter's durability legs through untouched - the lane's absence rule is the adapter's to state", () => {
+    const durability: EpicCloudSyncDurability = {
+      durability: "local",
+      pauseReason: undefined,
+      promotionState: undefined,
+      localProtection: "armed",
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: true,
+    };
+    expect(
+      legacyControlEventOf({
+        kind: "cloud-sync-status",
+        status: "disconnected",
+        observedAtMs: 0,
+        durability,
+      }),
+    ).toEqual({
+      kind: "cloud-sync-status",
+      status: "disconnected",
+      durability,
+    });
   });
 
   it("falls back to disconnected on an unrecognised value, never connected", () => {
@@ -129,6 +156,7 @@ describe("cloud sync status", () => {
         kind: "cloud-sync-status",
         status: "a-status-a-newer-host-invented",
         observedAtMs: 0,
+        durability: NO_CLOUD_SYNC_DURABILITY,
       }),
     ).toEqual({
       kind: "cloud-sync-status",

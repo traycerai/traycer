@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import {
+  epicStatusSubscribeServerFrameSchemaV10,
+  type EpicStatusDurabilityLegs,
+} from "@traycer/protocol/host/epic/status-subscribe";
 import type {
   AdapterHost,
   AdapterStatus,
@@ -35,6 +38,9 @@ interface SnapshotOverrides {
   readonly securityEpoch?: number;
   readonly permissionRole?: "owner" | "editor" | "viewer" | null;
   readonly cloudSyncStatus?: "connected" | "reconnecting" | "disconnected";
+  readonly durability?: EpicStatusDurabilityLegs["durability"];
+  readonly localProtection?: EpicStatusDurabilityLegs["localProtection"];
+  readonly freshness?: EpicStatusDurabilityLegs["freshness"];
   readonly dirty?: boolean | null;
   readonly migration?:
     | {
@@ -71,6 +77,15 @@ function snapshotFrame(overrides: SnapshotOverrides): EpicStatusSnapshotFrame {
     dirty: overrides.dirty === undefined ? null : overrides.dirty,
     migration: overrides.migration === undefined ? null : overrides.migration,
     deletion: overrides.deletion ?? { state: "unknown" },
+    ...(overrides.durability === undefined
+      ? {}
+      : { durability: overrides.durability }),
+    ...(overrides.localProtection === undefined
+      ? {}
+      : { localProtection: overrides.localProtection }),
+    ...(overrides.freshness === undefined
+      ? {}
+      : { freshness: overrides.freshness }),
     hasBinaryPayload: false,
   });
   if (parsed.kind !== "snapshot") throw new Error("fixture drift: snapshot");
@@ -989,7 +1004,81 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
     );
 
     expect(emittedEvents(log)).toEqual([
-      { kind: "cloud-sync-status", status: "reconnecting", observedAtMs: 5000 },
+      {
+        kind: "cloud-sync-status",
+        status: "reconnecting",
+        observedAtMs: 5000,
+        // The lane carries the legs, so an omitted key is the wire's stated
+        // UNKNOWN (`peerSpeaksDurabilityLegs: true`), never a silent peer.
+        durability: {
+          durability: undefined,
+          pauseReason: undefined,
+          promotionState: undefined,
+          localProtection: undefined,
+          freshness: undefined,
+          peerSpeaksDurabilityLegs: true,
+        },
+      },
+    ]);
+  });
+
+  it("carries the durability legs off a cloudSyncStatus transition and off the snapshot", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    const transition = epicStatusSubscribeServerFrameSchemaV10.parse({
+      kind: "cloudSyncStatus",
+      authorityEpoch: "epoch-1",
+      status: "disconnected",
+      durability: "local",
+      localProtection: "armed",
+      hasBinaryPayload: false,
+    });
+    if (transition.kind !== "cloudSyncStatus") throw new Error("fixture drift");
+    latest().callbacks.onTransition(transition);
+    latest().callbacks.onSnapshot(
+      snapshotFrame({
+        cloudSyncStatus: "connected",
+        durability: "cloud",
+        localProtection: "armed",
+        freshness: { kind: "lastCloudSyncAt", reconciledAtEpochMs: 10, state: "current" },
+      }),
+    );
+
+    const cloudSync = emittedEvents(log).filter(
+      (event) => event.kind === "cloud-sync-status",
+    );
+    expect(cloudSync).toEqual([
+      {
+        kind: "cloud-sync-status",
+        status: "disconnected",
+        observedAtMs: 5000,
+        durability: {
+          durability: "local",
+          pauseReason: undefined,
+          promotionState: undefined,
+          localProtection: "armed",
+          freshness: undefined,
+          peerSpeaksDurabilityLegs: true,
+        },
+      },
+      {
+        kind: "cloud-sync-status",
+        status: "connected",
+        observedAtMs: 5000,
+        durability: {
+          durability: "cloud",
+          pauseReason: undefined,
+          promotionState: undefined,
+          localProtection: "armed",
+          freshness: { kind: "lastCloudSyncAt", reconciledAtEpochMs: 10, state: "current" },
+          peerSpeaksDurabilityLegs: true,
+        },
+      },
     ]);
   });
 });

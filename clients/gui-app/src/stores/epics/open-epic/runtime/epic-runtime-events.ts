@@ -312,7 +312,8 @@ export type EpicControlEvent =
        * the `@1.6` legs, this capability controls the PRE-STATUS branch: a
        * peer that negotiated `@1.4` or `@1.5` can still report durability and
        * its initial silence is therefore not legacy reassurance. The lane arm
-       * answers `false` until the lanes grow durability legs of their own.
+       * answers `true`: `epic.status.subscribe` carries the same legs on its
+       * `snapshot` and `cloudSyncStatus` frames.
        */
       readonly durabilityStatusNegotiated: boolean;
       /**

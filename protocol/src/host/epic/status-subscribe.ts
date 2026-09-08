@@ -57,7 +57,7 @@
  * | Frame kind            | Projection on `snapshot`      |
  * | --------------------- | ----------------------------- |
  * | `permissionChanged`   | `permissionRole`, `securityEpoch` |
- * | `cloudSyncStatus`     | `cloudSyncStatus`             |
+ * | `cloudSyncStatus`     | `cloudSyncStatus` + the durability legs |
  * | `dirtyChanged`        | `dirty`                       |
  * | `epicDeleted`         | `deletion`                    |
  * | `migrationStarted`    | `migration.state === "running"` |
@@ -159,6 +159,35 @@
  * lane deliberately does not do it: the other inputs stay separate fields and
  * separate lanes.
  *
+ * ## The durability legs ride on this lane, not on a sibling
+ *
+ * `epic.subscribe@1.4`-`@1.6` grew five optional keys on its `cloudSyncStatus`
+ * frame - `durability`, `pauseReason`, `promotionState`, `localProtection`,
+ * `freshness` - and the lanes shipped their first cut WITHOUT them. A GUI on
+ * the lane arm therefore had no durability wire at all: the store read
+ * `{kind: "legacy"}` for every epic, the durability badge rendered nothing,
+ * and an unpromoted local-homed epic with the cloud down was indistinguishable
+ * from a healthy cloud-homed one. Measured on the local-first E2E run
+ * (2026-09-05), and the exact silence-as-reassurance defect the `@1.6` minor
+ * was minted to end.
+ *
+ * The same five keys, the SAME schemas (imported, never restated), on the same
+ * two frames the monolith carries them on: the `snapshot` - because a client
+ * reconnecting mid-promotion must learn where its bytes are from the one frame
+ * it is guaranteed - and `cloudSyncStatus`, because the host re-emits that
+ * frame when a leg moves with the connection status unchanged (a promotion
+ * finishing, a WAL arm being refused, a mirror converging to `current`).
+ *
+ * ABSENCE RULE, inherited verbatim from `@1.6`: an absent `durability` or
+ * `localProtection` key means UNKNOWN, never synced and never protected. The
+ * keys are optional so a host build that cannot answer (no store, a registry
+ * read that timed out) can say nothing rather than something false; a client
+ * reads that silence conservatively, exactly as it reads a `@1.6` peer's.
+ *
+ * Added to `@1.0` in place rather than as `@1.1`, on the same terms the
+ * three-state `deletion` was redefined: no released host or client speaks
+ * this lane yet, so there is no peer to stay additive for.
+ *
  * ## The security epoch, scoped honestly
  *
  * `securityEpoch` is HOST-LOCAL at `@1.0`. The host increments it when IT
@@ -194,8 +223,13 @@ import {
 // lane needs a value the monolith never shipped, fork a `...V11` copy HERE and
 // leave the shared const alone.
 import {
+  epicCloudFreshnessSchema,
   epicCloudSyncStatusSchema,
+  epicDurabilityPauseReasonSchemaV15,
+  epicDurabilityStatusSchemaV15,
+  epicLocalProtectionSchema,
   epicMigrationPhaseSchema,
+  epicPromotionStateSchema,
 } from "@traycer/protocol/host/epic/subscribe";
 
 const permissionRoleSchema = getRecordSchema(
@@ -348,6 +382,26 @@ export const epicSecurityEpochSchema = z.number().int().nonnegative();
 export type EpicSecurityEpoch = z.infer<typeof epicSecurityEpochSchema>;
 
 /**
+ * The durability legs, carried on the `snapshot` and `cloudSyncStatus` frames.
+ * See the module doc: the schemas are `epic.subscribe@1.6`'s own, every key is
+ * optional, and an absent `durability` / `localProtection` means UNKNOWN.
+ */
+export const epicStatusDurabilityLegFields = {
+  durability: epicDurabilityStatusSchemaV15.optional(),
+  /** Meaningful only beside `durability: "paused"`. */
+  pauseReason: epicDurabilityPauseReasonSchemaV15.optional(),
+  /** Meaningful only beside `durability: "promoting"`. */
+  promotionState: epicPromotionStateSchema.optional(),
+  localProtection: epicLocalProtectionSchema.optional(),
+  freshness: epicCloudFreshnessSchema.optional(),
+} as const;
+
+const epicStatusDurabilityLegsSchema = z.object(epicStatusDurabilityLegFields);
+export type EpicStatusDurabilityLegs = z.infer<
+  typeof epicStatusDurabilityLegsSchema
+>;
+
+/**
  * The open request. `epicId` and nothing else - see the module doc for why
  * there is no resume cursor at `@1.0`.
  */
@@ -392,6 +446,7 @@ const epicStatusSubscribeSnapshotFrameSchemaV10 = z.object({
    * every state the lane can be in.
    */
   cloudSyncStatus: epicCloudSyncStatusSchema,
+  ...epicStatusDurabilityLegFields,
   /**
    * The aggregate dirty flag, or `null` when the host cannot answer yet.
    *
@@ -470,6 +525,9 @@ export const epicStatusSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("cloudSyncStatus"),
       ...epicLaneEpochFrameFields,
       status: epicCloudSyncStatusSchema,
+      // Re-emitted whenever a leg moves, connection status unchanged or not -
+      // see the module doc's durability section.
+      ...epicStatusDurabilityLegFields,
       ...epicLaneTextFrameFields,
     }),
     /**

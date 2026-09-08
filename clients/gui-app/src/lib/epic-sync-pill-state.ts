@@ -47,7 +47,7 @@ export type EpicSyncPillState =
   /**
    * The epic is not in the cloud at all, and everything known is on disk here.
    *
-   * Exists because `synced` was rendering beside the durability badge's
+   * Exists because `synced` was rendering beside the durability plane's
    * "Stored locally" - the pill read a `LocalRoomConnection` as
    * connected/clean and concluded "All changes synced" about an epic no cloud
    * has ever seen. That is the normal settled free-tier session, not a corner
@@ -435,7 +435,7 @@ function cloudDownState(inputs: EpicSyncPillInputs): EpicSyncPillState {
  * `synced` is a CLOUD durability claim, and the pill used to make it off the
  * connection alone - which a `LocalRoomConnection` satisfies. So the settled
  * free-tier session rendered "All changes synced" inches from the durability
- * badge's "Stored locally", about an epic that has never been uploaded.
+ * plane's "Stored locally", about an epic that has never been uploaded.
  *
  * The rule, stated once here rather than at each caller: a calm claim needs a
  * POSITIVE statement behind it, never an absence.

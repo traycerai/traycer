@@ -49,7 +49,6 @@
  * pre-snapshot silence and an in-band "cannot answer yet" collapse onto the
  * consumer's `unknown` rather than onto a synthesised `false`.
  */
-import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { LatestPermissionRoleSchema } from "@traycer/protocol/host/epic/unary-schemas";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
@@ -143,10 +142,13 @@ export function legacyControlEventOf(event: ControlEvent): EpicControlEvent {
       return {
         kind: "cloud-sync-status",
         status: narrowCloudSyncStatus(event.status),
-        // The status lane does not carry the `@1.4`-`@1.6` durability legs
-        // yet, and an all-`undefined` payload is exactly the wire's "said
-        // nothing": every selector reads it as UNKNOWN, never as reassurance.
-        durability: NO_CLOUD_SYNC_DURABILITY,
+        // The legs are the adapter's reading of its own wire and are passed
+        // through untouched: the status lane carries the `@1.6` keys and
+        // reports `peerSpeaksDurabilityLegs: true`, so an omitted key reaches
+        // the replica as the wire's stated UNKNOWN. A wire with no legs at
+        // all reports `NO_CLOUD_SYNC_DURABILITY`, which every selector reads
+        // as unknown too - never as reassurance.
+        durability: event.durability,
       };
     case "aggregate-dirty":
       // The ATOMIC arm, not the delta arm - see the module doc. This is the

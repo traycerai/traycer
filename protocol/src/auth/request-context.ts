@@ -282,7 +282,7 @@ class CredentialLeaseImpl implements CredentialLease {
   getBearerToken(): string {
     if (this.released || this.retainedBearer === undefined) {
       throw new CredentialLeaseReleasedError(
-        `Credential lease for user '${this.identity.userId}' is no longer valid`,
+        "Credential lease is no longer valid",
       );
     }
     return this.retainedBearer;
@@ -291,12 +291,12 @@ class CredentialLeaseImpl implements CredentialLease {
   rotateBearerToken(args: { userId: string; bearerToken: string }): void {
     if (this.released) {
       throw new CredentialLeaseReleasedError(
-        `Cannot rotate credentials on released lease for user '${this.identity.userId}'`,
+        "Cannot rotate credentials on a released lease",
       );
     }
     if (args.userId !== this.identity.userId) {
       throw new IdentityMismatchError(
-        `Refusing to rotate credentials: lease identity '${this.identity.userId}' does not match supplied userId '${args.userId}'`,
+        "Refusing to rotate credentials: the supplied userId does not match the lease identity",
       );
     }
     this.retainedBearer = args.bearerToken;
@@ -420,10 +420,9 @@ export function buildBearerHeadersFromContext(
   },
 ): Headers {
   const Err = options.errorClass;
-  const userId = ctx.identity.userId;
   if (ctx.isAborted) {
     throw new Err(
-      `${options.operationLabel}: request context for user '${userId}' has been aborted`,
+      `${options.operationLabel}: request context has been aborted`,
     );
   }
   // The verdict gate, and it belongs HERE rather than at the call sites for the
@@ -440,7 +439,7 @@ export function buildBearerHeadersFromContext(
   // happened to look at the verdict afterwards.
   if (!ctx.cloudAuthorized) {
     throw new Err(
-      `${options.operationLabel}: request context for user '${userId}' holds no cloud verdict`,
+      `${options.operationLabel}: request context holds no cloud verdict`,
     );
   }
   let token: string;
@@ -454,7 +453,7 @@ export function buildBearerHeadersFromContext(
   }
   if (token.length === 0) {
     throw new Err(
-      `${options.operationLabel}: empty bearer token for user '${userId}'`,
+      `${options.operationLabel}: empty bearer token`,
     );
   }
   const headers = new Headers();

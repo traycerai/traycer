@@ -589,7 +589,7 @@ export function useEpicSyncPillState(): EpicSyncPillState {
       hasConnectedOnce: s.hasConnectedOnce,
       // The two legs the pill used to ignore entirely. Without them the pill
       // could derive `synced` from a `LocalRoomConnection` and render "All
-      // changes synced" beside the badge's "Stored locally" -
+      // changes synced" beside the durability plane's "Stored locally" -
       // `s5-status-truthfulness` instance 1.
       durability: s.durabilityStatus ?? undefined,
       localProtection: s.localProtection ?? undefined,
@@ -667,7 +667,7 @@ export function deriveEpicDurabilityView(
     // rests on this member alone - never on an absence. The protection leg is
     // KEPT, not resolved by the calm: the axes are independent, and a stated
     // `unavailable` beside `cloud` is exactly the "No local backup" risk the
-    // badge exists to surface.
+    // durability plane exists to surface.
     return { kind: "cloudDurable", protection: stated };
   }
   if (status === null || status === "unknown") {
@@ -682,8 +682,8 @@ export function deriveEpicDurabilityView(
   }
   // `stated` KEEPS its protection leg rather than collapsing to
   // `indeterminate` when that leg is `unavailable`: the two are separate axes,
-  // and the concrete status is what gates the badge's paused-only remedies
-  // (Upgrade, Export). Rendering both is `epicDurabilityRiskCopy`'s job.
+  // and the concrete status is what gates the paused-only remedies (Upgrade,
+  // Export). Saying both is the durability plane's job.
   return { kind: "stated", status, protection: stated };
 }
 
@@ -691,8 +691,8 @@ export function deriveEpicDurabilityView(
 export function useEpicDurabilityView(): EpicDurabilityView {
   // `useShallow` per this file's own object-select rule: the derivation builds
   // a fresh literal on every call, so a bare select hands `useSyncExternalStore`
-  // a new snapshot each read and the badge re-renders itself to the update-depth
-  // ceiling.
+  // a new snapshot each read and the status row re-renders itself to the
+  // update-depth ceiling.
   return useEpicStore(
     useShallow((s) =>
       deriveEpicDurabilityView(

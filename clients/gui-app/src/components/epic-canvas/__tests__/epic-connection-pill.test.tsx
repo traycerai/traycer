@@ -14,6 +14,7 @@ import type {
   EpicWriteCommandAlert,
 } from "@/lib/epic-sync-pill-state";
 import type { EpicChatBackupStatus } from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import type { EpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
 import type { AgentActivityPresenceDegradedReason } from "@/hooks/agent/use-agent-activity-presence-degraded";
 import type { CommGraphFeedHealth } from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -38,6 +39,10 @@ const mocks = vi.hoisted(() => ({
   },
   commGraphFeedHealth: null as CommGraphFeedHealth | null,
   writeCommandAlert: null as EpicWriteCommandAlert | null,
+  // The host's routing truth, fed in as a prop the way the status row does
+  // it; `null` is "nothing to say", which is every case written before the
+  // plane joined the pill.
+  durability: null as EpicDurabilityPlane | null,
 }));
 
 vi.mock("@/hooks/agent/use-agent-activity-presence-degraded", () => ({
@@ -92,7 +97,7 @@ const OFFLINE_UNSAVED_TOOLTIP =
 function pillTree() {
   return (
     <TooltipProvider>
-      <EpicConnectionPill epicId="epic-a" />
+      <EpicConnectionPill epicId="epic-a" durability={mocks.durability} />
     </TooltipProvider>
   );
 }
@@ -142,6 +147,7 @@ describe("<EpicConnectionPill />", () => {
     mocks.hostTransportStatus = "open";
     mocks.chatBackupStatus = null;
     mocks.presenceDegraded = null;
+    mocks.durability = null;
     mocks.terminalCoverage = null;
     mocks.terminalCapability = {
       status: "capable",
@@ -1058,6 +1064,101 @@ describe("<EpicConnectionPill />", () => {
       const pill = screen.getByRole<HTMLButtonElement>("button");
       expect(pill.dataset.source).toBe("artifact");
       expect(pill.getAttribute("aria-label")).toBe(OFFLINE_COPY);
+    });
+  });
+
+  describe("durability plane", () => {
+    it("selects a warning durability plane over a synced artifact leg, dot-only with its sentence as the tooltip and aria-label", async () => {
+      const sentence = "Cloud mirror — offline · No local backup";
+      mocks.durability = { severity: "warning", sentence };
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("durability");
+      // Dot-only: the routing truth used to be its own labelled pill, and now
+      // rides the hover and the accessible name instead of the visible copy.
+      expect(pill.textContent).toBe("");
+      expect(pill.getAttribute("aria-label")).toBe(sentence);
+      await expectTooltip(sentence);
+    });
+
+    it("outranks a warning chat-backup plane when durability reads danger", () => {
+      mocks.durability = {
+        severity: "danger",
+        sentence: "Sync blocked — access revoked",
+      };
+      mocks.chatBackupStatus = {
+        severity: "warning",
+        tooltip: "Chat backup failing · 1 chat not backed up",
+        ariaLabel: "Chat backup failing · 1 chat not backed up",
+      };
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("durability");
+      expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+        "bg-red-500",
+      );
+    });
+
+    it("loses the tie to an offlineChangesSavedLocally artifact leg and rides the tooltip as a second entry", async () => {
+      // `offlineChangesSavedLocally` is itself a warning, so it ties the
+      // durability plane's severity - and the artifact leg keeps the light on
+      // a tie. It is also a cloud-link-down state, so it is held at the quiet
+      // neutral reading until `CLOUD_LINK_GRACE_MS` passes.
+      vi.useFakeTimers();
+      const sentence = "Cloud mirror — offline · No local backup";
+      mocks.durability = { severity: "warning", sentence };
+      renderPill("offlineChangesSavedLocally");
+
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+      vi.useRealTimers();
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(await tooltipLines()).toEqual([
+        "The cloud connection is down. Your changes are saved on this device and sync when it is back.",
+        sentence,
+      ]);
+    });
+
+    it("leaves the pill claiming synced when the durability plane is merely steady", () => {
+      vi.useFakeTimers();
+      mocks.durability = { severity: "steady", sentence: "Stored locally" };
+      renderPill("synced");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(pillClaimsSynced()).toBe(true);
+    });
+
+    it("selects an activity durability plane over a synced artifact leg, with the idle pulse and no amber/red dot class", () => {
+      vi.useFakeTimers();
+      mocks.durability = {
+        severity: "activity",
+        sentence: "Checking for updates",
+      };
+      renderPill("synced");
+
+      // Settle past the 750ms hold so the artifact leg's own severity drops
+      // from the transitional `syncing` reading (itself "activity", which
+      // would tie) down to its true steady `synced` reading.
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("durability");
+      expect(pill.textContent).toBe("");
+      expect(pill.innerHTML).toContain("bg-muted-foreground/50");
+      expect(pill.innerHTML).not.toContain("bg-amber-500");
+      expect(pill.innerHTML).not.toContain("bg-red-500");
     });
   });
 });
