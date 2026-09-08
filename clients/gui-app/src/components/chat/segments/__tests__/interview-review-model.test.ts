@@ -25,6 +25,7 @@ function question(
       preview: null,
     })),
     multiSelect: false,
+    allowsCustomAnswer: null,
   };
 }
 
@@ -77,6 +78,7 @@ describe("deriveInterviewReviewModel", () => {
               },
             ],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
@@ -185,6 +187,7 @@ describe("deriveInterviewReviewModel", () => {
           {
             ...question("q1", "Which mode?", ["Alpha", "Beta"], undefined),
             multiSelect: true,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
