@@ -101,6 +101,7 @@ describe("<AutonomousResumeSegment />", () => {
     // Kind-only trigger (no `managedCommand` block): the harness's own
     // Monitor tool, which keeps its real name.
     expect(screen.getByText("Monitor failed")).toBeTruthy();
+    expect(screen.queryByText("Monitor running")).toBeNull();
     expect(screen.queryByText("Command still running")).toBeNull();
   });
 
