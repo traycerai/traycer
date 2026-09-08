@@ -1086,6 +1086,23 @@ export const HOST_METHOD_POLL_TABLE = {
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
   "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // ── Epic file plane (epic-media-pipeline) ──────────────────────────────
+  // Every one of these is a VERB against one already-known manifest entry, so
+  // none of them polls. The manifest itself is a sibling `Y.Map` on the epic
+  // root doc, which replicates on its own - a cadence here would re-ask the
+  // host for facts the doc already delivers, once per open file.
+  //
+  // `epic.readFile` in particular must not poll: its answer is an ADDRESS for
+  // immutable, content-addressed bytes, and the one part that does expire (a
+  // signed url's TTL) is re-read by the consumer that can see the expiry, not
+  // by an interval that would re-mint urls for every file a sidebar lists.
+  "epic.readFile": { ...LATEST_SCHEDULING, poll: null },
+  "epic.deleteFile": { ...LATEST_SCHEDULING, poll: null },
+  "epic.restoreFile": { ...LATEST_SCHEDULING, poll: null },
+  "epic.openFileInBrowser": { ...LATEST_SCHEDULING, poll: null },
+  "epic.captureTabScreenshot": { ...LATEST_SCHEDULING, poll: null },
+  "epic.startTabRecording": { ...LATEST_SCHEDULING, poll: null },
+  "epic.stopTabRecording": { ...LATEST_SCHEDULING, poll: null },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork

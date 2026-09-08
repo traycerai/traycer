@@ -16,6 +16,22 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="dark light" />
+    <!-- The Capacitor shell had no CSP at all, so its WebView ran under the
+         platform default while the desktop renderer ran under a policy. The
+         two shells host the SAME gui-app bundle, so the string below is the
+         desktop's byte for byte (clients/desktop/src/shared/content-security-policy.ts,
+         packaged branch - no dev extras), and a test asserts that equality
+         rather than trusting two hand-maintained copies to stay in step.
+         `sentry-ipc:` and the `localhost:5173` pair are inert here (an
+         Electron IPC scheme and the desktop's Vite dev server); they are kept
+         so the two policies are one string with one owner, and an inert
+         source matches nothing. `http://127.0.0.1:*` is the epic-file
+         loopback static server, which only resolves on a machine running a
+         host - unreachable from a phone, and harmless to admit. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; img-src 'self' data: blob: https: http://127.0.0.1:*; media-src 'self' blob: https: http://127.0.0.1:*; font-src 'self' data:; connect-src 'self' blob: data: https: wss: ws: sentry-ipc: http://127.0.0.1:* http://localhost:5173 ws://localhost:5173; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
     <title>Traycer</title>
   </head>
   <body>

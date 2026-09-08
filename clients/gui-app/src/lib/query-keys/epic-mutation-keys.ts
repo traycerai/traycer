@@ -23,4 +23,18 @@ export const epicMutationKeys = {
   finishArtifactImage: () => ["epic.finishArtifactImage"] as const,
   addImageToArtifact: () => ["epic.addImageToArtifact"] as const,
   archiveChats: () => ["epic.archiveChats"] as const,
+  /**
+   * The file plane's three verbs. Each is keyed per `(epicId, path)` so one
+   * row's in-flight delete never reads as pending on another row - the Files
+   * panel renders many of these side by side.
+   */
+  deleteFile: (epicId: string, path: string) =>
+    ["epic.deleteFile", epicId, path] as const,
+  restoreFile: (epicId: string, path: string) =>
+    ["epic.restoreFile", epicId, path] as const,
+  openFileInBrowser: (epicId: string, path: string) =>
+    ["epic.openFileInBrowser", epicId, path] as const,
+  /** Local only - fetch the bytes and hand them to the shell's save route. */
+  saveFile: (epicId: string, path: string) =>
+    ["epic.saveFile", epicId, path] as const,
 };

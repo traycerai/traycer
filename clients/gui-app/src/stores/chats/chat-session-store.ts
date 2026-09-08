@@ -443,6 +443,14 @@ export interface FailedSendRestorationState {
   readonly displacedReason: string;
 }
 
+/**
+ * Deliberately carries no `fileResolutions` twin of `imageResolutions`: the
+ * epic-file record (D28) is written by the host at message-assembly time and
+ * the protocol declares no `file_resolution.updated` frame, so there is
+ * nothing for a live row to accumulate. `assistantMessageFromLiveAssistant`
+ * emits `[]` for it, and the entries surface when the persisted record
+ * replaces the live row.
+ */
 export interface LiveAssistantMessage {
   readonly turnId: string;
   readonly sender: Extract<Message, { readonly role: "assistant" }>["sender"];
@@ -9357,6 +9365,11 @@ function assistantMessageFromLiveAssistant(
     // a wrong `null` here would only ever be visible for the moment before it.
     envCredentialVar: null,
     imageResolutions,
+    // Empty by construction, not by omission: `fileResolutions` is filled when
+    // the HOST assembles the message (D28) and has no streaming frame to
+    // mirror, so this transient stand-in has nothing to carry. The entries
+    // arrive with the authoritative record that replaces this row.
+    fileResolutions: [],
   };
 }
 

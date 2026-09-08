@@ -50,12 +50,14 @@ import {
   chatProjectionsEq,
   chatSlicesEq,
   deletedArtifactProjectionsEq,
+  epicFileRecordsEq,
   getArtifactEntry,
   getArtifactsMap,
   getChatEntry,
   getChatsMap,
   getDeletedArtifactEntry,
   getDeletedArtifactsMap,
+  getEpicFilesMap,
   getEpicMap,
   getTerminalAgentEntry,
   getTerminalAgentsMap,
@@ -65,6 +67,7 @@ import {
   projectAgentRolesSlice,
   projectChat,
   projectDeletedArtifact,
+  projectEpicFilesSlice,
   projectFullState,
   projectTerminalAgent,
   projectTreeSlice,
@@ -93,8 +96,10 @@ import type {
   ChatProjection,
   ChatsSlice,
   DeletedArtifactsSlice,
+  EpicFileRecord,
   EpicHeader,
   EpicProjectedSlices,
+  FilesSlice,
   TuiAgentProjection,
   TerminalAgentsSlice,
   TreeNode,
@@ -122,6 +127,13 @@ type AttachedConfig =
         events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
         transaction: Y.Transaction,
       ) => void;
+      /**
+       * The SECOND observation root. `files` is a sibling map on the root doc
+       * (D02), not a child of `epic`, so no event on it ever reaches
+       * {@link handler} - the manifest is invisible to that observer by
+       * construction, which is why it gets an observer of its own.
+       */
+      readonly filesHandler: () => void;
     }
   | {
       readonly kind: "lane";
@@ -332,6 +344,7 @@ export function createEpicProjector(
     if (attached.kind === "doc") {
       const epicMap = getEpicMap(attached.doc);
       epicMap.unobserveDeep(attached.handler);
+      getEpicFilesMap(attached.doc).unobserve(attached.filesHandler);
     }
     attached = null;
   }
@@ -404,8 +417,28 @@ export function createEpicProjector(
         }),
       });
     };
-    attached = { kind: "doc", doc, sink, handler };
+    // Manifest values are plain JSON under one key per path - never nested
+    // shared types - so a shallow `observe` sees every change a `observeDeep`
+    // would, at a fraction of the wiring.
+    //
+    // No patch set and no `applyPatches` entry: the manifest is one flat map
+    // whose whole re-scan is cheaper than the bookkeeping that would avoid it,
+    // and it feeds no other slice (no tree, no union, no overlay), so there is
+    // nothing for a patch to coordinate with. The identity contract is earned
+    // where it is for every full projection - in the stabilize pass below.
+    const filesHandler = (): void => {
+      if (ingesting) return;
+      const previous = sink.read();
+      const files = stabilizeFilesSlice(
+        previous.files,
+        projectEpicFilesSlice(doc),
+      );
+      if (files === previous.files) return;
+      sink.publish({ ...previous, files });
+    };
+    attached = { kind: "doc", doc, sink, handler, filesHandler };
     getEpicMap(doc).observeDeep(handler);
+    getEpicFilesMap(doc).observe(filesHandler);
 
     // Initial full projection so attaching to a non-empty doc populates the
     // sink deterministically. Skipped mid-ingest so the snapshot path can
@@ -1467,6 +1500,41 @@ function spliceAgentRoles(
   return identical ? prev : { byAgentId };
 }
 
+/**
+ * Splice previously published file rows into a freshly-parsed list. Matched by
+ * PATH rather than by index so a row keeps its reference across an insertion or
+ * a deletion elsewhere in the list, and the array itself keeps its reference
+ * when the membership did not move.
+ *
+ * Both lists are path-sorted, so equal length plus a path-for-path match means
+ * the same set in the same order - there is no reordering case to check.
+ */
+function spliceFileRecords(
+  next: readonly EpicFileRecord[],
+  prev: readonly EpicFileRecord[],
+): readonly EpicFileRecord[] {
+  if (prev.length === 0) return next;
+  const previousByPath = new Map(prev.map((record) => [record.path, record]));
+  let identical = next.length === prev.length;
+  const spliced = next.map((record) => {
+    const previous = previousByPath.get(record.path);
+    if (previous !== undefined && epicFileRecordsEq(previous, record)) {
+      return previous;
+    }
+    identical = false;
+    return record;
+  });
+  return identical ? prev : spliced;
+}
+
+function stabilizeFilesSlice(prev: FilesSlice, next: FilesSlice): FilesSlice {
+  const records = spliceFileRecords(next.records, prev.records);
+  const deleted = spliceFileRecords(next.deleted, prev.deleted);
+  return records === prev.records && deleted === prev.deleted
+    ? prev
+    : { records, deleted };
+}
+
 function stabilizeTree(next: TreeSlice, prev: TreeSlice): TreeSlice {
   const rootIds = arrayShallowEq(next.rootIds, prev.rootIds)
     ? prev.rootIds
@@ -1562,6 +1630,7 @@ function stabilizeProjectedSlices(
     docTuiAgents,
     tuiAgents,
     agentRoles: spliceAgentRoles(next.agentRoles, prev.agentRoles),
+    files: stabilizeFilesSlice(prev.files, next.files),
     tree: stabilizeTree(next.tree, prev.tree),
   };
 }

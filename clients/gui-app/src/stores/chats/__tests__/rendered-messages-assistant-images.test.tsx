@@ -99,6 +99,7 @@ function assistantMessage(
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 
@@ -755,7 +756,7 @@ function assistantMessageWithoutImageResolutions(
 ): Extract<Message, { role: "assistant" }> {
   const preImage: Omit<
     Extract<Message, { role: "assistant" }>,
-    "imageResolutions"
+    "imageResolutions" | "fileResolutions"
   > = {
     role: "assistant",
     messageId: turnId,
@@ -768,7 +769,8 @@ function assistantMessageWithoutImageResolutions(
     reasoningEffort: null,
     serviceTier: null,
     envCredentialVar: null,
-    // Deliberately no `imageResolutions` key.
+    // Deliberately no `imageResolutions` / `fileResolutions` key: both are
+    // `.default([])` fields the shallow parse path never fills.
   };
   return preImage as Extract<Message, { role: "assistant" }>;
 }

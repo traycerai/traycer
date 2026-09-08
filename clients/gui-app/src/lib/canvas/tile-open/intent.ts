@@ -162,6 +162,7 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   "managed-command-output": "content",
   "comm-graph": "content",
   "published-chat": "content",
+  "epic-file": "content",
   "pr-detail": "content",
   "pr-diff": "content",
   blank: "content",

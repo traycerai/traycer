@@ -155,6 +155,7 @@ function steeredAssistant(
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 
@@ -502,6 +503,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
     const projectedRowId = assistantRowId(turnId);
     const rows = transcriptListRows({
@@ -545,6 +547,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
     const rows = transcriptListRows({
       window: windowOf({
@@ -765,6 +768,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
     const rows = transcriptListRows({
       window: windowOf({
@@ -873,6 +877,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
     const rows = transcriptListRows({
       window: windowOf({
@@ -924,6 +929,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
     const steeredUser: Extract<Message, { role: "user" }> = {
       role: "user",
@@ -987,6 +993,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
     const rows = transcriptListRows({
       window: windowOf({
@@ -1034,6 +1041,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
     const rows = transcriptListRows({
       window: windowOf({
@@ -1433,6 +1441,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
 
     const part0Id = assistantSliceRowId(turnId, 0, true);
@@ -1674,6 +1683,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
 
     const part0Id = assistantSliceRowId(turnId, 0, true);
@@ -1791,6 +1801,7 @@ describe("transcriptListRows", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
 
     const assistantId = assistantRowId(turnId);
@@ -1970,6 +1981,7 @@ describe("tier-parameterized backing", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
     const steerRowId = queueSteerRowId("queue-seated");
     const rows = transcriptListRows({

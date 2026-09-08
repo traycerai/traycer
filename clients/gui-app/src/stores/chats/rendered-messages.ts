@@ -71,6 +71,7 @@ import {
   isTransientLiveAssistantMessageId,
   transientLiveAssistantMessageId,
 } from "@/lib/chat/transient-live-assistant-message-id";
+import type { FileResolutionEntry } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AssistantTurnMeta,
   AssistantMarkdownImageResolution,
@@ -1712,6 +1713,12 @@ interface AssistantTurnAccumulator {
     string,
     ReadonlyArray<AssistantMarkdownImageResolution>
   >;
+  /**
+   * The turn's epic-file resolutions (D28), keyed the same way. A parallel map
+   * rather than a widened entry because the two records are separate on the
+   * wire and only one of them has a live-update frame.
+   */
+  fileResolutionsByBlockId: Map<string, ReadonlyArray<FileResolutionEntry>>;
   generatedImageBlockIdByHash: Map<string, string>;
 }
 
@@ -2266,6 +2273,7 @@ function addAssistantMessageToAccumulator(
         messageId: message.messageId,
         entry,
       })),
+      assistantFileResolutions(message),
     );
     existing.signatureParts.push(assistantRecordSignature(message));
     // A turn split across multiple AssistantMessage records (subagent flows,
@@ -2313,6 +2321,7 @@ function addAssistantMessageToAccumulator(
     envCredentialVar: message.envCredentialVar,
     costUsd: message.usage?.costUsd ?? null,
     imageResolutionsByBlockId: new Map(),
+    fileResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
   addAssistantImageProjection(
@@ -2322,6 +2331,7 @@ function addAssistantMessageToAccumulator(
       messageId: message.messageId,
       entry,
     })),
+    assistantFileResolutions(message),
   );
   turnAccumulator.set(turnKey, created);
 }
@@ -2330,10 +2340,12 @@ function addAssistantImageProjection(
   acc: AssistantTurnAccumulator,
   blocks: ReadonlyArray<ContentBlock>,
   resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+  fileResolutions: ReadonlyArray<FileResolutionEntry>,
 ): void {
   for (const block of blocks) {
     if (block.type === "text") {
       acc.imageResolutionsByBlockId.set(block.blockId, resolutions);
+      acc.fileResolutionsByBlockId.set(block.blockId, fileResolutions);
       continue;
     }
     if (block.type !== "tool_call" || block.toolName !== "image_generation") {
@@ -2401,6 +2413,11 @@ function addLiveAssistantImageProjection(
       : liveAssistant.imageResolutions.filter(
           (resolution) => resolution.messageId === ownerMessageId,
         ),
+    // Always empty: `fileResolutions` is written by the host when it ASSEMBLES
+    // the message (D28) and has no streaming frame of its own, so a live row
+    // never carries one. The entries appear when the persisted record replaces
+    // this row - which is also why nothing has to be merged here.
+    NO_PERSISTED_FILE_RESOLUTIONS,
   );
 }
 
@@ -2458,7 +2475,7 @@ function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
  * The empty list every record without `imageResolutions` shares.
  *
  * One module-level array, deliberately not a fresh `[]` per call:
- * `imageResolutionsIdentityToken` keys a WeakMap on this value to build a memo
+ * `resolutionsIdentityToken` keys a WeakMap on this value to build a memo
  * signature, so a new array per read would change that signature on every
  * projection and defeat the cache it exists to feed.
  *
@@ -2467,6 +2484,13 @@ function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
  * message id). This one is the empty PERSISTED list a record carries.
  */
 const NO_PERSISTED_IMAGE_RESOLUTIONS: AssistantMessage["imageResolutions"] = [];
+
+/**
+ * The same shared-empty-list trick for `fileResolutions`, and it carries more
+ * weight here: EVERY record written before the epic file plane existed lacks
+ * the key outright, so this is the common case rather than the edge one.
+ */
+const NO_PERSISTED_FILE_RESOLUTIONS: AssistantMessage["fileResolutions"] = [];
 
 /**
  * `imageResolutions` for a persisted assistant record, tolerating one that
@@ -2480,7 +2504,7 @@ const NO_PERSISTED_IMAGE_RESOLUTIONS: AssistantMessage["imageResolutions"] = [];
  * fills. A host replaying a record stored before the field existed hands it
  * straight through, typed as present and genuinely `undefined`. Reading it
  * blind threw "Invalid value used as weak map key" out of
- * `imageResolutionsIdentityToken` and took the whole chat tile down through its
+ * `resolutionsIdentityToken` and took the whole chat tile down through its
  * error boundary.
  *
  * The tolerance belongs here and not in the transport: the shallow path is
@@ -2502,35 +2526,55 @@ function assistantImageResolutions(
     : NO_PERSISTED_IMAGE_RESOLUTIONS;
 }
 
-let imageResolutionsIdentityCounter = 0;
-const imageResolutionsIdentity = new WeakMap<
-  AssistantMessage["imageResolutions"],
-  number
->();
-function imageResolutionsIdentityToken(
-  imageResolutions: AssistantMessage["imageResolutions"],
-): number {
-  const existing = imageResolutionsIdentity.get(imageResolutions);
+/**
+ * `fileResolutions` for a persisted assistant record, tolerating a record that
+ * never carried the field - see {@link assistantImageResolutions} for why the
+ * declared type is not proof at runtime. The tolerance is not hypothetical
+ * here: every record persisted before the file plane shipped is in this case.
+ */
+function assistantFileResolutions(
+  message: AssistantMessage,
+): AssistantMessage["fileResolutions"] {
+  // `unknown` for the same reason as `assistantImageResolutions`.
+  const resolutions: unknown = message.fileResolutions;
+  return Array.isArray(resolutions)
+    ? message.fileResolutions
+    : NO_PERSISTED_FILE_RESOLUTIONS;
+}
+
+let resolutionsIdentityCounter = 0;
+const resolutionsIdentity = new WeakMap<object, number>();
+/**
+ * A stable per-ARRAY-IDENTITY number, used to key the render memo on a
+ * resolution list that changed without the block list changing. One WeakMap
+ * for both records: identity is a property of the array object, not of which
+ * field it came from.
+ */
+function resolutionsIdentityToken(resolutions: object): number {
+  const existing = resolutionsIdentity.get(resolutions);
   if (existing !== undefined) return existing;
-  imageResolutionsIdentityCounter += 1;
-  imageResolutionsIdentity.set(
-    imageResolutions,
-    imageResolutionsIdentityCounter,
-  );
-  return imageResolutionsIdentityCounter;
+  resolutionsIdentityCounter += 1;
+  resolutionsIdentity.set(resolutions, resolutionsIdentityCounter);
+  return resolutionsIdentityCounter;
 }
 
 function assistantRecordSignature(message: AssistantMessage): string {
-  const imageIdentity = imageResolutionsIdentityToken(
+  const imageIdentity = resolutionsIdentityToken(
     assistantImageResolutions(message),
+  );
+  // `blocksVersion` is a BLOCK counter, so a record re-served with a different
+  // file record would tie on it exactly as an image rewrite does. Cheap to
+  // include, and the alternative is a stale transcript.
+  const fileIdentity = resolutionsIdentityToken(
+    assistantFileResolutions(message),
   );
   const version = message.blocksVersion;
   if (version !== undefined) {
-    return `v:${version}#${blocksIdentityToken(message.blocks)}#i:${imageIdentity}`;
+    return `v:${version}#${blocksIdentityToken(message.blocks)}#i:${imageIdentity}#f:${fileIdentity}`;
   }
   const cached = assistantRecordSignatureCache.get(message);
   if (cached !== undefined) return cached;
-  const computed = `h:${turnSignature(message.blocks)}#i:${imageIdentity}`;
+  const computed = `h:${turnSignature(message.blocks)}#i:${imageIdentity}#f:${fileIdentity}`;
   assistantRecordSignatureCache.set(message, computed);
   return computed;
 }
@@ -2770,6 +2814,7 @@ function renderAssistantTurnSlice(
         epicId: input.epicId,
         chatId: input.chatId,
         resolutionsByBlockId: input.acc.imageResolutionsByBlockId,
+        fileResolutionsByBlockId: input.acc.fileResolutionsByBlockId,
         generatedImageBlockIdByHash: input.acc.generatedImageBlockIdByHash,
         rowIdByBlockId: input.rowIdByBlockId,
       },
@@ -3118,6 +3163,7 @@ function renderLiveAssistant(
     // and re-renders via the persisted path. The live footer is suppressed.
     costUsd: null,
     imageResolutionsByBlockId: new Map(),
+    fileResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
   addLiveAssistantImageProjection(acc, liveAssistant);
@@ -3286,6 +3332,9 @@ function renderStoppedTurnsWithoutAssistantRecords(
 const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
   [];
 
+/** The empty PROJECTION of epic-file resolutions; see `NO_IMAGE_RESOLUTIONS`. */
+const NO_FILE_RESOLUTIONS: ReadonlyArray<FileResolutionEntry> = [];
+
 function buildAssistantSegments(
   blocks: ReadonlyArray<ContentBlock>,
   checkpointView: CheckpointManifestView | null,
@@ -3296,6 +3345,10 @@ function buildAssistantSegments(
     readonly resolutionsByBlockId: ReadonlyMap<
       string,
       ReadonlyArray<AssistantMarkdownImageResolution>
+    >;
+    readonly fileResolutionsByBlockId: ReadonlyMap<
+      string,
+      ReadonlyArray<FileResolutionEntry>
     >;
     readonly generatedImageBlockIdByHash: ReadonlyMap<string, string>;
     readonly rowIdByBlockId: ReadonlyMap<string, string>;
@@ -3334,6 +3387,9 @@ function buildAssistantSegments(
                 chatId: imageProjection.chatId,
                 resolutions,
                 deduplicatedTargetsBySource: targetsFor(resolutions),
+                fileResolutions:
+                  imageProjection.fileResolutionsByBlockId.get(block.blockId) ??
+                  NO_FILE_RESOLUTIONS,
               },
             }
           : segment,

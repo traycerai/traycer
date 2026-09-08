@@ -100,6 +100,7 @@ const BASE_CONTEXT: AssistantMarkdownImageContext = {
   chatId: "chat-1",
   resolutions: [],
   deduplicatedTargetsBySource: EMPTY_DEDUP_TARGETS,
+  fileResolutions: [],
 };
 
 function dedupTarget(

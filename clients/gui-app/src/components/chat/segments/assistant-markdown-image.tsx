@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { Link } from "lucide-react";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
+import type { FileResolutionEntry } from "@traycer/protocol/persistence/epic/schemas";
 import {
   useScrollToChatBlock,
   type ScrollToChatBlock,
@@ -21,6 +22,11 @@ import {
   MAX_SVG_SOURCE_LENGTH,
   sanitizeUntrustedSvg,
 } from "@/lib/images/untrusted-svg";
+import { mediaTypeFamily } from "@/lib/files/media-type-family";
+import { useFileBytes } from "@/lib/files/byte-source";
+import { extractText } from "@/markdown/components/extract-react-node-text";
+import { MarkdownAnchor } from "@/markdown/components/markdown-anchor";
+import { InlineVideo } from "./inline-video";
 
 const RASTER_DATA_URL_PATTERN =
   /^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z\d+/]+={0,2})$/i;
@@ -66,6 +72,56 @@ export function AssistantMarkdownImageNode(
   const src = typeof props.src === "string" ? props.src : "";
   const alt = typeof props.alt === "string" ? props.alt : "";
   return <AssistantMarkdownImage src={src} alt={alt} context={context} />;
+}
+
+/**
+ * The `a` renderer for ASSISTANT markdown only - registered beside the `img`
+ * one in `text-segment.tsx`, and only for a segment that carries an image
+ * context, so every other markdown surface keeps the plain
+ * {@link MarkdownAnchor} it has today.
+ *
+ * A link is not an embed. The only target this takes over is a VIDEO the host
+ * resolved to an epic file (D28) - `[the run](files/recordings/x.mp4)` is how
+ * an agent embeds a clip, and rendering it as a dead-ish link would be the
+ * whole feature missing - plus a resolved-to-nothing target, which gets the
+ * same "no longer available" line an image does (D25). Every other kind falls
+ * through to the ordinary anchor: an epic-file PDF or log is a file you open,
+ * and this ticket adds no new opening seam for it.
+ */
+export function AssistantMarkdownLinkNode(
+  props: Record<string, unknown>,
+): ReactNode {
+  const context = useContext(AssistantMarkdownImageContext);
+  const href = typeof props.href === "string" ? props.href : "";
+  const children = props.children as ReactNode;
+  const entry =
+    context === null ? null : findFileResolution(context.fileResolutions, href);
+  if (context !== null && entry !== null) {
+    const render = classifyFileResolution(entry);
+    // The link TEXT is the only name a link carries; an embed needs one.
+    const label = extractText(children).trim();
+    if (render === "unavailable") {
+      return <FileNoLongerAvailable label={label} />;
+    }
+    if (render === "video") {
+      return (
+        <InlineFileVideo entry={entry} epicId={context.epicId} label={label} />
+      );
+    }
+  }
+  return (
+    <MarkdownAnchor
+      // `""` and `undefined` are the same anchor to `MarkdownAnchor`: it drops
+      // a blank href rather than letting it navigate to the current document.
+      href={href}
+      title={typeof props.title === "string" ? props.title : undefined}
+      className={
+        typeof props.className === "string" ? props.className : undefined
+      }
+    >
+      {children}
+    </MarkdownAnchor>
+  );
 }
 
 function classifyAssistantImageSource(src: string): AssistantImageSource {
@@ -369,6 +425,20 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   }
 
   if (resolution === null) {
+    // Only the `local` arm reaches here, and only with no image resolution -
+    // which is exactly the PRECEDENCE rule: an `imageResolutions` entry always
+    // wins over a `fileResolutions` one for the same target. That record is the
+    // released path and carries user-facing decisions a file entry has no way
+    // to express (`blocked`, `consent-required`, `oversized`), so a message
+    // whose target appears in both must keep rendering the answer it renders
+    // today. `https:` and `data:` sources never consult the file record at all.
+    const fileEntry = findFileResolution(
+      props.context.fileResolutions,
+      source.src,
+    );
+    if (fileEntry !== null) {
+      return renderFileResolution(fileEntry, props.context.epicId, props.alt);
+    }
     return (
       <AttachmentImageFailure
         alt={props.alt}
@@ -377,6 +447,176 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
     );
   }
   return renderImageResolution(resolution, props.alt);
+}
+
+/**
+ * What one epic-file resolution renders as.
+ *
+ * `unavailable` is decided STRUCTURALLY rather than by matching the state
+ * string: `state` is an open string on the wire (`fileResolutionEntrySchema`)
+ * and `path`/`sha256`/`mediaType` are null on every arm that resolved to no
+ * object, so "we have an address" is the honest test and an unrecognized
+ * future state degrades to the chip instead of to a broken element.
+ *
+ * `kind === "recording"` decides video ahead of the media type because a
+ * recording IS the clip of D14; the family check then covers a plain `.mp4`
+ * dropped into `files/` that carries no recording identity.
+ */
+type FileResolutionRender = "video" | "image" | "unavailable" | "other";
+
+function classifyFileResolution(
+  entry: FileResolutionEntry,
+): FileResolutionRender {
+  if (
+    entry.state !== "resolved" ||
+    entry.path === null ||
+    entry.sha256 === null ||
+    entry.mediaType === null
+  ) {
+    return "unavailable";
+  }
+  if (entry.kind === "recording") return "video";
+  const family = mediaTypeFamily(entry.mediaType);
+  if (family === "video") return "video";
+  return family === "image" ? "image" : "other";
+}
+
+function renderFileResolution(
+  entry: FileResolutionEntry,
+  epicId: string,
+  alt: string,
+): ReactNode {
+  const render = classifyFileResolution(entry);
+  if (render === "unavailable") return <FileNoLongerAvailable label={alt} />;
+  if (render === "video") {
+    return <InlineFileVideo entry={entry} epicId={epicId} label={alt} />;
+  }
+  if (render === "image") {
+    return <EpicFileImage entry={entry} epicId={epicId} alt={alt} />;
+  }
+  // A resolved non-image, non-video target written as an IMAGE: unchanged from
+  // today, which is the same line a `local` source with no resolution gets.
+  return (
+    <AttachmentImageFailure alt={alt} reason="Couldn't display this image." />
+  );
+}
+
+/** D25's chip, in the placeholder styling every other chat failure uses. */
+function FileNoLongerAvailable(props: { readonly label: string }): ReactNode {
+  return (
+    <AttachmentImageFailure
+      alt={props.label}
+      reason="This file is no longer available."
+    />
+  );
+}
+
+/**
+ * The narrowing both video call sites need. `classifyFileResolution` already
+ * proved the three address fields non-null, but that proof does not survive
+ * the function boundary, so it is re-read here rather than asserted.
+ */
+function InlineFileVideo(props: {
+  readonly entry: FileResolutionEntry;
+  readonly epicId: string;
+  readonly label: string;
+}): ReactNode {
+  const { path, sha256, mediaType } = props.entry;
+  if (path === null || sha256 === null || mediaType === null) {
+    return <FileNoLongerAvailable label={props.label} />;
+  }
+  return (
+    <InlineVideo
+      epicId={props.epicId}
+      path={path}
+      sha256={sha256}
+      mediaType={mediaType}
+      // A `<video>` has no text of its own, so an empty alt / link text would
+      // leave it with no accessible name at all. The manifest key's last
+      // segment is the file's name and always non-empty.
+      label={
+        props.label.length > 0 ? props.label : (path.split("/").pop() ?? path)
+      }
+    />
+  );
+}
+
+/**
+ * An epic-file image, rendered through the SAME `attachment-image.tsx`
+ * primitives as a chat-attachment one - only the byte source differs (ticket
+ * 13). A pixel of this must not look different from an image the host ingested
+ * as an attachment.
+ */
+function EpicFileImage(props: {
+  readonly entry: FileResolutionEntry;
+  readonly epicId: string;
+  readonly alt: string;
+}): ReactNode {
+  const { path, sha256, mediaType } = props.entry;
+  const bytes = useFileBytes(
+    path === null || sha256 === null || mediaType === null
+      ? null
+      : {
+          kind: "epic-file",
+          epicId: props.epicId,
+          path,
+          sha256,
+          mediaType,
+        },
+  );
+  if (path === null || sha256 === null || mediaType === null) {
+    return <FileNoLongerAvailable label={props.alt} />;
+  }
+  if (bytes.status === "loading") {
+    return (
+      <AttachmentImageLoading label="Waiting for file sync" fullWidth={false} />
+    );
+  }
+  if (bytes.status !== "ready") {
+    return <FileNoLongerAvailable label={props.alt} />;
+  }
+  return (
+    <AttachmentImage
+      key={bytes.src}
+      src={bytes.src}
+      // The DELIVERED type, not the manifest's claim - same reason as
+      // `ResolvedImage`: `AttachmentImage` gates SVG sanitization on what it is
+      // handed, so bytes that are really SVG must not arrive labelled png.
+      mediaType={bytes.mediaType}
+      alt={props.alt}
+      suggestedName={null}
+      fullWidth={false}
+    />
+  );
+}
+
+/**
+ * Match by EXACT string equality on the entry's `src`, which the host emits as
+ * the markdown target verbatim - the same contract `findResolution` matches
+ * `imageResolutions` on, and the reason neither side needs to agree on path
+ * normalization.
+ *
+ * Percent-encoding is the one wrinkle, and it is the same one the image record
+ * has: the markdown parser encodes a destination before any renderer sees it,
+ * so the authored `files/my clip.mp4` arrives here as `files/my%20clip.mp4`
+ * while the host recorded what the agent wrote. Both sides are decoded once so
+ * either direction matches.
+ */
+function findFileResolution(
+  entries: ReadonlyArray<FileResolutionEntry>,
+  source: string,
+): FileResolutionEntry | null {
+  const trimmed = source.trim();
+  if (trimmed.length === 0) return null;
+  const decoded = decodeImageSource(trimmed);
+  return (
+    entries.find(
+      (entry) =>
+        entry.src === trimmed ||
+        entry.src === decoded ||
+        decodeImageSource(entry.src) === decoded,
+    ) ?? null
+  );
 }
 
 function renderImageResolution(

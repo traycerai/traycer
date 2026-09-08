@@ -488,7 +488,11 @@ export function analyticsTargetForCanvasTileType(
       return "terminal";
     case "terminal-agent":
       return "terminal_agent";
+    // An epic file is a file: it shares the target kind with the workspace
+    // tile rather than earning one of its own, so "files opened" stays one
+    // number across both byte planes.
     case "workspace-file":
+    case "epic-file":
       return "file";
     case "git-diff":
     case "snapshot-diff":
@@ -512,6 +516,11 @@ export function analyticsArtifactKindForCanvasTileType(
     case "story":
     case "ticket":
       return tileType;
+    // Explicit, not left to the default: an epic file is a FILE, not an
+    // artifact record, so it has no artifact kind to report and must never
+    // acquire one by someone reading the default as "unhandled".
+    case "epic-file":
+      return null;
     default:
       return null;
   }

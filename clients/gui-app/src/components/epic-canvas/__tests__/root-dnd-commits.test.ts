@@ -341,6 +341,7 @@ describe("root dnd commits - left panel", () => {
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
+      { panelIds: ["files"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
       { panelIds: ["artifacts"] },
@@ -422,6 +423,7 @@ describe("root dnd commits - left panel", () => {
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
       { panelIds: ["browsers"] },
+      { panelIds: ["files"] },
     ]);
   });
 
@@ -463,6 +465,7 @@ describe("root dnd commits - left panel", () => {
       { panelIds: ["browsers"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
+      { panelIds: ["files"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
     ]);
@@ -539,6 +542,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
       { panelIds: ["browsers"] },
+      { panelIds: ["files"] },
     ]);
   });
 
@@ -558,6 +562,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
       { panelIds: ["browsers"] },
+      { panelIds: ["files"] },
     ]);
   });
 
@@ -577,7 +582,7 @@ describe("root dnd commits - left panel drop resolver", () => {
         { kind: "left-panel-rail", panelId: "chats", position: "combine" },
         groups,
       ),
-    ).toEqual([...groups, { panelIds: ["browsers"] }]);
+    ).toEqual([...groups, { panelIds: ["browsers"] }, { panelIds: ["files"] }]);
   });
 
   it("moves a rail group and a section to the rail end", () => {
@@ -596,6 +601,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
       { panelIds: ["browsers"] },
+      { panelIds: ["files"] },
       { panelIds: ["artifacts"] },
     ]);
     expect(
@@ -613,6 +619,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
       { panelIds: ["browsers"] },
+      { panelIds: ["files"] },
       { panelIds: ["artifacts"] },
     ]);
   });
@@ -636,6 +643,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
       { panelIds: ["browsers"] },
+      { panelIds: ["files"] },
     ]);
   });
 

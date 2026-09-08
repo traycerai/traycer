@@ -3,6 +3,7 @@ import type {
   BrowserSessionTileRef,
   CommGraphTileRef,
   EpicArtifactRef,
+  EpicFileTileRef,
   EpicTerminalRef,
   GitDiffTileRef,
   ManagedCommandOutputTileRef,
@@ -37,6 +38,7 @@ export interface TileKindToRefMap {
   readonly "managed-command-output": ManagedCommandOutputTileRef;
   readonly "comm-graph": CommGraphTileRef;
   readonly "published-chat": PublishedChatTileRef;
+  readonly "epic-file": EpicFileTileRef;
   readonly "pr-detail": PrDetailTileRef;
   readonly "pr-diff": PrDiffTileRef;
   readonly blank: BlankTileRef;

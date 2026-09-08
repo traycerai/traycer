@@ -10,8 +10,8 @@ import {
 
 /**
  * The mobile "Switch tab" sheet exposes the desktop left-panel categories as a
- * horizontally-scrollable tab bar: Agents (`chats`), Artifacts, File tree, Git
- * diff, Pull requests, Terminals, Browsers, Sharing and Comments.
+ * horizontally-scrollable tab bar: Agents (`chats`), Artifacts, Files, File
+ * tree, Git diff, Pull requests, Terminals, Browsers, Sharing and Comments.
  *
  * The bar's order is its OWN, not the rail's - the rail runs chats, terminals,
  * browsers, artifacts, git-diff, pull-requests, file-tree - and only the local
@@ -28,6 +28,7 @@ import {
 const CURATED_ORDER: readonly LeftPanelId[] = [
   "chats",
   "artifacts",
+  "files",
   "file-tree",
   "git-diff",
   "pull-requests",

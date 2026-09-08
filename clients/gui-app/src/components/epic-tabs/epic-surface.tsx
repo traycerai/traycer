@@ -11,6 +11,7 @@ import {
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { EpicFileEventsBinder } from "@/components/epic-canvas/epic-file-events-binder";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { AgentBrowserPip } from "@/components/epic-canvas/pip/agent-browser-pip";
 import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
@@ -67,6 +68,11 @@ export function EpicSurface(props: EpicSurfaceProps) {
                   effects below unmounted. Self-gates on mobile, so desktop
                   registers nothing either way. */}
               <MobileEpicHeaderActionsBinder tabId={props.tabId} />
+              {/* Holds this epic's `epic.fileEvents` claim for as long as the
+                  pane is mounted - refusal toasts and the recording lifecycle
+                  arrive whether or not the Files panel is open, and a second
+                  pane on the same epic shares the one subscription. */}
+              <EpicFileEventsBinder epicId={props.epicId} />
               <div
                 className="flex min-h-0 min-w-0 flex-1 flex-row"
                 data-epic-surface={props.tabId}

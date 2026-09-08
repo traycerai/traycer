@@ -23,6 +23,7 @@ import { snapshotDiffTileSchema } from "./snapshot-diff-tile";
 import { managedCommandOutputTileSchema } from "./managed-command-output-tile";
 import { commGraphTileSchema } from "./comm-graph-tile";
 import { publishedChatTileSchema } from "./published-chat-tile";
+import { epicFileTileSchema } from "./epic-file-tile";
 import { prDetailTileSchema } from "./pr-detail-tile";
 import { prDiffTileSchema } from "./pr-diff-tile";
 import { blankTileSchema } from "./blank-tile";
@@ -52,6 +53,7 @@ const TILE_SCHEMAS: TileSchemaRegistry = {
   "managed-command-output": managedCommandOutputTileSchema,
   "comm-graph": commGraphTileSchema,
   "published-chat": publishedChatTileSchema,
+  "epic-file": epicFileTileSchema,
   "pr-detail": prDetailTileSchema,
   "pr-diff": prDiffTileSchema,
   blank: blankTileSchema,

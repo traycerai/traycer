@@ -60,6 +60,7 @@ import type {
   DeletedArtifactsSlice,
   EpicArtifactRoomAvailability,
   EpicHeader,
+  FilesSlice,
   TerminalAgentsSlice,
   TreeSlice,
 } from "./types";
@@ -399,6 +400,12 @@ export interface OpenEpicState {
   /** Doc entries unioned with the host's registry rows. Components read THIS. */
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
+  /**
+   * The epic-files manifest (D02) - the sibling `files` Y.Map, projected. Two
+   * path-sorted lists: live entries and tombstones. Doc-only, so it is empty on
+   * a lane connection.
+   */
+  readonly files: FilesSlice;
   /**
    * Comment threads the RECORDS LANE has served, grouped by artifact. Empty on
    * every legacy connection - that arm's wire carries no comment records - so

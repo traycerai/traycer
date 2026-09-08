@@ -13,6 +13,7 @@ import {
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   FileDiff,
+  FileIcon,
   FilePlus,
   GitPullRequest,
   Lock,
@@ -1259,6 +1260,12 @@ function renderFixedTabIcon(
       return <CommGraphTileIcon className="size-3.5" />;
     case "published-chat":
       return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
+    // A generic file glyph on purpose: the tab is keyed by PATH and the bytes
+    // behind it can change family under an open tile (a re-capture), so an
+    // icon derived from the media type would be a fact the strip cannot keep
+    // true.
+    case "epic-file":
+      return <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />;
     default:
       return null;
   }

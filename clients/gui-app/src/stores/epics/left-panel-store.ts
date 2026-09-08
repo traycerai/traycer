@@ -16,6 +16,7 @@ export const LEFT_PANEL_IDS = [
   "terminals",
   "browsers",
   "artifacts",
+  "files",
   "git-diff",
   "pull-requests",
   "file-tree",
@@ -204,6 +205,7 @@ export const DEFAULT_LEFT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["git-diff"] },
   { panelIds: ["pull-requests"] },
   { panelIds: ["file-tree"] },
+  { panelIds: ["files"] },
   { panelIds: ["sharing"] },
   { panelIds: ["comments"] },
 ];

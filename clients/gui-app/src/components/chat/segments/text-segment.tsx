@@ -9,6 +9,7 @@ import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import {
   AssistantMarkdownImageNode,
   AssistantMarkdownImageProvider,
+  AssistantMarkdownLinkNode,
 } from "./assistant-markdown-image";
 import {
   NextStepsActionGroup,
@@ -23,11 +24,16 @@ interface TextSegmentProps {
   imageContext?: AssistantMarkdownImageContext;
 }
 
-const ASSISTANT_IMAGE_COMPONENTS: Record<
+// Registered only for a segment that HAS an image context, i.e. assistant
+// text. `a` is overridden alongside `img` because an epic file is embedded by
+// either markdown form (D28); the link node falls straight through to the
+// shared `MarkdownAnchor` for every target that is not a resolved video.
+const ASSISTANT_MARKDOWN_COMPONENTS: Record<
   string,
   ComponentType<Record<string, unknown>>
 > = {
   img: AssistantMarkdownImageNode as ComponentType<Record<string, unknown>>,
+  a: AssistantMarkdownLinkNode as ComponentType<Record<string, unknown>>,
 };
 
 function nextStepOptionLockKey(blockId: string, optionId: string): string {
@@ -37,7 +43,7 @@ function nextStepOptionLockKey(blockId: string, optionId: string): string {
 export function TextSegment(props: TextSegmentProps) {
   const imageContext = props.imageContext ?? null;
   const markdownComponents =
-    imageContext === null ? null : ASSISTANT_IMAGE_COMPONENTS;
+    imageContext === null ? null : ASSISTANT_MARKDOWN_COMPONENTS;
   const parts = useMemo(
     () => parseTraycerNextStepsMarkdown(props.markdown, props.isStreaming),
     [props.isStreaming, props.markdown],

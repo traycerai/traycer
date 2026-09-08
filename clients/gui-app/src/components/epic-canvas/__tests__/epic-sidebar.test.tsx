@@ -425,6 +425,7 @@ describe("<EpicLeftPanelRail />", () => {
       "epic-rail-git-diff",
       "epic-rail-pull-requests",
       "epic-rail-file-tree",
+      "epic-rail-files",
       "epic-rail-sharing",
     ]);
   });
@@ -595,6 +596,7 @@ describe("<EpicLeftPanelRail />", () => {
         "Terminals",
         "Browsers",
         "Artifacts",
+        "Files",
         "Git Diff",
         "Pull Requests",
         "File Tree",
@@ -716,6 +718,7 @@ describe("<EpicLeftPanelRail />", () => {
         "git-diff",
         "pull-requests",
         "file-tree",
+        "files",
         "sharing",
       ] as const) {
         useLeftPanelStore.getState().setPanelVisibilityOverride(panelId, false);
@@ -802,6 +805,7 @@ describe("Browsers panel registration", () => {
       "epic-rail-browsers",
       "epic-rail-git-diff",
       "epic-rail-file-tree",
+      "epic-rail-files",
       "epic-rail-sharing",
     ]);
     expect(

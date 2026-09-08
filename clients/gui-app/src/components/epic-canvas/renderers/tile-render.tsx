@@ -31,6 +31,7 @@ import { SnapshotDiffTile } from "./snapshot-diff-tile";
 import { ManagedCommandOutputTile } from "./managed-command-output-tile";
 import { CommGraphTile } from "./comm-graph-tile";
 import { PublishedChatTile } from "./published-chat-tile";
+import { EpicFileTile } from "./epic-file-tile";
 import { PrDetailTile } from "./pr-detail-tile";
 import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
@@ -156,6 +157,12 @@ const TILE_RENDERERS: TileRendererRegistry = {
       tileId={tileId}
       isActive={isActive}
     />
+  ),
+  // Epic-scoped content on the TAB's host: the manifest is the same doc for
+  // every participant, and the host is what decides whether the bytes come
+  // over loopback or a signed cloud url.
+  "epic-file": ({ node, viewTabId, epicId }) => (
+    <EpicFileTile node={node} viewTabId={viewTabId} epicId={epicId} />
   ),
   "pr-detail": ({ node, epicId, viewTabId, isActive }) => (
     <PrDetailTile

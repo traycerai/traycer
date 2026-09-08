@@ -86,6 +86,7 @@ import {
   EMPTY_ARRAY,
   EMPTY_CHATS_SLICE,
   EMPTY_COMMENT_THREADS_SLICE,
+  EMPTY_FILES_SLICE,
   EMPTY_PROJECTED_SLICES,
   EMPTY_TERMINAL_AGENTS_SLICE,
 } from "../types";
@@ -440,6 +441,9 @@ export function laneRawProjectionSources(
     docTuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
     epicHeader: slices.epicHeader,
     roleClaims: slices.roleClaims,
+    // No root doc on this head, so no manifest to read. See the field's own
+    // note on `EpicRawProjectionSources`.
+    files: EMPTY_FILES_SLICE,
   };
 }
 

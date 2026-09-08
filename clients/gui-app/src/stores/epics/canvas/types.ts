@@ -15,6 +15,7 @@ import {
   TILE_KIND_BLANK,
   TILE_KIND_BROWSER_SESSION,
   TILE_KIND_COMM_GRAPH,
+  TILE_KIND_EPIC_FILE,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_MANAGED_COMMAND_OUTPUT,
   TILE_KIND_PR_DETAIL,
@@ -631,6 +632,30 @@ export interface PrDiffTileRef {
   readonly view: PrDiffTileViewState;
 }
 
+/**
+ * One file on the epic's file plane.
+ *
+ * `(epicId, path)` is the WHOLE identity. The manifest entry - sha, media
+ * type, size, status, producer, tombstone - is read live from the `files`
+ * slice at render time, so a re-capture at the same path, an upload finishing,
+ * a delete and a restore all move an already-open tile without rewriting a
+ * persisted ref. `name` is the path's basename, recomputed on parse rather
+ * than trusted, so it can never disagree with the path it labels.
+ *
+ * `hostId` is the tab's host like every other tile: the bytes are fetched
+ * through THAT host's `epic.readFile`, which is what lets it pick loopback
+ * over a signed cloud url when the GUI shares its machine.
+ */
+export interface EpicFileTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_EPIC_FILE;
+  readonly name: string;
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly path: string;
+}
+
 export type EpicCanvasTileRef =
   | EpicNodeRef
   | BrowserSessionTileRef
@@ -639,6 +664,7 @@ export type EpicCanvasTileRef =
   | ManagedCommandOutputTileRef
   | CommGraphTileRef
   | PublishedChatTileRef
+  | EpicFileTileRef
   | PrDetailTileRef
   | PrDiffTileRef
   | BlankTileRef;
@@ -647,6 +673,12 @@ export function isPublishedChatTileRef(
   value: EpicCanvasTileRef,
 ): value is PublishedChatTileRef {
   return value.type === TILE_KIND_PUBLISHED_CHAT;
+}
+
+export function isEpicFileTileRef(
+  value: EpicCanvasTileRef,
+): value is EpicFileTileRef {
+  return value.type === TILE_KIND_EPIC_FILE;
 }
 
 export function isBlankTileRef(

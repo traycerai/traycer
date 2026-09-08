@@ -259,6 +259,7 @@ function assistantMessage(
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 

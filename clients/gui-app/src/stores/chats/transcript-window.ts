@@ -1259,6 +1259,15 @@ function pruneSupersededLiveRecords(
   };
 }
 
+/**
+ * `fileResolutions` (D28) is deliberately absent from this comparison and from
+ * the turn merge in {@link servedAssistantTurns}. Both exist to reconcile a
+ * TRANSIENT LIVE record against what the host just served, and a live record
+ * never carries a file record at all - the host writes it when it assembles
+ * the persisted message and there is no streaming frame to mirror. The merged
+ * turns these two produce are compared, never rendered, so nothing here can
+ * drop a file entry off a row.
+ */
 function assistantRenderBodyEqual(
   left: Extract<Message, { role: "assistant" }>,
   right: Extract<Message, { role: "assistant" }>,

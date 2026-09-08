@@ -15,6 +15,13 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * store-local monotonic sequence, and two copies whose contents both appear
  * in that stream are ordered by where they appear.
  *
+ * There is deliberately no file-resolution twin of this store. Its whole
+ * reason to exist is that the CLIENT rewrites `imageResolutions` in place from
+ * `image_resolution.updated` frames, which leaves two copies of one record
+ * differing with no version to order them. `fileResolutions` (D28) has no such
+ * frame - it is written once by the host with the message - so two copies can
+ * never disagree on it and there is no direction to witness.
+ *
  * A witness is evidence about the SOURCE's write stream, not about the
  * client's holdings - it is recorded even when the client holds no copy of
  * the record (the rewrite is skipped, never the recording), which is exactly

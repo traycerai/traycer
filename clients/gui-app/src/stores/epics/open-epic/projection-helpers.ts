@@ -39,6 +39,13 @@ import {
   roleClaimSchema,
   type RoleClaim,
 } from "@traycer/protocol/persistence/epic/role-claims";
+import {
+  EPIC_FILES_MAP_NAME,
+  epicFileEntrySchema,
+  isEpicFilePath,
+  type EpicFileObject,
+  type EpicFileProducer,
+} from "@traycer/protocol/persistence/epic/files";
 import * as Y from "yjs";
 import type {
   DeadPendingMutation,
@@ -60,9 +67,11 @@ import type {
   HeldChatRecordRow,
   DeletedArtifactProjection,
   DeletedArtifactsSlice,
+  EpicFileRecord,
   EpicHeader,
   EpicProjectedSlices,
   EpicTreeNodeType,
+  FilesSlice,
   TerminalAgentsSlice,
   TreeNode,
   TreeSlice,
@@ -72,6 +81,8 @@ import {
   EMPTY_AGENT_ROLES_SLICE,
   EMPTY_ARRAY,
   EMPTY_CHATS_SLICE,
+  EMPTY_FILE_RECORDS,
+  EMPTY_FILES_SLICE,
   EMPTY_PROJECTED_SLICES,
   EMPTY_TERMINAL_AGENTS_SLICE,
 } from "./types";
@@ -82,6 +93,17 @@ import { DEFAULT_SORT_MODE, makeNodeComparator } from "@/lib/epic-sort";
 
 export function getEpicMap(doc: Y.Doc): Y.Map<unknown> {
   return doc.getMap("epic");
+}
+
+/**
+ * The epic-files manifest map (D02). A SIBLING root map, not a child of
+ * `epic`, so it is reached through `doc.getMap` and never through
+ * {@link getEpicMap} - and, unlike every accessor below, it is never `null`:
+ * `getMap` materializes the root and is the only way to get a usable handle on
+ * a top-level map that arrived over the wire as a generic `AbstractType`.
+ */
+export function getEpicFilesMap(doc: Y.Doc): Y.Map<unknown> {
+  return doc.getMap(EPIC_FILES_MAP_NAME);
 }
 
 export function getArtifactsMap(doc: Y.Doc): Y.Map<unknown> | null {
@@ -593,6 +615,98 @@ function projectDeletedArtifactsSlice(doc: Y.Doc): DeletedArtifactsSlice {
     projectDeletedArtifact,
     EMPTY_PROJECTED_SLICES.deletedArtifacts,
   );
+}
+
+// ─── Epic files (the `files` sibling map, D02) ────────────────────────────
+
+/**
+ * `"chatId" in` rather than the `type` check alone: the producer union is OPEN
+ * (an unknown type parses as a generic producer whose `type` is an
+ * unconstrained string), so the name says what the writer meant and the
+ * property is what narrows it.
+ */
+function epicFileProducerChatId(producer: EpicFileProducer): string | null {
+  return producer.type === "agent" && "chatId" in producer
+    ? producer.chatId
+    : null;
+}
+
+function epicFileObjectsEq(a: EpicFileObject, b: EpicFileObject): boolean {
+  return (
+    a.sha256 === b.sha256 &&
+    a.byteLength === b.byteLength &&
+    a.mediaType === b.mediaType &&
+    a.createdAt === b.createdAt &&
+    a.createdBy === b.createdBy &&
+    a.producer.type === b.producer.type &&
+    epicFileProducerChatId(a.producer) === epicFileProducerChatId(b.producer)
+  );
+}
+
+/**
+ * Field-by-field, because every read re-parses the manifest value into a FRESH
+ * object: `safeParse` never hands back the value stored in the Y.Map, so
+ * reference equality is always false and the identity contract has to be earned
+ * by comparison. Every field of `EpicFileEntry` is covered - a comparison that
+ * skipped one would pin a row at a stale value rather than merely re-render it.
+ */
+export function epicFileRecordsEq(
+  a: EpicFileRecord,
+  b: EpicFileRecord,
+): boolean {
+  const left = a.entry;
+  const right = b.entry;
+  return (
+    a.path === b.path &&
+    left.v === right.v &&
+    left.kind === right.kind &&
+    left.status === right.status &&
+    left.recordingId === right.recordingId &&
+    left.deletedAt === right.deletedAt &&
+    epicFileObjectsEq(left.current, right.current) &&
+    arrayShallowEq(left.derivedFrom, right.derivedFrom) &&
+    left.versions.length === right.versions.length &&
+    left.versions.every((version, index) =>
+      epicFileObjectsEq(version, right.versions[index]),
+    )
+  );
+}
+
+/**
+ * Full sweep of the manifest, parsed ONE KEY AT A TIME (D02).
+ *
+ * Leniency is the point: an entry a build cannot parse is skipped, never
+ * thrown on, so a manifest written by a newer host renders as the files this
+ * build does understand instead of blanking the panel or blocking the epic
+ * from opening. A key that is not a legal `files/` path is skipped for the same
+ * reason - it is something this build has no name for.
+ *
+ * Sorted by path because Y.Map iteration order is not stable across peers, so
+ * without it two clients showing the same epic would list the same files in
+ * different orders. Paths are map keys, so they are unique and the comparator
+ * never ties.
+ */
+export function projectEpicFilesSlice(doc: Y.Doc): FilesSlice {
+  const records: EpicFileRecord[] = [];
+  const deleted: EpicFileRecord[] = [];
+  for (const [path, value] of getEpicFilesMap(doc).entries()) {
+    if (!isEpicFilePath(path)) continue;
+    const parsed = epicFileEntrySchema.safeParse(value);
+    if (!parsed.success) continue;
+    const record: EpicFileRecord = { path, entry: parsed.data };
+    if (parsed.data.deletedAt === null) {
+      records.push(record);
+    } else {
+      deleted.push(record);
+    }
+  }
+  if (records.length === 0 && deleted.length === 0) return EMPTY_FILES_SLICE;
+  records.sort((a, b) => (a.path > b.path ? 1 : -1));
+  deleted.sort((a, b) => (a.path > b.path ? 1 : -1));
+  return {
+    records: records.length === 0 ? EMPTY_FILE_RECORDS : records,
+    deleted: deleted.length === 0 ? EMPTY_FILE_RECORDS : deleted,
+  };
 }
 
 /**
@@ -1494,6 +1608,12 @@ export interface EpicRawProjectionSources {
   readonly docTuiAgents: TerminalAgentsSlice;
   readonly epicHeader: EpicHeader;
   readonly roleClaims: readonly RoleClaim[];
+  /**
+   * The `files` sibling map. Empty on the LANE head and structurally so: a lane
+   * connection has no root `Y.Doc`, and the manifest is doc-only - it has no
+   * record-plane equivalent to fold in. Same contract as `docChats` there.
+   */
+  readonly files: FilesSlice;
 }
 
 /** Read the `@1` root doc into {@link EpicRawProjectionSources}. */
@@ -1508,6 +1628,7 @@ export function readEpicRawProjectionSources(
     docTuiAgents: projectTerminalAgentsSlice(doc, currentUserId),
     epicHeader: projectEpicHeader(doc),
     roleClaims: readRoleClaims(doc),
+    files: projectEpicFilesSlice(doc),
   };
 }
 
@@ -1628,6 +1749,7 @@ export function composeEpicProjection(
     docTuiAgents,
     tuiAgents: overlaidTuiAgents,
     agentRoles,
+    files: raw.files,
     tree,
   };
 }

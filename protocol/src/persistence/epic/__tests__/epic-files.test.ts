@@ -132,7 +132,6 @@ describe("epicFileEntrySchema", () => {
     ["a short sha", { ...object, sha256: "a".repeat(63) }],
     ["a negative byteLength", { ...object, byteLength: -1 }],
     ["a fractional byteLength", { ...object, byteLength: 1.5 }],
-    ["an unknown producer type", { ...object, producer: { type: "system" } }],
     [
       "an agent producer without a chatId",
       { ...object, producer: { type: "agent" } },
@@ -141,6 +140,18 @@ describe("epicFileEntrySchema", () => {
     expect(epicFileEntrySchema.safeParse({ ...entry, current }).success).toBe(
       false,
     );
+  });
+
+  it("accepts an unknown producer type as a generic producer", () => {
+    // Per-ENTRY leniency, the same rule `kind`/`mediaType`/`status` follow: a
+    // producer this build has no name for must not fail the whole entry, or a
+    // newer host's file would vanish from the panel instead of rendering as a
+    // generic row.
+    const parsed = epicFileObjectSchema.safeParse({
+      ...object,
+      producer: { type: "system" },
+    });
+    expect(parsed.success && parsed.data.producer.type).toBe("system");
   });
 
   it("accepts an agent producer", () => {

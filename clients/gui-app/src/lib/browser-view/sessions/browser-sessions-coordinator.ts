@@ -3,6 +3,7 @@ import type {
   BrowserSessionsUxClientFrame,
   BrowserSessionsUxServerFrame,
   BrowserTabIdentity,
+  BrowserTabOpenedSource,
   BrowserTabPreview,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -24,6 +25,12 @@ import {
   removeOwnedElectronTabBinding,
   removeOwnedElectronTabBindings,
 } from "@/lib/browser-view/sessions/electron-tab-directory";
+import {
+  applyTabRecordingEnded,
+  applyTabRecordingLive,
+  applyTabRecordingStarted,
+  forgetOwnedTabRecordings,
+} from "@/lib/browser-view/sessions/tab-recording-store";
 import {
   applyPipCaption,
   applyPipHostLifecycle,
@@ -190,6 +197,8 @@ interface BrowserSessionsCoordinator {
    * calls it, keyed by coordinator.
    */
   captureTabPreview: (tabId: string) => Promise<BrowserTabPreview>;
+  /** Fire-and-forget; a recording answer has no reply and no request id. */
+  sendRecordingAnswer: (frame: BrowserSessionsUxClientFrame) => void;
   upsertConsumer: (
     consumerId: symbol,
     runtime: BrowserSessionsCoordinatorRuntime,
@@ -228,6 +237,13 @@ export function hasBrowserSessionsCoordinator(key: string): boolean {
  * no other way out.
  */
 const TAB_PREVIEW_TIMEOUT_MS = 5_000;
+
+/**
+ * The `recordingEnded` reason a shell with no main process answers with. An
+ * OPEN string on the wire, and the host only logs it, so it is a diagnostic
+ * naming the shell's shape rather than a code either side branches on.
+ */
+const NO_RECORDING_HELPER = "no-recording-helper-runtime";
 
 export function browserSessionsCoordinatorState(
   key: string | null,
@@ -352,6 +368,49 @@ export function captureBrowserTabPreview(
   return coordinator.captureTabPreview(tabId);
 }
 
+/**
+ * The two recording ANSWERS, sent up the named coordinator's stream.
+ *
+ * They are the desktop's, not this module's: the helper window lives in main,
+ * so main is what knows a helper came up or went away, and the renderer
+ * coordinator relays. Exported as functions rather than exposed on
+ * `BrowserSessionsState` because the caller is an IPC handler outside React
+ * (ticket 20), not a component reading state.
+ *
+ * Both are recording-addressed and idempotent: a repeat, or one for a
+ * recording this client never saw start, updates nothing and sends a frame the
+ * host drops.
+ */
+export function reportRecordingHelperReady(
+  key: string,
+  recordingId: string,
+): void {
+  const coordinator = browserSessionsCoordinators.get(key);
+  if (coordinator === undefined) return;
+  applyTabRecordingLive(recordingId);
+  coordinator.sendRecordingAnswer({
+    kind: "recordingHelperReady",
+    hasBinaryPayload: false,
+    recordingId,
+  });
+}
+
+export function reportRecordingEnded(
+  key: string,
+  recordingId: string,
+  reason: string,
+): void {
+  const coordinator = browserSessionsCoordinators.get(key);
+  if (coordinator === undefined) return;
+  applyTabRecordingEnded({ recordingId, status: "ended", reason });
+  coordinator.sendRecordingAnswer({
+    kind: "recordingEnded",
+    hasBinaryPayload: false,
+    recordingId,
+    reason,
+  });
+}
+
 export function subscribeToBrowserSessionsCoordinators(
   listener: () => void,
 ): () => void {
@@ -375,6 +434,10 @@ function createBrowserSessionsCoordinator(args: {
     [args.consumerId, args.runtime],
   ]);
   const tabBindingOwner = Symbol("browser-sessions-tabs");
+  // Its own token, not `tabBindingOwner`: two epics open on one host are two
+  // coordinators with the same `hostId`, and one closing must not clear the
+  // other's recording rows.
+  const recordingOwner = Symbol("browser-sessions-recordings");
   let activeConsumerId: symbol | null = args.consumerId;
   let runtime = args.runtime;
   let session: BrowserSessionsSession | null = null;
@@ -461,6 +524,25 @@ function createBrowserSessionsCoordinator(args: {
     });
   };
 
+  /**
+   * One frame up the stream with no answer expected. Dropped while the stream
+   * is not `live`: a recording answer describes a helper on THIS connection,
+   * so queuing one for a future incarnation would report a window that no
+   * longer exists to a host that has already timed the recording out.
+   */
+  const sendRecordingAnswer = (frame: BrowserSessionsUxClientFrame): void => {
+    const live = session;
+    if (live === null || lifecycle !== "live") return;
+    try {
+      live.send(frame);
+    } catch (cause) {
+      appLogger.warn("[browser] a recording answer did not reach the host", {
+        frameKind: frame.kind,
+        cause: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  };
+
   const closeTab = (sessionId: string, tabId: string): Promise<void> =>
     sendRequest(pendingCloses, null, (requestId) => ({
       kind: "closeTab",
@@ -490,6 +572,44 @@ function createBrowserSessionsCoordinator(args: {
       tabId,
     }));
 
+  /**
+   * `startTabRecording`: the host wants a hidden helper window opened at
+   * `helperUrl` for this tab (D15). The window is main's - ticket 20 owns
+   * opening it and answering through {@link reportRecordingHelperReady} - so
+   * all this does is record that a recording was asked for, and settle the one
+   * case it can decide by itself.
+   *
+   * A shell with no `browserView` bridge has no main process and therefore no
+   * way to open a helper at all. It answers immediately rather than leaving
+   * the host to time the recording out: the frame is recording-addressed, and
+   * the protocol already reasons that a client-sent answer names an id only
+   * the host mints and ends a recording the same user could end from the
+   * toolbar.
+   */
+  const startRecording = (frame: {
+    readonly tabId: string;
+    readonly recordingId: string;
+  }): void => {
+    applyTabRecordingStarted({
+      owner: recordingOwner,
+      hostId: args.owner.hostId,
+      tabId: frame.tabId,
+      recordingId: frame.recordingId,
+    });
+    if (runtime.browserView !== null) return;
+    applyTabRecordingEnded({
+      recordingId: frame.recordingId,
+      status: "refused",
+      reason: NO_RECORDING_HELPER,
+    });
+    sendRecordingAnswer({
+      kind: "recordingEnded",
+      hasBinaryPayload: false,
+      recordingId: frame.recordingId,
+      reason: NO_RECORDING_HELPER,
+    });
+  };
+
   const rejectEveryPendingRequest = (): void => {
     const closed = new Error("Browser sessions stream closed.");
     rejectPendingRequests(pendingCloses, closed);
@@ -507,6 +627,10 @@ function createBrowserSessionsCoordinator(args: {
     if (next !== "live" && wasLive) {
       rejectEveryPendingRequest();
       removeOwnedElectronTabBindings(tabBindingOwner);
+      // A recording is helper- and socket-bound, so a stream that left `live`
+      // has none running - and a badge left at `recording` would keep counting
+      // against a run with nothing behind it.
+      forgetOwnedTabRecordings(recordingOwner);
     }
     patchState({
       lifecycle: next,
@@ -532,6 +656,7 @@ function createBrowserSessionsCoordinator(args: {
       pendingPreviews,
       presenters: selectBrowserSessionsPresenters(runtimes),
       currentItems: () => coordinator.state.items,
+      startRecording,
     });
   };
 
@@ -579,6 +704,7 @@ function createBrowserSessionsCoordinator(args: {
     lifecycle = "closed";
     removeOwnedElectronTabBindings(tabBindingOwner);
     rejectEveryPendingRequest();
+    forgetOwnedTabRecordings(recordingOwner);
   };
 
   const restart = (): void => {
@@ -591,6 +717,7 @@ function createBrowserSessionsCoordinator(args: {
     owner: args.owner,
     epicId: args.epicId,
     captureTabPreview,
+    sendRecordingAnswer,
     state: {
       hostId: args.owner.hostId,
       lifecycle: "connecting",
@@ -673,6 +800,10 @@ function handleBrowserSessionsFrame(args: {
   readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly presenters: readonly BrowserSessionsPresenter[];
+  readonly startRecording: (frame: {
+    readonly tabId: string;
+    readonly recordingId: string;
+  }) => void;
 }): void {
   const frame = args.frame;
   switch (frame.kind) {
@@ -712,21 +843,28 @@ function handleBrowserSessionsFrame(args: {
       });
       return;
     case "tabOpened":
-      for (const presenter of args.presenters) {
-        if (
-          surfaceHostOpenedTab({
-            epicId: args.epicId,
-            viewTabId: presenter.viewTabId,
-            hostId: args.hostId,
-            sessionId: frame.sessionId,
-            tabId: frame.tabId,
-            source: frame.source,
-            navigateNested: presenter.navigateNested,
-          })
-        ) {
-          break;
-        }
-      }
+      routeTabOpened({
+        epicId: args.epicId,
+        hostId: args.hostId,
+        presenters: args.presenters,
+        sessionId: frame.sessionId,
+        tabId: frame.tabId,
+        source: frame.source,
+      });
+      return;
+    case "startTabRecording":
+      args.startRecording(frame);
+      return;
+    case "stopTabRecording":
+      // The host tearing the helper down - auto-stop on tab close, the
+      // duration cap, or the toolbar. Terminal for the badge whether or not a
+      // helper ever reported ready; `recordingEnded` is the desktop's own
+      // answer to it, and arriving after this changes nothing.
+      applyTabRecordingEnded({
+        recordingId: frame.recordingId,
+        status: "ended",
+        reason: null,
+      });
       return;
     case "burstStarted":
     case "burstEnded":
@@ -740,6 +878,35 @@ function handleBrowserSessionsFrame(args: {
       appLogger.warn("[browser] unhandled browser.sessions frame", {
         frameKind: args.frame.kind,
       });
+    }
+  }
+}
+
+/**
+ * The first presenter that claims a host-opened tab wins - the rest are other
+ * surfaces on the same epic, and a tab belongs to one of them.
+ */
+function routeTabOpened(args: {
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly presenters: readonly BrowserSessionsPresenter[];
+  readonly sessionId: string;
+  readonly tabId: string;
+  readonly source: BrowserTabOpenedSource;
+}): void {
+  for (const presenter of args.presenters) {
+    if (
+      surfaceHostOpenedTab({
+        epicId: args.epicId,
+        viewTabId: presenter.viewTabId,
+        hostId: args.hostId,
+        sessionId: args.sessionId,
+        tabId: args.tabId,
+        source: args.source,
+        navigateNested: presenter.navigateNested,
+      })
+    ) {
+      return;
     }
   }
 }

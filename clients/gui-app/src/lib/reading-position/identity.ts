@@ -35,7 +35,15 @@ function durableIdentity(args: {
  * had not moved, which is exactly what keying it by cloud identity was for.
  */
 function durableHostId(node: EpicCanvasTileRef): string | null {
-  return node.type === "published-chat" ? null : node.hostId;
+  if (node.type === "published-chat") return null;
+  // Same reasoning one plane over: an epic file is addressed by `(epicId,
+  // path)` on a manifest that replicates to every participant, and which host
+  // served the bytes - the producing one over loopback, any other one over a
+  // signed cloud url - is incidental to the file. Keying on it would drop the
+  // reader's scroll position the first time the same file was reopened while a
+  // different host answered, for content that had not moved.
+  if (node.type === "epic-file") return null;
+  return node.hostId;
 }
 
 function liveIdentity(
@@ -127,6 +135,12 @@ function durableContentParts(
     // served the reopen, for a transcript that did not move.
     case "published-chat":
       return [node.type, node.taskId, node.ownerUserId, node.chatId];
+    // Durable and host-neutral, for the reason in `durableHostId`. Keyed by
+    // path rather than by the object's sha: a re-capture at the same path is
+    // the same FILE to a reader, and folding the sha in would silently discard
+    // the scroll position of a log or transcript every time it was rewritten.
+    case "epic-file":
+      return [node.type, node.epicId, node.path];
     default:
       assertNonDurableTileType(node.type);
       return null;

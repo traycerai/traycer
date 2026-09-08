@@ -88,10 +88,33 @@ export function normalizeEpicFileStatus(
 /**
  * Who produced the object. `createdBy` on the object is a user id: manifest DATA,
  * never log text (D31).
+ *
+ * OPEN, like `kind`, `mediaType` and `status`, and for the file's own reason: a
+ * closed union here would make one unrecognized producer written by a newer
+ * host fail the whole ENTRY, which contradicts the per-entry leniency rule this
+ * module is built on - an entry a reader cannot fully understand renders as a
+ * generic file, it does not vanish. So an unknown `type` parses as a generic
+ * producer carrying nothing but its name.
+ *
+ * `agent` keeps its typed `chatId`: it is the one producer anything branches
+ * on, and the generic arm refuses the `agent` name precisely so an agent
+ * producer that lost its `chatId` still fails rather than degrading into a
+ * generic row that no longer names the chat. Narrow with
+ * `producer.type === "agent" && "chatId" in producer` - the `in` check is what
+ * excludes the generic arm, whose `type` is an unconstrained string.
  */
-export const epicFileProducerSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("user") }),
-  z.object({ type: z.literal("agent"), chatId: z.string() }),
+const epicFileAgentProducerSchema = z.object({
+  type: z.literal("agent"),
+  chatId: z.string(),
+});
+const epicFileGenericProducerSchema = z.object({
+  type: z.string().refine((type) => type !== "agent", {
+    message: "an agent producer must carry a chatId",
+  }),
+});
+export const epicFileProducerSchema = z.union([
+  epicFileAgentProducerSchema,
+  epicFileGenericProducerSchema,
 ]);
 export type EpicFileProducer = z.infer<typeof epicFileProducerSchema>;
 

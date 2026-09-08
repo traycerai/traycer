@@ -878,6 +878,7 @@ function assistantSteerMessage(
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 
@@ -959,6 +960,7 @@ function persistedInterviewMessage(
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 
@@ -9892,6 +9894,7 @@ describe("createChatSessionStore", () => {
           serviceTier: null,
           envCredentialVar: null,
           imageResolutions: [],
+          fileResolutions: [],
         },
       ],
       queue: { status: "idle", items: [] },
@@ -10460,6 +10463,7 @@ describe("createChatSessionStore", () => {
               serviceTier: null,
               envCredentialVar: null,
               imageResolutions: [],
+              fileResolutions: [],
             },
           ],
           events: [],
@@ -10605,6 +10609,7 @@ describe("createChatSessionStore", () => {
               serviceTier: null,
               envCredentialVar: null,
               imageResolutions: [],
+              fileResolutions: [],
             },
             persistedUserMessage("message-split-steered"),
             {
@@ -10632,6 +10637,7 @@ describe("createChatSessionStore", () => {
               serviceTier: null,
               envCredentialVar: null,
               imageResolutions: [],
+              fileResolutions: [],
             },
           ],
           events: [],
@@ -11900,6 +11906,7 @@ function settleTurnAndEvictItsRow(callbacks: ChatStreamCallbacks): void {
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
   emitSnapshotFrame({
     callbacks,
@@ -12627,6 +12634,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       serviceTier: null,
       envCredentialVar: null,
       imageResolutions: [],
+      fileResolutions: [],
     };
   }
 
@@ -12817,6 +12825,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         serviceTier: null,
         envCredentialVar: null,
         imageResolutions: [],
+        fileResolutions: [],
       },
     ]);
     expect(harness.nudgeCount()).toBe(1);

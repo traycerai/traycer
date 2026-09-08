@@ -478,6 +478,7 @@ function buildAssistantSnapshotMessage(
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 

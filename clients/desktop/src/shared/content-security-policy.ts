@@ -21,6 +21,20 @@
  *  - `connect-src blob: data:` lets the image lightbox `fetch()` its own
  *    blob-cache / data-URL sources to copy or save them; both schemes are
  *    local byte access, not network reach.
+ *  - `media-src` exists at all because `<video>` has no other directive to
+ *    fall back to: without it a clip lands on `default-src 'self'` and is
+ *    blocked, which is exactly what the epic-file video viewer hits.
+ *  - `http://127.0.0.1:*` on `img-src` / `media-src` / `connect-src` is the
+ *    epic-file loopback static server (D32). It binds `127.0.0.1` on an
+ *    ephemeral port (`traycer-host` `domain/epic-files/static-server.ts`
+ *    `LOOPBACK_HOST`, `server.listen(0, ...)`), so the PORT cannot be named
+ *    ahead of time and the host is the only thing that can be. All three
+ *    directives need it because the byte plane picks its element by sniffed
+ *    type: an image goes straight into `<img>`, a clip into `<video>`, and
+ *    everything else is `fetch()`ed into a blob. `localhost` is deliberately
+ *    NOT admitted alongside it - the host mints one origin and it is the
+ *    literal address, so a second spelling would widen the policy to a name
+ *    that resolves wherever the resolver says.
  *  - The localhost entries cover the default Vite dev server. Multi-run
  *    `make dev-desktop` can use another loopback port; the renderer page is
  *    served from that origin, so `'self'` covers its own assets and `ws:`
@@ -82,9 +96,10 @@ export function buildCspDirectives(env: NodeJS.ProcessEnv): readonly string[] {
     "default-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
-    "img-src 'self' data: blob: https:",
+    "img-src 'self' data: blob: https: http://127.0.0.1:*",
+    "media-src 'self' blob: https: http://127.0.0.1:*",
     "font-src 'self' data:",
-    `connect-src 'self' blob: data: https: wss: ws: sentry-ipc: http://localhost:5173 ws://localhost:5173${devConnectSrcExtras(
+    `connect-src 'self' blob: data: https: wss: ws: sentry-ipc: http://127.0.0.1:* http://localhost:5173 ws://localhost:5173${devConnectSrcExtras(
       env,
     )}`,
     "frame-src 'none'",

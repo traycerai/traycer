@@ -86,6 +86,7 @@ import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-hos
 import { HOSTED_TILE_RECORD_SELECTOR } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 import {
   TILE_KIND_BROWSER_SESSION,
+  TILE_KIND_EPIC_FILE,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_PUBLISHED_CHAT,
   TILE_KIND_PR_DETAIL,
@@ -140,6 +141,9 @@ function panelIdForTabType(
   if (tabType === TILE_KIND_PR_DETAIL) return "pull-requests";
   if (tabType === TILE_KIND_PR_DIFF) return "pull-requests";
   if (tabType === TILE_KIND_BROWSER_SESSION) return "browsers";
+  // An epic file's row lives in the Files panel, not in the artifact tree the
+  // default falls through to.
+  if (tabType === TILE_KIND_EPIC_FILE) return "files";
   return "artifacts";
 }
 
@@ -165,6 +169,12 @@ function sidebarRevealNodeIdForTab(tab: EpicCanvasTileRef): string | null {
       });
     case TILE_KIND_GIT_DIFF:
       return tab.diff.kind === "file" ? tab.id : null;
+    // The Files panel's rows carry no reveal node id - they are keyed by path
+    // and register nothing with `requestSidebarNodeReveal` - so "Reveal in
+    // sidebar" opens the panel and stops there. Explicit rather than
+    // defaulted, so a row identity added later has one named place to land.
+    case TILE_KIND_EPIC_FILE:
+      return null;
     default:
       return null;
   }

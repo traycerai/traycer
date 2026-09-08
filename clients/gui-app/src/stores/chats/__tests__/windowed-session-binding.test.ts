@@ -151,6 +151,7 @@ function assistantMessage(messageId: string, timestamp: number): Message {
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 

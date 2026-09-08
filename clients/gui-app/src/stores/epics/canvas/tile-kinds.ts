@@ -33,6 +33,14 @@ export const TILE_KIND_COMM_GRAPH = "comm-graph";
  * addressable at once.
  */
 export const TILE_KIND_PUBLISHED_CHAT = "published-chat";
+/**
+ * One file on the epic's own file plane (`files/` manifest), addressed by
+ * `(epicId, path)` and nothing else. The object's sha and media type are
+ * deliberately NOT in the ref: they are read live from the manifest, so a
+ * re-capture at the same path updates an already-open tile instead of pinning
+ * it to the bytes that happened to be current when it was opened.
+ */
+export const TILE_KIND_EPIC_FILE = "epic-file";
 export const TILE_KIND_PR_DETAIL = "pr-detail";
 export const TILE_KIND_PR_DIFF = "pr-diff";
 // A "blank" tab: a real strip tab whose body renders the inline opener until
@@ -54,6 +62,7 @@ export type TileKindId =
   | typeof TILE_KIND_MANAGED_COMMAND_OUTPUT
   | typeof TILE_KIND_COMM_GRAPH
   | typeof TILE_KIND_PUBLISHED_CHAT
+  | typeof TILE_KIND_EPIC_FILE
   | typeof TILE_KIND_PR_DETAIL
   | typeof TILE_KIND_PR_DIFF
   | typeof TILE_KIND_BLANK;
@@ -73,6 +82,7 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_MANAGED_COMMAND_OUTPUT]: true,
   [TILE_KIND_COMM_GRAPH]: true,
   [TILE_KIND_PUBLISHED_CHAT]: true,
+  [TILE_KIND_EPIC_FILE]: true,
   [TILE_KIND_PR_DETAIL]: true,
   [TILE_KIND_PR_DIFF]: true,
   [TILE_KIND_BLANK]: true,

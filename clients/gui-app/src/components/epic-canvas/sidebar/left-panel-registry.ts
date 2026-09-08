@@ -1,4 +1,5 @@
 import {
+  FileBox,
   Files,
   FolderTree,
   GitBranch,
@@ -96,6 +97,18 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
       isAutoVisible: () => true,
       forcedOnHint: null,
       supportsHeaderSearch: true,
+    },
+    {
+      // Epic FILES (the `files/` drop zone and capture output), distinct from
+      // `file-tree`, which lists the workspace on disk. Both are unconditional:
+      // an empty epic-files panel still has to be reachable, because dropping a
+      // file into it is how it stops being empty.
+      id: "files",
+      title: "Files",
+      icon: FileBox,
+      isAutoVisible: () => true,
+      forcedOnHint: null,
+      supportsHeaderSearch: false,
     },
     {
       id: "git-diff",

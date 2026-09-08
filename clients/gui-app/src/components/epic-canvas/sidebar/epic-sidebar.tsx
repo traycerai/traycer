@@ -189,6 +189,7 @@ import {
   X,
 } from "lucide-react";
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
+import { FilesPanelBody } from "@/components/epic-canvas/sidebar/files-panel";
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
@@ -522,6 +523,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
       Subtitle: null,
     },
     loading: emptyLoadingSlots(ArtifactsLoadingPanelBody),
+  },
+  files: {
+    live: {
+      Body: FilesPanelBody,
+      Actions: null,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
   },
   "git-diff": {
     live: {

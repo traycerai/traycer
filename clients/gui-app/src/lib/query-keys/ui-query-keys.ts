@@ -29,4 +29,11 @@ export const uiQueryKeys = {
    */
   hostUpdateObservation: (hostId: string) =>
     ["host-update-observation", hostId] as const,
+  /**
+   * Decoded text for one already-fetched file blob, keyed by the `blob:` url
+   * the byte layer produced. That url IS the content identity - the blob cache
+   * mints a new one when the bytes change and revokes the old one - so keying
+   * on it can neither serve a stale decode nor re-decode an unchanged file.
+   */
+  fileBlobText: (blobUrl: string) => ["file-blob-text", blobUrl] as const,
 };

@@ -13,6 +13,7 @@ import type {
   InterviewOutcome,
   InterviewQuestion,
   InterviewSettlementAuthority,
+  FileResolutionEntry,
   ImageResolutionEntry,
   ImageGenerationResult,
   TodoItem,
@@ -97,6 +98,19 @@ export interface AssistantMarkdownImageContext {
     string,
     AssistantMarkdownImageTarget
   >;
+  /**
+   * The turn's epic-file resolutions (D28), a SECOND and separate record from
+   * {@link resolutions} - never a widening of it (see
+   * `fileResolutionEntrySchema`). Entries are message-level, so the whole
+   * turn's list is handed to every text block, exactly as the image
+   * resolutions are.
+   *
+   * Unlike the image record there is no owning `messageId` to carry: nothing
+   * upserts these client-side (the protocol has no `file_resolution.updated`
+   * frame), so an entry only ever arrives with the persisted record it
+   * belongs to.
+   */
+  readonly fileResolutions: ReadonlyArray<FileResolutionEntry>;
 }
 
 export interface FileChangeSegment {

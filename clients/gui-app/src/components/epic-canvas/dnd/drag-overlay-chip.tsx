@@ -11,6 +11,7 @@ import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
 import {
   FileDiff,
+  FileIcon,
   FilePlus,
   Folder,
   GitPullRequest,
@@ -37,6 +38,7 @@ import {
   isBlankTileRef,
   isBrowserSessionTileRef,
   isCommGraphTileRef,
+  isEpicFileTileRef,
   isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
@@ -227,6 +229,14 @@ function EpicCanvasNodeDragOverlay(props: {
     return (
       <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
         <CommGraphTileIcon className="size-3.5" />
+        <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+      </m.div>
+    );
+  }
+  if (isEpicFileTileRef(props.node)) {
+    return (
+      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+        <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 truncate font-medium">{props.node.name}</span>
       </m.div>
     );

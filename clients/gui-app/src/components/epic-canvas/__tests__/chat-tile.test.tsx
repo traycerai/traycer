@@ -803,6 +803,7 @@ function nextStepsAssistantMessage(): Message {
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 
@@ -859,6 +860,7 @@ function planAssistantMessage(): Message {
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 
@@ -900,6 +902,7 @@ function skillNextStepsAssistantMessage(): Message {
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 
@@ -955,6 +958,7 @@ function streamingInterviewAssistantMessage(): Message {
     serviceTier: null,
     envCredentialVar: null,
     imageResolutions: [],
+    fileResolutions: [],
   };
 }
 

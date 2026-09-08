@@ -26,6 +26,7 @@ import type { WorktreeBindingWorkspaceMode } from "@traycer/protocol/host/worktr
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { EpicFileEntry } from "@traycer/protocol/persistence/epic/files";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
@@ -282,6 +283,41 @@ export interface CommentThreadsSlice {
   readonly byArtifactId: Readonly<Record<string, readonly CommentThreadWire[]>>;
 }
 
+/**
+ * One epic-files manifest entry, together with the path that keys it in the
+ * sibling `files` Y.Map (D02). The entry is the protocol's own parsed shape -
+ * there is no second projected row type, because every field the GUI renders
+ * (kind, size, media type, status, producer, tombstone) is already on it and a
+ * projection would only be a copy that can drift.
+ */
+export interface EpicFileRecord {
+  readonly path: string;
+  readonly entry: EpicFileEntry;
+}
+
+/**
+ * The epic-files manifest as the GUI holds it: two path-sorted lists rather
+ * than a `byId`/`allIds` table.
+ *
+ * The path IS the key, so an id array would just be the paths again; and the
+ * list is rendered in path order in exactly one surface (the `Files` panel),
+ * which is why the order is baked in here rather than re-derived per consumer.
+ * Y.Map iteration order is not stable across peers, so the sort is what makes
+ * the projection deterministic at all.
+ *
+ * Tombstoned entries (D25) live in {@link deleted} instead of being dropped:
+ * restore is un-tombstoning, so a surface that offers it needs the rows, and a
+ * consumer that does not care never sees them in {@link records}.
+ *
+ * Identity contract, same as every `byId` table above: a record's reference
+ * only changes when one of its fields does, and each array only changes
+ * reference when its membership does.
+ */
+export interface FilesSlice {
+  readonly records: readonly EpicFileRecord[];
+  readonly deleted: readonly EpicFileRecord[];
+}
+
 export interface TreeNode {
   readonly id: string;
   readonly parentId: string | null;
@@ -368,10 +404,27 @@ export interface EpicProjectedSlices {
   /** Doc entries unioned with the host's registry rows. Components read THIS. */
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
+  /**
+   * The `files` sibling map (D02). A SECOND observation root - it is not under
+   * `getMap("epic")`, so the projector observes it separately.
+   */
+  readonly files: FilesSlice;
   readonly tree: TreeSlice;
 }
 
 export const EMPTY_ARRAY: readonly string[] = Object.freeze([]);
+
+/**
+ * The empty file list, shared by both arms of {@link EMPTY_FILES_SLICE} and by
+ * every projection that finds nothing, so "no files" is one reference and a
+ * subscriber never re-renders on a freshly built empty array.
+ */
+export const EMPTY_FILE_RECORDS: readonly EpicFileRecord[] = Object.freeze([]);
+
+export const EMPTY_FILES_SLICE: FilesSlice = Object.freeze({
+  records: EMPTY_FILE_RECORDS,
+  deleted: EMPTY_FILE_RECORDS,
+});
 
 export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
   stateByArtifactId: Object.freeze(
@@ -442,6 +495,7 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
   docTuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
   tuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
   agentRoles: EMPTY_AGENT_ROLES_SLICE,
+  files: EMPTY_FILES_SLICE,
   tree: Object.freeze({
     rootIds: EMPTY_ARRAY,
     childrenByParent: Object.freeze({} as Record<string, readonly string[]>),
