@@ -20,7 +20,9 @@ import { createCliLogger } from "../logger";
 //   - every liveness converge (`host ensure --keep-installed`, background AND
 //     Doctor "converge-ready" alike) already keeps whatever is installed via
 //     the `viability` policy - it never reinstalls a pin, so it never consults
-//     this record; and
+//     this record (Doctor's "Install host" is the one EXPLICIT, version-
+//     seeking converge, and like any explicit forward move it is not gated:
+//     it simply leaves a new install whose id no longer matches); and
 //   - the desktop's launch-time staged-apply stands down while the installed
 //     host is the held instance - the launch reconcile via the status gate,
 //     and `host apply --respect-hold` re-checking under the CLI lock.
@@ -146,15 +148,17 @@ export async function holdVersionIfDowngrade(
 }
 
 /**
- * The post-swap commit observer every downgrade-capable install passes to the
+ * The swap-commit observer every downgrade-capable install passes to the
  * committer (`CommitInstallFromSourceOptions.onSwapCommitted`). It records the
- * hold at the TRUE successful-swap boundary - under the mutation lock, right
- * after the atomic swap and BEFORE the post-swap lifecycle bookkeeping hook,
- * which may reject with the bytes nevertheless committed and the host
- * restarting (the T6 contract). Writing here rather than after the committer
- * RETURNS is what keeps such a committed downgrade from losing its hold.
- * Keyed on the record the swap just wrote, so the strict-downgrade decision and
- * the `installId` binding both use the actual committed instance.
+ * hold at the TRUE successful-swap boundary - under the mutation lock, the
+ * instant the swap-in rename has placed the new tree, BEFORE the swap's own
+ * post-rename carryover/invalidation (which can reject on authority loss with
+ * the new install already in place) and BEFORE the post-swap lifecycle
+ * bookkeeping hook (which may reject with the bytes nevertheless committed and
+ * the host restarting - the T6 contract). Writing there rather than after the
+ * committer RETURNS is what keeps such a committed downgrade from losing its
+ * hold. Keyed on the record the swap just wrote, so the strict-downgrade
+ * decision and the `installId` binding both use the actual committed instance.
  */
 export function holdVersionOnSwapCommitted(
   environment: Environment,

@@ -98,12 +98,15 @@ export async function runFixAction(
     // and rejected with "Unknown fix action: host-install".
     case "host-install":
     case "host-install-latest":
-      // No "install latest" intent survives the two-lane cutover - the
-      // idempotent-converge intent (`convergeReady`) subsumes it: it
-      // installs/registers/starts the host when reachable, which is exactly
-      // what this Doctor issue means.
+      // The VERSION-SEEKING converge, not the liveness one: this issue means
+      // there is no usable host - none installed, a missing binary, an
+      // unreadable record, or one whose protocol is too old for this client -
+      // so the repair must be allowed to put this build's pinned host in
+      // place. `converge-ready` keeps whatever is installed by design (it is
+      // what protects a deliberate downgrade from liveness), and on a
+      // too-old host it would report "applied" having changed nothing.
       return management.runDoctorRepairQueued({
-        repair: "converge-ready",
+        repair: "converge-latest",
         expectedHostId,
       });
     case "service-install":

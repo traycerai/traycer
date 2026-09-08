@@ -851,7 +851,7 @@ describe("headline: convergeReady during an in-flight mutation resolves, never r
 
     let convergeSettled = false;
     const convergePromise = controller
-      .convergeReady(false, { kind: "background" })
+      .convergeReady(false, { kind: "background" }, "keep-installed")
       .then((outcome) => {
         convergeSettled = true;
         return outcome;
@@ -1721,9 +1721,13 @@ describe("two lanes: mutation vs download independence", () => {
     const applyPromise = controller.applyStaged("manual", false);
     await downloadStarted.promise;
 
-    const convergePromise = controller.convergeReady(false, {
-      kind: "background",
-    });
+    const convergePromise = controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
     // The download is still gated (unresolved) while convergeReady reaches
     // its own CLI call - real fs reads (readRunningHostIdentity et al.) are
     // in the path first, so poll rather than assume a fixed number of
@@ -1788,9 +1792,13 @@ describe("two lanes: mutation vs download independence", () => {
     const activatePromise = controller.activateInstalled(false, true);
     await downloadStarted.promise;
 
-    const convergePromise = controller.convergeReady(false, {
-      kind: "background",
-    });
+    const convergePromise = controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
     await vi.waitFor(() => {
       if (!ensureCalled) throw new Error("ensure not reached yet");
     });
@@ -2126,9 +2134,13 @@ describe("lock-contention terminal contract: convergeReady defers like every oth
     // force: true - skips the "noop && !force" early return (same as B6's
     // force test above) so this genuinely reaches the locked activation
     // cycle's desktop-lock acquisition instead of short-circuiting first.
-    const outcome = await controller.convergeReady(true, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      true,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome.kind).toBe("deferred");
     await held.handle.release();
@@ -4575,7 +4587,11 @@ describe("platform matrix", () => {
       data: { action: "installed", version: "1.8.0", runtimeVersion: null },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -4594,7 +4610,11 @@ describe("platform matrix", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    await controller.convergeReady(true, { kind: "background" });
+    await controller.convergeReady(
+      true,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -4677,11 +4697,15 @@ describe("platform matrix", () => {
     await markHostRemovedByUser();
     expect(await isHostRemovedByUser()).toBe(true);
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
 
     // Not merely "the sentinel is gone afterwards" — the converge must have
     // actually RUN. A short-circuit would also leave kind "ok".
@@ -4705,11 +4729,15 @@ describe("platform matrix", () => {
       runtimeVersion: "1.7.0",
     });
 
-    await controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4727,11 +4755,15 @@ describe("platform matrix", () => {
     });
     writeHeldVersion("production", "1.2.0", "install-1");
 
-    await controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4753,11 +4785,15 @@ describe("platform matrix", () => {
     });
     writeHeldVersion("production", "1.2.0", "install-1");
 
-    await controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4778,15 +4814,76 @@ describe("platform matrix", () => {
       data: { running: true, version: "1.2.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => Promise.resolve({ kind: "proceed" }),
-    });
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
         args: expect.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
+  // Doctor's "Install host" repair (`converge-latest`) is the ONE explicit,
+  // version-seeking converge - it must NOT keep a too-old host installed, so
+  // it requests `pinned-minimum` and the CLI-owned route omits
+  // `--keep-installed` entirely (unlike every `keep-installed` case above).
+  it("a user-repair with pinned-minimum omits --keep-installed (CLI-owned route)", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "pinned-minimum",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.not.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
+  it("a user-repair with pinned-minimum omits --keep-installed (packaged-mac route)", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.4.0", action: "installed" },
+    });
+
+    await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "pinned-minimum",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.not.arrayContaining(["--keep-installed"]),
       }),
     );
   });
@@ -4802,12 +4899,16 @@ describe("platform matrix", () => {
     });
     await markHostRemovedByUser();
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () =>
-        Promise.resolve({ kind: "abandon", message: "host changed" }),
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () =>
+          Promise.resolve({ kind: "abandon", message: "host changed" }),
+      },
+      "keep-installed",
+    );
 
     // `abandoned`, not `failed`: the refusal classification travels in the
     // settled outcome so every coalesced waiter reads the same verdict, and
@@ -4832,7 +4933,11 @@ describe("platform matrix", () => {
       await installGate.promise;
       return { data: { action: "noop", version: "1.7.0" } };
     });
-    const occupy = controller.convergeReady(false, { kind: "background" });
+    const occupy = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     let guardAsked = false;
     const repair = controller.registerService({
@@ -4867,16 +4972,24 @@ describe("platform matrix", () => {
     });
     await markHostRemovedByUser();
 
-    const background = controller.convergeReady(false, { kind: "background" });
+    const background = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
     let guardAsked = false;
-    const repair = controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => {
-        guardAsked = true;
-        return Promise.resolve({ kind: "proceed" });
+    const repair = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => {
+          guardAsked = true;
+          return Promise.resolve({ kind: "proceed" });
+        },
       },
-    });
+      "keep-installed",
+    );
 
     expect(await background).toEqual({
       kind: "ok",
@@ -4887,6 +5000,102 @@ describe("platform matrix", () => {
     // job's short-circuit and never asked.
     expect(guardAsked).toBe(true);
     expect(await isHostRemovedByUser()).toBe(false);
+  });
+
+  // The version policy is in the coalesce key for the same reason the intent
+  // is: a version-seeking "Install host" repair (`pinned-minimum`) that
+  // joined a queued liveness converge (`keep-installed`) would inherit that
+  // job's policy and report "applied" having moved nothing.
+  it("two concurrent user-repairs for the same host with DIFFERENT version policies do not coalesce", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const streamedArgs: (readonly string[])[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      streamedArgs.push(opts.args);
+      return {
+        data: { running: true, version: "1.7.0", action: "noop" },
+      };
+    });
+
+    const keepInstalled = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
+    const pinnedMinimum = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "pinned-minimum",
+    );
+
+    await keepInstalled;
+    await pinnedMinimum;
+
+    // Two genuinely separate jobs, each honoring its OWN policy - not one
+    // job whose CLI call ran once under whichever policy joined first.
+    expect(streamedArgs).toHaveLength(2);
+    expect(streamedArgs.some((args) => args.includes("--keep-installed"))).toBe(
+      true,
+    );
+    expect(
+      streamedArgs.some((args) => !args.includes("--keep-installed")),
+    ).toBe(true);
+  });
+
+  it("two concurrent user-repairs for the same host with the SAME version policy still coalesce onto one job", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    let cliCalls = 0;
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      cliCalls += 1;
+      return {
+        data: { running: true, version: "1.7.0", action: "noop" },
+      };
+    });
+    let secondGuardAsked = false;
+
+    const first = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      },
+      "keep-installed",
+    );
+    const second = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => {
+          secondGuardAsked = true;
+          return Promise.resolve({ kind: "proceed" });
+        },
+      },
+      "keep-installed",
+    );
+
+    await first;
+    await second;
+
+    expect(cliCalls).toBe(1);
+    // Proves the two really were ONE job - the joiner's own guard never ran.
+    expect(secondGuardAsked).toBe(false);
   });
 
   it("two coalesced user-repairs for the same host both receive the guard's refusal", async () => {
@@ -4902,20 +5111,28 @@ describe("platform matrix", () => {
       runtimeVersion: "1.7.0",
     });
     const guardGate = deferred<ReprovisionGuardVerdict>();
-    const first = controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => guardGate.promise,
-    });
-    let secondGuardAsked = false;
-    const second = controller.convergeReady(false, {
-      kind: "user-repair",
-      targetHostId: "local-host",
-      guard: () => {
-        secondGuardAsked = true;
-        return Promise.resolve({ kind: "proceed" });
+    const first = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => guardGate.promise,
       },
-    });
+      "keep-installed",
+    );
+    let secondGuardAsked = false;
+    const second = controller.convergeReady(
+      false,
+      {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => {
+          secondGuardAsked = true;
+          return Promise.resolve({ kind: "proceed" });
+        },
+      },
+      "keep-installed",
+    );
 
     guardGate.resolve({ kind: "abandon", message: "host changed" });
     await expect(first).resolves.toEqual({
@@ -4947,7 +5164,11 @@ describe("platform matrix", () => {
       await installGate.promise;
       return { data: { action: "noop", version: "1.7.0" } };
     });
-    const occupy = controller.convergeReady(false, { kind: "background" });
+    const occupy = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     let guardAsked = false;
     const restart = controller.respawn({
@@ -5785,9 +6006,13 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       },
     });
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome.kind).toBe("failed");
   });
@@ -5818,9 +6043,13 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       reason: "timeout",
     });
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome.kind).toBe("failed");
   });
@@ -5849,9 +6078,13 @@ describe("convergeReady E_HOST_BUSY classification (fixup B8)", () => {
       new TraycerCliError("E_HOST_BUSY", "host busy"),
     );
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome).toEqual({
       kind: "busy",
@@ -5917,7 +6150,11 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     // A background converge is liveness-only (the mid-session revert guard),
     // so `--keep-installed` accompanies `--from` here - the archive is only
@@ -5949,7 +6186,11 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -5972,7 +6213,11 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "ensure", "--keep-installed"] }),
@@ -5995,7 +6240,11 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false, { kind: "background" });
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "ensure", "--keep-installed"] }),
@@ -6600,7 +6849,11 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     await vi.waitFor(() => {
       if (!registerCalled) throw new Error("revision cycle did not start");
     });
-    const convergence = controller.convergeReady(false, { kind: "background" });
+    const convergence = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
     await vi.waitFor(() => {
       // A reachability probe is only an earlier asynchronous prerequisite.
       // Wait for the real production join edge: the reentrant caller has
@@ -6754,9 +7007,13 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
 
     expect(outcome.kind).toBe("ok");
     expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
@@ -7016,9 +7273,13 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.convergeReady(false, {
-      kind: "background",
-    });
+    const outcome = await controller.convergeReady(
+      false,
+      {
+        kind: "background",
+      },
+      "keep-installed",
+    );
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(outcome).toEqual({
       kind: "ok",
@@ -9398,8 +9659,13 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     );
 
     expect(
-      (await convergeController.convergeReady(false, { kind: "background" }))
-        .kind,
+      (
+        await convergeController.convergeReady(
+          false,
+          { kind: "background" },
+          "keep-installed",
+        )
+      ).kind,
     ).toBe("failed");
     expect(convergeLifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
 

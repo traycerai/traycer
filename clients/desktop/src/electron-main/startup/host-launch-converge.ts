@@ -356,9 +356,11 @@ export function armLocalHostBootOnSignIn(
           log.info("[host-controller] local host boot deferred to a sign-in");
           return;
         }
-        const outcome = await hostController.convergeReady(false, {
-          kind: "background",
-        });
+        const outcome = await hostController.convergeReady(
+          false,
+          { kind: "background" },
+          "keep-installed",
+        );
         if (outcome.kind === "ok") {
           settle();
           log.info("[host-controller] local host boot complete", {
@@ -479,7 +481,11 @@ export async function runLaunchHostConvergeReconcile(
   // controller coalesces the two onto one job.
   const recovery =
     !initialStatus.updateReady && isUnavailableInstalledHost(initialStatus)
-      ? await hostController.convergeReady(false, { kind: "background" })
+      ? await hostController.convergeReady(
+          false,
+          { kind: "background" },
+          "keep-installed",
+        )
       : null;
   if (recovery !== null) {
     log.info("[host-controller] launch converge recovered an absent service", {
@@ -544,7 +550,11 @@ export async function runLaunchHostConvergeReconcile(
     // pass already attempted, since repeating a failure seconds later helps
     // nobody.
     outcome = backgroundMutationOutcome(
-      await hostController.convergeReady(false, { kind: "background" }),
+      await hostController.convergeReady(
+        false,
+        { kind: "background" },
+        "keep-installed",
+      ),
     );
   }
 
@@ -626,6 +636,10 @@ async function recoverAfterFailedApply(
     { applyKind: applied.kind },
   );
   return backgroundMutationOutcome(
-    await hostController.convergeReady(false, { kind: "background" }),
+    await hostController.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    ),
   );
 }

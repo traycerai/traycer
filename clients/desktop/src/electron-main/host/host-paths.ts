@@ -151,11 +151,15 @@ export interface HostFsLayout {
   readonly stagedDir: string;
   readonly stagedRecordFile: string;
   /**
-   * `held-host-version.json` - the CLI-owned marker naming a host version the
-   * user deliberately downgraded/pinned to, which the launch-time staged-apply
-   * and the Doctor "converge-ready" repair honour by standing down while it is
-   * the installed version. A sibling of `install/`/`staged/` (NOT inside
-   * `install/`, so an atomic swap of the install dir leaves it in place).
+   * `held-host-version.json` - the CLI-owned `{ version, installId }` marker
+   * naming the specific install INSTANCE the user deliberately downgraded to.
+   * The launch-time staged-apply stands down while the installed record's
+   * `installId` matches it (never by version: a later reinstall of the same
+   * version has a fresh id and inherits nothing). Liveness converges - the
+   * reconciler and Doctor's "converge-ready" alike - never consult it: they
+   * keep whatever non-yanked host is installed via `--keep-installed`. A
+   * sibling of `install/`/`staged/` (NOT inside `install/`, so an atomic swap
+   * of the install dir leaves it in place).
    *
    * Lockstep with the CLI's `hostHeldVersionRecordPath`
    * (`@traycer/protocol/config/installation`, whose

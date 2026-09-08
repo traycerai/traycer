@@ -15,9 +15,11 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   HostControllerStatus,
   InstallVersionOk,
   LifecycleAdmissionBlock,
+  LocalHostMutationIntent,
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
@@ -55,6 +57,8 @@ export class FakeHostController implements IpcHostController {
   }
   async convergeReady(
     _force: boolean,
+    _intent: LocalHostMutationIntent,
+    _versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     return { kind: "ok", value: { running: true, version: "1.0.0" } };
   }

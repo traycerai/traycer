@@ -104,6 +104,7 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
   HostControllerStatus,
   LifecycleAdmissionBlock,
@@ -400,6 +401,7 @@ export interface IpcHostController {
   convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(

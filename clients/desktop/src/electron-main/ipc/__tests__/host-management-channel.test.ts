@@ -25,8 +25,10 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   HostControllerStatus,
   InstallVersionOk,
+  LocalHostMutationIntent,
   MutationOutcome,
   MutationProgress,
   MutationKind,
@@ -253,8 +255,13 @@ class FakeHostController implements IpcHostController {
   }
   async convergeReady(
     force: boolean,
+    intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    this.calls.push({ method: "convergeReady", args: [force] });
+    this.calls.push({
+      method: "convergeReady",
+      args: [force, intent, versionPolicy],
+    });
     return this.convergeReadyResult;
   }
   async stageLatest(): Promise<void> {
@@ -1117,7 +1124,7 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
     });
     expect(bridge.options.hostController.calls).toContainEqual({
       method: "convergeReady",
-      args: [true],
+      args: [true, { kind: "background" }, "keep-installed"],
     });
   });
 
@@ -1143,7 +1150,7 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
     });
     expect(bridge.options.hostController.calls).toContainEqual({
       method: "convergeReady",
-      args: [false],
+      args: [false, { kind: "background" }, "keep-installed"],
     });
   });
 

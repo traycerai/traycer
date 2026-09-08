@@ -103,6 +103,7 @@ import {
   type ApplyStagedTrigger,
   type BusyContinuation,
   type ConvergeReadyOk,
+  type ConvergeReadyVersionPolicy,
   type DownloadLaneStatus,
   type GuardedMutationOutcome,
   type HostControllerIntent,
@@ -2871,6 +2872,7 @@ export class HostController {
   async convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>> {
     return this.enqueueMutation<GuardedMutationOutcome<ConvergeReadyOk>>(
       "ensure",
@@ -2881,8 +2883,11 @@ export class HostController {
       // coalescing bug, where the joiner's policy was discarded in favour of
       // the occupant's. Two repairs for DIFFERENT hosts are likewise not the
       // same job: joining would hand the newcomer the occupant's guard, which
-      // then refuses it for naming a different host.
-      `ensure:${force}:${this.reprovisionCoalesceKeySuffix(intent)}`,
+      // then refuses it for naming a different host. The version policy is in
+      // the key for the same reason: a version-seeking "Install host" repair
+      // that joined a queued liveness converge would inherit its
+      // `--keep-installed` and report applied having moved nothing.
+      `ensure:${force}:${versionPolicy}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
         const abandoned = await this.admitReprovision(intent);
         if (abandoned !== null) return abandoned;
@@ -2892,23 +2897,29 @@ export class HostController {
         if (intent.kind === "background" && (await isHostRemovedByUser())) {
           return { kind: "ok", value: { running: false, version: null } };
         }
-        // ALWAYS liveness-only (`host ensure --keep-installed`, the
-        // `viability` policy), for a background AND a user-repair converge
-        // alike. `convergeReady` is the liveness path - it brings a down host
-        // back up on WHATEVER non-yanked version is installed and never moves
-        // the version as a matter of client preference (version movement is the
-        // channel's / an explicit update's job). This is also what makes it
-        // race-free against a deliberate downgrade: `viability` re-reads the
-        // installed version UNDER the CLI mutation lock, so there is no stale
-        // desktop-side "is it held?" sample a terminal downgrade could slip
-        // past between the sample and the CLI acquiring its lock (finding 3,
-        // Doctor path). A genuinely absent/yanked install still gets the pinned
-        // host (first-install bootstrap), since viability is only satisfied by
-        // an existing usable install.
+        // `keep-installed` (`host ensure --keep-installed`, the `viability`
+        // policy) is every implicit converge - background AND Doctor's
+        // `converge-ready` alike. That is the liveness path: it brings a down
+        // host back up on WHATEVER non-yanked version is installed and never
+        // moves the version as a matter of client preference (version
+        // movement is the channel's / an explicit update's job). This is also
+        // what makes it race-free against a deliberate downgrade: `viability`
+        // re-reads the installed version UNDER the CLI mutation lock, so
+        // there is no stale desktop-side "is it held?" sample a terminal
+        // downgrade could slip past between the sample and the CLI acquiring
+        // its lock (finding 3, Doctor path). A genuinely absent/yanked install
+        // still gets the pinned host (first-install bootstrap), since
+        // viability is only satisfied by an existing usable install.
+        //
+        // `pinned-minimum` is the one EXPLICIT, version-seeking converge:
+        // Doctor's `converge-latest`, behind "Install host" on a host that is
+        // too old to serve this client. Liveness would keep exactly that host
+        // and call the repair applied - see `ConvergeReadyVersionPolicy`.
+        const keepInstalled = versionPolicy === "keep-installed";
         if (await this.isPackagedMacOwned()) {
-          return this.convergeReadyPackagedMac(force, true);
+          return this.convergeReadyPackagedMac(force, keepInstalled);
         }
-        return this.convergeReadyCliOwned(force, true);
+        return this.convergeReadyCliOwned(force, keepInstalled);
       },
     );
   }

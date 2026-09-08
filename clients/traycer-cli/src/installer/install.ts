@@ -652,16 +652,21 @@ async function cleanupStagingArtifacts(
 }
 
 /**
- * A best-effort observer fired the instant the atomic swap has committed the
- * new install record - AFTER {@link CommitInstallFromSourceOptions.onCommitted}
- * and BEFORE the post-swap lifecycle hook (whose bookkeeping write may reject
- * with the bytes nevertheless committed and the host restarting, per the T6
- * contract). It receives the ACTUAL committed record and the record it
- * replaced, so a caller can record install-instance-scoped state (e.g. the
- * version hold, keyed on `record.installId`) at the true successful-swap
- * boundary, under the same lock, without a pre-lock snapshot and without being
- * lost to a later hook throw. Its own rejection is swallowed by the committer
- * and never aborts the commit or masks a hook failure.
+ * A best-effort observer fired the instant the swap-in rename has placed the
+ * new tree (and with it the new `install.json`) at `install/` - the commit
+ * point. It runs INSIDE the swap, before everything that follows the rename
+ * and can still reject with the new install already in place: the post-rename
+ * provider carryover and aside invalidation (each revalidates mutation
+ * authority and throws on its loss), {@link
+ * CommitInstallFromSourceOptions.onCommitted}, and the post-swap lifecycle hook
+ * (whose bookkeeping write may reject with the bytes nevertheless committed
+ * and the host restarting, per the T6 contract). It receives the ACTUAL
+ * committed record and the record it replaced, so a caller can record
+ * install-instance-scoped state (e.g. the version hold, keyed on
+ * `record.installId`) at the true successful-swap boundary, under the same
+ * lock, without a pre-lock snapshot and without being lost to any later throw.
+ * Its own rejection is swallowed by the committer and never aborts the commit
+ * or masks a later failure.
  */
 export type HostInstallCommitObserver = (info: {
   readonly record: HostInstallRecord;
@@ -842,12 +847,40 @@ export async function commitInstallFromSource(
   });
   await verifyMutationCapability();
   if (opts.onWillSwap !== null) opts.onWillSwap();
+  // The observer runs at the true successful-swap boundary - INSIDE
+  // `atomicSwap`, the instant the swap-in rename lands: the record is
+  // committed and the record it replaced is still known, but nothing that can
+  // still reject with the new install in place has run yet. That is not only
+  // the post-swap lifecycle hook below (a T6 hook failure leaves the bytes
+  // committed and the host restarting, then rethrows): the swap's OWN
+  // post-rename provider carryover and aside invalidation revalidate mutation
+  // authority and throw on its loss, with `install.json` already swapped in.
+  // Firing after `atomicSwap` returned would lose the hold on exactly that
+  // path. Best-effort: swallow its rejection so it neither aborts the commit
+  // nor masks a failure surfaced later.
+  const onSwapCommitted = opts.onSwapCommitted;
+  const onSwappedIn =
+    onSwapCommitted === null
+      ? null
+      : async (): Promise<void> => {
+          try {
+            await onSwapCommitted({ record, previous });
+          } catch (err) {
+            logger.warn("Host install swap-committed observer failed", {
+              environment: opts.environment,
+              version: record.version,
+              errorName: errorFromUnknown(err).name,
+              errorMessage: errorFromUnknown(err).message,
+            });
+          }
+        };
   await atomicSwap({
     environment: opts.environment,
     stagingDir: opts.sourceDir,
     swapLockRecovery:
       opts.lifecycle === null ? null : opts.lifecycle.swapLockRecovery,
     verifyMutationCapability,
+    onSwappedIn,
   });
   opts.onCommitted();
   logger.info("Host install atomic swap completed", {
@@ -855,25 +888,6 @@ export async function commitInstallFromSource(
     version: record.version,
     replacedPreviousInstall: previous !== null,
   });
-  // The true successful-swap boundary: the record is committed and the record
-  // it replaced is still known, but the post-swap lifecycle hook below has not
-  // run and cannot yet have rejected. A caller records install-instance-scoped
-  // state (the version hold) HERE so a T6 hook failure - which leaves the bytes
-  // committed and the host restarting, then rethrows - can never lose it.
-  // Best-effort: swallow its rejection so it neither aborts the commit nor
-  // masks the hook failure surfaced below.
-  if (opts.onSwapCommitted !== null) {
-    try {
-      await opts.onSwapCommitted({ record, previous });
-    } catch (err) {
-      logger.warn("Host install swap-committed observer failed", {
-        environment: opts.environment,
-        version: record.version,
-        errorName: errorFromUnknown(err).name,
-        errorMessage: errorFromUnknown(err).message,
-      });
-    }
-  }
 
   // Post-swap start/restart, and the second barrier: the bytes are
   // committed and the service has not been asked to come back up yet. The
@@ -1265,6 +1279,15 @@ interface AtomicSwapOptions {
   readonly swapLockRecovery: SwapLockRecovery | null;
   /** Revalidated immediately before every irreversible swap edge. */
   readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Runs the instant the swap-in rename has succeeded - the commit point, with
+   * the new tree (and its `install.json`) at `install/` - and BEFORE the
+   * post-rename provider carryover and aside invalidation, which are
+   * canonical-tree mutations that revalidate authority and can still reject
+   * with the new install in place. Must not throw; the caller owns any
+   * best-effort wrapping. `null` when nothing observes the commit point.
+   */
+  readonly onSwappedIn: (() => Promise<void>) | null;
 }
 
 // The swap renames get a far longer runway than `renameWithRetry`'s
@@ -1435,6 +1458,10 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
       exitCode: 1,
     });
   }
+  // The new install is committed from here on: nothing below rolls it back,
+  // and the carryover / invalidation that follow can each throw with the new
+  // tree in place. Observe the commit point now, before either can.
+  if (opts.onSwappedIn !== null) await opts.onSwappedIn();
   if (targetExists) {
     // Carry the outgoing install's bundled provider packs into the new
     // install BEFORE the old dir is invalidated - a slim host archive ships

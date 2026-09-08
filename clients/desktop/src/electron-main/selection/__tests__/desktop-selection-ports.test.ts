@@ -24,7 +24,9 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   InstallVersionOk,
+  LocalHostMutationIntent,
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
@@ -1545,14 +1547,22 @@ class FakeHostController implements IpcHostController {
     kind: "ok",
     value: { running: true, version: "1.0.0" },
   };
+  readonly convergeReadyCalls: [
+    boolean,
+    LocalHostMutationIntent,
+    ConvergeReadyVersionPolicy,
+  ][] = [];
 
   readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
   async getStatus(): Promise<HostControllerStatus> {
     return buildControllerStatus(null);
   }
   async convergeReady(
-    _force: boolean,
+    force: boolean,
+    intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
+    this.convergeReadyCalls.push([force, intent, versionPolicy]);
     return this.outcome;
   }
   async stageLatest(): Promise<void> {}
@@ -1631,6 +1641,21 @@ class FakeHostController implements IpcHostController {
 }
 
 describe("createDesktopLocalHostEnsurePort", () => {
+  // Ticket 4: the ensure port is background/liveness-only - it must never
+  // move the installed version as a side effect of proving the host alive,
+  // so it always requests `"keep-installed"`. Target-independent by design
+  // (2026-08-19), hence the `background` intent rather than a user repair.
+  it("requests convergeReady with a background intent and keep-installed", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
+
+    await port.ensureReady();
+
+    expect(controller.convergeReadyCalls).toEqual([
+      [false, { kind: "background" }, "keep-installed"],
+    ]);
+  });
+
   it("maps an ok outcome to {ok: true}", async () => {
     const controller = new FakeHostController();
     controller.outcome = {

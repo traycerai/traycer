@@ -2035,8 +2035,24 @@ export interface CliInstallManifestSnapshot {
   } | null;
 }
 
-/** Which Doctor repair to run; both are controller lifecycle intents. */
-export type DoctorRepairIntent = "converge-ready" | "register-service";
+/**
+ * Which Doctor repair to run; all three are controller lifecycle intents.
+ *
+ *   - `converge-ready` — liveness only: install/register/start the host,
+ *     keeping WHATEVER non-yanked version is installed. It never moves the
+ *     version, so it can never revert a deliberate downgrade.
+ *   - `converge-latest` — the same converge, but version-seeking: it also
+ *     reinstalls a host BELOW this build's pinned host. This is the explicit
+ *     repair behind "Install host" (`host-install` / `host-install-latest`) —
+ *     a host whose protocol is too old for this client, a missing binary, an
+ *     unreadable record — where liveness alone would keep the unusable host
+ *     and report the repair applied.
+ *   - `register-service` — add the OS service registration.
+ */
+export type DoctorRepairIntent =
+  | "converge-ready"
+  | "converge-latest"
+  | "register-service";
 
 /**
  * The recovery console's repairs, which QUEUE rather than refusing.
@@ -2055,6 +2071,7 @@ export type DoctorRepairIntent = "converge-ready" | "register-service";
  */
 export type QueuedDoctorRepair =
   | "converge-ready"
+  | "converge-latest"
   | "register-service"
   | "restart";
 

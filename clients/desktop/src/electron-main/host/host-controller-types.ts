@@ -273,6 +273,29 @@ export function backgroundMutationOutcome<TOk>(
     : outcome;
 }
 
+/**
+ * Which host version a `convergeReady` may leave installed - the ONLY axis on
+ * which a liveness converge and a Doctor "Install host" repair differ, and
+ * part of the lane's coalesce key for that reason.
+ *
+ *   - `keep-installed` (`host ensure --keep-installed`, the CLI's `viability`
+ *     policy): bring a down host back up on WHATEVER non-yanked version is
+ *     installed and never move the version as a matter of client preference.
+ *     Every implicit converge - the reconciler, launch convergence, the
+ *     selection ports, and Doctor's `converge-ready` - is this, which is what
+ *     keeps a deliberately downgraded host from being reverted by liveness.
+ *     A missing or yanked install still gets the pinned host.
+ *   - `pinned-minimum` (`host ensure` with no flag, the CLI's default
+ *     satisfaction policy): additionally reinstall when the installed version
+ *     is BELOW this build's pinned host. Explicit and version-seeking by
+ *     design: it is Doctor's `converge-latest`, the repair behind the
+ *     "Install host" button on a host whose protocol is too old for this
+ *     client (`host-install-latest`), a missing binary, or an unreadable
+ *     record. A liveness converge would report that repair applied having
+ *     kept the very host that cannot serve the client.
+ */
+export type ConvergeReadyVersionPolicy = "keep-installed" | "pinned-minimum";
+
 export interface ConvergeReadyOk {
   readonly running: boolean;
   readonly version: string | null;

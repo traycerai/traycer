@@ -5,7 +5,9 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   HostControllerStatus,
+  LocalHostMutationIntent,
   MutationOutcome,
 } from "../../host/host-controller-types";
 import type { HostRegistryUpdateState } from "../../../ipc-contracts/host-management-types";
@@ -147,6 +149,20 @@ function fakeHostController(
   readonly applyStagedCalls: readonly [ApplyStagedTrigger, boolean][];
   readonly activateInstalledCalls: readonly [boolean, boolean][];
   readonly convergeReadyCalls: readonly boolean[];
+  /**
+   * The full 3-arg call, `force` alongside the intent/version-policy every
+   * launch-converge call site is required to pass. Kept alongside the
+   * force-only `convergeReadyCalls` above (which every existing assertion in
+   * this file already reads) rather than replacing it, since every call site
+   * here passes the SAME `{kind:"background"}, "keep-installed"` pair -
+   * `convergeReadyPolicyCalls` exists to pin that uniformity once, not to
+   * duplicate every force-only assertion.
+   */
+  readonly convergeReadyPolicyCalls: readonly [
+    boolean,
+    LocalHostMutationIntent,
+    ConvergeReadyVersionPolicy,
+  ][];
   readonly stageLatestCalls: number;
   /**
    * How many times status was sampled. Lets a test wait for an actor that
@@ -164,6 +180,11 @@ function fakeHostController(
   const applyStagedCalls: [ApplyStagedTrigger, boolean][] = [];
   const activateInstalledCalls: [boolean, boolean][] = [];
   const convergeReadyCalls: boolean[] = [];
+  const convergeReadyPolicyCalls: [
+    boolean,
+    LocalHostMutationIntent,
+    ConvergeReadyVersionPolicy,
+  ][] = [];
   const callOrder: string[] = [];
   let stageLatestCalls = 0;
   let getStatusCalls = 0;
@@ -180,6 +201,9 @@ function fakeHostController(
     },
     get convergeReadyCalls() {
       return convergeReadyCalls;
+    },
+    get convergeReadyPolicyCalls() {
+      return convergeReadyPolicyCalls;
     },
     get stageLatestCalls() {
       return stageLatestCalls;
@@ -207,8 +231,11 @@ function fakeHostController(
     },
     async convergeReady(
       force: boolean,
+      intent: LocalHostMutationIntent,
+      versionPolicy: ConvergeReadyVersionPolicy,
     ): Promise<MutationOutcome<ConvergeReadyOk>> {
       convergeReadyCalls.push(force);
+      convergeReadyPolicyCalls.push([force, intent, versionPolicy]);
       callOrder.push("convergeReady");
       return { kind: "ok", value: { running: true, version: "1.4.0" } };
     },
@@ -524,6 +551,14 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     // Exactly once: the post-stage arm must not re-run a recovery that the
     // pre-stage pass already performed.
     expect(controller.convergeReadyCalls).toEqual([false]);
+    // Ticket 4 (installId-bound hold): launch recovery is background
+    // liveness only - it must never move the installed version as a side
+    // effect of bringing a down host back up, so it always requests
+    // `"keep-installed"` under a `background` intent (never a user-repair,
+    // which would clear the removal sentinel).
+    expect(controller.convergeReadyPolicyCalls).toEqual([
+      [false, { kind: "background" }, "keep-installed"],
+    ]);
   });
 
   // Applying is itself the fastest route back to a running host and
