@@ -1,4 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The real hook reads the appearance blob store (IndexedDB), which does not
@@ -6,11 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // shows for a given wallpaper setting.
 const wallpaperMocks = vi.hoisted(() => ({
   image: { url: null as string | null, name: null as string | null },
+  choose: vi.fn(),
+  save: vi.fn(),
+  toastError: vi.fn(),
 }));
 
+vi.mock("sonner", () => ({ toast: { error: wallpaperMocks.toastError } }));
+
 vi.mock("@/lib/appearance/start-page-wallpaper", () => ({
-  chooseStartPageWallpaper: vi.fn(),
-  saveStartPageWallpaper: vi.fn(),
+  chooseStartPageWallpaper: wallpaperMocks.choose,
+  saveStartPageWallpaper: wallpaperMocks.save,
   useStartPageWallpaperImage: () => wallpaperMocks.image,
 }));
 
@@ -27,6 +33,9 @@ function rowLabels(): string[] {
 describe("StartPageSettingsSection", () => {
   beforeEach(() => {
     wallpaperMocks.image = { url: null, name: null };
+    wallpaperMocks.choose.mockReset().mockResolvedValue(undefined);
+    wallpaperMocks.save.mockReset().mockResolvedValue(undefined);
+    wallpaperMocks.toastError.mockReset();
     useSettingsStore.setState({
       startPageWallpaper: null,
       showGreeting: true,
@@ -122,5 +131,70 @@ describe("StartPageSettingsSection", () => {
     render(<StartPageSettingsSection />);
     expect(screen.queryByTestId("start-page-preview")).toBeNull();
     expect(document.querySelectorAll("canvas")).toHaveLength(0);
+  });
+
+  it("makes removal immediate while an upload is pending", async () => {
+    const choose = { resolve: (): void => undefined };
+    wallpaperMocks.choose.mockReturnValue(
+      new Promise<void>((resolve) => {
+        choose.resolve = () => resolve();
+      }),
+    );
+    wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
+    wallpaperMocks.save.mockImplementation(() => {
+      wallpaperMocks.image = { url: null, name: null };
+      return Promise.resolve();
+    });
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+      },
+    });
+    render(<StartPageSettingsSection />);
+
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected wallpaper file input");
+    await userEvent.upload(
+      input,
+      new File(["image"], "new.png", { type: "image/png" }),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Choose image…" })
+        .matches(":disabled"),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(
+      screen
+        .getByRole("button", { name: "Choose image…" })
+        .matches(":disabled"),
+    ).toBe(false);
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(rowLabels()).toEqual(["Wallpaper", "Greeting", "Recent tasks"]);
+    choose.resolve();
+  });
+
+  it("surfaces a failed removal", async () => {
+    const error = new Error("storage unavailable");
+    wallpaperMocks.save.mockRejectedValue(error);
+    wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "photo",
+        intensity: 0.6,
+        tintWithAccent: true,
+      },
+    });
+    render(<StartPageSettingsSection />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await vi.waitFor(() =>
+      expect(wallpaperMocks.toastError).toHaveBeenCalledWith(
+        "storage unavailable",
+      ),
+    );
   });
 });

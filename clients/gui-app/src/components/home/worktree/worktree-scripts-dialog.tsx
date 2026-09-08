@@ -326,6 +326,7 @@ function WorktreeScriptsDialogBody(props: {
       identity={{
         slot: <RepoIdentityFields draft={identity} />,
         changed: identity.changed,
+        canSave: identity.canSave,
         save: identity.save,
       }}
       pathLabel={descriptor.pathLabel}

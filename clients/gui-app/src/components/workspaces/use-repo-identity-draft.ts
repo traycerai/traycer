@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  appearanceIconSchema,
-  type AppearanceUpload,
-  type WorkspaceAppearance,
-  type WorkspaceAppearanceRead,
+import type {
+  AppearanceUpload,
+  WorkspaceAppearance,
+  WorkspaceAppearanceRead,
 } from "@traycer/protocol/host/workspace/appearance-schemas";
 import {
   useWorkspaceAppearance,
@@ -44,14 +43,13 @@ interface LocalLogo {
 
 export interface RepoIdentityDraft {
   readonly values: RepoIdentityValues;
-  readonly emojiText: string;
-  readonly emojiInvalid: boolean;
   readonly imageError: string | null;
   /** One short line naming why this repo has no editable identity. */
   readonly note: string | null;
   readonly disabled: boolean;
   readonly busy: boolean;
   readonly changed: boolean;
+  readonly canSave: boolean;
   /** Object URL for a logo chosen in this session, before it is saved. */
   readonly localLogoUrl: string | null;
   readonly scope: AppearanceScope | null;
@@ -72,11 +70,6 @@ function iconsEqual(
   if (left.kind === "emoji")
     return right.kind === "emoji" && left.value === right.value;
   return right.kind === "image" && left.path === right.path;
-}
-
-function emojiIcon(value: string): RepositoryIcon | null {
-  const candidate: RepositoryIcon = { kind: "emoji", value };
-  return appearanceIconSchema.safeParse(candidate).success ? candidate : null;
 }
 
 function identityNote(
@@ -106,15 +99,6 @@ function identityChanged(
 ): boolean {
   if (draft === null) return false;
   return draft.color !== saved.color || !iconsEqual(draft.icon, saved.icon);
-}
-
-/** The typed text while editing, else whatever emoji the values carry. */
-function emojiTextFor(
-  values: RepoIdentityValues,
-  emojiDraft: string | null,
-): string {
-  if (emojiDraft !== null) return emojiDraft;
-  return values.icon?.kind === "emoji" ? values.icon.value : "";
 }
 
 /** The object URL, only while the values still point at the chosen logo. */
@@ -147,7 +131,6 @@ export function useRepoIdentityDraft(args: {
   // `null` means "follow whatever is saved" - a late-landing read then shows
   // through without a re-seed effect, and only a real edit pins a draft.
   const [draft, setDraft] = useState<RepoIdentityValues | null>(null);
-  const [emojiDraft, setEmojiDraft] = useState<string | null>(null);
   const [logo, setLogo] = useState<LocalLogo | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -156,10 +139,6 @@ export function useRepoIdentityDraft(args: {
   const saved = savedIdentityValues(read.appearance);
   const values = draft ?? saved;
   const changed = identityChanged(draft, saved);
-  const emojiText = emojiTextFor(values, emojiDraft);
-  const trimmedEmoji = emojiText.trim();
-  const emojiInvalid =
-    trimmedEmoji.length > 0 && emojiIcon(trimmedEmoji) === null;
   const localLogoUrl = localLogoUrlFor(values, logo);
 
   const logoUrl = logo?.url ?? null;
@@ -199,7 +178,6 @@ export function useRepoIdentityDraft(args: {
           url: URL.createObjectURL(prepared.blob),
           upload: { mediaType, dataBase64 },
         });
-        setEmojiDraft("");
         edit((previous) => ({
           ...previous,
           icon: { kind: "image", path: prepared.path },
@@ -219,6 +197,10 @@ export function useRepoIdentityDraft(args: {
 
   const save = (): Promise<unknown> => {
     if (!changed) return Promise.resolve(undefined);
+    if (busy || mutation.isPending || !read.canEdit)
+      return Promise.reject(
+        new Error("Repository identity is not ready to save."),
+      );
     // The host canonicalizes too, but naming the source root here keeps the
     // request honest about where a committed file is being written.
     const workspacePath =
@@ -241,15 +223,12 @@ export function useRepoIdentityDraft(args: {
         // Follow the saved value again: the mutation writes the fresh read into
         // the cache before this resolves.
         setDraft(null);
-        setEmojiDraft(null);
         return response;
       });
   };
 
   return {
     values,
-    emojiText,
-    emojiInvalid,
     imageError,
     note: identityNote(
       read.appearance,
@@ -258,23 +237,18 @@ export function useRepoIdentityDraft(args: {
     disabled: !read.canEdit,
     busy,
     changed,
+    canSave: !busy && !mutation.isPending && (!changed || read.canEdit),
     localLogoUrl,
     scope: read.scope,
     assetRefreshKey: read.assetRefreshKey,
     setColor: (color) => edit((previous) => ({ ...previous, color })),
-    setEmoji: (text) => {
-      setEmojiDraft(text);
-      const trimmed = text.trim();
-      if (trimmed.length === 0) {
-        edit((previous) => ({ ...previous, icon: null }));
-        return;
-      }
-      const icon = emojiIcon(trimmed);
-      if (icon !== null) edit((previous) => ({ ...previous, icon }));
-    },
+    setEmoji: (text) =>
+      edit((previous) => ({
+        ...previous,
+        icon: { kind: "emoji", value: text },
+      })),
     chooseLogo,
     clearIcon: () => {
-      setEmojiDraft("");
       setImageError(null);
       edit((previous) => ({ ...previous, icon: null }));
     },

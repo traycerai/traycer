@@ -115,7 +115,6 @@ vi.mock("@/hooks/appearance/use-workspace-appearance", () => {
   return {
     useWorkspaceAppearance: stub,
     useDraftAppearance: stub,
-    useEpicAppearance: stub,
     useEpicAppearanceSource: () => ({ hostId: null, workspacePath: null }),
     useWorkspaceSetAppearance: () => ({
       mutateAsync: () => Promise.resolve({}),

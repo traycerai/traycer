@@ -119,11 +119,6 @@ export function RepoIdentityFields(props: {
       <p className="text-ui-xs text-muted-foreground">
         Shown in tabs and the workspace picker. Commit to share with your team.
       </p>
-      {draft.emojiInvalid ? (
-        <p role="alert" className="text-ui-xs text-destructive">
-          Enter one emoji.
-        </p>
-      ) : null}
       {draft.imageError !== null ? (
         <p role="alert" className="text-ui-xs text-destructive">
           {draft.imageError}
@@ -163,7 +158,9 @@ function RepoEmojiEditor({
 }) {
   const emojiId = useId();
   const emojiRef = useRef<HTMLInputElement>(null);
-  const [emojiChoice, setEmojiChoice] = useState(draft.emojiText);
+  const [emojiChoice, setEmojiChoice] = useState(
+    draft.values.icon?.kind === "emoji" ? draft.values.icon.value : "",
+  );
   const validEmoji = appearanceIconSchema.safeParse({
     kind: "emoji",
     value: emojiChoice.trim(),

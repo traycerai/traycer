@@ -79,12 +79,7 @@ export function ScriptsReviewDialog(props: {
    * Settings ▸ Worktrees delete-review flow, which reviews one worktree's
    * scripts and has no repository to identify.
    */
-  readonly identity: {
-    readonly slot: ReactNode;
-    readonly changed: boolean;
-    /** Rejects on failure (the caller surfaces its own toast). */
-    readonly save: () => Promise<unknown>;
-  } | null;
+  readonly identity: ScriptReviewIdentity | null;
   readonly testId: string;
   // Footer action label (idle state only - a successful save always shows
   // "Saved" regardless). Callers name what they're persisting - both current
@@ -106,79 +101,21 @@ export function ScriptsReviewDialog(props: {
   const [scripts, setScripts] = useState<RepoScriptsValue>(() =>
     repoScriptsValueFromScripts(props.scriptSeed),
   );
-  const [saveState, setSaveState] = useState<ScriptReviewSaveState>("idle");
-  const closeTimerRef = useRef<number | null>(null);
-  const mountedRef = useRef(true);
-  const clearSaveTimers = useCallback((): void => {
-    if (closeTimerRef.current !== null) {
-      window.clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-    }
-  }, []);
-
-  const initialScripts = useMemo(
-    () => repoScriptsValueFromScripts(props.scriptSeed),
-    [props.scriptSeed],
-  );
-  const scriptsChanged = useMemo(
-    () =>
-      !worktreeScriptsEqual(
-        repoScriptsRequestPayload(scripts),
-        repoScriptsRequestPayload(initialScripts),
-      ),
-    [initialScripts, scripts],
-  );
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      clearSaveTimers();
-    };
-  }, [clearSaveTimers]);
-
+  const { saveState, saveBusy, canSave, handleSave, handleOpenChange } =
+    useScriptsReviewSave({
+      scripts,
+      scriptSeed: props.scriptSeed,
+      seedPending: props.seedPending,
+      identity: props.identity,
+      onSave: props.onSave,
+      onOpenChange: props.onOpenChange,
+    });
   const identity = props.identity;
-  const identityChanged = identity !== null && identity.changed;
-  const anythingChanged = scriptsChanged || identityChanged;
-  const saveBusy = saveState !== "idle";
-
-  const handleOpenChange = (nextOpen: boolean): void => {
-    if (!nextOpen && saveBusy) return;
-    props.onOpenChange(nextOpen);
-  };
-
-  const handleSave = (): void => {
-    if (saveBusy || !anythingChanged) return;
-    const payload = repoScriptsRequestPayload(scripts);
-    clearSaveTimers();
-    setSaveState("saving");
-    // Drive the confirmation off the real save outcome: "Saved" + auto-close on
-    // success only; a failed save (the caller surfaces its own error toast)
-    // returns to idle so the user can retry instead of seeing a false success.
-    // Each concern writes only when it actually changed - an untouched scripts
-    // form must not rewrite the environment file just because a colour moved.
-    void Promise.all([
-      scriptsChanged ? props.onSave(payload) : Promise.resolve(),
-      identityChanged ? identity.save() : Promise.resolve(),
-    ]).then(
-      () => {
-        if (!mountedRef.current) return;
-        setSaveState("saved");
-        closeTimerRef.current = window.setTimeout(() => {
-          props.onOpenChange(false);
-        }, SCRIPT_REVIEW_SAVED_CLOSE_MS);
-      },
-      () => {
-        if (!mountedRef.current) return;
-        setSaveState("idle");
-      },
-    );
-  };
 
   return (
     <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent
-        className="flex max-h-[90dvh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(52rem,var(--safe-area-width),calc(100%-2rem))]"
+        className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(52rem,var(--safe-area-width),calc(100%-2rem))]"
         data-testid={props.testId}
         showCloseButton={!saveBusy}
         onEscapeKeyDown={props.onEscapeKeyDown}
@@ -189,7 +126,10 @@ export function ScriptsReviewDialog(props: {
           </DialogTitle>
           <DialogDescription>{props.description}</DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6">
+        <fieldset
+          disabled={saveBusy}
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain border-0 p-0 px-6"
+        >
           {identity !== null ? (
             <div className="border-b border-foreground/10 py-4">
               {identity.slot}
@@ -236,7 +176,7 @@ export function ScriptsReviewDialog(props: {
               {props.repositoryDefaultsSlot}
             </div>
           ) : null}
-        </div>
+        </fieldset>
         <DialogFooter className="mx-0 mb-0 shrink-0 flex-row justify-end rounded-b-xl border-t border-foreground/10 bg-foreground/3 px-6 py-3">
           <Button
             type="button"
@@ -251,7 +191,7 @@ export function ScriptsReviewDialog(props: {
             type="button"
             variant="default"
             size="sm"
-            disabled={saveBusy || props.seedPending || !anythingChanged}
+            disabled={!canSave}
             aria-live="polite"
             onClick={handleSave}
           >
@@ -269,6 +209,98 @@ export function ScriptsReviewDialog(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+interface ScriptReviewIdentity {
+  readonly slot: ReactNode;
+  readonly changed: boolean;
+  readonly canSave: boolean;
+  readonly save: () => Promise<unknown>;
+}
+
+/** Holds the edit lock until all writes settle, then closes after confirmation. */
+function useScriptsReviewSave(props: {
+  readonly scripts: RepoScriptsValue;
+  readonly scriptSeed: RepoScriptsSeed | null;
+  readonly seedPending: boolean;
+  readonly identity: ScriptReviewIdentity | null;
+  readonly onSave: (scripts: WorktreeEntryScripts) => Promise<unknown>;
+  readonly onOpenChange: (open: boolean) => void;
+}) {
+  const { scripts } = props;
+  const [saveState, setSaveState] = useState<ScriptReviewSaveState>("idle");
+  const closeTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+  const clearSaveTimers = useCallback((): void => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const initialScripts = useMemo(
+    () => repoScriptsValueFromScripts(props.scriptSeed),
+    [props.scriptSeed],
+  );
+  const scriptsChanged = useMemo(
+    () =>
+      !worktreeScriptsEqual(
+        repoScriptsRequestPayload(scripts),
+        repoScriptsRequestPayload(initialScripts),
+      ),
+    [initialScripts, scripts],
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearSaveTimers();
+    };
+  }, [clearSaveTimers]);
+
+  const identity = props.identity;
+  const identityChanged = identity !== null && identity.changed;
+  const anythingChanged = scriptsChanged || identityChanged;
+  const saveBusy = saveState !== "idle";
+  const canSave =
+    !saveBusy &&
+    !props.seedPending &&
+    anythingChanged &&
+    (identity?.canSave ?? true);
+
+  const handleOpenChange = (nextOpen: boolean): void => {
+    if (!nextOpen && saveBusy) return;
+    props.onOpenChange(nextOpen);
+  };
+
+  const handleSave = (): void => {
+    if (!canSave) return;
+    const payload = repoScriptsRequestPayload(scripts);
+    clearSaveTimers();
+    setSaveState("saving");
+    // Drive the confirmation off the real save outcome: "Saved" + auto-close on
+    // success only; a failed save (the caller surfaces its own error toast)
+    // returns to idle so the user can retry instead of seeing a false success.
+    // Each concern writes only when it actually changed - an untouched scripts
+    // form must not rewrite the environment file just because a colour moved.
+    void Promise.allSettled([
+      scriptsChanged ? props.onSave(payload) : Promise.resolve(),
+      identityChanged ? identity.save() : Promise.resolve(),
+    ]).then((results) => {
+      if (!mountedRef.current) return;
+      if (results.some((result) => result.status === "rejected")) {
+        setSaveState("idle");
+        return;
+      }
+      setSaveState("saved");
+      closeTimerRef.current = window.setTimeout(() => {
+        props.onOpenChange(false);
+      }, SCRIPT_REVIEW_SAVED_CLOSE_MS);
+    });
+  };
+
+  return { saveState, saveBusy, canSave, handleSave, handleOpenChange };
 }
 
 function ScriptsPathRow(props: {

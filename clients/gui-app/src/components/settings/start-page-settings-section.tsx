@@ -89,9 +89,16 @@ export function StartPageSettingsSection() {
 
   const remove = (): void => {
     abortRef.current?.abort();
+    setBusy(false);
     trackSettingChanged("appearance", "startPageWallpaper");
     setWallpaper(null);
-    void saveStartPageWallpaper(null).catch(() => undefined);
+    void saveStartPageWallpaper(null).catch((error: unknown) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "The wallpaper could not be removed.",
+      );
+    });
   };
 
   return (

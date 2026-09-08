@@ -92,10 +92,12 @@ function DitheredWallpaper(props: {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
-    const controller = new AbortController();
+    let controller: AbortController | null = null;
     const image = new Image();
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let timer: number | null = null;
     const paint = (): void => {
+      controller?.abort();
+      controller = new AbortController();
       void renderDither(
         canvas,
         image,
@@ -108,14 +110,14 @@ function DitheredWallpaper(props: {
     };
     const schedule = (): void => {
       if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(paint, RESIZE_DEBOUNCE_MS);
+      timer = window.setTimeout(paint, RESIZE_DEBOUNCE_MS);
     };
     image.onload = paint;
     image.src = url;
     const observer = new ResizeObserver(schedule);
     observer.observe(canvas);
     return () => {
-      controller.abort();
+      controller?.abort();
       observer.disconnect();
       if (timer !== null) clearTimeout(timer);
       image.onload = null;

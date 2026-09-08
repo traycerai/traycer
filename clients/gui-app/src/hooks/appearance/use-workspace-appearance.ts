@@ -100,12 +100,6 @@ function appearanceScopeFor(
   return { accountId, hostId, canonicalSourceRoot: read.canonicalSourceRoot };
 }
 
-function fallbackReadStatus(
-  status: WorkspaceAppearanceRead["status"] | undefined,
-): boolean {
-  return !["present", "absent", "non-git"].includes(status ?? "");
-}
-
 function resolvedReadSource(
   read: WorkspaceAppearanceRead,
   previous: WorkspaceAppearanceRead | null | undefined,
@@ -269,10 +263,6 @@ export function useWorkspaceAppearance(args: {
   const appearance = enabled ? (query.data ?? fallback.data ?? null) : null;
   const canEdit = canEditAppearance(readSupport, writeSupport, query);
   const scope = appearanceScopeFor(accountId, hostId, appearance);
-  const isFallback =
-    query.isError ||
-    readSupport === false ||
-    fallbackReadStatus(query.data?.status);
   return {
     query,
     appearance,
@@ -280,7 +270,6 @@ export function useWorkspaceAppearance(args: {
     canEdit,
     readSupport,
     writeSupport,
-    isFallback,
     assetRefreshKey: query.data?.assetRefreshKey ?? 0,
   };
 }
@@ -311,13 +300,6 @@ export function useEpicAppearanceSource(args: {
     hostId: primary?.hostId ?? args.hostId,
     workspacePath: primary?.workspacePath ?? null,
   };
-}
-
-export function useEpicAppearance(args: {
-  readonly hostId: string | null;
-  readonly epicId: string;
-}) {
-  return useWorkspaceAppearance(useEpicAppearanceSource(args));
 }
 
 export function useWorkspaceSetAppearance(args: {

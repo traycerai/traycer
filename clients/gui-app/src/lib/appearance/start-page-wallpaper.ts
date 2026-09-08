@@ -84,7 +84,8 @@ export function useStartPageWallpaperImage(): StartPageWallpaperImage {
     void readAppearanceBlob(null, START_PAGE_WALLPAPER_KEY)
       .catch(() => null)
       .then((blob) => {
-        if (cancelled || blob === null) {
+        if (cancelled) return;
+        if (blob === null) {
           setImage(NO_WALLPAPER);
           return;
         }

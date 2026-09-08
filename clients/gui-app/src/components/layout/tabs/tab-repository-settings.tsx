@@ -26,7 +26,11 @@ export function useTabRepositorySettings(
       open && tab.kind === "epic" ? (
         <TabRepositorySettingsDialog
           epicId={tab.epicId}
-          hostId={tab.hostId ?? sessionCreatedEpicHostId(tab.epicId)}
+          hostId={
+            tab.repositoryIdentity?.scope?.hostId ??
+            tab.hostId ??
+            sessionCreatedEpicHostId(tab.epicId)
+          }
           identityPath={
             tab.repositoryIdentity?.scope?.canonicalSourceRoot ?? null
           }
