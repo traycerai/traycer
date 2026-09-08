@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import {
+  Check,
+  ChevronDown,
   Copy,
   Download,
   ExternalLink,
   FileUp,
+  Moon,
   Package,
   Search,
+  Sun,
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -27,6 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { themeQueryKeys } from "@/lib/query-keys/theme-query-keys";
 import { importThemeFiles, importThemeText } from "@/lib/themes/theme-import";
@@ -105,7 +110,6 @@ function ThemeImportDialogBody({
   const [dragging, setDragging] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [conflictError, setConflictError] = useState<string | null>(null);
-  const openLink = useOpenLink();
   const fileInput = useRef<HTMLInputElement>(null);
   const preview = useRef<HTMLDivElement>(null);
   const controllers = useRef(new Set<AbortController>());
@@ -219,305 +223,385 @@ function ThemeImportDialogBody({
   }
   return (
     <Dialog open onOpenChange={close}>
-      <DialogContent className="max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] overflow-y-auto sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Add a theme</DialogTitle>
-          <DialogDescription>
-            Find community themes on Open VSX, or import a theme file.
+      <DialogContent className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:max-w-3xl">
+        <DialogHeader className="shrink-0 border-b border-border/60 p-4 pr-10">
+          <DialogTitle className="text-ui-sm">
+            Find your next palette
+          </DialogTitle>
+          <DialogDescription className="max-w-prose pr-4">
+            Browse Open VSX or import theme files.
           </DialogDescription>
         </DialogHeader>
-        <section className="space-y-3" aria-label="Community themes">
-          <Label htmlFor="theme-search">Search community themes</Label>
-          <div className="relative">
-            <Search
-              aria-hidden
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              id="theme-search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Theme name or publisher.extension"
-              className="pl-9"
-            />
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap gap-1" aria-label="Popular searches">
-              {popularSearches.map((entry) => (
-                <Button
-                  key={entry.label}
-                  size="sm"
-                  variant="ghost"
-                  aria-pressed={query === entry.query}
-                  onClick={() => setQuery(entry.query)}
+        <div className="min-h-0 overflow-y-auto px-4 pb-4">
+          <Tabs defaultValue="browse" className="gap-3 pt-3">
+            <TabsList
+              variant="line"
+              aria-label="Theme import source"
+              className="w-full justify-start gap-5 border-b border-border/60 pb-2"
+            >
+              <TabsTrigger value="browse" className="flex-none px-0">
+                <Search aria-hidden />
+                Browse themes
+              </TabsTrigger>
+              <TabsTrigger value="files" className="flex-none px-0">
+                <FileUp aria-hidden />
+                Import files
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="browse" className="space-y-3">
+              <section className="space-y-3" aria-label="Community themes">
+                <div className="space-y-2">
+                  <Label htmlFor="theme-search" className="sr-only">
+                    Search community themes
+                  </Label>
+                  <div className="relative">
+                    <Search
+                      aria-hidden
+                      className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                    />
+                    <Input
+                      id="theme-search"
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="Theme name or publisher.extension"
+                      className="h-9 border-border/70 pl-9"
+                    />
+                  </div>
+                  <div
+                    className="flex flex-wrap items-center gap-1 text-ui-xs"
+                    aria-label="Popular searches"
+                  >
+                    <span className="mr-1 text-muted-foreground">Explore</span>
+                    {popularSearches.map((entry) => (
+                      <Button
+                        key={entry.label}
+                        size="sm"
+                        variant="ghost"
+                        aria-pressed={query === entry.query}
+                        onClick={() => setQuery(entry.query)}
+                        className={cn(
+                          "h-7 rounded-full px-2.5 text-ui-xs",
+                          query === entry.query && "bg-foreground/8",
+                        )}
+                      >
+                        {entry.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-2">
+                  <p className="text-ui-xs text-muted-foreground">
+                    Color themes from Open VSX
+                  </p>
+                  <Select
+                    value={sort}
+                    onValueChange={(value) => {
+                      const selected = sorts.find(
+                        (entry) => entry.value === value,
+                      );
+                      if (selected) setSort(selected.value);
+                    }}
+                  >
+                    <SelectTrigger
+                      aria-label="Sort themes"
+                      size="sm"
+                      className="w-auto border-transparent bg-transparent text-ui-xs shadow-none"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sorts.map((entry) => (
+                        <SelectItem key={entry.value} value={entry.value}>
+                          {entry.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {search.isPending ? (
+                  <div
+                    role="status"
+                    className="flex items-center justify-center gap-2 py-6 text-muted-foreground"
+                  >
+                    <AgentSpinningDots
+                      className={undefined}
+                      testId={undefined}
+                      variant={undefined}
+                    />
+                    Loading community themes
+                  </div>
+                ) : null}
+                {search.isError ? (
+                  <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 p-4 text-destructive"
+                  >
+                    {search.error.message}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void search.refetch()}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                ) : null}
+                {search.data?.length === 0 ? (
+                  <p className="py-6 text-center text-muted-foreground">
+                    No themes found. Try a different name or use Import files.
+                  </p>
+                ) : null}
+                <div className="divide-y divide-border/60">
+                  {search.data?.map((extension) => (
+                    <CommunityThemeRow
+                      key={extension.id}
+                      extension={extension}
+                      installed={themes.some(
+                        (theme) =>
+                          theme.collection?.id === `open-vsx:${extension.id}`,
+                      )}
+                      pending={Boolean(
+                        loadThemes.isPending &&
+                        loadThemes.variables.kind === "extension" &&
+                        loadThemes.variables.extension.id === extension.id,
+                      )}
+                      disabled={loadThemes.isPending}
+                      onLoad={() => load({ kind: "extension", extension })}
+                    />
+                  ))}
+                </div>
+              </section>
+            </TabsContent>
+            <TabsContent value="files" className="space-y-3">
+              <section className="space-y-3" aria-label="Import theme files">
+                <div
+                  className={cn(
+                    "flex flex-col items-center gap-3 rounded-lg border border-dashed px-4 py-5 text-center transition-colors",
+                    dragging
+                      ? "border-primary bg-primary/10"
+                      : "border-border bg-foreground/3",
+                  )}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragLeave={(event) => {
+                    if (
+                      !event.currentTarget.contains(
+                        event.relatedTarget instanceof Node
+                          ? event.relatedTarget
+                          : null,
+                      )
+                    )
+                      setDragging(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setDragging(false);
+                    if (event.dataTransfer.files.length)
+                      load({
+                        kind: "files",
+                        files: Array.from(event.dataTransfer.files),
+                      });
+                  }}
                 >
-                  {entry.label}
-                </Button>
-              ))}
-            </div>
-            <Select
-              value={sort}
-              onValueChange={(value) => {
-                const selected = sorts.find((entry) => entry.value === value);
-                if (selected) setSort(selected.value);
-              }}
-            >
-              <SelectTrigger aria-label="Sort themes">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {sorts.map((entry) => (
-                  <SelectItem key={entry.value} value={entry.value}>
-                    {entry.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {search.isPending ? (
-            <div
-              role="status"
-              className="flex items-center gap-2 py-6 text-muted-foreground"
-            >
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-              Loading community themes
-            </div>
-          ) : null}
-          {search.isError ? (
-            <div
-              role="alert"
-              className="rounded-lg border border-destructive/30 p-3 text-destructive"
-            >
-              {search.error.message}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void search.refetch()}
-              >
-                Retry
-              </Button>
-            </div>
-          ) : null}
-          {search.data?.length === 0 ? (
-            <p className="py-6 text-center text-muted-foreground">
-              No themes found. Try a different name or import a file below.
-            </p>
-          ) : null}
-          <div className="grid gap-2 sm:grid-cols-2">
-            {search.data?.map((extension) => {
-              const installed = themes.some(
-                (theme) => theme.collection?.id === `open-vsx:${extension.id}`,
-              );
-              const pending =
-                loadThemes.isPending &&
-                loadThemes.variables.kind === "extension" &&
-                loadThemes.variables.extension.id === extension.id;
-              return (
-                <article
-                  key={extension.id}
-                  className="flex min-w-0 flex-col gap-3 rounded-xl bg-foreground/5 p-3"
-                >
-                  <div className="flex min-w-0 gap-3">
-                    {extension.iconUrl ? (
-                      <img
-                        src={extension.iconUrl}
-                        alt=""
-                        loading="lazy"
-                        referrerPolicy="no-referrer"
-                        className="size-9 shrink-0 rounded-lg object-contain"
-                      />
-                    ) : (
-                      <Package
-                        aria-hidden
-                        className="size-9 shrink-0 rounded-lg p-1 text-muted-foreground"
-                      />
-                    )}
-                    <div className="min-w-0">
-                      <h3 className="break-words font-medium">
-                        {extension.name}
-                      </h3>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {extension.publisher} ·{" "}
-                        {numberFormat.format(extension.downloadCount)} downloads
-                      </p>
+                  <div className="space-y-1.5">
+                    <p className="text-ui-sm font-medium">
+                      Drop your theme files here
+                    </p>
+                    <p className="max-w-prose text-ui-xs text-muted-foreground">
+                      Traycer and VS Code themes, including entire extension
+                      packs.
+                    </p>
+                    <p className="font-mono text-ui-xs text-muted-foreground">
+                      .json · .jsonc · .vsix
+                    </p>
+                  </div>
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    accept=".json,.jsonc,.vsix"
+                    multiple
+                    className="sr-only"
+                    aria-label="Choose theme files"
+                    tabIndex={-1}
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? []);
+                      event.target.value = "";
+                      if (files.length) load({ kind: "files", files });
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={loadThemes.isPending}
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    Choose files
+                  </Button>
+                </div>
+                <details className="group rounded-xl border border-border/60">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl p-4 text-ui-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                    Paste theme JSON
+                    <ChevronDown
+                      aria-hidden
+                      className="size-4 text-muted-foreground transition-transform group-open:rotate-180"
+                    />
+                  </summary>
+                  <div className="space-y-3 border-t border-border/60 p-4">
+                    <Label htmlFor="theme-json">Theme JSON</Label>
+                    <Textarea
+                      id="theme-json"
+                      value={json}
+                      onChange={(event) => setJson(event.target.value)}
+                      placeholder="Paste exported Traycer theme JSON or a VS Code color theme…"
+                      rows={7}
+                      className="bg-foreground/3 font-mono text-ui-xs"
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        variant="outline"
+                        disabled={!json.trim() || loadThemes.isPending}
+                        onClick={() => load({ kind: "json", text: json })}
+                      >
+                        Preview import
+                      </Button>
                     </div>
                   </div>
-                  <p className="line-clamp-2 grow text-xs text-muted-foreground">
-                    {extension.description}
-                  </p>
-                  <div className="flex items-center justify-between gap-2">
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label={`View ${extension.name} on Open VSX`}
-                      onClick={(event) =>
-                        void openLink(
-                          `https://open-vsx.org/extension/${extension.id.split(".").map(encodeURIComponent).join("/")}`,
-                          "docs",
-                          event,
-                        )
-                      }
-                    >
-                      <ExternalLink aria-hidden className="size-3.5" />
-                    </Button>
-                    <span className="mr-auto truncate text-xs text-muted-foreground">
-                      {extension.version}
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={loadThemes.isPending}
-                      onClick={() => load({ kind: "extension", extension })}
-                    >
-                      {pending ? (
-                        <AgentSpinningDots
-                          className={undefined}
-                          testId={undefined}
-                          variant={undefined}
-                        />
-                      ) : (
-                        <Download aria-hidden className="size-3.5" />
-                      )}
-                      {installed ? "Review update" : "Install"}
-                    </Button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-        <div className="flex items-center gap-3 py-2 text-xs text-muted-foreground">
-          <span className="h-px grow bg-border" />
-          OR IMPORT A FILE
-          <span className="h-px grow bg-border" />
-        </div>
-        <section className="space-y-3" aria-label="Import theme files">
-          <div
-            className={cn(
-              "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-4",
-              dragging
-                ? "border-primary bg-primary/10"
-                : "border-border bg-foreground/3",
-            )}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={(event) => {
-              if (
-                !event.currentTarget.contains(
-                  event.relatedTarget instanceof Node
-                    ? event.relatedTarget
-                    : null,
-                )
-              )
-                setDragging(false);
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              setDragging(false);
-              if (event.dataTransfer.files.length)
-                load({
-                  kind: "files",
-                  files: Array.from(event.dataTransfer.files),
-                });
-            }}
-          >
-            <div>
-              <p className="font-medium">Theme files</p>
-              <p className="text-xs text-muted-foreground">
-                Drop Traycer or VS Code .json, .jsonc, or .vsix files
+                </details>
+              </section>
+            </TabsContent>
+          </Tabs>
+          <div className="space-y-3 pt-3">
+            {loadThemes.isPending ? (
+              <div
+                role="status"
+                className="flex items-center gap-2 text-muted-foreground"
+              >
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+                Reading theme data
+              </div>
+            ) : null}
+            {loadThemes.isError ? (
+              <p role="alert" className="text-destructive">
+                {loadThemes.error.message}
               </p>
-            </div>
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".json,.jsonc,.vsix"
-              multiple
-              className="sr-only"
-              aria-label="Choose theme files"
-              tabIndex={-1}
-              onChange={(event) => {
-                const files = Array.from(event.target.files ?? []);
-                event.target.value = "";
-                if (files.length) load({ kind: "files", files });
-              }}
+            ) : null}
+            {conflictError ? (
+              <p role="alert" className="text-destructive">
+                {conflictError}
+              </p>
+            ) : null}
+            {storageError ? (
+              <p role="alert" className="text-destructive">
+                {storageError}
+              </p>
+            ) : null}
+            <ThemeImportPreview
+              staged={staged}
+              replacing={replacing}
+              previewRef={preview}
+              onCancel={() => loadThemes.reset()}
+              onSave={save}
             />
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={loadThemes.isPending}
-              onClick={() => fileInput.current?.click()}
-            >
-              <FileUp aria-hidden className="size-4" />
-              Choose files
-            </Button>
+            {success ? (
+              <p
+                role="status"
+                className="flex items-start gap-2 rounded-lg border border-border/60 bg-foreground/3 p-4 text-ui-sm"
+              >
+                <Check aria-hidden className="mt-0.5 size-4 shrink-0" />
+                {success}
+              </p>
+            ) : null}
           </div>
-          <Label htmlFor="theme-json">Theme JSON</Label>
-          <Textarea
-            id="theme-json"
-            value={json}
-            onChange={(event) => setJson(event.target.value)}
-            placeholder="Paste exported Traycer theme JSON or a VS Code color theme…"
-            rows={5}
-            className="font-mono text-xs"
-          />
-          <div className="flex justify-end">
-            <Button
-              variant="outline"
-              disabled={!json.trim() || loadThemes.isPending}
-              onClick={() => load({ kind: "json", text: json })}
-            >
-              Preview import
-            </Button>
-          </div>
-        </section>
-        {loadThemes.isPending ? (
-          <div
-            role="status"
-            className="flex items-center gap-2 text-muted-foreground"
-          >
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CommunityThemeRow({
+  extension,
+  installed,
+  pending,
+  disabled,
+  onLoad,
+}: {
+  extension: OpenVsxExtension;
+  installed: boolean;
+  pending: boolean;
+  disabled: boolean;
+  onLoad: () => void;
+}) {
+  const openLink = useOpenLink();
+  return (
+    <article className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-2 py-3 first:pt-0 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+      {extension.iconUrl ? (
+        <img
+          src={extension.iconUrl}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          className="size-7 rounded object-contain"
+        />
+      ) : (
+        <Package aria-hidden className="size-7 p-1 text-muted-foreground" />
+      )}
+      <div className="min-w-0 space-y-0.5">
+        <div className="flex flex-wrap items-center gap-x-2">
+          <h3 className="break-words text-ui-sm font-medium">
+            {extension.name}
+          </h3>
+          {installed ? (
+            <span className="text-ui-xs text-muted-foreground">Installed</span>
+          ) : null}
+        </div>
+        <p className="truncate text-ui-xs text-muted-foreground">
+          {extension.publisher} · {numberFormat.format(extension.downloadCount)}{" "}
+          downloads · {extension.version}
+        </p>
+        <p className="truncate text-ui-xs text-muted-foreground">
+          {extension.description}
+        </p>
+      </div>
+      <div className="col-start-2 flex items-center gap-1 sm:col-start-auto">
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label={`View ${extension.name} on Open VSX`}
+          onClick={(event) =>
+            void openLink(
+              `https://open-vsx.org/extension/${extension.id.split(".").map(encodeURIComponent).join("/")}`,
+              "docs",
+              event,
+            )
+          }
+        >
+          <ExternalLink aria-hidden className="size-3.5" />
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          onClick={onLoad}
+        >
+          {pending ? (
             <AgentSpinningDots
               className={undefined}
               testId={undefined}
               variant={undefined}
             />
-            Reading theme data
-          </div>
-        ) : null}
-        {loadThemes.isError ? (
-          <p role="alert" className="text-destructive">
-            {loadThemes.error.message}
-          </p>
-        ) : null}
-        {conflictError ? (
-          <p role="alert" className="text-destructive">
-            {conflictError}
-          </p>
-        ) : null}
-        {storageError ? (
-          <p role="alert" className="text-destructive">
-            {storageError}
-          </p>
-        ) : null}
-        <ThemeImportPreview
-          staged={staged}
-          replacing={replacing}
-          previewRef={preview}
-          onCancel={() => loadThemes.reset()}
-          onSave={save}
-        />
-        {success ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {success}
-          </p>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+          ) : (
+            <Download aria-hidden className="size-3.5" />
+          )}
+          {installed ? "Review update" : "Install"}
+        </Button>
+      </div>
+    </article>
   );
 }
 
@@ -538,19 +622,42 @@ function ThemeImportPreview({
   return (
     <div
       ref={previewRef}
-      className="space-y-3 rounded-xl border border-border bg-foreground/5 p-4"
+      className="space-y-4 rounded-xl border border-border bg-foreground/3 p-4"
     >
       <p className="font-medium">
         {staged.themes.length} {staged.themes.length === 1 ? "theme" : "themes"}{" "}
         ready to import
       </p>
-      <ul className="flex max-h-[25svh] flex-wrap gap-2 overflow-y-auto">
+      <ul className="max-h-[25svh] divide-y divide-border/60 overflow-y-auto">
         {staged.themes.map((theme) => (
           <li
             key={theme.id}
-            className="rounded-md bg-foreground/8 px-2 py-1 text-xs"
+            className="flex items-center gap-3 py-2.5 text-ui-xs"
           >
-            {theme.name} · {theme.appearance}
+            <span
+              aria-hidden
+              className="flex size-8 shrink-0 overflow-hidden rounded-md border border-foreground/10"
+            >
+              <span
+                className="w-2/3"
+                style={{
+                  background: theme.colors.background ?? "var(--background)",
+                }}
+              />
+              <span
+                className="flex-1"
+                style={{ background: theme.colors.primary ?? "var(--primary)" }}
+              />
+            </span>
+            <span className="min-w-0 flex-1 break-words">{theme.name}</span>
+            <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+              {theme.appearance === "light" ? (
+                <Sun aria-hidden className="size-3.5" />
+              ) : (
+                <Moon aria-hidden className="size-3.5" />
+              )}
+              {theme.appearance}
+            </span>
           </li>
         ))}
       </ul>

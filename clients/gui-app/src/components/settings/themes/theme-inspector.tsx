@@ -169,13 +169,13 @@ export function ThemeInspector({
       {highlights.map(({ id, ...rect }) => (
         <div
           key={id}
-          className="absolute rounded border-2 border-fuchsia-500 bg-fuchsia-500/10"
+          className="absolute rounded-md border-2 border-[#a5bd83] bg-[#a5bd83]/10 ring-1 ring-[#272a25]/40"
           style={rect}
         />
       ))}
       <div
         role="status"
-        className="absolute top-safe-top-gutter left-safe-left-gutter max-w-safe-dvw rounded-md border border-white/20 bg-zinc-950 px-3 py-2 text-sm text-white shadow-lg"
+        className="absolute top-safe-top-gutter left-safe-left-gutter max-w-safe-dvw rounded-lg border border-[#4a5143] bg-[#272a25] px-4 py-3 text-sm text-[#edf0e8] shadow-lg"
       >
         {inspecting
           ? message || "Select an area to edit its color. Escape cancels."

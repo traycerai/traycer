@@ -121,11 +121,11 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Appearance"
-      description="Make Traycer feel like yours. Choose a theme, bring your favorites, or create something new."
+      description="Themes, typography, and display preferences."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div
-        className={cn("@container flex flex-col", compact ? "gap-6" : "gap-10")}
+        className={cn("@container flex flex-col", compact ? "gap-5" : "gap-8")}
       >
         <ThemeGallery />
         <AppearanceDetails />

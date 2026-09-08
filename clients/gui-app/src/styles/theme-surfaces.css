@@ -7,12 +7,32 @@
   color: var(--sidebar-foreground);
 }
 
+/* One glass layer per floating surface. Custom Floating UI/Tiptap surfaces
+   join the same contract as the Radix wrappers through their stable markers. */
 [data-slot="dialog-content"],
 [data-slot="alert-dialog-content"],
 [data-slot="popover-content"],
 [data-slot="dropdown-menu-content"],
 [data-slot="dropdown-menu-sub-content"],
-[data-slot="select-content"] {
+[data-slot="context-menu-content"],
+[data-slot="context-menu-sub-content"],
+[data-slot="select-content"],
+[data-slot="hover-card-content"],
+[data-slot="sheet-content"],
+[data-slot="drawer-content"],
+[data-slot="composer-menu"],
+[data-slot="mention-preview-panel"],
+[data-slot="artifact-link-popover"],
+[data-slot="floating-draft-popover"],
+[data-slot="thread-hover-popover"],
+[data-slot="mention-suggestion"],
+[data-slot="quote-selection-popover"],
+[data-profile-usage-sidecar],
+[data-minimap-list-card],
+.tc-editor-bubble-menu,
+.tc-node-block-toolbar {
+  /* An embedded command list must not paint another, opaque panel over glass. */
+  --command-surface-background: transparent;
   background-color: color-mix(
     in srgb,
     var(--popover) calc(var(--glass-opacity, 1) * 100%),

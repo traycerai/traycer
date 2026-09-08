@@ -27,19 +27,19 @@ import { ThemeInspector } from "./theme-inspector";
 // The recovery controls stay readable even when a draft makes the application's text invisible.
 const editorColors: CSSProperties & Record<string, string | number> = {
   colorScheme: "dark",
-  color: "#f4f4f5",
-  background: "#242428",
-  borderColor: "#52525b",
-  "--background": "#242428",
-  "--foreground": "#f4f4f5",
-  "--popover": "#242428",
-  "--popover-foreground": "#f4f4f5",
-  "--input": "#71717a",
-  "--border": "#52525b",
-  "--primary": "#a5b4fc",
-  "--primary-foreground": "#18181b",
-  "--ring": "#a5b4fc",
-  "--muted-foreground": "#d4d4d8",
+  color: "#edf0e8",
+  background: "#272a25",
+  borderColor: "#4a5143",
+  "--background": "#272a25",
+  "--foreground": "#edf0e8",
+  "--popover": "#272a25",
+  "--popover-foreground": "#edf0e8",
+  "--input": "#707969",
+  "--border": "#4a5143",
+  "--primary": "#c8dba8",
+  "--primary-foreground": "#20251b",
+  "--ring": "#c8dba8",
+  "--muted-foreground": "#bec6b5",
   "--destructive": "#fda4af",
 };
 
@@ -71,10 +71,10 @@ function ThemeContrastStatus({ draft }: { draft: ThemeDefinition }) {
     <p
       role="status"
       className={cn(
-        "rounded-md border px-3 py-2 text-xs",
+        "text-xs leading-relaxed",
         hasTransparency || contrast >= 4.5
-          ? "border-white/15 text-zinc-300"
-          : "border-amber-300/50 text-amber-200",
+          ? "text-[#bec6b5]"
+          : "text-amber-200",
       )}
     >
       {message}
@@ -105,13 +105,13 @@ function ColorField({
     <div
       data-theme-color={token}
       className={cn(
-        "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-md px-2 py-1.5",
-        selected && "bg-white/10 outline outline-indigo-300/60",
+        "grid min-w-0 grid-cols-[minmax(0,1.1fr)_minmax(0,.5fr)_minmax(0,1fr)] items-center gap-2 rounded-md px-1 py-1",
+        selected && "bg-[#c8dba8]/8 outline outline-[#c8dba8]/40",
       )}
     >
       <button
         type="button"
-        className="text-left text-sm text-zinc-200 hover:text-white focus-visible:outline-2 focus-visible:outline-indigo-300"
+        className="text-left text-sm text-[#e0e6d8] hover:text-white focus-visible:outline-2 focus-visible:outline-[#c8dba8]"
         onClick={() => onSelect(token)}
         aria-pressed={selected}
       >
@@ -120,7 +120,7 @@ function ColorField({
       <input
         type="color"
         aria-label={`${label} color picker`}
-        className="size-7 cursor-pointer overflow-hidden rounded-full border border-white/25 bg-transparent"
+        className="h-7 w-full cursor-pointer overflow-hidden rounded-md border border-white/20 bg-transparent p-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded-md [&::-webkit-color-swatch]:border-0"
         value={color.slice(0, 7)}
         onChange={(event) => onChange(token, event.target.value)}
       />
@@ -128,7 +128,7 @@ function ColorField({
         aria-label={`${label} color value`}
         aria-invalid={invalid}
         value={text}
-        className="h-7 min-w-0 font-mono text-xs"
+        className="h-7 min-w-0 border-white/10 bg-transparent font-mono text-xs"
         onChange={(event) => {
           const value = event.target.value;
           const normalized = normalizeThemeColor(value);
@@ -401,7 +401,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
         aria-modal={false}
         aria-label="Theme editor"
         className={cn(
-          "fixed right-safe-right-gutter bottom-safe-bottom-gutter z-[110] flex w-[min(90vw,var(--container-sm))] max-w-safe-dvw flex-col overflow-hidden rounded-xl border shadow-2xl",
+          "fixed right-safe-right-gutter bottom-safe-bottom-gutter z-[110] flex w-[min(90vw,var(--container-sm))] max-w-safe-dvw flex-col overflow-hidden rounded-xl border shadow-xl",
           minimized
             ? "h-auto"
             : "max-h-[min(75svh,calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem))]",
@@ -419,17 +419,17 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
         }}
       >
         <header
-          className="flex shrink-0 touch-none items-center gap-1 border-b border-white/15 px-3 py-2"
+          className="flex shrink-0 touch-none items-center gap-1 border-b border-white/10 px-3 py-2"
           onPointerDown={(event) => startGesture(event, "move")}
           onPointerMove={moveGesture}
           onPointerUp={endGesture}
           onPointerCancel={endGesture}
         >
           <Grip
-            className="size-4 shrink-0 cursor-grab text-zinc-400"
+            className="size-4 shrink-0 cursor-grab text-[#a6b19b]"
             aria-hidden
           />
-          <h2 className="min-w-0 flex-1 truncate text-sm font-medium">
+          <h2 className="min-w-0 flex-1 truncate pl-1 text-sm font-medium">
             Theme editor
           </h2>
           <Button
@@ -465,7 +465,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
         </header>
         {!minimized && (
           <>
-            <div className="min-h-0 space-y-5 overflow-y-auto p-3">
+            <div className="min-h-0 space-y-3 overflow-y-auto p-3">
               <label
                 htmlFor={`${fieldId}-name`}
                 className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-center gap-3 text-sm"
@@ -473,6 +473,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                 Theme name
                 <Input
                   id={`${fieldId}-name`}
+                  className="h-8 border-white/15 bg-transparent text-sm"
                   placeholder="e.g. Aurora"
                   maxLength={100}
                   value={draft.name}
@@ -503,45 +504,46 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                   ))}
                 </div>
               </div>
-              <label
-                htmlFor={`${fieldId}-artwork`}
-                className="flex items-center justify-between gap-3 text-sm"
-              >
-                Sidebar artwork
-                <Switch
-                  id={`${fieldId}-artwork`}
-                  checked={draft.sidebarArtwork ?? false}
-                  onCheckedChange={(sidebarArtwork) =>
-                    setDraft({ ...draft, sidebarArtwork })
-                  }
-                />
-              </label>
               {copiedPair ? (
-                <p className="text-xs text-zinc-300">
+                <p className="text-xs text-[#bec6b5]">
                   This variant is now an independent light and dark theme. Its
                   source pack is unchanged.
                 </p>
               ) : null}
               <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-medium">Colors</h3>
-                  <label
-                    htmlFor={`${fieldId}-advanced`}
-                    className="flex items-center gap-2 text-xs"
+                <div
+                  role="group"
+                  aria-label="Color editing mode"
+                  className="flex items-center gap-1 border-b border-white/10 pb-2"
+                >
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={!advanced}
+                    className={cn(
+                      "rounded-md",
+                      !advanced && "bg-white/8 text-[#e0eccf]",
+                    )}
+                    onClick={() => {
+                      setAdvanced(false);
+                      setQuery("");
+                    }}
                   >
-                    Advanced
-                    <Switch
-                      id={`${fieldId}-advanced`}
-                      checked={advanced}
-                      onCheckedChange={setAdvanced}
-                    />
-                  </label>
+                    Palette
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={advanced}
+                    className={cn(
+                      "rounded-md",
+                      advanced && "bg-white/8 text-[#e0eccf]",
+                    )}
+                    onClick={() => setAdvanced(true)}
+                  >
+                    All colors
+                  </Button>
                 </div>
-                <p className="text-xs text-zinc-300">
-                  {advanced
-                    ? "Select a label to highlight where its color is used."
-                    : "Choose a background and accent. The other colors follow."}
-                </p>
                 {advanced ? (
                   <Input
                     aria-label="Filter theme colors"
@@ -559,7 +561,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                   tokens.length > 0 && (
                     <section key={group} className="space-y-1">
                       {advanced ? (
-                        <h4 className="px-2 pb-1 text-xs font-medium text-zinc-400">
+                        <h4 className="pb-1 text-xs font-medium text-[#a6b19b]">
                           {group}
                         </h4>
                       ) : null}
@@ -585,10 +587,23 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                 );
               })}
               {visibleTokens.length === 0 && (
-                <p className="text-sm text-zinc-300">
+                <p className="text-sm text-[#bec6b5]">
                   No colors match your search.
                 </p>
               )}
+              <label
+                htmlFor={`${fieldId}-artwork`}
+                className="flex items-center justify-between gap-3 text-sm"
+              >
+                Sidebar artwork
+                <Switch
+                  id={`${fieldId}-artwork`}
+                  checked={draft.sidebarArtwork ?? false}
+                  onCheckedChange={(sidebarArtwork) =>
+                    setDraft({ ...draft, sidebarArtwork })
+                  }
+                />
+              </label>
               <ThemeContrastStatus draft={draft} />
               {error ? (
                 <p role="alert" className="text-sm text-rose-300">
@@ -596,7 +611,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                 </p>
               ) : null}
             </div>
-            <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-white/15 p-3 pr-6">
+            <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-white/10 px-3 py-2 pr-7">
               <Button variant="ghost" size="sm" onClick={cancelDraft}>
                 Cancel
               </Button>
@@ -628,7 +643,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
             <button
               type="button"
               aria-label="Resize theme editor by dragging or using arrow keys"
-              className="absolute right-0 bottom-0 flex size-6 touch-none items-end justify-end p-1 text-zinc-400 focus-visible:outline-2 focus-visible:outline-indigo-300"
+              className="absolute right-0 bottom-0 flex size-6 touch-none items-end justify-end p-1 text-[#a6b19b] focus-visible:outline-2 focus-visible:outline-[#c8dba8]"
               onPointerDown={(event) => startGesture(event, "resize")}
               onPointerMove={moveGesture}
               onPointerUp={endGesture}

@@ -162,6 +162,14 @@ limits, not a requirement that every constant be identical in Traycer.
 
 All implementation paths below are relative to `clients/gui-app/src/`.
 
+`styles/theme-surfaces.css` applies the same glass opacity to shared menus,
+submenus, popovers, hover cards, dialogs and drawers, plus custom composer and
+editor floating surfaces. Each surface paints one glass layer; embedded command
+lists inherit a transparent background, while standalone command lists retain
+their normal fill. Fixed menu headers and footers remain transparent. Sticky
+rows retain their fill to cover scrolling content, and compact inverted tooltips
+and theme-editor recovery controls retain their dedicated styling.
+
 | Responsibility                                                     | Owner                                                                             |
 | ------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
 | Typed semantic roles, literal-color validation, guided derivation  | `lib/themes/theme-definition.ts`                                                  |
@@ -205,6 +213,44 @@ are pinned to a version, SHA-256 checked, and matched to their packaged
 publisher/name/version. Imports extract theme data without executing extension
 code. Workbench mapping is necessarily best effort: applications have different
 surfaces and not every VS Code role has a Traycer equivalent.
+
+### Visual redesign after the checkpoint
+
+The complete implementation is checkpointed in OSS commit `6051c4d18`; internal
+commit `ba42fd1a1e` records that submodule revision. The subsequent UI work keeps
+the same theme data, imports, storage, and application paths.
+
+The appearance page shows compact mode controls and two selected-theme rows.
+Each row opens a searchable picker with the 17 built-in families and saved
+themes for that appearance. Only the current selections occupy the page;
+small three-color swatches replace the preview and repeated palette cards.
+A separate saved-theme manager retains selection, editing, duplication,
+individual and full-pack export, filtering, and deletion.
+
+The floating editor uses independent graphite and sage colors so recovery
+controls remain readable during extreme theme edits. Palette / All colors
+controls expose guided derivation and individual tokens in compact horizontal
+color rows; inspection, drag, resize, minimize, paired editing, save, and
+rollback remain available. During editing, modal Settings releases its focus,
+pointer, and scroll locks so the floating editor can interact with the app.
+Normal modality returns on save/cancel. Radix remounts the Settings content
+when modality changes, so transient disclosure/scroll state may reset.
+
+Import sources have separate Browse themes and Import files tabs. Community
+results use full-width rows; local files have a drop area and expandable JSON
+input. A shared review area preserves staged imports when switching tabs and
+retains explicit update/copy choices and stale-update protection.
+
+The compact components pass GUI type checking, scoped Oxlint/ESLint, and
+React Doctor with no diagnostics. Thirteen focused appearance/editor checks
+pass, including independent picker selection, all 17 built-in choices,
+manager-to-editor focus, and paired-save/source-pack safety. The prior JSON
+import test covers staging, switching tabs, cancellation, and saving.
+A real Settings-modal integration test also verifies editor focus, pointer
+lock release during editing, and restoration on cancel.
+Vite/Tailwind stylesheet transformation includes the picker viewport cap and
+compact editor layout. Interactive visual acceptance is still pending: no
+browser is available through the UI tools.
 
 ### Verification performed
 

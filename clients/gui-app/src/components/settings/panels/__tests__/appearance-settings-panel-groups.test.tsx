@@ -137,7 +137,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     });
 
     const schemeButton = screen.getByRole("button", { name: "System" });
-    const preset = screen.getByRole("button", { name: "Use Neutral light" });
+    const preset = screen.getByRole("button", { name: "Light theme" });
     const pointerCursors = screen.getByText("Use pointer cursors");
     const uiFont = screen.getByText("UI font");
     const codeFont = screen.getByText("Code font");
@@ -234,7 +234,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     });
 
     const schemeButton = screen.getByRole("button", { name: "System" });
-    const preset = screen.getByRole("button", { name: "Use Neutral light" });
+    const preset = screen.getByRole("button", { name: "Light theme" });
     const pointerCursors = screen.getByText("Use pointer cursors");
     const uiFont = screen.getByText("UI font");
     const codeFont = screen.getByText("Code font");

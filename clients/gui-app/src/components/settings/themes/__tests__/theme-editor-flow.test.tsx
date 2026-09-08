@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -128,6 +129,7 @@ describe("theme editor flow", () => {
   });
 
   it("preserves an imported pack while creating a separate appearance pair", async () => {
+    const user = userEvent.setup();
     const collection = { id: "vsix:fixture.pack", name: "Fixture pack" };
     const light = importedTheme(
       "pack-light",
@@ -145,13 +147,26 @@ describe("theme editor flow", () => {
     expect(
       useThemeLibraryStore.getState().saveThemes([light, dark, darkAlternate]),
     ).toBe(true);
-    expect(useThemeLibraryStore.getState().selectTheme("dark", dark.id)).toBe(
-      true,
-    );
     renderThemes();
-    useThemeLibraryStore.getState().setDraft(dark);
+    await user.click(screen.getByRole("button", { name: "Dark theme" }));
+    await user.click(
+      screen.getByRole("option", { name: "Use Pack Dark dark" }),
+    );
+    expect(useThemeLibraryStore.getState().selected.dark).toBe(dark.id);
 
+    await user.click(screen.getByRole("button", { name: "Manage themes" }));
+    const manager = await screen.findByRole("dialog", {
+      name: "Manage themes",
+    });
+    await user.click(
+      within(manager).getByRole("button", { name: "Manage Pack Dark" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit theme" }));
     const editor = await screen.findByRole("dialog", { name: "Theme editor" });
+    expect(screen.queryByRole("dialog", { name: "Manage themes" })).toBeNull();
+    expect(document.activeElement).toBe(
+      within(editor).getByLabelText("Theme name"),
+    );
     fireEvent.change(within(editor).getByLabelText("Background color value"), {
       target: { value: "#202020" },
     });
@@ -182,5 +197,38 @@ describe("theme editor flow", () => {
     expect(
       copied.every((theme) => theme.collection?.name === "Pack Dark"),
     ).toBe(true);
+  });
+
+  it("keeps appearance choices compact and scoped to their own picker", async () => {
+    const user = userEvent.setup();
+    renderThemes();
+
+    expect(
+      screen.queryByRole("option", { name: "Use Neutral light" }),
+    ).toBeNull();
+    const lightPicker = screen.getByRole("button", {
+      name: "Light theme",
+    });
+
+    await user.click(lightPicker);
+    const lightSearch = await screen.findByRole("combobox", {
+      name: "Search light themes",
+    });
+    await user.type(lightSearch, "Nord");
+    await user.click(screen.getByRole("option", { name: "Use Nord light" }));
+
+    expect(useThemeLibraryStore.getState().selected.light).toBe("nord");
+    expect(useThemeLibraryStore.getState().selected.dark).toBeNull();
+    expect(useSettingsStore.getState().themePreset).toBe("neutral");
+    expect(
+      screen.queryByRole("combobox", { name: "Search light themes" }),
+    ).toBeNull();
+
+    await user.click(lightPicker);
+    const reopenedSearch = await screen.findByRole("combobox", {
+      name: "Search light themes",
+    });
+    await user.clear(reopenedSearch);
+    expect(screen.getAllByRole("option")).toHaveLength(17);
   });
 });
