@@ -125,6 +125,7 @@ const assistantMessage: JsonObject = {
   // settings do. What the round-trip guarantees is idempotence, not omission.
   envCredentialVar: null,
   imageResolutions: [],
+  fileResolutions: [],
 };
 
 // A message role no shipped reader knows.

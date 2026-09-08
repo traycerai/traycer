@@ -5179,6 +5179,70 @@ export const chatSyncSchemaSurfaceBaseline = {
                                 }
                               ]
                             }
+                          },
+                          "fileResolutions": {
+                            "default": [],
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "src": {
+                                  "type": "string"
+                                },
+                                "state": {
+                                  "type": "string"
+                                },
+                                "path": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "sha256": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "mediaType": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "kind": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "src",
+                                "state",
+                                "path",
+                                "sha256",
+                                "mediaType",
+                                "kind"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -5193,7 +5257,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "reasoningEffort",
                           "serviceTier",
                           "envCredentialVar",
-                          "imageResolutions"
+                          "imageResolutions",
+                          "fileResolutions"
                         ],
                         "additionalProperties": false
                       }

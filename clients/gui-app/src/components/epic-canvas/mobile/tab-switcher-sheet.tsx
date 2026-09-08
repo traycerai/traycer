@@ -249,8 +249,8 @@ interface SwitcherCategoryBodyProps {
 /**
  * Content-region registry: the desktop chat tree for Agents, flat lists for the
  * other row-per-item categories; the shared comments panel for Comments;
- * embedded desktop panel bodies for File tree, Git diff, Pull requests and
- * Sharing. The row categories call `onClose` on selection; the embeds rely on the sheet's active-tile watcher, and the
+ * embedded desktop panel bodies for Files, File tree, Git diff, Pull requests
+ * and Sharing. The row categories call `onClose` on selection; the embeds rely on the sheet's active-tile watcher, and the
  * categories that open no tile - Sharing, and Comments, where expanding a thread
  * is reading rather than navigating - simply keep the sheet open.
  */
@@ -283,6 +283,12 @@ function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
       );
     case "comments":
       return <SwitcherCommentsList epicId={epicId} tabId={tabId} />;
+    case "files":
+      return (
+        <Suspense fallback={<SwitcherEmbedFallback />}>
+          <SwitcherPanelEmbed category="files" epicId={epicId} tabId={tabId} />
+        </Suspense>
+      );
     case "file-tree":
       return (
         <Suspense fallback={<SwitcherEmbedFallback />}>

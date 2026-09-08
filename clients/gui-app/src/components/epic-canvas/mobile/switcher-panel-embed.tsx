@@ -2,11 +2,13 @@ import type { CSSProperties, ReactNode } from "react";
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
 import { SharingPanel } from "@/components/epic-canvas/panels/epic-sharing/panel";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
+import { FilesPanelBody } from "@/components/epic-canvas/sidebar/files-panel";
 import { FileTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 
 /** The switcher categories whose body is the desktop panel body, unmodified. */
 export type SwitcherEmbedCategory =
+  | "files"
   | "file-tree"
   | "git-diff"
   | "pull-requests"
@@ -30,10 +32,12 @@ const SWITCHER_EMBED_SURFACE_STYLE = {
 } as CSSProperties;
 
 /**
- * File-tree, Git-diff, Pull-requests and Sharing categories. Unlike the row
+ * Files, File-tree, Git-diff, Pull-requests and Sharing categories. Unlike the row
  * lists these are not row-per-item surfaces: they embed the EXACT desktop panel
  * bodies - already click-driven and Pierre-rendered - rather than being rebuilt.
- * All four mount cleanly here: the app-shell `RootDndProvider` supplies the
+ * All five mount cleanly here: the epic-files list is a plain scrolling
+ * stack whose row opens an `epic-file` tile through the same
+ * `useEpicTileNavigation` seam desktop uses; the app-shell `RootDndProvider` supplies the
  * dnd-kit context the file-tree drag bridge needs, and a finger never drags the
  * tree either way: a touch-primary device attaches no pointer listener at all
  * (`useDragSourceDisabled`), and a hybrid one - fine-primary with a touchscreen
@@ -84,6 +88,8 @@ export function SwitcherPanelEmbed(props: SwitcherPanelEmbedProps) {
 function SwitcherEmbeddedBody(props: SwitcherPanelEmbedProps): ReactNode {
   const { category, epicId, tabId } = props;
   switch (category) {
+    case "files":
+      return <FilesPanelBody epicId={epicId} tabId={tabId} />;
     case "file-tree":
       return <FileTreePanelBody epicId={epicId} tabId={tabId} />;
     case "git-diff":

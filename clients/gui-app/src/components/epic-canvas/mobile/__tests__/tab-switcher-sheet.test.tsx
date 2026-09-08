@@ -124,6 +124,7 @@ const HOST_ID = "host-A";
 const CATEGORY_NAMES = [
   "Chats",
   "Artifacts",
+  "Files",
   "File Tree",
   "Git Diff",
   "Terminals",
@@ -171,12 +172,12 @@ describe("<TabSwitcherSheet />", () => {
   });
   afterEach(cleanup);
 
-  it("renders exactly the eight always-on category tabs when open on mobile", () => {
+  it("renders exactly the nine always-on category tabs when open on mobile", () => {
     renderSheet(true, () => {});
     for (const name of CATEGORY_NAMES) {
       expect(screen.getByRole("tab", { name })).toBeTruthy();
     }
-    expect(screen.getAllByRole("tab")).toHaveLength(8);
+    expect(screen.getAllByRole("tab")).toHaveLength(9);
   });
 
   it("keeps the Comments tab on the bar with no artifact tile open", () => {
@@ -270,10 +271,11 @@ describe("<TabSwitcherSheet />", () => {
     setPullRequestPresence(true);
     renderSheet(true, () => {});
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(9);
+    expect(tabs).toHaveLength(10);
     expect(tabs.map((tab) => tab.getAttribute("data-testid"))).toEqual([
       "mobile-switcher-tab-chats",
       "mobile-switcher-tab-artifacts",
+      "mobile-switcher-tab-files",
       "mobile-switcher-tab-file-tree",
       "mobile-switcher-tab-git-diff",
       "mobile-switcher-tab-pull-requests",
@@ -417,7 +419,7 @@ describe("<TabSwitcherSheet />", () => {
     streamState.prSupport = "unsupported";
     renderSheet(true, () => {});
     expect(screen.queryByRole("tab", { name: "Pull Requests" })).toBeNull();
-    expect(screen.getAllByRole("tab")).toHaveLength(8);
+    expect(screen.getAllByRole("tab")).toHaveLength(9);
   });
 
   it("clamps a persisted pull-requests selection when the host lost stream support", () => {

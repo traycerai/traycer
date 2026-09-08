@@ -8,6 +8,9 @@ import { SwitcherPanelEmbed } from "@/components/epic-canvas/mobile/switcher-pan
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar", () => ({
   FileTreePanelBody: () => <div data-testid="file-tree-body" />,
 }));
+vi.mock("@/components/epic-canvas/sidebar/files-panel", () => ({
+  FilesPanelBody: () => <div data-testid="files-body" />,
+}));
 vi.mock("@/components/epic-canvas/git-diff/git-diff-panel-body-live", () => ({
   GitDiffPanelBodyLive: () => <div data-testid="git-diff-body" />,
 }));
@@ -22,6 +25,15 @@ vi.mock("@/components/epic-canvas/panels/epic-sharing/panel", () => ({
 
 describe("<SwitcherPanelEmbed />", () => {
   afterEach(cleanup);
+
+  // The epic-files list, distinct from the workspace file tree beside it. Both
+  // are on the phone bar (`switcher-categories.ts`), so both need a body - the
+  // Files tab shipped with the category and without one.
+  it("embeds the epic-files body for the files category", () => {
+    render(<SwitcherPanelEmbed category="files" epicId="e" tabId="t" />);
+    expect(screen.getByTestId("files-body")).toBeTruthy();
+    expect(screen.queryByTestId("file-tree-body")).toBeNull();
+  });
 
   it("embeds the file-tree body for the file-tree category", () => {
     render(<SwitcherPanelEmbed category="file-tree" epicId="e" tabId="t" />);
