@@ -1260,20 +1260,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       ),
     );
 
-    const row = (slug: string) => ({
-      harnessId: "codex" as const,
-      slug,
-      label: slug,
-      description: null,
-      isDefault: true,
-      contextWindow: null,
-      maxOutputTokens: null,
-      defaultReasoningEffort: null,
-      supportedReasoningEfforts: [],
-      defaultServiceTier: null,
-      supportedServiceTiers: [],
-      metadata: {},
-    });
+    const row = (slug: string) => modelOption("codex", slug);
 
     // Load WITHOUT the remembered slug -> presents the first model, silently.
     modelsData.value = { models: [row("survivor")] };
