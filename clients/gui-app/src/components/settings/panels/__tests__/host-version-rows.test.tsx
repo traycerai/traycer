@@ -57,7 +57,7 @@ describe("HostVersionRows store-format actions", () => {
             "Installing anyway may lose access to newer chats.",
           newerData: true,
           storeFormatConfirmation:
-            "Nothing is deleted; updating forward restores access.",
+            "Nothing is deleted; a host that reads format 9 opens them again.",
         },
       ],
       vi.fn(),

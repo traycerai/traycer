@@ -67,7 +67,10 @@ import {
   publishedHostProcessGone,
   readHostPidMetadataEvidenceAt,
 } from "./pid-metadata";
-import type { ChatStoreSurveyRoots } from "./chat-store-survey-roots";
+import {
+  isChatStoreRootNotFound,
+  type ChatStoreSurveyRoots,
+} from "./chat-store-survey-roots";
 import { serviceManagerMayRespawn } from "../service";
 import type { ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
@@ -209,12 +212,24 @@ async function resolveWriterPidRecords(
     };
   }
   const paths = new Set<string>([own, hostPidMetadataPathIn(hostDevHomeDir())]);
+  // Every SURVEYED root as well, which costs one ENOENT per pooled identity
+  // and turns this module's premise into something it checks rather than
+  // assumes. A pooled identity home carries no pid record - the host that
+  // acquires one publishes into its own slot - but that is a fact about how
+  // the host resolves its data dir, not one this walk can see: a host handed
+  // `--host-data-dir <identity home>` by hand writes its record there.
+  for (const root of surveyRoots.roots) {
+    paths.add(hostPidMetadataPathIn(root.path));
+  }
   const runsRoot = hostDevRunsRoot();
   let slots: Dirent[];
   try {
     slots = await readdir(runsRoot, { withFileTypes: true });
   } catch (error: unknown) {
-    if (errorCode(error) === "ENOENT") {
+    // Absent is the ordinary single-desktop machine: no slots, nothing to be
+    // blind to. `isChatStoreRootNotFound` rather than a fifth private errno
+    // helper - the survey's root resolver next door already owns this test.
+    if (isChatStoreRootNotFound(error)) {
       return { kind: "records", paths: [...paths].sort() };
     }
     return { kind: "unenumerable", cause: `${runsRoot} could not be read` };
@@ -248,15 +263,6 @@ function unseenWriters(
     },
   );
   return { established: false, reason: "unseen-writers" };
-}
-
-function errorCode(error: unknown): string | null {
-  return typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof error.code === "string"
-    ? error.code
-    : null;
 }
 
 /**
@@ -400,7 +406,7 @@ export function describeQuiescenceGap(reason: SwapQuiescenceGap): string {
     return "no host is running, but the service manager still held a host job that can start one after waiting for it to settle - a recent crash, or a host that was still starting when the stop ran - so it can stamp a store before the swap lands; retry once it has settled";
   }
   if (reason === "unseen-writers") {
-    return "this CLI could not list every host that can write them on this machine - a data root, or a dev run slot under host/dev-runs, could not be enumerated - so another host could still be writing them";
+    return "this CLI could not account for every host that can write them on this machine - a data root or a dev run slot could not be listed, or the roots span more machines' worth of state than this process has a model for - so another host could still be writing them";
   }
   return "this CLI could not read the host's pid record, so it cannot tell whether a host is still writing them";
 }

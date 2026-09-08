@@ -1535,7 +1535,14 @@ function baselineFrom(
  * floor that consent was given for. The claim carries the authorization the
  * park was made under, exactly as `allowDowngrade` does in `selectBoundResume`.
  * A fresh run's claim was just minted from `args`, so the two operands agree
- * there and this is the resume's rule alone.
+ * there and this only ever decides a RESUME.
+ *
+ * Not only the bound one. `selectClaim` routes an UNBOUND `host update` onto
+ * `resumeSelection` when the plan's target equals the parked record's, so a
+ * plain `traycer host update <that version>` with no flag also inherits the
+ * park's consent - correctly, since it is the same attempt finishing the same
+ * move the consent was given for. A resume onto a DIFFERENT target is a
+ * different move and takes a fresh claim, hence fresh consent.
  */
 function storeFormatLossAccepted(input: RunArmInput): boolean {
   return (

@@ -318,7 +318,9 @@ describe("observeSwapQuiescence", () => {
     // it publishes into the run slot it was started in - `host/dev-runs/
     // <slot>`, or the unslotted `host/dev` home. So the records that can
     // vouch for every surveyed root are exactly those, and the observer
-    // reads each of them instead of refusing on the root count.
+    // reads each of them instead of refusing on the root count. It also reads
+    // each SURVEYED root's own pid path - normally ENOENT, since an identity
+    // home carries no record - so that premise is checked rather than assumed.
     const DEV_ROOTS = {
       roots: [
         { path: "/tmp/dev-runs/slot-a", label: "host" },
@@ -326,6 +328,10 @@ describe("observeSwapQuiescence", () => {
       ],
       enumerationFailed: false,
     };
+    /** The surveyed roots' own pid paths, which every walk below also reads. */
+    const SURVEYED_ROOT_RECORDS = DEV_ROOTS.roots.map((entry) =>
+      join(entry.path, "pid.json"),
+    );
     let root: string;
     beforeEach(async () => {
       root = await mkdtemp(join(tmpdir(), "swap-quiescence-dev-slots-"));
@@ -373,6 +379,7 @@ describe("observeSwapQuiescence", () => {
           recordPath("dev"),
           recordPath("dev-runs", "slot-a"),
           recordPath("dev-runs", "slot-b"),
+          ...SURVEYED_ROOT_RECORDS,
         ].sort(),
       );
     });
@@ -382,7 +389,11 @@ describe("observeSwapQuiescence", () => {
         observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
       ).resolves.toEqual({ established: true });
       expect(readPaths()).toEqual(
-        [recordPath("dev"), recordPath("dev-runs", "slot-a")].sort(),
+        [
+          recordPath("dev"),
+          recordPath("dev-runs", "slot-a"),
+          ...SURVEYED_ROOT_RECORDS,
+        ].sort(),
       );
     });
 

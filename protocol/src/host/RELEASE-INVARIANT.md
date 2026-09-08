@@ -94,11 +94,11 @@ only reads this file would miss both.
    what the protocol holds is the knowledge of which released version writes
    which stamp, and it has three sources with one precedence:
 
-   | source                                        | covers                               | guarded by                                                                                                                                  |
-   | --------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-   | manifest entry `storeFormats.chatDb`          | every release from 1.3.0 on          | outer repo: `publish-host-manifest.cjs` refuses an entry without it; `read-store-formats.cjs` reads it off the host source, never a literal |
-   | archive runtime `version.json` `storeFormats` | any archive, released or local       | outer repo: `build-host-sea.cjs` writes it from the same reader and fails without the constant; `smoke-host-sea.cjs` asserts it as phase 0  |
-   | fixed table `CHAT_DB_FORMAT_ERAS`             | releases through the table's ceiling | `__tests__/store-formats.test.ts` pins the rc.1/rc.2 boundary and the ceiling                                                               |
+   | source                                        | covers                                                                          | guarded by                                                                                                                                  |
+   | --------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+   | manifest entry `storeFormats.chatDb`          | every release published since it landed - and the ONLY source above the ceiling | outer repo: `publish-host-manifest.cjs` refuses an entry without it; `read-store-formats.cjs` reads it off the host source, never a literal |
+   | archive runtime `version.json` `storeFormats` | any archive, released or local                                                  | outer repo: `build-host-sea.cjs` writes it from the same reader and fails without the constant; `smoke-host-sea.cjs` asserts it as phase 0  |
+   | fixed table `CHAT_DB_FORMAT_ERAS`             | releases through the table's ceiling                                            | `__tests__/store-formats.test.ts` pins the rc.1/rc.2 boundary and the ceiling                                                               |
 
    The release rule that follows: **a bump of `CHAT_DB_SCHEMA_VERSION` needs
    no protocol change** - the manifest and the archive both publish the new
