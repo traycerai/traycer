@@ -40,6 +40,14 @@ vi.mock("electron", () => ({
     getPath: vi.fn(() => join(process.env.HOME ?? "/tmp", "userData")),
     isPackaged: false,
     getAppPath: vi.fn(() => "/tmp"),
+    // The fence's other half of the identity pair, beside the CLI manifest
+    // version. Deliberately a plain release ABOVE `LOCK_AWARE_DESKTOP_FLOOR`
+    // rather than a `-test`-tagged one: a below-floor stub would still admit
+    // here, but only via the non-release WAIVER arm, so every row past the
+    // cohort gate would be exercising the fence's exception path by accident.
+    // This value admits by the ordinary comparison, which is what a shipped
+    // Desktop does.
+    getVersion: vi.fn(() => "9.9.9"),
   },
 }));
 
@@ -67,6 +75,13 @@ vi.mock("../../cli/traycer-cli", () => ({
 
 vi.mock("../../cli/cli-discovery", () => ({
   resolveBundledCliPath: vi.fn(async () => null),
+  // Q8's compatibility fence reads the installed CLI's version at the
+  // decision (`host-controller.ts`'s `readCompatibilityIdentities`). `null`
+  // is the value production documents as ADMITTED - the fence detects an old
+  // *installed* CLI and is structurally silent about one invoked from
+  // elsewhere on `PATH` - so this stub leaves the fence open and the rows
+  // that exercise it keep testing what they were written to test.
+  readCliManifest: vi.fn(async () => null),
 }));
 
 // Mirrors exactly what production imports from this module across
@@ -177,6 +192,20 @@ const writeAdoptionProofMock = vi.hoisted(() => ({
   restoreShipped: (): void => {},
 }));
 
+// Ticket 05 (D13): `readLocalAttemptFacts` probes the attempt lock through
+// `probeAttemptHolder` for an `execution: "active"` record only. Mocked the
+// same way as `writeAdoptionProofMock` above - hoisted, defaulting to the
+// REAL shared implementation so every other test in this file that reaches
+// an active record (there are several, elsewhere in this suite) keeps
+// exercising the genuine probe against a real (holder-absent) temp HOME
+// rather than silently going through a stub. Only the D13 describe block
+// below overrides it, per test, to drive `holder-live` / `no-holder` /
+// `indeterminate`.
+const probeAttemptHolderMock = vi.hoisted(() => ({
+  probe: vi.fn(),
+  restoreShipped: (): void => {},
+}));
+
 // F3 terminal-with-diagnostics contract (round 5, item #1): the tombstone
 // must be withdrawn BEFORE the record's own `failed` commit lands, not
 // merely gone by the time a test reads final state (both orderings produce
@@ -201,9 +230,14 @@ vi.mock("@traycer-clients/shared/host-update", async () => {
     writeAdoptionProofMock.write.mockImplementation(actual.writeAdoptionProof);
   };
   writeAdoptionProofMock.restoreShipped();
+  probeAttemptHolderMock.restoreShipped = (): void => {
+    probeAttemptHolderMock.probe.mockImplementation(actual.probeAttemptHolder);
+  };
+  probeAttemptHolderMock.restoreShipped();
   return {
     ...actual,
     writeAdoptionProof: writeAdoptionProofMock.write,
+    probeAttemptHolder: probeAttemptHolderMock.probe,
     commitAttemptMutationWithCapability: async (
       capability: Parameters<
         typeof actual.commitAttemptMutationWithCapability
@@ -268,6 +302,7 @@ import {
 import {
   HOST_REMOVED_BY_USER_MESSAGE,
   type LifecycleAdmissionBlock,
+  type LocalAttemptFacts,
   type MutationLaneStatus,
   type MutationProgress,
   type ReprovisionGuardVerdict,
@@ -293,10 +328,13 @@ import type {
 import {
   acquireUpdateAttemptLock,
   commitAttemptMutationWithCapability,
+  probeAttemptHolder,
   readUpdateAttemptRecord,
   withUpdateContender,
   writeAdoptionProof,
+  type AttemptHolderEvidence,
   type HostUpdateAttemptIdentity,
+  type LockMetadata,
 } from "@traycer-clients/shared/host-update";
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -361,6 +399,7 @@ afterEach(() => {
   // this, one `eligibleDesktopCohort()` leaks into every subsequent test.
   desktopExecutorCohortMock.restoreShippedCohort();
   writeAdoptionProofMock.restoreShipped();
+  probeAttemptHolderMock.restoreShipped();
   terminalOrderEvents.reset();
 });
 
@@ -612,6 +651,148 @@ function availableSnapshotFixture(
     includePreReleases: false,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The mock-factory census.
+//
+// `vi.mock` with a factory replaces the WHOLE module, so a production file
+// that starts importing one more name from a mocked module does not get a
+// smaller mock - it gets a hard failure the moment that path runs, and the
+// message names vitest rather than the missing symbol. That is how Q8's
+// compatibility fence landed red here: `host-controller.ts` began importing
+// `readCliManifest` from `cli/cli-discovery`, the factory still exported only
+// `resolveBundledCliPath`, and one row failed in 3ms with an `undefined`
+// export it took a bisect to attribute.
+//
+// The `host-login-item` factory above already carries a prose comment saying
+// it "mirrors exactly what production imports". Prose cannot redden. These
+// rows check the same claim mechanically, in both directions, for every mock
+// whose factory enumerates a real module's exports.
+// ---------------------------------------------------------------------------
+const MOCK_FACTORY_CENSUS: readonly {
+  readonly module: string;
+  readonly moduleBasename: string;
+  readonly importers: readonly string[];
+}[] = [
+  {
+    module: "../../cli/cli-discovery",
+    moduleBasename: "cli/cli-discovery",
+    importers: ["../host-controller.ts"],
+  },
+  {
+    module: "../../app/host-login-item",
+    moduleBasename: "app/host-login-item",
+    // The two the prose comment names, plus `substrate-backfill-contender.ts`,
+    // which the comment predates - itself a small demonstration that a hand
+    // -maintained list of importers rots quietly.
+    importers: [
+      "../host-controller.ts",
+      "../update-mutation.ts",
+      "../substrate-backfill-contender.ts",
+    ],
+  },
+];
+
+/** The VALUE names a file imports from a module - type-only specifiers are
+ * erased before runtime, so a factory owes nothing for them. */
+function valueImportsFrom(
+  source: string,
+  moduleBasename: string,
+): readonly string[] {
+  const pattern = new RegExp(
+    String.raw`import\s*\{([^}]*)\}\s*from\s*"[^"]*${moduleBasename}"`,
+    "g",
+  );
+  const names: string[] = [];
+  for (const match of source.matchAll(pattern)) {
+    for (const raw of match[1].split(",")) {
+      const specifier = raw.trim();
+      if (specifier.length === 0) continue;
+      if (specifier.startsWith("type ")) continue;
+      // `a as b` imports `a`; the local alias is not the module's export.
+      names.push(specifier.split(/\s+as\s+/)[0].trim());
+    }
+  }
+  return [...new Set(names)].sort();
+}
+
+describe("mock factory census", () => {
+  it.each(MOCK_FACTORY_CENSUS)(
+    "$module: the factory provides every value production imports",
+    async ({ module, moduleBasename, importers }) => {
+      const mocked = (await import(module)) as Record<string, unknown>;
+      const missing: string[] = [];
+      for (const importer of importers) {
+        const source = readFileSync(join(__dirname, importer), "utf8");
+        for (const name of valueImportsFrom(source, moduleBasename)) {
+          if (!(name in mocked)) missing.push(`${importer} -> ${name}`);
+        }
+      }
+      // Named, not counted: the whole point is that the next added import
+      // reddens with the symbol in the message.
+      expect(missing).toEqual([]);
+    },
+  );
+
+  // The census above reads MODULE exports, and that is not the whole surface
+  // a factory owes. The same Q8 line that added `readCliManifest` also added
+  // `app.getVersion()`, and `app` is one export whose METHODS production calls
+  // - invisible to an export-name check, and it fails the same opaque way
+  // (`app.getVersion is not a function`, 10ms, no clue whose fault). This row
+  // covers that shape for the namespaces this suite stubs by hand.
+  it.each([
+    {
+      module: "electron",
+      namespace: "app",
+      importers: ["../host-controller.ts"],
+    },
+  ])(
+    "$module: the $namespace stub carries every member production reaches",
+    async ({ module, namespace, importers }) => {
+      const mocked = (await import(module)) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      const stub = mocked[namespace];
+      const missing: string[] = [];
+      for (const importer of importers) {
+        const source = readFileSync(join(__dirname, importer), "utf8");
+        // Property reads as well as calls - `app.isPackaged` is a member this
+        // suite already had to stub, and it is never called.
+        const used = new Set(
+          [
+            ...source.matchAll(
+              new RegExp(
+                String.raw`(?<![\w.$])${namespace}\.([A-Za-z_$][\w$]*)`,
+                "g",
+              ),
+            ),
+          ].map((match) => match[1]),
+        );
+        for (const member of [...used].sort()) {
+          if (!(member in stub)) missing.push(`${importer} -> ${member}`);
+        }
+      }
+      expect(missing).toEqual([]);
+    },
+  );
+
+  it.each(MOCK_FACTORY_CENSUS)(
+    "$module: the factory stubs nothing the real module does not export",
+    async ({ module }) => {
+      const mocked = (await import(module)) as Record<string, unknown>;
+      const actual = (await vi.importActual(module)) as Record<string, unknown>;
+      // The other direction, so the factory cannot keep a stub for a name
+      // production renamed or deleted - a dead stub is indistinguishable from
+      // a live one until someone reads both files side by side.
+      const orphaned = Object.keys(mocked)
+        .filter((name) => name !== "default")
+        .filter((name) => !(name in actual))
+        .sort();
+      expect(orphaned).toEqual([]);
+    },
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Headline guardrail: "the screenshot race becomes a test" - `convergeReady`
@@ -2342,7 +2523,333 @@ describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
       phase: "failed",
       continuation: null,
       updatedAt: oneHourAgo,
+      // The fixture's raw JSON write above hardcodes `error: null` (it takes
+      // no override for it), so the published fact must round-trip that
+      // exactly — never a fabricated cause for a record that carries none.
+      error: null,
+      // A terminal record is never probed (D13), so there is no observation
+      // to timestamp and nothing that could make it `live`.
+      liveness: "unknown",
+      livenessObservedAtMs: null,
     });
+  });
+});
+
+// Ticket 05 (D13): `readLocalAttemptFacts` probes the attempt lock for an
+// `execution: "active"` record only, brackets the probe with a second record
+// read, and joins the two under the host observer's own rule (identity held
+// STILL across the bracket, never a timestamp race). Direct JSON writes,
+// mirroring `writeTerminalAttemptRecord` above - a record's shape, not the
+// legal claim/commit path, is what this method reads. `probeAttemptHolder`
+// is mocked per-test via the hoisted `probeAttemptHolderMock`; every field
+// this describe block does not vary is held fixed so each pin isolates the
+// one seam it is named for.
+describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
+  const ATTEMPT_ID = "local-attempt-d13";
+  // A DIFFERENT attempt, for the replacement arm of the join. The id is a
+  // fixture parameter rather than a constant baked into the writer because a
+  // hardcoded id cannot exercise the first of the join's three comparisons -
+  // and a join that had lost that comparison would hand a replacement attempt
+  // the holder evidence gathered for its predecessor.
+  const REPLACEMENT_ATTEMPT_ID = "local-attempt-d13-replacement";
+
+  function writeActiveAttemptRecord(overrides: {
+    readonly attemptId: string;
+    readonly generation: number;
+    readonly sequence: number;
+    readonly updatedAt: string;
+  }): void {
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.rootDir, { recursive: true });
+    writeFileSync(
+      updateAttemptRecordPath(layout.rootDir),
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: overrides.attemptId,
+        generation: overrides.generation,
+        sequence: overrides.sequence,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: "restarting",
+        execution: "active",
+        continuation: null,
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: overrides.updatedAt,
+        completedAt: null,
+        error: null,
+      }),
+    );
+  }
+
+  function writeParkedAttemptRecord(): void {
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.rootDir, { recursive: true });
+    writeFileSync(
+      updateAttemptRecordPath(layout.rootDir),
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: ATTEMPT_ID,
+        generation: 1,
+        sequence: 1,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: new Date().toISOString(),
+        completedAt: null,
+        error: null,
+      }),
+    );
+  }
+
+  const FAKE_HOLDER: LockMetadata = {
+    pid: 4242,
+    reason: "update",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    hostname: "test-host",
+    token: "tok-1",
+    processStartedAtMs: null,
+    processStartIdentity: null,
+  };
+
+  function holderLive(): AttemptHolderEvidence {
+    return { kind: "holder-live", holder: FAKE_HOLDER };
+  }
+
+  function noHolder(): AttemptHolderEvidence {
+    return { kind: "no-holder" };
+  }
+
+  async function getLocalAttempt(): Promise<LocalAttemptFacts | null> {
+    const status = await newController("production").getStatus();
+    return status.localAttempt;
+  }
+
+  interface AttemptIdentity {
+    readonly attemptId: string;
+    readonly generation: number;
+    readonly sequence: number;
+  }
+
+  /**
+   * Drive one record identity into another ACROSS the probe.
+   *
+   * The three bracket pins below each move exactly ONE of the join's three
+   * fields and hold everything else - `updatedAt` included - constant. That
+   * is the point of the shared driver: with only one field ever differing,
+   * dropping any single comparison from the real join has exactly one pin
+   * that can catch it, and a pin cannot pass for the wrong reason (a moving
+   * timestamp, say, which the join does not read at all).
+   */
+  async function attemptMovedAcrossTheBracket(
+    before: AttemptIdentity,
+    after: AttemptIdentity,
+  ): Promise<LocalAttemptFacts | null> {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const updatedAt = new Date().toISOString();
+    writeActiveAttemptRecord({ ...before, updatedAt });
+    probeAttemptHolderMock.probe.mockImplementationOnce(async () => {
+      // The probe runs between the two reads - rewrite the record from
+      // INSIDE it, exactly where a genuinely advancing (or replaced) attempt
+      // would land. The holder evidence is deliberately `holder-live`: it is
+      // the verdict a broken join would publish, so each pin fails as `live`
+      // rather than merely reporting the wrong facts.
+      writeActiveAttemptRecord({ ...after, updatedAt });
+      return holderLive();
+    });
+    return getLocalAttempt();
+  }
+
+  // A1: `live` is minted ONLY from `holder-live` joined to an identity that
+  // held still across the bracket. Ablation (a) - mapping the derivation's
+  // grace-period `active` to `live` - does not touch this pin (the holder
+  // genuinely is live here); it is A3 below that catches that ablation.
+  it("publishes `live` from `holder-live` with an unchanged identity across the bracket", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    writeActiveAttemptRecord({
+      attemptId: ATTEMPT_ID,
+      generation: 1,
+      sequence: 1,
+      updatedAt: new Date().toISOString(),
+    });
+    probeAttemptHolderMock.probe.mockResolvedValueOnce(holderLive());
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("live");
+    expect(localAttempt?.attemptId).toBe(ATTEMPT_ID);
+    expect(localAttempt?.generation).toBe(1);
+    expect(localAttempt?.sequence).toBe(1);
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A2a-A2c: the probe runs BETWEEN the two record reads, so a record that
+  // moved during the bracket must publish the FRESHER facts (making the
+  // bracket observable, not just its verdict) with an explicitly unknown
+  // liveness - pairing the pre-probe record with post-probe holder evidence
+  // would describe two different worlds. Ablation (b) - dropping the bracket
+  // entirely and publishing the first read's verdict - reddens all three.
+  //
+  // THREE pins rather than one because the join compares three fields
+  // (`attemptId + generation + sequence`, the host observer's ordering key,
+  // never a timestamp) and one pin can only witness one of them: with a fixed
+  // id and a sequence-only move, deleting the id AND generation comparisons
+  // from the real join left the entire suite green (cold review A, R3).
+
+  // A2a: a REPLACEMENT attempt across the bracket - a different `attemptId`
+  // with the counters held EQUAL, so the id is the only thing that moved.
+  // This is the arm with teeth: a join blind to the id would hand a brand-new
+  // attempt the holder evidence gathered for its predecessor and publish
+  // `live` about it.
+  it("publishes the FRESHER record with `unknown` when a REPLACEMENT attempt appears across the bracket (id only)", async () => {
+    const localAttempt = await attemptMovedAcrossTheBracket(
+      { attemptId: ATTEMPT_ID, generation: 1, sequence: 1 },
+      { attemptId: REPLACEMENT_ATTEMPT_ID, generation: 1, sequence: 1 },
+    );
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.attemptId).toBe(REPLACEMENT_ATTEMPT_ID);
+    expect(localAttempt?.generation).toBe(1);
+    expect(localAttempt?.sequence).toBe(1);
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A2b: a recovery bumps `generation` and resets `sequence`, so generation
+  // is an independent leg of the key - the same attempt id at a new
+  // generation is not the record this probe was paired with.
+  it("publishes the FRESHER record with `unknown` when the generation moves across the bracket", async () => {
+    const localAttempt = await attemptMovedAcrossTheBracket(
+      { attemptId: ATTEMPT_ID, generation: 1, sequence: 1 },
+      { attemptId: ATTEMPT_ID, generation: 2, sequence: 1 },
+    );
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.attemptId).toBe(ATTEMPT_ID);
+    expect(localAttempt?.generation).toBe(2);
+    expect(localAttempt?.sequence).toBe(1);
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A2c: the ordinary case - an executor advancing its own record while the
+  // probe is in flight bumps `sequence` alone.
+  it("publishes the FRESHER record with `unknown` when the sequence advances across the bracket", async () => {
+    const localAttempt = await attemptMovedAcrossTheBracket(
+      { attemptId: ATTEMPT_ID, generation: 1, sequence: 1 },
+      { attemptId: ATTEMPT_ID, generation: 1, sequence: 2 },
+    );
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.attemptId).toBe(ATTEMPT_ID);
+    expect(localAttempt?.generation).toBe(1);
+    expect(localAttempt?.sequence).toBe(2);
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A3: the shared derivation's grace-period `active` arm (a recent record
+  // with a dead/absent holder) is NOT liveness - it exists to keep a young
+  // attempt from reading as interrupted, not to prove anything is running.
+  // Ablation (a) - mapping that grace-period `active` to `live` - reddens
+  // this exact pin.
+  it("publishes `unknown` for a recent record with a dead/absent holder (grace period, not liveness)", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    writeActiveAttemptRecord({
+      attemptId: ATTEMPT_ID,
+      generation: 1,
+      sequence: 1,
+      updatedAt: new Date().toISOString(),
+    });
+    probeAttemptHolderMock.probe.mockResolvedValueOnce(noHolder());
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A4: the derivation fails TOWARD `active` for a future-dated `updatedAt`
+  // (a clock step or skewed writer, not staleness) - still a grace period,
+  // never proof of liveness, with no holder to back it.
+  it("publishes `unknown` for a future-dated record with no holder", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const futureUpdatedAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    writeActiveAttemptRecord({
+      attemptId: ATTEMPT_ID,
+      generation: 1,
+      sequence: 1,
+      updatedAt: futureUpdatedAt,
+    });
+    probeAttemptHolderMock.probe.mockResolvedValueOnce(noHolder());
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A5: once the record is stale past `RECOMMENDED_ATTEMPT_STALENESS_MS`
+  // (120s) AND positively unheld, the derivation's `interrupted` verdict is
+  // carried through as itself - the one non-`unknown`, non-`live` outcome
+  // this method publishes.
+  it("publishes `interrupted` when the derivation says so (stale, active, unheld)", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const staleUpdatedAt = new Date(Date.now() - 130_000).toISOString();
+    writeActiveAttemptRecord({
+      attemptId: ATTEMPT_ID,
+      generation: 1,
+      sequence: 1,
+      updatedAt: staleUpdatedAt,
+    });
+    probeAttemptHolderMock.probe.mockResolvedValueOnce(noHolder());
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("interrupted");
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A6: parked records are never probed at all - a park is DEFINED by the
+  // absence of a holder, so a probe cannot change the answer. Skipping it
+  // keeps the steady state (an idle park) at zero probes per poll.
+  // `livenessObservedAtMs` stays `null` here specifically because no
+  // observation happened - this is the un-probed arm of that contract, the
+  // dual of every probed arm's finite stamp above.
+  it("does not probe a parked record and publishes `unknown`", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    writeParkedAttemptRecord();
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(probeAttemptHolderMock.probe).not.toHaveBeenCalled();
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.livenessObservedAtMs).toBeNull();
   });
 });
 
@@ -6619,6 +7126,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
               expected: null,
               newAttemptId: "f3-attempt-1",
               initialPhase: "applying",
+              initialContinuation: null,
+              claim: null,
               nowIso: "2025-12-31T00:00:00.000Z",
             },
           },
@@ -6637,6 +7146,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
               continuation: "activate",
               progress: null,
               error: null,
+              claimRefresh: null,
+              verification: null,
               nowIso: "2025-12-31T00:01:00.000Z",
             },
           },
@@ -6707,6 +7218,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
               expected: null,
               newAttemptId: "f2-attempt-1",
               initialPhase: "applying",
+              initialContinuation: null,
+              claim: null,
               nowIso: "2025-12-31T00:00:00.000Z",
             },
           },
@@ -6725,6 +7238,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
               continuation: "activate",
               progress: null,
               error: null,
+              claimRefresh: null,
+              verification: null,
               nowIso: "2025-12-31T00:01:00.000Z",
             },
           },
@@ -6749,6 +7264,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
               // identity-bound request cannot reach that arm.
               newAttemptId: "f2-attempt-unused",
               initialPhase: "applying",
+              initialContinuation: null,
+              claim: null,
               nowIso: "2025-12-31T00:02:00.000Z",
             },
           },
@@ -6812,6 +7329,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
               continuation: "activate",
               progress: null,
               error: null,
+              claimRefresh: null,
+              verification: null,
               nowIso: "2025-12-31T00:03:00.000Z",
             },
           },
@@ -6862,6 +7381,8 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
               expected: null,
               newAttemptId: "f2-control-1",
               initialPhase: "applying",
+              initialContinuation: null,
+              claim: null,
               nowIso: "2025-12-31T00:00:00.000Z",
             },
           },

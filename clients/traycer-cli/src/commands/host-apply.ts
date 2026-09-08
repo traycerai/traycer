@@ -1,4 +1,5 @@
 import type { ApplyHostOutcome } from "../installer/apply";
+import { NO_INSTALL_PHASE_HOOKS } from "../installer/install";
 import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
@@ -89,6 +90,9 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
           onProgress: (info) => ctx.progress(info),
           onWillCommitStaged: null,
           onWillDisruptHost: null,
+          // `host apply` advances no attempt record of its own: Desktop
+          // drives its own lane around this call and reads the outcome.
+          hooks: NO_INSTALL_PHASE_HOOKS,
         }),
     );
     const activation = activationOf(outcome);

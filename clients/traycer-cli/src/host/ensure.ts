@@ -28,17 +28,28 @@ import { installSourceLogFields } from "./install-source-log-fields";
 // service registration was missing, auto-bootstrap forced `satisfaction:
 // presence` so a registration repair could never replace the installed host.
 // `ensureHost` does NOT: it derives satisfaction from the resolved source, so
-// bytes that differ from this CLI's expected version are reinstalled even
-// when the only visible gap was the registration.
+// bytes that differ from this CLI's expected version are reinstalled even when
+// the only visible gap was the registration - IN EVERY DIRECTION BUT ONE. A
+// host whose installed version this build's comparator ranks strictly ABOVE
+// the expected one is kept (`own-build-minimum`, `provision.ts`), because an
+// update the user already has must not be undone by a convergence they did not
+// ask for. Q7: `exact` could not express that, and the desktop requests a
+// convergence whenever the local host is down OR has not been dialed - so a
+// host updated out of band was reverted to the bundled build after every
+// outage and every launch with a remote serving, then updated again, then
+// reverted again.
 //
 // That asymmetry tracks implicit vs explicit. Auto-bootstrap ran off a READ,
 // where swapping a user's host bytes as a side effect is indefensible;
 // `ensure` is a convergence verb someone typed, and converging to the
 // expected version is what it promises (Desktop's post-auth call depends on
 // exactly that). Do not "restore" presence-only semantics here to match the
-// deleted module - it would break that contract. A caller that wants
-// registration repaired WITHOUT touching bytes wants `host service install`,
-// which is the narrower tool and still has that behaviour.
+// deleted module - it would break that contract, and it is not what the Q7
+// narrowing did: a missing, older, or unorderable install still converges, and
+// `--force` still replaces bytes unconditionally, since it never takes the
+// satisfied fast path. A caller that wants registration repaired WITHOUT
+// touching bytes wants `host service install`, which is the narrower tool and
+// still has that behaviour.
 //
 // Source resolution order (offline-capable, self-contained when the host
 // ships beside the CLI):
@@ -100,16 +111,23 @@ export async function ensureHost(
   // local-file; it shares this build's `config.version`, so we stamp that as
   // both the target and the recorded version. A rebuilt host (new stamp,
   // same channel) then differs from the install record and is reinstalled,
-  // while an unchanged build is a no-op. An explicit `--release <semver>`
-  // resolves to a registry source and keeps the real semver as its target.
+  // while an unchanged build - and, since Q7, a comparably NEWER install - is
+  // a no-op. An explicit `--release <semver>` resolves to a registry source
+  // and keeps the real semver as its target.
   const source = await resolveEnsureSource(opts);
   opts.runtime.logger.debug("Host ensure source resolved", {
     environment: opts.runtime.environment,
     ...installSourceLogFields(source),
   });
+  // Both local-file shapes are "this build's host": the packaged archive AND
+  // an explicit `--from`, which is what the Windows desktop passes for the
+  // very same bundled archive (`resolveWindowsBundledHostArchive`). Keying the
+  // Q7 narrowing on the local-file branch rather than on "no `--from`" is what
+  // makes the two desktop platforms behave alike; an operator who does mean
+  // "these bytes, whatever is installed" has `--force`.
   const isOwnBuild = source.kind === "local-file";
   const satisfaction: HostSatisfactionPolicy = isOwnBuild
-    ? { kind: "exact", version: config.version }
+    ? { kind: "own-build-minimum", version: config.version }
     : opts.versionRequest !== null &&
         source.kind === "registry" &&
         source.versionRequest !== "latest"

@@ -11,7 +11,8 @@ import {
   type ServiceInstallLifecycleState,
 } from "../install-lifecycle";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
-import type { SwapLockRecovery } from "../../installer";
+import { NO_INSTALL_PHASE_HOOKS, type SwapLockRecovery } from "../../installer";
+import { makeBarrierGate } from "../../__tests__/support/barrier-gate";
 import { epochMicrosNow } from "../platforms/windows";
 
 const mocks = vi.hoisted(() => ({
@@ -177,6 +178,7 @@ async function runLifecycle(
     bootstrap: options,
     force,
     onWillStopHost: null,
+    hooks: NO_INSTALL_PHASE_HOOKS,
   });
   await handle.lifecycle.beforeSwap();
   await handle.lifecycle.afterSwap();
@@ -248,6 +250,36 @@ describe("service install lifecycle re-registration", () => {
     },
   );
 
+  it("runs hooks.afterSwap at the TOP of its own afterSwap, before the re-registration install call", async () => {
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const order: string[] = [];
+    harness.install.mockImplementation(async () => {
+      order.push("install");
+    });
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: {
+        beforeSwapCommit: async () => {},
+        afterSwap: async () => {
+          order.push("hooks.afterSwap");
+        },
+      },
+    });
+
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(order).toEqual(["hooks.afterSwap", "install"]);
+    // Falsification: move `await options.hooks.afterSwap()` below the
+    // re-registration branch in `install-lifecycle.ts`'s `afterSwap` (or
+    // drop the call) and "install" would lead "hooks.afterSwap" in `order`,
+    // or the hook would never appear at all.
+  });
+
   it("leaves a not-installed service untouched when bootstrap is null", async () => {
     const { state, harness } = await runLifecycle("not-installed", null, false);
 
@@ -288,6 +320,7 @@ describe("service install lifecycle re-registration", () => {
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     runningHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -307,6 +340,7 @@ describe("service install lifecycle re-registration", () => {
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     let verifierCalls = 0;
     externalHandle.lifecycle.setMutationVerifier?.(async () => {
@@ -332,6 +366,7 @@ describe("service install lifecycle re-registration", () => {
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     bootstrapHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -483,6 +518,7 @@ describe("service install lifecycle re-registration", () => {
         bootstrap,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
@@ -519,6 +555,7 @@ describe("service install lifecycle re-registration", () => {
         bootstrap,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -559,6 +596,7 @@ describe("service install lifecycle re-registration", () => {
         bootstrap,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -587,6 +625,7 @@ describe("service install lifecycle re-registration", () => {
         bootstrap,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       await handle.lifecycle.beforeSwap();
 
@@ -624,6 +663,7 @@ describe("service install lifecycle re-registration", () => {
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     await handle.lifecycle.beforeSwap();
 
@@ -804,6 +844,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -838,6 +879,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -879,6 +921,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -910,6 +953,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -952,6 +996,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -1003,10 +1048,12 @@ describe("swap-lock recovery wiring", () => {
         bootstrap: null,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
         label,
+        NO_INSTALL_PHASE_HOOKS,
       );
       recoveries = [
         serviceHandle.lifecycle.swapLockRecovery,
@@ -1058,10 +1105,12 @@ describe("swap-lock recovery wiring", () => {
         bootstrap: null,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
         label,
+        NO_INSTALL_PHASE_HOOKS,
       );
       expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
       expect(bytesOnly.swapLockRecovery).toBeNull();
@@ -1100,6 +1149,7 @@ describe("service install lifecycle onWillStopHost", () => {
       onWillStopHost: () => {
         order.push("boundary");
       },
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
 
     await handle.lifecycle.beforeSwap();
@@ -1117,6 +1167,7 @@ describe("service install lifecycle onWillStopHost", () => {
       bootstrap: null,
       force: false,
       onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const lost = new Error("update attempt capability was lost");
     handle.lifecycle.setMutationVerifier?.(async () => {
@@ -1140,6 +1191,7 @@ describe("service install lifecycle onWillStopHost", () => {
       bootstrap: null,
       force: false,
       onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
 
     await expect(handle.lifecycle.beforeSwap()).rejects.toBe(probeFailure);
@@ -1157,6 +1209,7 @@ describe("service install lifecycle onWillStopHost", () => {
       bootstrap: null,
       force: false,
       onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
 
     await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
@@ -1164,5 +1217,88 @@ describe("service install lifecycle onWillStopHost", () => {
     expect(onWillStopHost).not.toHaveBeenCalled();
     expect(harness.stop).not.toHaveBeenCalled();
     expect(handle.state.stoppedBeforeSwap).toBe(false);
+  });
+});
+
+describe("InstallPhaseHooks forwarding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("createServiceInstallLifecycle forwards beforeSwapCommit to the caller's hook and waits for it", async () => {
+    // Cold review A (R2): this suite drove `beforeSwap` and `afterSwap` but
+    // never `beforeSwapCommit`, so the real forwarding could be replaced by
+    // an async no-op with nothing failing here. The barrier's PLACEMENT
+    // (after a resolved stop, before the swap) belongs to
+    // `commitInstallFromSource` and is pinned in
+    // `installer/__tests__/apply-real-lifecycle.test.ts`; what this pins is
+    // that the constructor hands the member through at all, and returns the
+    // caller's promise rather than a resolved one.
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    let released = false;
+    const gate = makeBarrierGate();
+    const calls: string[] = [];
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: {
+        beforeSwapCommit: async () => {
+          calls.push("beforeSwapCommit");
+          await gate.promise;
+          released = true;
+        },
+        afterSwap: async () => {
+          calls.push("afterSwap");
+        },
+      },
+    });
+
+    const pending = handle.lifecycle.beforeSwapCommit();
+    gate.release();
+    await pending;
+
+    expect(calls).toEqual(["beforeSwapCommit"]);
+    // The awaited half: a forwarding that dropped the caller's promise
+    // would resolve `pending` before the hook body finished.
+    expect(released).toBe(true);
+    // Falsification: replace the forwarding with `async () => {}` and
+    // `calls` stays empty; return without awaiting the caller's promise and
+    // `released` is false.
+  });
+
+  it("createBytesOnlyInstallLifecycle forwards both barriers verbatim and starts nothing itself", async () => {
+    const harness = makeController("running");
+    const calls: string[] = [];
+    const lifecycle = createBytesOnlyInstallLifecycle(
+      harness.controller,
+      label,
+      {
+        beforeSwapCommit: async () => {
+          calls.push("beforeSwapCommit");
+        },
+        afterSwap: async () => {
+          calls.push("afterSwap");
+        },
+      },
+    );
+
+    await lifecycle.beforeSwapCommit();
+    await lifecycle.afterSwap();
+
+    expect(calls).toEqual(["beforeSwapCommit", "afterSwap"]);
+    // This lifecycle never starts/registers anything on its own - its
+    // `afterSwap` IS the caller's hook, verbatim, with nothing else behind
+    // it (unlike the service lifecycle's `afterSwap`, which runs the hook
+    // and THEN its own retire/kickstart/register work).
+    expect(harness.start).not.toHaveBeenCalled();
+    expect(harness.restart).not.toHaveBeenCalled();
+    expect(harness.install).not.toHaveBeenCalled();
+    // Falsification: have `createBytesOnlyInstallLifecycle` wrap the hooks
+    // in its own logic (e.g. swallow their errors, or re-derive `afterSwap`
+    // from `hooks.beforeSwapCommit`) and `calls` would stop matching the
+    // exact identity/order pinned above.
   });
 });

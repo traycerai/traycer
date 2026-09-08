@@ -15,7 +15,11 @@ import { assertHostNotBusy } from "../host/busy-check";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
-import { commitInstallFromSource, currentInstallPlatform } from "./install";
+import {
+  commitInstallFromSource,
+  currentInstallPlatform,
+  type InstallPhaseHooks,
+} from "./install";
 
 // `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed
 // commands" > `host apply`. Promotes the single-slot staged tree over the
@@ -102,6 +106,29 @@ export interface ApplyHostOptions {
    * `null` for a caller not tracking it.
    */
   readonly onWillDisruptHost: (() => void) | null;
+  /**
+   * The two swap barriers, threaded into the lifecycle this function builds
+   * internally so a caller reaches them without duplicating the apply path
+   * or its contender wrapper (`host/update-mutation.ts`).
+   *
+   * They sit BESIDE `onWillCommitStaged` and `onWillDisruptHost`, not in
+   * place of either, and they answer a different question. The first two are
+   * ANNOUNCEMENTS aimed at the progress marker - "work is about to start",
+   * "the host may now be disturbed" - and neither may fail the apply. These
+   * two are RECORD ADVANCES: `hooks.beforeSwapCommit` runs after the
+   * cooperative stop SUCCEEDED and before the swap, `hooks.afterSwap` after
+   * it, and each is a durable write the attempt executor must land before
+   * the next irreversible step.
+   *
+   * Ordering, for the four in one place: `onWillCommitStaged` before the
+   * lifecycle exists (so before the cooperative stop), `onWillDisruptHost`
+   * at the pre-stop/pre-swap capability check, `hooks.beforeSwapCommit`
+   * after the stop succeeded, `hooks.afterSwap` after the swap. A stop
+   * denial therefore reaches the first two and neither of the last two.
+   * `--no-service` builds no lifecycle at all and reaches neither barrier.
+   * Callers driving no attempt record pass `NO_INSTALL_PHASE_HOOKS`.
+   */
+  readonly hooks: InstallPhaseHooks;
 }
 
 // The facts `createServiceInstallLifecycle` observed around the swap -
@@ -271,6 +298,7 @@ export async function applyHost(
         // anyway.
         force: opts.force,
         onWillStopHost: opts.onWillDisruptHost,
+        hooks: opts.hooks,
       });
   if (lifecycleHandle !== null && opts.publishHostStartAdoption !== undefined) {
     lifecycleHandle.lifecycle.setHostStartAdoptionPublisher?.(
@@ -316,12 +344,15 @@ export async function applyHost(
           postSwapAction: lifecycleHandle.state.postSwapAction,
         };
 
-  const installGeneration = encodeInstallGeneration({
-    installId: record.installId,
-    installedAt: record.installedAt,
-    archiveSha256: record.archiveSha256,
-    version: record.version,
-  });
+  // The RECORD, not a literal rebuilt from it (cold review B, F1). The
+  // fingerprint this returns is compared byte-for-byte against one another
+  // module computed - `host start`'s relaunch admission, the claim baseline a
+  // park records - so byte-identical construction is the whole contract, and a
+  // hand-built literal makes that contract a convention six sites have to keep
+  // remembering. `HostInstallRecord` satisfies `InstallGenerationIdentity`
+  // structurally, so a field added to one side can no longer be forgotten on
+  // the other.
+  const installGeneration = encodeInstallGeneration(record);
 
   logger.info("Host apply completed", {
     environment: opts.environment,

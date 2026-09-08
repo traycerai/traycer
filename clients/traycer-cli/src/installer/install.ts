@@ -79,10 +79,20 @@ export type InstallSourceArg =
 //     rename. If `beforeSwap` throws, the existing install is left
 //     untouched; verify-before-replace ordering is preserved.
 //
+//   - `beforeSwapCommit` runs after `beforeSwap`'s cooperative stop
+//     SUCCEEDED and before `atomicSwap` touches the install dir. It is
+//     the "the host is down and the bytes are about to move" barrier: a
+//     stop that denied (a busy host) throws out of `beforeSwap` and this
+//     never runs, so nothing here can announce work the stop refused.
+//     Distinct from `beforeSwap`, which performs the stop, and from
+//     `ApplyHostOptions.onWillCommitStaged`, which fires BEFORE the
+//     lifecycle exists at all.
+//
 //   - `afterSwap` runs after the install dir has been replaced and
-//     the install record has been written. Use this to start /
-//     restart the OS service. Per the Tech Plan, a failure here does
-//     NOT trigger rollback - the new host stays installed and the
+//     the install record has been written, and BEFORE the service is
+//     asked to come back up - the swap/relaunch barrier. Use this to
+//     start / restart the OS service. Per the Tech Plan, a failure here
+//     does NOT trigger rollback - the new host stays installed and the
 //     caller is expected to surface the failure (Doctor flags the
 //     non-readiness). The hook should therefore swallow start errors
 //     internally if it wants the install to report success; throwing
@@ -101,6 +111,7 @@ export type InstallSourceArg =
 //     callers that manage the OS service themselves.
 export interface InstallHostLifecycle {
   readonly beforeSwap: () => Promise<void>;
+  readonly beforeSwapCommit: () => Promise<void>;
   readonly afterSwap: () => Promise<void>;
   readonly swapLockRecovery: SwapLockRecovery | null;
   /**
@@ -121,6 +132,48 @@ export interface InstallHostLifecycle {
     publishHostStartAdoption: HostStartAdoptionPublisher,
   ) => void;
 }
+
+// The two lifecycle barriers a caller that owns an update ATTEMPT needs to
+// observe, expressed as plain callbacks so a caller reaches them without
+// building its own `InstallHostLifecycle` (which would mean duplicating the
+// service stop, the Windows swap-lock recovery, the capability verifier and
+// the host-start adoption publisher). Both production lifecycle builders -
+// `createServiceInstallLifecycle` and `createBytesOnlyInstallLifecycle` -
+// take one of these and call it at the barrier the same-named lifecycle
+// member marks:
+//
+//   - `beforeSwapCommit` - the stop succeeded, the swap has not started.
+//   - `afterSwap` - the swap committed, the relaunch has not started. The
+//     service lifecycle runs it at the TOP of its own `afterSwap`, before
+//     any kickstart/register, so the caller's write always precedes the
+//     start request - on EVERY prior-state branch, `externally-managed`
+//     included. That branch does not re-register the Desktop-owned label
+//     (SMAppService owns it), but on darwin it does kickstart it: a forced
+//     recycle when the pre-swap stop resolved, a plain start when the stop
+//     degraded. So a caller writing "restarting" from here is naming a
+//     CLI-requested relaunch in the ordinary case, and Desktop's next
+//     register cycle only when that kickstart itself fails.
+//
+// Passing the callbacks is deliberately REQUIRED rather than optional: an
+// omitted barrier is indistinguishable from a caller that meant to observe
+// it, and `NO_INSTALL_PHASE_HOOKS` names the no-op choice out loud.
+export interface InstallPhaseHooks {
+  readonly beforeSwapCommit: () => Promise<void>;
+  readonly afterSwap: () => Promise<void>;
+}
+
+// The explicit "this caller observes no phase barriers" value. Every caller
+// that is not driving an attempt record passes this.
+//
+// It lives HERE rather than beside the two lifecycle builders in
+// `service/install-lifecycle.ts` on purpose: `installer/__tests__/
+// apply.test.ts` replaces that whole module with a `vi.mock` factory, so a
+// constant exported from there reads as `undefined` in exactly the suite
+// that has to pass the no-op hooks. Do not "tidy" it back.
+export const NO_INSTALL_PHASE_HOOKS: InstallPhaseHooks = {
+  beforeSwapCommit: async (): Promise<void> => {},
+  afterSwap: async (): Promise<void> => {},
+};
 
 // A process the platform's slot scan still associates with the install
 // after the swap rename kept failing - the diagnostic payload for the
@@ -187,6 +240,9 @@ export async function installHost(
     onProgress: opts.onProgress,
     recordVersionOverride: opts.recordVersionOverride,
     verifyMutationCapability: legacyMutationVerifier,
+    // Test-only convenience wrapper (see the comment above): no attempt
+    // record to advance, so nothing observes the verified-bytes barrier.
+    beforeExtract: async () => {},
   });
   const { record, previous } = await commitHostInstallSource({
     environment: opts.environment,
@@ -262,44 +318,19 @@ export async function stageHostInstallSource(
 
   try {
     await opts.verifyMutationCapability();
-    opts.onProgress({
-      stage: "extract",
-      message: `extracting host archive into ${staging.stagingDir}`,
-      percent: null,
-      bytes: null,
-      totalBytes: null,
-      workUnits: null,
-    });
-    await extractHostSource({
-      source: staging.archivePath,
+    const { executablePath, runtimeVersion } = await stageVerifiedSource({
+      environment: opts.environment,
+      archivePath: staging.archivePath,
       targetDir: staging.stagingDir,
-      onEntry: createExtractHeartbeat({
-        environment: opts.environment,
-        archivePath: staging.archivePath,
-        version: staging.version,
-        onProgress: opts.onProgress,
-      }),
+      version: staging.version,
+      extractMessage: `extracting host archive into ${staging.stagingDir}`,
+      onProgress: opts.onProgress,
+      beforeExtract: opts.beforeExtract,
     });
     logger.info("Host install archive extracted", {
       environment: opts.environment,
       version: staging.version,
     });
-
-    const executablePath = await resolveHostExecutable(
-      staging.stagingDir,
-      osPlatform(),
-    );
-
-    // The archive's own build stamp - the same value the running host will
-    // publish in pid.json. The sidecar sits beside the executable (the
-    // build emits it into the runtime dir root), so anchor the read there
-    // rather than guessing the archive's top-level layout. Recorded
-    // alongside (never instead of) the caller-derived `version` so the
-    // record describes the bytes it actually installed even when the
-    // installing CLI is an older build (see HostInstallRecord.runtimeVersion).
-    const runtimeVersion = await readExtractedRuntimeVersion(
-      dirname(executablePath),
-    );
     logger.debug("Host install executable resolved", {
       environment: opts.environment,
       version: staging.version,
@@ -339,6 +370,85 @@ export async function stageHostInstallSource(
     );
     throw err;
   }
+}
+
+export interface StageVerifiedSourceOptions {
+  readonly environment: Environment;
+  // A downloaded archive that has ALREADY passed sha256 and minisign - the
+  // whole chain lives inside the registry client's `downloadAndVerify`
+  // (registry/fetch-resource.ts's size cap + digest, registry/client.ts's
+  // signature), or, for a local-file install, the caller's own hash.
+  readonly archivePath: string;
+  readonly targetDir: string;
+  readonly version: string;
+  // The two staging paths word their `extract` progress differently and
+  // their consumers render it verbatim, so the message is the caller's.
+  readonly extractMessage: string;
+  readonly onProgress: (info: ProgressInfo) => void;
+  /**
+   * Awaited once, after the verified bytes are on disk and before the first
+   * entry is extracted. The single barrier between "the transfer is done and
+   * proven" and "the tree is being built", shared by BOTH staging paths -
+   * `downloadAndStageHost`'s background stage and `stageHostInstallSource`'s
+   * private install/downgrade source - so a caller driving an update attempt
+   * marks the phase once and reaches it whichever path ran.
+   *
+   * A throw here aborts staging with the archive untouched: the caller's
+   * `catch` scrubs the staging tree and keeps the verified bytes for a retry.
+   * Callers with no attempt to advance pass a no-op.
+   */
+  readonly beforeExtract: () => Promise<void>;
+}
+
+export interface StageVerifiedSourceResult {
+  // Absolute path, INSIDE `targetDir`, to the resolved host executable.
+  readonly executablePath: string;
+  // The archive's own build stamp - the same value the running host will
+  // publish in pid.json. The sidecar sits beside the executable (the build
+  // emits it into the runtime dir root), so the read is anchored there
+  // rather than guessing the archive's top-level layout. Recorded alongside
+  // (never instead of) the caller-derived `version` so the record describes
+  // the bytes it actually installed even when the installing CLI is an older
+  // build (see HostInstallRecord.runtimeVersion).
+  readonly runtimeVersion: string | null;
+}
+
+// Verified archive -> extracted tree with a resolved executable. The step
+// both staging paths perform identically; factored out so the barrier
+// between them cannot drift (Plan D3). Deliberately narrow: it neither
+// downloads (the verification chain stays where it is, one call above each
+// caller) nor creates the target directory (the two paths own their temps at
+// different points in their own cleanup scopes).
+export async function stageVerifiedSource(
+  opts: StageVerifiedSourceOptions,
+): Promise<StageVerifiedSourceResult> {
+  await opts.beforeExtract();
+  opts.onProgress({
+    stage: "extract",
+    message: opts.extractMessage,
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+    workUnits: null,
+  });
+  await extractHostSource({
+    source: opts.archivePath,
+    targetDir: opts.targetDir,
+    onEntry: createExtractHeartbeat({
+      environment: opts.environment,
+      archivePath: opts.archivePath,
+      version: opts.version,
+      onProgress: opts.onProgress,
+    }),
+  });
+  const executablePath = await resolveHostExecutable(
+    opts.targetDir,
+    osPlatform(),
+  );
+  const runtimeVersion = await readExtractedRuntimeVersion(
+    dirname(executablePath),
+  );
+  return { executablePath, runtimeVersion };
 }
 
 // Best-effort cleanup for a staged source the caller decided not to
@@ -443,12 +553,8 @@ export async function commitHostInstallSource(
       opts.verifyMutationCapability,
     );
 
-    const installGeneration = encodeInstallGeneration({
-      installId: record.installId,
-      installedAt: record.installedAt,
-      archiveSha256: record.archiveSha256,
-      version: record.version,
-    });
+    // The record itself; see `apply.ts` for why a literal is not equivalent.
+    const installGeneration = encodeInstallGeneration(record);
 
     logger.info("Host install commit completed", {
       environment: opts.environment,
@@ -644,6 +750,11 @@ export async function commitInstallFromSource(
     installId: record.installId,
   });
 
+  // A hook rejection AFTER the host has been stopped, held until the machine
+  // is whole again. See the capture below `beforeSwapCommit` for why it is not
+  // thrown where it happens.
+  let hookFailure: unknown = null;
+
   // Stop the OS service immediately before the swap, never earlier:
   // verify-before-replace means we must not disturb the running host if
   // staging or verification would have failed.
@@ -662,6 +773,35 @@ export async function commitInstallFromSource(
       version: record.version,
     });
     await opts.lifecycle.beforeSwap();
+    // The stop RESOLVED - a busy host's denial threw above and never
+    // reaches here, which is the whole point of the barrier sitting on this
+    // side of the call. Nothing has moved yet: the swap is next.
+    //
+    // CAPTURED, not thrown (CodeRabbit T6). The caller's hook is a durable
+    // BOOKKEEPING write - `writer.phaseWrite("applying")` for the update arms
+    // - and `commit` throws `E_HOST_INSTALL_RECORD_INVALID` for every
+    // non-`committed` outcome: another actor bumping the generation between
+    // the claim and this write, a record that has become unreadable, a
+    // durability error after the rename, or the marker mirror throwing after
+    // the record already committed. Nothing above this catches. Throwing here
+    // therefore left the machine STOPPED, on the OLD bytes, because a write
+    // about the work was refused - the placed bytes never even placed. Placed
+    // bytes must never leave the host down over bookkeeping, so the swap and
+    // the restart below run, and the error is surfaced afterwards with its
+    // own code and message.
+    //
+    // What the record then says is a DESIGNED consequence, not drift: this
+    // segment restarted the host having never written `applying`, so
+    // `canReachVerifying`'s `resume-apply` rule (a segment may claim a
+    // verification only for work it actually did) refuses the completion, and
+    // the run ends `superseded` / `failed` with the host RUNNING on the new
+    // bytes. The exit stays non-zero. The matrix rows observe those phases -
+    // this paragraph is why they read the way they do.
+    try {
+      await opts.lifecycle.beforeSwapCommit();
+    } catch (err) {
+      hookFailure = err;
+    }
   }
 
   opts.onProgress({
@@ -688,10 +828,21 @@ export async function commitInstallFromSource(
     replacedPreviousInstall: previous !== null,
   });
 
-  // Post-swap start/restart. Per the Tech Plan, failures here do not roll
-  // back the install: the new host stays in place and Doctor surfaces the
-  // non-readiness. The hook is responsible for swallowing start errors if
-  // it wants the caller to report success.
+  // Post-swap start/restart, and the second barrier: the bytes are
+  // committed and the service has not been asked to come back up yet. The
+  // production lifecycles fire their caller's `InstallPhaseHooks.afterSwap`
+  // at the TOP of this hook, before any kickstart/register, so an attempt
+  // record's "restarting" always precedes the start request.
+  //
+  // Per the Tech Plan, failures here do not roll back the install: the new
+  // host stays in place and Doctor surfaces the non-readiness. The hook is
+  // responsible for swallowing start errors if it wants the caller to
+  // report success.
+  //
+  // Both barriers are lifecycle members, so the `lifecycle: null` path
+  // (`host apply --no-service`) reaches neither - it stops nothing and
+  // starts nothing, so there is no stop-succeeded or pre-relaunch moment to
+  // observe.
   if (opts.lifecycle !== null) {
     await verifyMutationCapability();
     opts.onProgress({
@@ -706,8 +857,23 @@ export async function commitInstallFromSource(
       environment: opts.environment,
       version: record.version,
     });
-    await opts.lifecycle.afterSwap();
+    // Captured for the same reason, and the lifecycle captures INSIDE itself
+    // too: it runs the caller's hook at the top of its own `afterSwap`, so a
+    // rejection propagating from there would skip the register / kickstart
+    // that brings the host back. `??=` because the FIRST failure is the one
+    // that explains the state - a record that refused `applying` usually
+    // refuses `restarting` seconds later, and reporting the second would name
+    // a consequence instead of a cause.
+    try {
+      await opts.lifecycle.afterSwap();
+    } catch (err) {
+      hookFailure ??= err;
+    }
   }
+
+  // Surfaced verbatim - never swallowed, never replaced by a summary of it.
+  // By here the bytes are committed and the host has been asked to come back.
+  if (hookFailure !== null) throw hookFailure;
 
   return { record, previous };
 }
@@ -770,6 +936,8 @@ interface StageOptions {
   readonly recordVersionOverride: string | null;
   /** Required before every staging-tree creation or cleanup edge. */
   readonly verifyMutationCapability: () => Promise<void>;
+  /** See `StageVerifiedSourceOptions.beforeExtract`. */
+  readonly beforeExtract: () => Promise<void>;
 }
 
 interface StageLocalOptions {

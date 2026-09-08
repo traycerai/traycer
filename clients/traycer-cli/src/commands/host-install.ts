@@ -1,6 +1,7 @@
 import {
   currentInstallPlatform,
   discardStagedHostInstallSource,
+  NO_INSTALL_PHASE_HOOKS,
   stageHostInstallSource,
   type InstallSourceArg,
 } from "../installer";
@@ -185,6 +186,9 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
           },
           force: args.force,
           onWillStopHost: null,
+          // `host install` advances no attempt record - it is not an
+          // update - so it observes neither swap barrier.
+          hooks: NO_INSTALL_PHASE_HOOKS,
         });
     const lifecycle =
       handle !== null
@@ -192,6 +196,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         : createBytesOnlyInstallLifecycle(
             createServiceController(),
             serviceLabelFor(ctx.runtime.environment),
+            NO_INSTALL_PHASE_HOOKS,
           );
     ctx.runtime.logger.debug("Host install command lifecycle created", {
       environment: ctx.runtime.environment,
@@ -224,6 +229,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
           onProgress: (info) => ctx.progress(info),
           recordVersionOverride: null,
           verifyMutationCapability: verify,
+          // No attempt record to advance; see `hooks` above.
+          beforeExtract: async () => {},
         });
         try {
           return await withCliAttemptMutation(
