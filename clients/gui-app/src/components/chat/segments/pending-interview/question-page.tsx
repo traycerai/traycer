@@ -7,12 +7,10 @@ import type {
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { InterviewOptionDetailsButton } from "@/components/chat/segments/interview-visuals";
+import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
-import {
-  questionAllowsCustomAnswer,
-  type DraftAnswer,
-} from "./interview-draft";
+import type { DraftAnswer } from "./interview-draft";
 import { QUESTION_TRANSITION } from "./use-interview-card";
 
 const OTHER_LABEL = "Other";

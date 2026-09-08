@@ -1,4 +1,5 @@
 import type { InterviewQuestion } from "@traycer/protocol/persistence/epic/schemas";
+import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import type { StoredInterviewDraftAnswer } from "@/stores/composer/interview-draft-store";
 
 export interface DraftAnswer {
@@ -41,22 +42,6 @@ export function draftHasState(draft: DraftAnswer): boolean {
   return (
     draft.selected.size > 0 || draft.otherSelected || draft.otherText.length > 0
   );
-}
-
-/**
- * Whether this question's answer channel can carry free text ("Other").
- *
- * `null` is UNSTATED and offers free text, exactly as every renderer did
- * before the field existed; only an explicit `false` withdraws it. Withdrawal
- * has to hold across the whole card and not just the rendered row: the digit
- * shortcut maps `options.length + 1` to Other, and a stored draft outlives the
- * event that raised the question. So this predicate gates the two entry
- * points and the submission boundary, not the markup alone.
- */
-export function questionAllowsCustomAnswer(
-  question: InterviewQuestion,
-): boolean {
-  return question.allowsCustomAnswer !== false;
 }
 
 export function questionIdentity(question: InterviewQuestion): string {

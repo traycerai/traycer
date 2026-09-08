@@ -15,6 +15,7 @@ import {
   focusActiveComposer,
   registerComposerFocus,
 } from "@/lib/composer/composer-focus-registry";
+import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
@@ -35,7 +36,6 @@ import {
   draftToAnswerValues,
   draftToStoredAnswer,
   emptyDraft,
-  questionAllowsCustomAnswer,
   replaceDraftAt,
   type DraftAnswer,
 } from "./interview-draft";
@@ -173,6 +173,13 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   );
   const question = total > 0 ? questions[safeIndex] : null;
   const draft = drafts[safeIndex] ?? emptyDraft();
+  // Every text field this card can render belongs to the custom-answer
+  // channel - the standalone free-text textarea when there are no options, the
+  // Other row's input when there are. So a withdrawn channel means NO field,
+  // and both focus predicates below hang off this one fact rather than
+  // re-deriving it.
+  const allowsCustomAnswer =
+    question !== null && questionAllowsCustomAnswer(question);
   // "This question renders a text field the card should yield focus to."
   // Withdrawing free text from an OPTIONLESS question renders no field at all
   // (`QuestionPage` returns null), so yielding to one would leave nothing
@@ -180,9 +187,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // it never receives them until the user clicks. The predicate has to name the
   // rendered field, not merely the absence of options.
   const freeTextQuestion =
-    question !== null &&
-    question.options.length === 0 &&
-    questionAllowsCustomAnswer(question);
+    question !== null && question.options.length === 0 && allowsCustomAnswer;
 
   const isLast = safeIndex >= total - 1;
   const answeredCount = drafts.filter(draftHasContent).length;
@@ -565,7 +570,20 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // refocuses when the tab becomes active (`focusActive` is a dependency).
   // Free-text and Other inputs focus themselves via their callback ref, so the
   // card yields to them.
-  const wantsFieldFocus = freeTextQuestion || draft.otherSelected;
+  // The Other half needs the same gate as the free-text half above, for the
+  // same reason: the row is not rendered when the channel is withdrawn
+  // (`QuestionPage`), so yielding to its input would focus nothing.
+  //
+  // This is defense in depth, not a live bug - every writer of
+  // `otherSelected` is already gated (`draftFromStoredAnswer` scrubs a
+  // restored one, `toggleOther` and `selectByDigit` refuse, `setFreeText`
+  // needs the textarea that is not rendered). What it buys is locality: this
+  // predicate now decides from the question in front of it instead of
+  // trusting an invariant maintained by four other functions, so a fifth
+  // writer cannot silently reopen a focus black hole that presents as "the
+  // card's number keys stopped working".
+  const wantsFieldFocus =
+    freeTextQuestion || (allowsCustomAnswer && draft.otherSelected);
   useEffect(() => {
     if (!focusActive || wantsFieldFocus) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
