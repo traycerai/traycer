@@ -714,7 +714,15 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     (`conversation`) and **Browsers** (`browser`) - product nouns for what the
     user opens, not the store's category words. Browser alone adds **Picture
     in picture** (`BrowserTilePlacement`) because the other two have no PiP
-    host. Defaults content=tab, conversation=tab, browser=split;
+    host. A fourth row, **Side chats** (`sideChat`), covers the `/btw` /
+    `/side` aside: it is a plain `chat` tile, so no tile kind maps to the
+    row - the open carries it as a `beside` placement
+    (`ExplicitTilePlacement`) naming the source chat's pane, and the row
+    decides only how "beside" is drawn ("As a tab of the source chat" /
+    "In a split beside the source chat"). Its own row rather than Agents &
+    terminals because an aside is read next to its conversation whatever
+    the user chose for new agents. Defaults content=tab, conversation=tab,
+    browser=split, sideChat=split;
     `tilePlacementForCategory` resolves a category against the default. On a
     single-tile viewport (`useIsMobileViewport()`) the row gains the
     DESCRIPTION "Narrow windows show one tile at a time, so everything opens
