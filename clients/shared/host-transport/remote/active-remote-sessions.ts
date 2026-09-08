@@ -614,6 +614,7 @@ export function acquireRemoteSession<
       params,
       idempotencyKey,
       abortSignal,
+      callerAgentId,
       responseTimeoutMs,
       replayMustBeKeyed,
     ) =>
@@ -622,6 +623,7 @@ export function acquireRemoteSession<
         params,
         idempotencyKey,
         abortSignal,
+        callerAgentId,
         responseTimeoutMs,
         replayMustBeKeyed,
       ),
@@ -1051,6 +1053,7 @@ export function tryAcquireReadyRemoteSession<
           params,
           null,
           abortSignal,
+          null,
           responseTimeoutMs,
           // A borrowed status poll carries no key and is never a replay: the
           // caller re-polls on the next tick rather than retrying this one.

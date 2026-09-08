@@ -76,6 +76,7 @@ import {
   agentStopV10,
   agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
+import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
@@ -305,9 +306,13 @@ import {
   diagnosticsLogsTailV10,
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
+  managedCommandConfigureAgentShellV10,
   managedCommandConfigureV10,
+  managedCommandCreateV10,
   managedCommandDeleteV10,
   managedCommandDeliverHeldV10,
+  managedCommandListV10,
+  managedCommandRestartV10,
   managedCommandStartUpgradeV10ToV11,
   managedCommandStartV10,
   managedCommandStartV11,
@@ -316,7 +321,20 @@ import {
   managedCommandStopV11,
   managedCommandSubscribeOutputV10,
   managedCommandSubscribeOutputV11,
+  managedCommandViewV10,
 } from "@traycer/protocol/host/managed-command/contracts";
+import {
+  hostDirectoryListV10,
+  hostFileCopyCancelV10,
+  hostFileCopyStartV10,
+  hostFileCopyStatusV10,
+  hostFileTransferCloseV10,
+  hostFileTransferEnumerateV10,
+  hostFileTransferOpenV10,
+  hostFileTransferReadChunkV10,
+  hostOneOffShellRunV10,
+  hostResolveRepoPathsV10,
+} from "@traycer/protocol/host/host-agent-capabilities";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
@@ -631,7 +649,9 @@ import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stre
 import { providersChangedV10 } from "@traycer/protocol/host/providers-changed-stream";
 import {
   epicCommunicationGraphSubscribeV10,
+  epicCommunicationGraphSubscribeV11,
   hostCommunicationGraphCloudFeedSubscribeV10,
+  hostCommunicationGraphCloudFeedSubscribeV11,
 } from "@traycer/protocol/host/epic/communication-graph";
 import {
   hostChatRecordsSubscribeV10,
@@ -5807,6 +5827,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "agent.archive": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentArchiveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "phase.migrateToEpic": {
     1: {
       latestMinor: 0,
@@ -7388,6 +7421,74 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "managedCommand.create": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandCreateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.view": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandViewV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The agent's own configure. Distinct from the human `managedCommand.configure`
+  // below: the agent edits the settings it authored and reads back the wider
+  // agent view, so the two cannot share one contract.
+  "managedCommand.configureAgentShell": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandConfigureAgentShellV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.restart": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandRestartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The one human-editable setting: relaunch after a host restart. Same
   // channel as the lifecycle three; a host too old to have the flag lacks the
   // method, so the GUI hides the switch (`useHostSupportsMethod`), and its
@@ -7420,6 +7521,136 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeliverHeldV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.resolveRepoPaths": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostResolveRepoPathsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.directory.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostDirectoryListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileCopy.start": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileCopyStartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileCopy.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileCopyStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileCopy.cancel": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileCopyCancelV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileTransfer.enumerate": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileTransferEnumerateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileTransfer.open": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileTransferOpenV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileTransfer.readChunk": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileTransferReadChunkV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileTransfer.close": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileTransferCloseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.oneOffShell.run": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostOneOffShellRunV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -9642,10 +9873,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // it to the unary released floor - that list is fail-closed on the name set.
   "epic.communicationGraph.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds host_agent_verb / remote_host. @1.0 stays frozen so a
+      // client that negotiated it never receives those kinds.
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCommunicationGraphSubscribeV10,
+        },
+        1: {
+          contract: epicCommunicationGraphSubscribeV11,
         },
       },
     },
@@ -9658,10 +9894,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // released floor - that list is fail-closed on the name set.
   "host.communicationGraph.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostCommunicationGraphCloudFeedSubscribeV10,
+        },
+        1: {
+          contract: hostCommunicationGraphCloudFeedSubscribeV11,
         },
       },
     },
