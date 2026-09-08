@@ -198,6 +198,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecordListAuthoritative: () =>
     testState.chatRecordListAuthoritative,
   useEpicLastFocusedArtifactId: () => null,
+  useEpicNodeRecency: () => ({}),
   useEpicSnapshotLoaded: () => true,
   useEpicTitle: () => "",
 }));

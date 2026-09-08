@@ -29,6 +29,7 @@ import {
   useEpicArtifactRecords,
   useEpicChatRecordListAuthoritative,
   useEpicLastFocusedArtifactId,
+  useEpicNodeRecency,
   useEpicSnapshotLoaded,
   useEpicTitle,
 } from "@/lib/epic-selectors";
@@ -93,6 +94,12 @@ export function useEpicRouteSynchronization(
   const liveTitle = useEpicTitle();
   const persistedFocus = useEpicLastFocusedArtifactId();
   const records = useEpicArtifactRecords();
+  // Auto-open's recency input. It comes off the SAME epic projection as
+  // `records`, so the two are always in step: whatever agent rows this device
+  // has, it has their activity clocks, and an epic whose projection carries no
+  // agent rows yields an empty map - the resolver's "no recency available"
+  // input, which lands on the first node in tree order exactly as before.
+  const nodeRecency = useEpicNodeRecency();
   // Same-host counterpart of the cross-host cloud fallback (chat-sync-v2
   // ticket 36): `epic.listCloudChats` already excludes anything this host's
   // own registry has tombstoned, so "still cloud-known" is what tells a
@@ -385,6 +392,7 @@ export function useEpicRouteSynchronization(
       records,
       focusArtifactId ?? null,
       persistedFocus,
+      nodeRecency,
     );
     if (target === null) {
       return;
@@ -433,6 +441,7 @@ export function useEpicRouteSynchronization(
   }, [
     snapshotLoaded,
     records,
+    nodeRecency,
     focusArtifactId,
     focusedAt,
     persistedFocus,

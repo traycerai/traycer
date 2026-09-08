@@ -136,6 +136,7 @@ const EMPTY_TERMINAL_AGENT_PROJECTIONS: ReadonlyArray<TuiAgentProjection> =
   Object.freeze([]);
 const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
   Object.freeze([]);
+const EMPTY_NODE_RECENCY: Readonly<Record<string, number>> = Object.freeze({});
 const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
 const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
 const EMPTY_ROLE_CLAIMS: readonly RoleClaim[] = Object.freeze([]);
@@ -571,6 +572,44 @@ export function useEpicArtifactRecords(): ReadonlyArray<EpicTreeRecord> {
         records.push(recordForArtifact(s.artifacts.byId[id], fallbackHostId));
       }
       return records;
+    }),
+  );
+}
+
+/**
+ * The last-activity clock of every agent row this epic's projection holds,
+ * keyed by node id - the whole-epic counterpart of
+ * {@link useEpicNodeUpdatedAt}, and read off the same projection for the same
+ * reason: the `TreeNode` copy lags, because `CHAT_TREE_KEYS` deliberately omits
+ * `updatedAt` so touching a chat never rebuilds the tree.
+ *
+ * Artifact rows (spec / ticket / story / review) are ABSENT rather than mapped
+ * to `0`. They have no activity clock at all, and a caller ranking rows by
+ * recency must be able to tell that apart from a row last touched at the epoch.
+ *
+ * Shallow-compared over id → timestamp, so it changes at the rate the chat
+ * projections themselves do (every streamed token for a live chat). Pair it
+ * only with a subscriber that already re-renders on that churn - it is the
+ * companion of {@link useEpicArtifactRecords}, whose array churns identically.
+ * A single row wants the per-id {@link useEpicNodeUpdatedAt} instead. See
+ * RENDER_PERF_INVARIANTS.md.
+ */
+export function useEpicNodeRecency(): Readonly<Record<string, number>> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): Readonly<Record<string, number>> => {
+      if (s.chats.allIds.length === 0 && s.tuiAgents.allIds.length === 0) {
+        return EMPTY_NODE_RECENCY;
+      }
+      const recency: Record<string, number> = {};
+      for (const id of s.chats.allIds) {
+        recency[id] = s.chats.byId[id].updatedAt;
+      }
+      for (const id of s.tuiAgents.allIds) {
+        recency[id] = s.tuiAgents.byId[id].updatedAt;
+      }
+      return recency;
     }),
   );
 }
