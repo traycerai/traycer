@@ -402,6 +402,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "host install",
     options: [
+      { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--allow-self-invocation", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--from <path>", mandatory: false },
@@ -417,6 +418,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "host ensure",
     options: [
+      { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--allow-self-invocation", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--from <path>", mandatory: false },
@@ -436,6 +438,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "host apply",
     options: [
+      { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
@@ -449,6 +452,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--release <version>", mandatory: false },
       { flags: "--allow-downgrade", mandatory: false },
       { flags: "--force", mandatory: false },
+      { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
@@ -1196,6 +1200,9 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "host adoption-nonce",
         "host maintenance-lease",
         "host update-verify",
+        // Diagnostic dump for support/debugging, not a user workflow step -
+        // see commands/host-store-formats.ts.
+        "host store-formats",
         "cli mark-source",
         "cli finalize-upgrade",
         "agent title-from-hook",

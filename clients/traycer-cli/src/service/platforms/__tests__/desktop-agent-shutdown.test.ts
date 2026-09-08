@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   forceStopHostProcess,
+  forceStopHostProcessReporting,
   requestCooperativeShutdown,
+  requestCooperativeShutdownReporting,
 } from "../desktop-agent-shutdown";
 
 // The cooperative flow's own contract: claim -> commit -> wait for REAL
@@ -695,5 +697,121 @@ describe("forceStopHostProcess", () => {
       expect(outcome).toEqual({ kind: "stopped" });
       expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
     });
+  });
+});
+
+// `StopServiceOptions.onHostAddressed`, reported from the engine's OWN reads:
+// the install lifecycle's restore after a refused swap owes the machine a
+// host only if this stop took one down, and neither `externally-managed` nor
+// a `void` resolution can say so. It fires once a live, current host is about
+// to be claimed or signalled - never for a missing record, a dead pid, or an
+// identity the engine refuses to signal.
+describe("onHostAddressed", () => {
+  afterEach(() => {
+    // `process.kill` spies accumulate across tests otherwise.
+    vi.restoreAllMocks();
+  });
+
+  it("cooperative: fires once, after the liveness read and before the claim, for a live host", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    const onHostAddressed = vi.fn();
+    MOCKS.callHostRpcAtEndpoint.mockImplementation(async (method: string) => {
+      // The report precedes the first RPC.
+      expect(onHostAddressed).toHaveBeenCalledTimes(1);
+      return method === "lifecycle.claimShutdown"
+        ? { granted: { token: "tok-1" } }
+        : { committed: true };
+    });
+
+    const outcome = await requestCooperativeShutdownReporting(
+      "production",
+      "stop",
+      "shutdown",
+      onHostAddressed,
+    );
+
+    expect(outcome).toEqual({ kind: "stopped" });
+    expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  it("cooperative: still fires when the claim then fails - the host was addressed whatever the RPC did", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(true);
+    MOCKS.callHostRpcAtEndpoint.mockRejectedValue(new Error("dial failed"));
+    const onHostAddressed = vi.fn();
+
+    const outcome = await requestCooperativeShutdownReporting(
+      "production",
+      "stop",
+      "shutdown",
+      onHostAddressed,
+    );
+
+    expect(outcome).toMatchObject({ kind: "unreachable" });
+    expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  it("cooperative: does not fire for a missing record or a dead pid", async () => {
+    const onHostAddressed = vi.fn();
+    MOCKS.readHostPidMetadata.mockResolvedValue(null);
+    await expect(
+      requestCooperativeShutdownReporting(
+        "production",
+        "stop",
+        "shutdown",
+        onHostAddressed,
+      ),
+    ).resolves.toEqual({ kind: "no-metadata" });
+
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(false);
+    await expect(
+      requestCooperativeShutdownReporting(
+        "production",
+        "stop",
+        "shutdown",
+        onHostAddressed,
+      ),
+    ).resolves.toEqual({ kind: "no-host" });
+
+    expect(onHostAddressed).not.toHaveBeenCalled();
+  });
+
+  it("forced: fires once the pid is verified live, before SIGTERM", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    const onHostAddressed = vi.fn();
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      expect(onHostAddressed).toHaveBeenCalledTimes(1);
+      return true;
+    });
+
+    const outcome = await forceStopHostProcessReporting(
+      "production",
+      "stop",
+      onHostAddressed,
+    );
+
+    expect(outcome).toEqual({ kind: "stopped" });
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  it("forced: does not fire for a dead pid, which is never signalled", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(false);
+    const killSpy = vi.spyOn(process, "kill");
+    const onHostAddressed = vi.fn();
+
+    const outcome = await forceStopHostProcessReporting(
+      "production",
+      "stop",
+      onHostAddressed,
+    );
+
+    expect(outcome).toEqual({ kind: "no-host" });
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(onHostAddressed).not.toHaveBeenCalled();
   });
 });

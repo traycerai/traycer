@@ -129,7 +129,8 @@ const hostPlatformAssetSchema = z.discriminatedUnion("available", [
   }),
 ]);
 
-export const hostAvailableManifestSchema = z.object({
+// Frozen for host.update.check@1.0/1.1: those peers never reported formats.
+export const hostAvailableManifestSchemaPreStoreFormats = z.object({
   schemaVersion: z.literal(1),
   generatedAt: z.string(),
   latest: z.string(),
@@ -146,6 +147,19 @@ export const hostAvailableManifestSchema = z.object({
     }),
   ),
 });
+export const hostAvailableManifestSchema =
+  hostAvailableManifestSchemaPreStoreFormats.extend({
+    versions: z.array(
+      hostAvailableManifestSchemaPreStoreFormats.shape.versions.element.extend({
+        // Older CLI listings omit this, just like older release manifests.
+        // The caller then consults the fixed released table, never a guess.
+        storeFormats: z
+          .object({ chatDb: z.number().int().nonnegative() })
+          .nullable()
+          .optional(),
+      }),
+    ),
+  });
 export type HostAvailableManifest = z.infer<typeof hostAvailableManifestSchema>;
 
 /**
@@ -173,7 +187,10 @@ export type HostUpdateCheckRequest = z.infer<
 >;
 
 export const hostUpdateCheckResponseSchema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("ok"), manifest: hostAvailableManifestSchema }),
+  z.object({
+    outcome: z.literal("ok"),
+    manifest: hostAvailableManifestSchemaPreStoreFormats,
+  }),
   z.object({ outcome: z.literal("cli-unavailable") }),
   z.object({ outcome: z.literal("cli-failed") }),
   z.object({ outcome: z.literal("invalid-output") }),
@@ -267,7 +284,7 @@ export const hostUpdateCheckResponseSchemaV11 = z.discriminatedUnion(
   [
     z.object({
       outcome: z.literal("ok"),
-      manifest: hostAvailableManifestSchema,
+      manifest: hostAvailableManifestSchemaPreStoreFormats,
       effectiveIncludePreReleases: z.boolean(),
       includePreReleasesSource: hostIncludePreReleasesSourceSchema,
     }),
@@ -280,12 +297,40 @@ export type HostUpdateCheckResponseV11 = z.infer<
   typeof hostUpdateCheckResponseSchemaV11
 >;
 
+/** Published store formats survive the host's CLI-JSON projection from @1.2. */
+export const hostUpdateCheckResponseSchemaV12 = z.discriminatedUnion(
+  "outcome",
+  [
+    hostUpdateCheckResponseSchemaV11.options[0].extend({
+      manifest: hostAvailableManifestSchema,
+    }),
+    hostUpdateCheckResponseSchemaV11.options[1],
+    hostUpdateCheckResponseSchemaV11.options[2],
+    hostUpdateCheckResponseSchemaV11.options[3],
+  ],
+);
+export type HostUpdateCheckResponseV12 = z.infer<
+  typeof hostUpdateCheckResponseSchemaV12
+>;
+
 export const hostUpdateInstallRequestSchema = z.object({
   version: z.string().min(1),
   force: z.boolean(),
 });
 export type HostUpdateInstallRequest = z.infer<
   typeof hostUpdateInstallRequestSchema
+>;
+
+/**
+ * @1.3 separates accepting lost chat access from force's busy-work consent.
+ * Required here so every current caller states the choice explicitly.
+ */
+export const hostUpdateInstallRequestV13Schema =
+  hostUpdateInstallRequestSchema.extend({
+    acceptStoreFormatLoss: z.boolean(),
+  });
+export type HostUpdateInstallRequestV13 = z.infer<
+  typeof hostUpdateInstallRequestV13Schema
 >;
 
 /**
@@ -409,6 +454,63 @@ export const hostUpdateInstallResponseV11Schema = z.discriminatedUnion(
 );
 export type HostUpdateInstallResponseV11 = z.infer<
   typeof hostUpdateInstallResponseV11Schema
+>;
+
+/** Bounded because the whole device may contain thousands of epic stores. */
+export const HOST_STORE_FLOOR_EPIC_ID_LIMIT = 10;
+
+export const hostUpdateStoreFloorRefusalSchema = z.object({
+  kind: z.enum(["blocked", "indeterminate"]),
+  reason: z.enum([
+    "newer-chat-stores",
+    "target-format-unknown",
+    "unreadable-stores",
+  ]),
+  targetVersion: z.string().min(1),
+  targetChatDb: z.number().int().nonnegative().nullable(),
+  // Null when any stamp was unreadable, just like host.status.onDiskMax.
+  onDiskMax: z.number().int().positive().nullable(),
+  // For a blocked verdict these name only proven-newer stores. Indeterminate
+  // verdicts name the stores whose compatibility could not be established.
+  epicCount: z.number().int().nonnegative(),
+  epicIds: z.array(z.string().min(1)).max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
+  // Keep unreadable stores separate even when another store proves the move
+  // is blocked: the UI must not label an unreadable stamp as proven-newer.
+  // Zero/empty means no per-epic read failed, not that the peer said nothing.
+  unreadableEpicCount: z.number().int().nonnegative(),
+  unreadableEpicIds: z
+    .array(z.string().min(1))
+    .max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
+});
+export type HostUpdateStoreFloorRefusal = z.infer<
+  typeof hostUpdateStoreFloorRefusalSchema
+>;
+
+/**
+ * @1.3 retains cli-failed so every released peer can decode a pre-spawn
+ * refusal. The dispatcher strips these additive details for older minors;
+ * no new outcome or emission gate is needed. Null means no reason was given,
+ * including when a response is upgraded from an older peer.
+ */
+export const hostUpdateInstallResponseV13Schema = z.discriminatedUnion(
+  "outcome",
+  [
+    hostUpdateInstallResponseV11Schema.options[0],
+    hostUpdateInstallResponseV11Schema.options[1],
+    hostUpdateInstallResponseV11Schema.options[2],
+    z.object({
+      outcome: z.literal("cli-failed"),
+      // Open vocabulary, like the bound-dispatch reason, so future CLI causes
+      // do not create an unservable generation of clients.
+      reason: z.string().min(1).nullable(),
+      storeFloor: hostUpdateStoreFloorRefusalSchema.nullable(),
+    }),
+    hostUpdateInstallResponseV11Schema.options[4],
+    hostUpdateInstallResponseV11Schema.options[5],
+  ],
+);
+export type HostUpdateInstallResponseV13 = z.infer<
+  typeof hostUpdateInstallResponseV13Schema
 >;
 
 /**

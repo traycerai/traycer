@@ -11,7 +11,7 @@ import {
   type HostPidMetadataEvidence,
 } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
-import { forceStopHostProcess } from "./desktop-agent-shutdown";
+import { forceStopHostProcessReporting } from "./desktop-agent-shutdown";
 import type { CliInvocation } from "../cli-binary";
 import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
@@ -55,7 +55,14 @@ export function createLinuxController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label),
-    stop: (label, options) => stopService(label, run, options.force, "stop"),
+    stop: (label, options) =>
+      stopService(
+        label,
+        run,
+        options.force,
+        "stop",
+        options.onHostAddressed ?? null,
+      ),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
@@ -415,7 +422,7 @@ async function stopForRestartService(
   // --force`. It reaches the host process directly, outside the unit's
   // cgroup, which is the one place left that a unit-scoped kill cannot.
   if (force) {
-    await finishForcedStopForPublishedHost(label, "restart");
+    await finishForcedStopForPublishedHost(label, "restart", null);
   }
   // `true` even when the forced stop above SUCCEEDED, and that is deliberate
   // rather than a missed branch (cold review B: the obvious tidy here returns
@@ -507,7 +514,18 @@ async function stopService(
   run: ProcessRunner,
   force: boolean,
   operation: "stop" | "restart",
+  // See `StopServiceOptions.onHostAddressed`: reported from this route's own
+  // read of the record, immediately before the unit is told to stop.
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
+  const before = await readHostPidMetadataEvidence(label.environment);
+  // At most once for the whole route: once this read has reported, the
+  // forced fallback below gets no callback, whatever its own read finds.
+  let reportToFallback = onHostAddressed;
+  if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
+    onHostAddressed?.();
+    reportToFallback = null;
+  }
   await run("systemctl", ["--user", "stop", unitName(label)], {
     env: undefined,
     cwd: undefined,
@@ -533,7 +551,11 @@ async function stopService(
     // unconfirmed cancel falls through to the SIGKILL escalation instead of
     // reporting a stop it cannot prove.
     if (await waitForUnitInactive(label, run, FORCE_STOP_CONFIRM_GRACE_MS)) {
-      await finishForcedStopForPublishedHost(label, operation);
+      await finishForcedStopForPublishedHost(
+        label,
+        operation,
+        reportToFallback,
+      );
       return;
     }
   }
@@ -556,7 +578,7 @@ async function stopService(
   // state settle at inactive/failed.
   await cancelScheduledAutoRestart(label, run);
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGKILL_GRACE_MS)) {
-    await finishForcedStopForPublishedHost(label, operation);
+    await finishForcedStopForPublishedHost(label, operation, reportToFallback);
     return;
   }
   throw cliError({
@@ -646,8 +668,17 @@ function forcedStopRemediation(operation: "stop" | "restart"): string {
 async function finishForcedStopForPublishedHost(
   label: ServiceLabel,
   operation: "stop" | "restart",
+  // `null` once the route's own pre-`systemctl` read has reported; otherwise
+  // the engine reports a host that published only AFTER that read and is
+  // killed here, so no actuator on this route signals silently and none
+  // reports twice.
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
-  const outcome = await forceStopHostProcess(label.environment, operation);
+  const outcome = await forceStopHostProcessReporting(
+    label.environment,
+    operation,
+    onHostAddressed,
+  );
   const premise = forcedStopPremise(operation);
   switch (outcome.kind) {
     case "stopped":
@@ -757,6 +788,51 @@ async function probeUnitSettled(
   // as not settled, and the caller keeps waiting, escalates, or fails
   // loudly.
   return state === "inactive" || state === "failed" || state === "unknown";
+}
+
+/**
+ * Whether systemd could start this unit's host on its own before a swap lands.
+ *
+ * The same hazard as macOS's `macosServiceMayRespawn`, through the same seam:
+ * `statusService` here also reports purely from `pid.json`, so a unit sitting
+ * in `Restart=on-failure`'s relaunch window reads `stopped` while systemd is
+ * about to bring it back.
+ *
+ * `systemctl is-active` names that state directly. `activating` is systemd
+ * bringing the unit UP - which for a crashed unit is the `auto-restart`
+ * sub-state - so it is the one answer that means "a writer is coming". Its
+ * settled answers do not: `inactive` is a deliberate stop (`Restart=` does not
+ * apply to a unit stopped that way, which this file already relies on in
+ * `cancelScheduledAutoRestart`), `failed` is a unit whose restart budget is
+ * exhausted, and `unknown` is not loaded at all.
+ *
+ * Anything else - `deactivating`, an unrecognized word, or the empty output a
+ * probe that could not reach the user manager produces - is UNPROVEN and reads
+ * as "may respawn". That is the same positive-confirmation-only discipline the
+ * settle probe above uses, pointed the other way.
+ */
+export async function linuxServiceMayRespawn(
+  label: ServiceLabel,
+  runner: ProcessRunner | null,
+  // Bounds the `systemctl` call; the caller's settle loop sizes it from its
+  // remaining budget.
+  timeoutMs: number,
+): Promise<boolean> {
+  const run = runner ?? runCommand;
+  let result: RunResult;
+  try {
+    result = await run("systemctl", ["--user", "is-active", unitName(label)], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs,
+      tolerateNonZeroExit: true,
+    });
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return true;
+  }
+  const state = result.stdout.trim();
+  return !(state === "inactive" || state === "failed" || state === "unknown");
 }
 
 async function startService(

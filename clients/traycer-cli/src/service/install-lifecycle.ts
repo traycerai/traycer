@@ -44,6 +44,29 @@ function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
   };
 }
 
+/**
+ * Whether a host was actually running before a pre-swap stop, and therefore
+ * whether an abandoned swap owes the machine a restart - as far as the STATUS
+ * probe can say.
+ *
+ * `stopped` and `not-installed` are NOT this, even when a stop was issued:
+ * Windows stops unconditionally to clear file handles the rename needs, so
+ * "we called stop" and "there was a host to put back" are different facts.
+ * Conflating them makes a refused install start a host the user had
+ * deliberately stopped.
+ *
+ * `externally-managed` is the one state this cannot settle. It says Desktop
+ * owns the loaded label, and the probe reports it with no pid at all
+ * (`statusService` in `platforms/macos.ts`), so it is as true of a Desktop
+ * host the person stopped as of one that is serving. The service lifecycle
+ * therefore asks the stop route to report what it addressed
+ * (`StopServiceOptions.onHostAddressed`); this predicate answers only for the
+ * states the probe does decide, which is what the bytes-only lifecycle needs.
+ */
+function hostWasRunningBefore(priorState: ServiceState): boolean {
+  return priorState === "running";
+}
+
 // State captured by the lifecycle hooks so the command can render an
 // accurate `serviceLifecycle` block in its result.
 //
@@ -55,11 +78,14 @@ function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
 //     assumes the service is already there). `externally-managed`
 //     (macOS, SMAppService-owned label) always skips the service work:
 //     Desktop owns that registration and the CLI must not touch it.
-//   - `stoppedBeforeSwap` - true iff we issued `controller.stop()`
-//     because the service was running (or because Windows needs a
-//     force-kill of stray host processes before the install-dir
-//     rename). Used for reporting only; the post-swap path no longer
-//     branches on it.
+//   - `stoppedBeforeSwap` - true iff `controller.stop()` RESOLVED (the
+//     service was running, or Windows needed a force-kill of stray host
+//     processes before the install-dir rename). REPORTING ONLY, and
+//     narrower than it reads: the post-swap path does not branch on it,
+//     and `restartAfterAbortedSwap` deliberately does not either. That
+//     hook gates on whether the stop was DISPATCHED, because a degraded
+//     Desktop stop can commit on the host while reporting failure here -
+//     see its docblock.
 //   - `postSwapAction` - what we actually attempted after the swap.
 //     `install` when we rewrote/re-registered the OS service manifest
 //     (fresh bootstrap or an existing registration that needs the
@@ -162,6 +188,23 @@ export function createServiceInstallLifecycle(
 ): ServiceInstallLifecycleHandle {
   const controller = createServiceController();
   const label = serviceLabelFor(options.environment);
+  // Whether the pre-swap stop was ISSUED, as distinct from whether it
+  // resolved (`state.stoppedBeforeSwap`). A degraded Desktop stop may have
+  // committed on the host while reporting failure here; see
+  // `restartAfterAbortedSwap`.
+  let stopDispatched = false;
+  // Whether the stop ADDRESSED A RUNNING HOST - what a refused swap's restore
+  // owes the machine. Reported by the stop route itself
+  // (`StopServiceOptions.onHostAddressed`), from the pid read it acts on, so
+  // it fires whether the stop then resolves or degrades: `externally-managed`
+  // carries no pid, a resolved stop covers both `stopped` and `no-host`, and
+  // a read of our own taken before the stop would miss a host that publishes
+  // in the gap. `running` also sets it, since that probe answered from a live
+  // record already.
+  let hostRunningBeforeStop = false;
+  const onHostAddressed = (): void => {
+    hostRunningBeforeStop = true;
+  };
   const state: ServiceInstallLifecycleState = {
     priorState: "not-installed",
     stoppedBeforeSwap: false,
@@ -191,9 +234,14 @@ export function createServiceInstallLifecycle(
       // open handles inside the install dir would fail the swap rename, so
       // it runs even when the service wasn't observed running.
       if (status.state === "running" || process.platform === "win32") {
+        hostRunningBeforeStop = hostWasRunningBefore(status.state);
         await withServiceMutationAuthority(verifyMutationCapability, () => {
           if (options.onWillStopHost !== null) options.onWillStopHost();
-          return controller.stop(label, { force: options.force });
+          stopDispatched = true;
+          return controller.stop(label, {
+            force: options.force,
+            onHostAddressed,
+          });
         });
         state.stoppedBeforeSwap = true;
         return;
@@ -213,6 +261,20 @@ export function createServiceInstallLifecycle(
       // Installing is strictly better than refusing there, and
       // `afterSwap` kickstarts the agent either way, so the degrade never
       // leaves the machine hostless.
+      //
+      // THAT DEGRADE IS NOT THE WHOLE STORY ANY MORE, and both halves have
+      // to be read together. It still holds for every move the store-format
+      // floor does not apply to - an upgrade, a same-version reinstall - and
+      // those are the overwhelming majority. But a `hung` outcome here means
+      // the pid was observed STILL ALIVE after the full grace, and swallowing
+      // it leaves a live 1.3 host writing chat stores while older bytes land
+      // underneath. So for a move the floor DOES apply to, the commit tail
+      // refuses instead: `observeSwapQuiescence` cannot prove the writer is
+      // gone, and `assertStoreFormatFloorAfterStop` turns that into a refusal
+      // naming the reason, with `--accept-store-format-loss` the only way
+      // past. The decision lives there rather than here because only the tail
+      // knows whether the floor applies - this branch cannot see the target
+      // version at all.
       if (
         status.state === "externally-managed" &&
         process.platform === "darwin"
@@ -223,7 +285,14 @@ export function createServiceInstallLifecycle(
             // that denial is `HOST_BUSY`, which every caller routes to the
             // park arm - the one exit that never reads the boundary.
             if (options.onWillStopHost !== null) options.onWillStopHost();
-            return controller.stop(label, { force: options.force });
+            stopDispatched = true;
+            // `externally-managed` says nothing about a process, so the
+            // route's own read is the only word on whether a host is being
+            // taken down here; see `onHostAddressed`.
+            return controller.stop(label, {
+              force: options.force,
+              onHostAddressed,
+            });
           });
           state.stoppedBeforeSwap = true;
         } catch (cause) {
@@ -242,6 +311,66 @@ export function createServiceInstallLifecycle(
           );
         }
       }
+    },
+    /**
+     * Put back the host `beforeSwap` stopped, for a swap that was abandoned
+     * between the two.
+     *
+     * The SAME recycle route `afterSwap` takes after a resolved stop, not a
+     * plain start. An earlier version of this used `controller.start` on the
+     * reasoning that nothing was replaced so no new generation needs forcing
+     * onto the job. That reasoning was about the wrong thing: on macOS
+     * `stopService` waits on the HOST pid from `pid.json`, while the launchd
+     * job is the SUPERVISOR, which outlives its child by the whole post-mortem
+     * - so there is a window where the host is gone, the stop has returned,
+     * and launchd still considers the job running. A plain kickstart against a
+     * running job is a silent no-op (see `relaunchServiceAfterRestart` in
+     * `platforms/macos.ts`, which names this hazard). The recovery would then
+     * report success and leave the machine HOSTLESS on the old, untouched
+     * install - the worst outcome available to a refusal whose whole promise
+     * is that it changed nothing.
+     *
+     * Gated on TWO things, because `stoppedBeforeSwap` alone is not the
+     * question. It is set whenever `controller.stop` was issued - and on
+     * Windows that happens even for a service the probe found `stopped`,
+     * because the stop there is a force-kill of stray processes whose handles
+     * inside the install directory would fail the rename, not a host
+     * shutdown. Restoring on that alone would START a host the user had
+     * deliberately stopped. So the stop has to have ADDRESSED a running host:
+     * the probe's `running`, or the stop route's own report that its pid
+     * read found a live host (`onHostAddressed`) - the only word there is for
+     * `externally-managed`, which the probe reports without a pid whether or
+     * not a Desktop host is up.
+     *
+     * The other gate is DISPATCH, not success, and the difference is a machine
+     * left hostless. `stoppedBeforeSwap` is assigned only after
+     * `controller.stop` RESOLVES, so a Desktop-managed stop that degraded -
+     * the claim committed on the host but its acknowledgement was lost, so the
+     * route reported `unreachable` or `hung` - leaves that flag false while the
+     * host goes on to finish the shutdown it already committed to. A committed
+     * claim cannot be released, the supervisor's clean-exit arm does not
+     * relaunch without a restart intent, and `withStopIntent` recorded reason
+     * `stop`, so no manager owes a comeback either. Gating the restore on
+     * success would therefore skip it in exactly the case where the host is
+     * about to disappear and nothing else will bring it back.
+     *
+     * So this tracks whether the stop was DISPATCHED - set where
+     * `onWillStopHost` fires, which is the documented first point at which
+     * this lifecycle can have disturbed the host, and after the mutation
+     * authority check that can refuse before touching anything.
+     */
+    restartAfterAbortedSwap: async () => {
+      if (!stopDispatched) return;
+      if (!hostRunningBeforeStop) return;
+      await withServiceMutationAuthority(verifyMutationCapability, () =>
+        runWithPublishedHostStartAdoption(
+          publishHostStartAdoption,
+          controller,
+          label,
+          async () =>
+            controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ),
+      );
     },
     afterSwap: async () => {
       // At the TOP, before every branch below: the bytes are committed and
@@ -520,6 +649,7 @@ export function createBytesOnlyInstallLifecycle(
   hooks: InstallPhaseHooks,
 ): InstallHostLifecycle {
   let verifyMutationCapability = async (): Promise<void> => {};
+  let hostWasRunning = false;
   return {
     swapLockRecovery: swapLockRecoveryFor(label),
     setMutationVerifier: (verify) => {
@@ -527,8 +657,29 @@ export function createBytesOnlyInstallLifecycle(
     },
     beforeSwap: async (): Promise<void> => {
       if (process.platform !== "win32") return;
+      // Probed BEFORE the stop, and only to answer "was a host running?" -
+      // never to decide whether to stop. The Windows stop runs regardless,
+      // because it force-kills stray processes whose open handles inside the
+      // install directory would fail the rename, and those outlive a service
+      // the probe calls `stopped`.
+      const status = await controller.status(label);
       await withServiceMutationAuthority(verifyMutationCapability, () =>
         controller.stop(label, { force: false }),
+      );
+      hostWasRunning = hostWasRunningBefore(status.state);
+    },
+    // Only Windows ever stopped anything here, so only Windows has anything
+    // to put back - and only when a host was actually RUNNING to begin with.
+    // On POSIX this lifecycle is bytes-only by contract: it leaves the running
+    // host alone, and starting one after an abandoned swap would be this path
+    // doing the very thing it promises not to. On Windows the same promise
+    // binds one step further in: a refused `host install --no-service-register`
+    // over a deliberately stopped service must leave it stopped, even though
+    // the rename's force-kill did issue a stop.
+    restartAfterAbortedSwap: async (): Promise<void> => {
+      if (!hostWasRunning) return;
+      await withServiceMutationAuthority(verifyMutationCapability, () =>
+        controller.start(label),
       );
     },
     beforeSwapCommit: () => hooks.beforeSwapCommit(),

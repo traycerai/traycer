@@ -21,7 +21,7 @@ describe("host update final actuator regression boundaries", () => {
     const atomicSwap = sliceFrom(
       install,
       "async function atomicSwap(",
-      "// Reads the `version.json` sidecar",
+      "function deriveLocalVersion(",
     );
 
     expect(atomicSwap).toContain("verifyMutationCapability");

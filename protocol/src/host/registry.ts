@@ -244,9 +244,11 @@ import {
   hostStatusV11,
   hostStatusV12,
   hostStatusV13,
+  hostStatusV14,
   hostStatusUpgradeV10ToV11,
   hostStatusUpgradeV11ToV12,
   hostStatusUpgradeV12ToV13,
+  hostStatusUpgradeV13ToV14,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -271,15 +273,19 @@ import {
   hostUpdateActivateV10,
   hostUpdateActivateV11,
   hostUpdateCheckUpgradeV10ToV11,
+  hostUpdateCheckUpgradeV11ToV12,
   hostUpdateCheckV10,
   hostUpdateCheckV11,
+  hostUpdateCheckV12,
   hostUpdateContinueUpgradeV10ToV11,
   hostUpdateContinueV10,
   hostUpdateContinueV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
   hostUpdateInstallV12,
+  hostUpdateInstallV13,
   hostUpdateInstallUpgradeV11ToV12,
+  hostUpdateInstallUpgradeV12ToV13,
   hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
@@ -4349,7 +4355,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -4366,6 +4372,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         3: {
           contract: hostStatusV13,
           upgradeFromPreviousVersion: hostStatusUpgradeV12ToV13,
+        },
+        4: {
+          contract: hostStatusV14,
+          upgradeFromPreviousVersion: hostStatusUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -4449,7 +4459,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.check": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostUpdateCheckV10,
@@ -4459,6 +4469,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: hostUpdateCheckV11,
           upgradeFromPreviousVersion: hostUpdateCheckUpgradeV10ToV11,
         },
+        2: {
+          contract: hostUpdateCheckV12,
+          upgradeFromPreviousVersion: hostUpdateCheckUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -4466,7 +4480,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
@@ -4496,6 +4510,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostUpdateInstallV12,
           upgradeFromPreviousVersion: hostUpdateInstallUpgradeV11ToV12,
+        },
+        3: {
+          contract: hostUpdateInstallV13,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},

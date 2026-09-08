@@ -196,6 +196,9 @@ function hostStatusResponse(
     // which is exactly what host.status@1.2-and-older peers send.
     updateOperation: null,
     updateTransaction: null,
+    // `null` = this fixture's host did not report on-disk store formats,
+    // which is what a host predating the field sends.
+    storeFormats: null,
     ...overrides,
   };
 }
