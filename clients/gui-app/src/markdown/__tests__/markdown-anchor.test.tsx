@@ -137,6 +137,7 @@ function renderMarkdownWithBrowserRouting(
     lifecycle: "live",
     inventoryReady: true,
     canMaterializeElectron: false,
+    connectionGeneration: 0,
     items: [],
     errorMessage: null,
     retry: () => undefined,

@@ -170,14 +170,19 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       ? null
       : compositeKey(node.hostId, node.sessionId, node.tabId, node.instanceId);
 
+  // `releaseForwardedPageKeys` is published with the claim rather than looked
+  // up later: the keybinding provider fires app-forwarded actions while a tile
+  // is armed, and the only tile it may ever tell about that is the one holding
+  // the claim it read.
+  const releaseForwardedPageKeys = session.releaseForwardedPageKeys;
   useLayoutEffect(() => {
     if (inputOwnerId === null) return;
     const store = useScreencastArmedStore.getState();
-    store.claim(inputOwnerId);
+    store.claim(inputOwnerId, releaseForwardedPageKeys);
     return () => {
       useScreencastArmedStore.getState().release(inputOwnerId);
     };
-  }, [inputOwnerId]);
+  }, [inputOwnerId, releaseForwardedPageKeys]);
 
   const status = useMemo(
     () =>

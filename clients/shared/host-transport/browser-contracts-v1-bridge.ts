@@ -107,6 +107,31 @@ export const BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON =
   "This host predates window-bound browser tabs. Update it to place a tab in this window.";
 
 /**
+ * Whether a rejected `attachTab` / `moveTab` is THIS refusal rather than one
+ * of the host's own.
+ *
+ * The distinction is the whole point, and it is not a nicety: a host's refusal
+ * ("bound in another window", "the session is closing") is transient and the
+ * reader's next activation is its retry, while this one is a standing fact
+ * about the LINE - it will refuse the same request for as long as the reader
+ * is on this host, and no amount of retrying changes that. A caller that
+ * treats the two alike either retries forever or gives up on a tab that was
+ * about to come back.
+ *
+ * Matched on the reason because that is the only channel an `actionAck` has,
+ * and it lives HERE, beside the string it compares against, so the refusal and
+ * its recogniser can never drift into two different sentences in two packages.
+ */
+export function isBrowserSessionsV1NoWindowBindingRefusal(
+  error: unknown,
+): error is Error {
+  return (
+    error instanceof Error &&
+    error.message === BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON
+  );
+}
+
+/**
  * The first browser major addressed by a SCOPE rather than by an epic id.
  *
  * Pinned, not negotiated, by the one request `@1` has no way to express: the

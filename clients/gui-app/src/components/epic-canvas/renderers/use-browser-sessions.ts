@@ -213,6 +213,10 @@ function unavailableBrowserSessionsState(
     // native tab on that host. Surfaces gate a native branch on it, and the
     // safe answer is the viewer one.
     canMaterializeElectron: false,
+    // No connection has been established, so nothing has answered anything on
+    // one. A reader comparing a latched per-connection answer against this
+    // sees a generation that can only go up.
+    connectionGeneration: 0,
     items: [],
     errorMessage: null,
     retry: () => undefined,

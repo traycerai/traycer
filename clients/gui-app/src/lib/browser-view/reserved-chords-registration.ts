@@ -45,11 +45,22 @@ import { ignoreError } from "./ignore-error";
  * keeps a canvas viewer out of both: it opens no tabs and retires no row, so
  * it hands the controller nothing and those chords stay the page's.
  *
- * The APP-FORWARDED rows below still have no streamed equivalent, and it is
- * not an omission of the same kind: forwarding means main replays the key into
- * the renderer, and there is nothing to replay into a renderer that is already
- * holding it. A streamed tile drops them because the app's registry is skipped
- * wholesale while a tile is armed.
+ * The APP-FORWARDED rows have a streamed equivalent too, and it is the
+ * simplest one there could be. Forwarding means main replays the key into the
+ * renderer so the renderer's own binding runs - and a streamed tile's renderer
+ * is already holding the key, so there is nothing to replay: the only thing in
+ * the way was the app registry skipping every action while a tile is armed.
+ * `keybinding-provider.tsx` therefore stops skipping exactly the tokens this
+ * function returns with a null `command`, and those bindings fire from the
+ * registry as they always did. No second list: a row added below is honoured
+ * on both halves the moment it appears here.
+ *
+ * The LANDING rows ride the same mechanism and keep their surface gate, which
+ * on the streamed side is what round 7's rule asks for - the gate is in this
+ * function, so a canvas-armed tile is never offered them and its ⌘J stays the
+ * page's. The plain APP-FORWARDED rows are surface-independent on both halves
+ * alike, because the palette and epic/tab navigation have handlers wherever
+ * the reader is.
  *
  * The BROWSER-SCOPED rows are literal tokens, because they are not app
  * bindings at all: they are what a browser does with those keys, and the

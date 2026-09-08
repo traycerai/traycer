@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { isBrowserSessionsV1NoWindowBindingRefusal } from "@traycer-clients/shared/host-transport/browser-contracts-v1-bridge";
 import { ElectronTabSurface } from "./agent-browser-tile";
 import {
   BrowserPeekTile,
@@ -124,6 +125,16 @@ interface BrowserTabTileSurfaceProps extends BrowserTabTileProps {
   readonly wakeExpired: boolean;
   readonly onRequestWake: () => void;
   /**
+   * The reason a `@1` host gave for refusing to place this tab in a window, or
+   * `null` on every line that can express one.
+   *
+   * A terminal fact rather than an error: the frozen `browser.sessions` line
+   * has no window-bound tabs at all, so the refusal is the same for every tab,
+   * every window and every retry. It displaces the reconnect wait because that
+   * wait is a guess about a binding that is on its way, and here none is.
+   */
+  readonly attachUnsupportedReason: string | null;
+  /**
    * "Show here": move this tab's native guest out of the window that holds it
    * and into this one, page state intact. Rejects with the host's reason,
    * which the note toasts before putting its button back.
@@ -193,7 +204,15 @@ function shouldRequestTabAttach(args: {
   readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
   readonly binding: ElectronTabBinding | null;
   readonly hostReachable: boolean;
+  /**
+   * The host has already said it cannot place a tab in a window at all. Asking
+   * again is not a retry, it is the same refusal - and re-asking on every
+   * activation is what kept the tile in a reconnect loop instead of telling
+   * the reader to update the host.
+   */
+  readonly attachUnsupported: boolean;
 }): boolean {
+  if (args.attachUnsupported) return false;
   if (!args.canMaterializeElectron || !args.inventoryReady) return false;
   if (!args.visible || !args.hostReachable) return false;
   if (args.session === undefined || args.tab === undefined) return false;
@@ -285,6 +304,18 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
     // rather than after it: the wait is a guess about elapsed time and this is
     // the host's answer, so it displaces the spinner and pre-empts the
     // reopen alert instead of sitting behind ten seconds of one.
+    // Before both, because it answers the question they are guessing at. On
+    // this line `boundWindowId` is lifted to null for every tab, so the note
+    // below can never be reached and the wait below it never ends: the tab is
+    // not coming back to THIS window, and no window it could be moved to is
+    // nameable. The refusal is the answer, so it is what the reader is shown.
+    if (props.attachUnsupportedReason !== null) {
+      return (
+        <BrowserTabAttachUnsupportedNote
+          reason={props.attachUnsupportedReason}
+        />
+      );
+    }
     if (
       tabBoundInAnotherWindow(props.session, props.tab, props.desktopWindowId)
     ) {
@@ -382,6 +413,33 @@ function BrowserTabRebindWait(props: {
       <Button type="button" variant="outline" size="sm" onClick={props.onWake}>
         Reopen tab
       </Button>
+    </div>
+  );
+}
+
+/**
+ * A host too old to place a tab in a window, and the end of the road for this
+ * tile's native branch.
+ *
+ * `role="alert"` and not `status`, unlike the other-window note: that one is a
+ * standing fact with a gesture that resolves it, and this is a dead end with
+ * nothing the reader can do inside the app. The reason is rendered rather than
+ * restated, because the bridge writes it about the HOST for exactly this
+ * surface - "this tab is busy" would send a reader looking for a tab problem
+ * that does not exist - and duplicating the sentence here would let the two
+ * drift.
+ *
+ * No "Reopen tab" and no spinner: both would promise a retry that is refused
+ * identically every time.
+ */
+function BrowserTabAttachUnsupportedNote(props: { readonly reason: string }) {
+  return (
+    <div
+      role="alert"
+      data-testid="browser-tab-attach-unsupported"
+      className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-ui-sm text-muted-foreground"
+    >
+      <p className="max-w-md">{props.reason}</p>
     </div>
   );
 }
@@ -667,21 +725,89 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
   const [wakeRequestedAt, setWakeRequestedAt] = useState<number | null>(null);
   const [wakeWindowExpired, setWakeWindowExpired] = useState(false);
   /**
+   * The `@1` refusal, if one has been given, TOGETHER with the connection it
+   * was given on.
+   *
+   * The generation is the whole of what makes this safe to latch. The refusal
+   * is a property of the negotiated line, so it holds for as long as that
+   * connection does - but a reader upgrading their host does not remount this
+   * tile. `BrowserSessionsHostProvider` keeps its children, the coordinator
+   * patches lifecycle and inventory in place, and `openSessionsSubscription`
+   * re-declares its params against whatever major the new incarnation serves.
+   * An unscoped latch would therefore survive the upgrade it asked for and go
+   * on showing "Update it" over a host that had just been updated, with no way
+   * out but recreating the tile.
+   *
+   * The generation identifies a connection ACROSS COORDINATOR REPLACEMENT, not
+   * only within one coordinator's life, and this tile depends on that stronger
+   * property. The coordinator itself is disposed and rebuilt under the same key
+   * whenever the host's authenticated directory identity drops - a local host
+   * restarting is exactly that - while this tile stays mounted holding the old
+   * one's answer. `allocateConnectionGeneration` is renderer-wide so the
+   * replacement's first connection cannot reuse the number that answer carries;
+   * a per-coordinator counter would restart and collide with it precisely.
+   *
+   * Kept as state rather than cleared by an effect because the answer is
+   * derived: a latch from an older connection is simply not this connection's
+   * answer. Writing it monotonically is what keeps a rejection that was in
+   * flight across the reconnect from displacing a newer one.
+   */
+  const [attachRefusal, setAttachRefusal] = useState<{
+    readonly reason: string;
+    readonly generation: number;
+  } | null>(null);
+  const connectionGeneration = sessions.connectionGeneration;
+  const attachUnsupportedReason =
+    attachRefusal !== null && attachRefusal.generation === connectionGeneration
+      ? attachRefusal.reason
+      : null;
+  /**
    * "Attach this tab on MY window's route." The host elects native routes per
    * scope AND window, so without this the tab is woken onto whichever route is
    * the scope's default and the reader watches it appear in the other window.
    *
-   * Fire-and-forget by construction, and that is the whole design rather than
-   * missing error handling: the screencast subscription behind the peek branch
-   * is still what WAKES the tab, and this only names the window that asked. So
-   * a rejection (the tab is bound in another window, the session is closing)
-   * and a timeout (a host too old to have the frame's reader) both leave the
-   * tile rendering exactly what it renders without it, and neither is worth a
-   * retry - the reader's own next activation is the retry.
+   * Fire-and-forget for every outcome the HOST can produce, and that is the
+   * whole design rather than missing error handling: the screencast
+   * subscription behind the peek branch is still what WAKES the tab, and this
+   * only names the window that asked. So a rejection (the tab is bound in
+   * another window, the session is closing) and a timeout both leave the tile
+   * rendering exactly what it renders without it, and neither is worth a retry
+   * - the reader's own next activation is the retry.
+   *
+   * Exactly one refusal is not like that, and it is not the host's: see the
+   * catch. Everything above rests on "the tile renders the same either way",
+   * and that premise is what fails there.
    */
   const sendAttachTab = useCallback(() => {
-    void attachTab(props.node.tabId).catch(() => undefined);
-  }, [attachTab, props.node.tabId]);
+    const sentOnGeneration = connectionGeneration;
+    void attachTab(props.node.tabId).catch((error: unknown) => {
+      // The one refusal that is NOT what the note above describes. Everything
+      // the note says holds for a host's own rejection - it is transient, the
+      // next activation is the retry, and the tile renders the same either
+      // way. This one comes from the client's own compatibility bridge, is
+      // identical for every tab and every retry, and the tile CANNOT render
+      // the same either way: a `@1` line reports no window binding for any
+      // tab, so the reconnect wait it falls into has nothing to wait for and
+      // the reader is left cycling "Reconnecting" and "Reopen tab" over a
+      // host that simply needs updating.
+      if (!isBrowserSessionsV1NoWindowBindingRefusal(error)) return;
+      // Stamped with the generation this attach was SENT on, not the one
+      // current when it was refused: the point is to recognise an answer that
+      // belongs to a connection that has since been replaced.
+      //
+      // Monotonic, through a functional update rather than a read of the
+      // current generation, which would be stale in this closure anyway. Two
+      // attaches can be outstanding across a reconnect, and the older one's
+      // rejection routinely lands last - so "keep the newer answer" is the
+      // rule, and it is decided against whatever is stored rather than
+      // against a captured value.
+      setAttachRefusal((previous) =>
+        previous !== null && previous.generation >= sentOnGeneration
+          ? previous
+          : { reason: error.message, generation: sentOnGeneration },
+      );
+    });
+  }, [attachTab, props.node.tabId, connectionGeneration]);
   /**
    * The exact opposite of `sendAttachTab` in how its outcome is handled, for
    * the reason stated on the note: this one is a press, so the rejection is
@@ -742,6 +868,7 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
     tab,
     binding,
     hostReachable: reachability.status !== "unreachable",
+    attachUnsupported: attachUnsupportedReason !== null,
   });
   // A LAYOUT effect, and that one word is the whole ordering guarantee.
   //
@@ -833,6 +960,7 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
           wakeExpired={wakeExpired}
           onRequestWake={requestWake}
           onShowHere={sendMoveTab}
+          attachUnsupportedReason={attachUnsupportedReason}
         />
       </div>
     </div>

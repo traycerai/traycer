@@ -48,6 +48,29 @@ export interface BrowserSessionsState {
    * from host-side facts that describe some other client's window.
    */
   readonly canMaterializeElectron: boolean;
+  /**
+   * Which established connection this state belongs to, allocated from a
+   * RENDERER-WIDE counter ({@link allocateConnectionGeneration}). `0` means no
+   * connection has been established yet and is strictly below every allocated
+   * value.
+   *
+   * A connection is the unit a per-connection ANSWER is valid for, and until
+   * now nothing named it. `lifecycle` cannot stand in - it returns to the same
+   * `"live"` string - and neither can the negotiated `SchemaVersion`, because a
+   * reconnect to the SAME version is still a new connection whose answers are
+   * freshly given: a host restarted at its old build has forgotten every
+   * refusal it issued, and a client still holding one is holding a fact about
+   * a socket that no longer exists.
+   *
+   * A reader that latches a refusal stores this alongside it and compares
+   * before believing it again, which is both halves of the problem at once -
+   * the latch is dropped when the connection is replaced, and a rejection that
+   * was in flight ACROSS that replacement is recognisable as the old
+   * connection's rather than the new one's. Both readings rest on allocation
+   * order being process-wide time order, which is why the counter is not
+   * per-coordinator.
+   */
+  readonly connectionGeneration: number;
   readonly items: readonly BrowserSessionInfo[];
   readonly errorMessage: string | null;
   readonly retry: () => void;
@@ -208,6 +231,33 @@ function canMaterializeElectronTab(
   hostId: string,
 ): boolean {
   return runtime.browserView !== null && runtime.localHostId === hostId;
+}
+
+/**
+ * Numbers every connection this RENDERER establishes, across every coordinator
+ * and every host.
+ *
+ * Deliberately module-scoped rather than a field on the coordinator, and that
+ * is the whole correctness argument. A coordinator is disposed and recreated
+ * under the same key while its consumers stay mounted - `use-browser-sessions`
+ * drops `owner` the moment the host's authenticated directory identity does,
+ * which a local host restarting is, and the acquire effect's cleanup releases
+ * the last consumer and disposes the instance. A per-coordinator counter
+ * restarts at 0 there, so the replacement's FIRST connection is generation 1 -
+ * exactly the number a refusal latched on the previous coordinator's first
+ * connection is already holding. The stale answer would then match a fresh
+ * connection precisely, which is the one case the generation exists to catch,
+ * and neither the equality compare nor the monotonic write would notice: the
+ * numbers are equal, not older.
+ *
+ * Monotonic for the life of the renderer, so a comparison never has to know
+ * which coordinator - or which host - produced either side.
+ */
+let nextConnectionGeneration = 0;
+
+function allocateConnectionGeneration(): number {
+  nextConnectionGeneration += 1;
+  return nextConnectionGeneration;
 }
 
 /** One outstanding request/response pair, keyed by its `requestId`. */
@@ -511,6 +561,7 @@ function createBrowserSessionsCoordinator(args: {
       Pick<
         BrowserSessionsState,
         | "canMaterializeElectron"
+        | "connectionGeneration"
         | "errorMessage"
         | "inventoryReady"
         | "items"
@@ -654,6 +705,23 @@ function createBrowserSessionsCoordinator(args: {
       lifecycle: next,
       inventoryReady: next === "live" && coordinator.state.inventoryReady,
       errorMessage,
+      // The edge INTO live, which is exactly one allocation per established
+      // connection: a durable reconnect leaves `live` for `reconnecting` and
+      // comes back, and `openSessionsSubscription` re-declares its params
+      // against whatever major THAT incarnation serves. Guarded on `wasLive`
+      // rather than allocating on every status so a `reconnecting` ->
+      // `failed` -> `reconnecting` churn does not invent connections that
+      // never opened.
+      //
+      // ALLOCATED, not incremented off the current value: this coordinator may
+      // itself be a replacement for a disposed one whose consumers are still
+      // mounted holding its answers, and counting from this instance's own
+      // state would hand them back a number that instance already used. See
+      // `allocateConnectionGeneration`.
+      connectionGeneration:
+        next === "live" && !wasLive
+          ? allocateConnectionGeneration()
+          : coordinator.state.connectionGeneration,
     });
   };
 
@@ -743,6 +811,9 @@ function createBrowserSessionsCoordinator(args: {
         args.runtime,
         args.owner.hostId,
       ),
+      // Not allocated: no connection has been established yet, and 0 is below
+      // every value the allocator hands out.
+      connectionGeneration: 0,
       items: [],
       errorMessage: null,
       retry: restart,

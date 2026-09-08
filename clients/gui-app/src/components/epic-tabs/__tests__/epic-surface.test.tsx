@@ -101,6 +101,7 @@ vi.mock(
           lifecycle: ready ? "live" : "connecting",
           inventoryReady: ready,
           canMaterializeElectron: false,
+          connectionGeneration: 0,
           items: ready ? readySessionsState.items : [],
           errorMessage: null,
           retry: () => undefined,

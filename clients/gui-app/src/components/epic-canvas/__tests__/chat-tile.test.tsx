@@ -54,6 +54,7 @@ const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   lifecycle: "live",
   inventoryReady: true,
   canMaterializeElectron: false,
+  connectionGeneration: 0,
   items: [],
   errorMessage: null,
   retry: () => undefined,

@@ -17,6 +17,7 @@ import {
 import { subscribeLeaderScopes } from "@/lib/keybindings/leader-scope";
 import { historyNavChromeAvailable } from "@/lib/history-navigation";
 import type { ActionId } from "@/lib/keybindings/actions";
+import type { ChordString } from "@/lib/keybindings/chord";
 import { ACTION_META, type TerminalPolicy } from "@/lib/keybindings/actions";
 import { isMac } from "@/lib/keybindings/platform";
 import {
@@ -33,6 +34,10 @@ import {
   isEditableEventTarget,
 } from "@/lib/keybindings/editable-target";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
+import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-registration";
+import { selectLandingTerminalSurfaceActive } from "@/components/home/terminal-panel/landing-terminal-surface-binding";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useTabsStore } from "@/stores/tabs/store";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -95,6 +100,52 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     const unsubscribeArmed = useScreencastArmedStore.subscribe((state) => {
       armedRef.current = state.ownerId !== null;
     });
+
+    /**
+     * The chords a focused browser tile hands BACK to the app, as tokens.
+     *
+     * The SAME table main replays from on the native side
+     * (`reservedBrowserChordsFor`), filtered to the app-forwarded rows - the
+     * ones whose `command` is null. Browser-scoped rows are deliberately
+     * absent: `mod+t` / `mod+w` / `mod+l` / `mod+r` belong to the tile, and
+     * the screencast controller is what claims them. Deriving from that one
+     * table is the whole point - a chord the native path replays and the
+     * streamed path swallows is the defect this closes, and two lists would
+     * grow one back.
+     *
+     * Read at event time rather than subscribed to, and memoised on the two
+     * inputs' identities. A subscription would either re-register the window
+     * listeners on every rebind or rebuild this on every tabs-store write;
+     * this rebuilds only when the bindings object or the surface flag
+     * actually changes, and costs two `getState()` calls otherwise. It is
+     * consulted only while a tile is armed.
+     */
+    let forwardedChords: {
+      readonly bindings: Readonly<Record<ActionId, ChordString | null>>;
+      readonly landingSurfaceActive: boolean;
+      readonly tokens: ReadonlySet<ChordString>;
+    } | null = null;
+    const readForwardedChords = (): ReadonlySet<ChordString> => {
+      const bindings = useKeybindingStore.getState().bindings;
+      const landingSurfaceActive = selectLandingTerminalSurfaceActive(
+        useTabsStore.getState(),
+      );
+      const cached = forwardedChords;
+      if (
+        cached !== null &&
+        cached.bindings === bindings &&
+        cached.landingSurfaceActive === landingSurfaceActive
+      ) {
+        return cached.tokens;
+      }
+      const tokens = new Set(
+        reservedBrowserChordsFor(bindings, { landingSurfaceActive })
+          .filter((row) => row.command === null)
+          .map((row) => row.token),
+      );
+      forwardedChords = { bindings, landingSurfaceActive, tokens };
+      return tokens;
+    };
 
     const clearHintTimer = () => {
       if (hintTimerRef.current === null) return;
@@ -307,6 +358,25 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         return true;
       }
       if (!armedRef.current) return false;
+      // The one exemption, and it is the streamed half of the reserved-chord
+      // policy rather than a new rule: a native tile's app-forwarded chords
+      // reach these handlers because main replays them into this renderer,
+      // and a STREAMED tile has no main process in its input path at all - so
+      // without this the same chords are simply lost while a tile is armed.
+      //
+      // Reaching dispatch is guaranteed, not hoped for: the token came from
+      // the live binding table, so `findActionMatchForChord` matches it by
+      // construction, and none of the forwarded actions is externally handled
+      // or is `nav.back` / `nav.forward` (the two `resolveReservedAction` can
+      // still refuse). That is what lets the page-key release sit here
+      // instead of beside each dispatch - and it has to happen before the
+      // action runs, because an action that takes focus out of the tile's IME
+      // input is exactly the case where the matching keyup never arrives.
+      const chord = resolveMatchingChord(event);
+      if (chord !== null && readForwardedChords().has(chord)) {
+        useScreencastArmedStore.getState().releasePageKeys?.();
+        return false;
+      }
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       else resetHintSession(pathname);
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);

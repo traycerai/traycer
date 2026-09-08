@@ -29,6 +29,13 @@ import type {
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { registerHostedPaneActivationClaim } from "@/components/epic-canvas/pane-activation";
+import {
+  acquireBrowserSessionsCoordinator,
+  browserSessionsCoordinatorKey,
+  browserSessionsCoordinatorState,
+} from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import { BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON } from "@traycer-clients/shared/host-transport/browser-contracts-v1-bridge";
 
 const harness = vi.hoisted(() => ({
   binding: null as ElectronTabBinding | null,
@@ -39,6 +46,13 @@ const harness = vi.hoisted(() => ({
   // desktop co-located with the tile's host. A viewer-only client sets it
   // false, and then never reaches the native or rebind branches at all.
   canMaterializeElectron: true,
+  /**
+   * Which (re)negotiated connection the coordinator is on. Bumping it is how
+   * this suite spells "the host was upgraded and the stream came back" without
+   * remounting the tile - which is exactly what the real provider does, and
+   * what a latched per-connection refusal has to notice.
+   */
+  connectionGeneration: 0,
   closeCanvasTile: vi.fn(),
   // Fixed resolution, independent of the sessionId it is called with: the
   // relocated open-link tests (below) assert on this literal return value,
@@ -149,6 +163,7 @@ function sessionsContextValue() {
     lifecycle: harness.lifecycle,
     inventoryReady: harness.inventoryReady,
     canMaterializeElectron: harness.canMaterializeElectron,
+    connectionGeneration: harness.connectionGeneration,
     items: harness.items,
     errorMessage: null,
     retry: vi.fn(),
@@ -195,6 +210,13 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   ),
 }));
 vi.mock("@/lib/browser-view/sessions/electron-tab-directory", () => ({
+  // The coordinator imports these three, and the generation probe below runs
+  // a REAL coordinator through acquire/dispose - so a factory that answered
+  // only the hook would fail at dispose rather than at an assertion. Same
+  // whole-seam rule the canvas provider suite's stream-client double follows.
+  publishElectronTabBinding: () => undefined,
+  removeOwnedElectronTabBinding: () => undefined,
+  removeOwnedElectronTabBindings: () => undefined,
   useElectronTabBindingOnHost: (
     sessionId: string,
     tabId: string,
@@ -385,10 +407,15 @@ describe("BrowserSessionTile lifecycle projection", () => {
     harness.lifecycle = "live";
     harness.inventoryReady = true;
     harness.canMaterializeElectron = true;
+    harness.connectionGeneration = 0;
     harness.closeCanvasTile.mockClear();
     harness.openTab.mockClear();
     harness.closeTab.mockClear();
-    harness.attachTab.mockClear();
+    harness.attachTab.mockReset();
+    harness.attachTab.mockImplementation(() => {
+      harness.frameOrder.push("attachTab");
+      return Promise.resolve();
+    });
     harness.moveTab.mockReset();
     harness.moveTab.mockImplementation(() => Promise.resolve());
     toastHarness.error.mockClear();
@@ -980,6 +1007,272 @@ describe("BrowserSessionTile lifecycle projection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // A `@1` host cannot express window binding at all, so the client's own
+  // compatibility bridge answers the attach locally with the reason a reader
+  // is shown. Swallowing that alongside the host's own transient refusals left
+  // the tile cycling "Reconnecting" and "Reopen tab" over a host that only
+  // needed updating.
+  it("shows the update guidance and stops re-asking when the line cannot bind a tab to a window", async () => {
+    harness.items = [session("ready", "electron")];
+    harness.attachTab.mockImplementation(() =>
+      Promise.reject(new Error(BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON)),
+    );
+
+    const view = render(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+
+    const note = await screen.findByTestId("browser-tab-attach-unsupported");
+    expect(note.textContent).toContain(
+      BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON,
+    );
+    expect(note.getAttribute("role")).toBe("alert");
+    // The wait it displaces, and the retry that wait offers: both gone, so
+    // there is no loop left to re-arm.
+    expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+    expect(screen.queryByTestId("browser-tab-rebind-timeout")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reopen tab" })).toBeNull();
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+
+    // A conceal/reveal cycle IS the ordinary retry - it is what re-arms the
+    // per-activation ask - and this is the one refusal it must not repeat.
+    view.rerender(
+      <TabBodySelectedContext.Provider value={false}>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    view.rerender(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("browser-tab-attach-unsupported")).toBeTruthy();
+  });
+
+  // Upgrading the host does NOT remount this tile: the provider preserves its
+  // children, the coordinator patches lifecycle and inventory in place, and
+  // `openSessionsSubscription` re-declares its params against whatever major
+  // the new incarnation serves. A latch that ignored that would survive the
+  // upgrade it asked for and go on telling the reader to update a host they
+  // just updated.
+  it("clears the update guidance and re-asks once the connection is renegotiated", async () => {
+    harness.items = [session("ready", "electron")];
+    harness.attachTab.mockImplementation(() =>
+      Promise.reject(new Error(BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON)),
+    );
+
+    const view = render(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    await screen.findByTestId("browser-tab-attach-unsupported");
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+
+    // The upgraded host: a fresh connection, and an attach it can answer.
+    harness.attachTab.mockImplementation(() => Promise.resolve());
+    harness.connectionGeneration = 1;
+    view.rerender(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("browser-tab-attach-unsupported")).toBeNull();
+    // Back to the ordinary wait, and the ask actually went out again - a
+    // cleared note over a tile that never re-asks would be the same dead end
+    // wearing a spinner.
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+    expect(harness.attachTab).toHaveBeenCalledTimes(2);
+  });
+
+  // The rejection of an attach sent on the OLD connection routinely lands
+  // after the new one is up, because that is when the old socket finally
+  // settles. Stamping the refusal with the generation it was SENT on is what
+  // keeps it from re-latching over a host that can now answer.
+  it("ignores a refusal from a connection that has already been replaced", async () => {
+    harness.items = [session("ready", "electron")];
+    const stale = Promise.withResolvers<void>();
+    harness.attachTab.mockImplementationOnce(() => stale.promise);
+
+    const view = render(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+
+    harness.attachTab.mockImplementation(() => Promise.resolve());
+    harness.connectionGeneration = 1;
+    view.rerender(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Now the old connection's refusal finally arrives.
+    stale.reject(new Error(BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Reddens without the generation stamp: the tile latches the dead
+    // connection's answer and tells the reader to update the host it is
+    // already talking to.
+    expect(screen.queryByTestId("browser-tab-attach-unsupported")).toBeNull();
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+  });
+
+  /**
+   * The generations a REAL coordinator hands out either side of being disposed
+   * and rebuilt under the same key - the exact shape `use-browser-sessions`
+   * produces when a host's authenticated directory identity drops and returns.
+   *
+   * Read from the coordinator module rather than invented here, because that is
+   * the only way this test can tell a renderer-wide counter from a
+   * per-coordinator one: with a per-instance counter both numbers are 1, and
+   * the tile's latch matches a connection it never spoke to.
+   */
+  function generationsAcrossCoordinatorReplacement(): {
+    readonly stale: number;
+    readonly fresh: number;
+  } {
+    const scope = { kind: "epic", epicId: "epic-generation-probe" } as const;
+    const owner = { hostId: "host-test", identityKey: "identity-1" };
+    const key = browserSessionsCoordinatorKey(scope, owner);
+    const openTransport = () => ({
+      wsStreamClient: new FakeStreamClient(true),
+      close: () => undefined,
+    });
+    const runtime = {
+      browserView: null,
+      userId: "user-1",
+      localHostId: null,
+      presentation: null,
+      navigateNested: () => null,
+      openTransport,
+    };
+    const generation = (): number => {
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      return state.connectionGeneration;
+    };
+    const first = acquireBrowserSessionsCoordinator({
+      key,
+      consumerId: Symbol("probe-1"),
+      scope,
+      owner,
+      runtime,
+      createIfMissing: true,
+    });
+    const stale = generation();
+    first();
+    const second = acquireBrowserSessionsCoordinator({
+      key,
+      consumerId: Symbol("probe-2"),
+      scope,
+      owner,
+      runtime,
+      createIfMissing: true,
+    });
+    const fresh = generation();
+    second();
+    return { stale, fresh };
+  }
+
+  // The gap `use-browser-sessions` actually produces: `owner` goes null, the
+  // acquire effect's cleanup disposes the last coordinator, the state falls
+  // back to `unavailableState` (generation 0), and a replacement is built under
+  // the same key when the identity returns. The tile never unmounts through any
+  // of it, so its latch has to survive the gap and then be released by the
+  // replacement's first connection.
+  it("clears the update guidance across a coordinator replacement, not just a reconnect", async () => {
+    const { stale, fresh } = generationsAcrossCoordinatorReplacement();
+    // Reddens with a per-coordinator counter: both are 1, and the assertion
+    // below that the note clears cannot hold because the tile is comparing a
+    // stale answer against a number that means a different connection.
+    expect(fresh).not.toBe(stale);
+
+    harness.items = [session("ready", "electron")];
+    harness.connectionGeneration = stale;
+    harness.attachTab.mockImplementation(() =>
+      Promise.reject(new Error(BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON)),
+    );
+
+    const view = render(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    await screen.findByTestId("browser-tab-attach-unsupported");
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+
+    // The coordinator is gone: no host client, no inventory, generation 0.
+    harness.connectionGeneration = 0;
+    harness.inventoryReady = false;
+    harness.lifecycle = "connecting";
+    view.rerender(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Nothing is asked of a stream that does not exist.
+    expect(harness.attachTab).toHaveBeenCalledTimes(1);
+
+    // The replacement's first connection, on an upgraded host.
+    harness.attachTab.mockImplementation(() => Promise.resolve());
+    harness.connectionGeneration = fresh;
+    harness.inventoryReady = true;
+    harness.lifecycle = "live";
+    view.rerender(
+      <TabBodySelectedContext.Provider value>
+        {tileElement("pane-1")}
+      </TabBodySelectedContext.Provider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("browser-tab-attach-unsupported")).toBeNull();
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+    expect(harness.attachTab).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves an ordinary attach refusal in the reconnect wait", async () => {
+    harness.items = [session("ready", "electron")];
+    harness.attachTab.mockImplementation(() =>
+      Promise.reject(new Error("This tab is bound in another window.")),
+    );
+
+    renderTile();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Unchanged by this ticket: a host's own refusal is transient, the reader's
+    // next activation is its retry, and the tile renders exactly what it
+    // renders without it.
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+    expect(screen.queryByTestId("browser-tab-attach-unsupported")).toBeNull();
   });
 
   it("never fires attachTab on the viewer path, even past the reconnect deadline", () => {

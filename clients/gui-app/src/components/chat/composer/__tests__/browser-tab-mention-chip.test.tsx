@@ -91,6 +91,7 @@ function tileHostSessionsState(): BrowserSessionsState {
     lifecycle: "live",
     inventoryReady: true,
     canMaterializeElectron: false,
+    connectionGeneration: 0,
     items: [
       sessionInfo({
         sessionId: "session-tile",

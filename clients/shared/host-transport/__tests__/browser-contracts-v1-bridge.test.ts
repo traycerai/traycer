@@ -6,6 +6,7 @@ import {
 import { browserSessionsClientFrameSchemaV10 } from "@traycer/protocol/host/browser/contracts-v1";
 import {
   BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON,
+  isBrowserSessionsV1NoWindowBindingRefusal,
   liftBrowserSessionsServerFrameFromV10,
   projectBrowserSessionsClientFrameToV10,
 } from "../browser-contracts-v1-bridge";
@@ -186,5 +187,30 @@ describe("browser-contracts-v1-bridge", () => {
     expect(BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON.length).toBeGreaterThan(
       0,
     );
+  });
+
+  // The recogniser lives beside the string it compares against so the two can
+  // never drift into different sentences in different packages. A caller that
+  // cannot tell this refusal apart either retries a request that is refused
+  // identically forever, or gives up on a tab that was about to come back.
+  it("recognises its own refusal and nothing else", () => {
+    expect(
+      isBrowserSessionsV1NoWindowBindingRefusal(
+        new Error(BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON),
+      ),
+    ).toBe(true);
+    // A host's own refusal, which is transient and must keep its retry.
+    expect(
+      isBrowserSessionsV1NoWindowBindingRefusal(
+        new Error("This tab is bound in another window."),
+      ),
+    ).toBe(false);
+    // The reason as it travels on the wire, before the coordinator wraps it.
+    expect(
+      isBrowserSessionsV1NoWindowBindingRefusal(
+        BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON,
+      ),
+    ).toBe(false);
+    expect(isBrowserSessionsV1NoWindowBindingRefusal(null)).toBe(false);
   });
 });

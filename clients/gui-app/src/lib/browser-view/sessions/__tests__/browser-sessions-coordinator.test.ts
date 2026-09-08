@@ -390,6 +390,84 @@ describe("browser sessions coordinator registry", () => {
     );
   });
 
+  // The unit a per-connection ANSWER is valid for. A reader that latches one -
+  // the tile does, for the `@1` "cannot place a tab in a window" refusal - has
+  // to be able to tell that the connection it was given on is gone, and
+  // `lifecycle` cannot say so because it returns to the same `"live"` string.
+  it("bumps the connection generation once per established connection", () => {
+    const harness = createTransportHarness();
+    const { key } = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: harness.openTransport,
+    });
+    const session = soleSession(soleClient(harness.clients));
+    const generation = (): number => {
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      return state.connectionGeneration;
+    };
+
+    const first = generation();
+    expect(first).toBeGreaterThan(0);
+
+    // Idempotent while the same connection stays up: a repeated `open` is not
+    // a new connection and must not invent one.
+    session.emitStatus("open");
+    expect(generation()).toBe(first);
+
+    // A drop on its own is not a connection either - only coming back up is.
+    session.emitStatus("reconnecting");
+    expect(generation()).toBe(first);
+    session.emitStatus("open");
+    expect(generation()).toBe(first + 1);
+
+    // And a same-version reconnect counts, which is the whole reason this is a
+    // counter rather than the negotiated `SchemaVersion`: a host restarted at
+    // its old build has forgotten every refusal it ever issued.
+    session.emitStatus("reconnecting");
+    session.emitStatus("open");
+    expect(generation()).toBe(first + 2);
+  });
+
+  // The coordinator is not the unit a generation identifies - the CONNECTION
+  // is - and a coordinator is disposed and rebuilt under the same key while
+  // its consumers stay mounted holding its answers. `use-browser-sessions`
+  // drops `owner` the moment the host's authenticated directory identity does,
+  // which a local host restarting is; the acquire effect's cleanup then
+  // releases the last consumer and disposes the instance. A counter living on
+  // the instance restarts there, and the replacement's first connection lands
+  // on the number the previous instance's first connection already handed out.
+  it("never reuses a generation across a disposed coordinator and its replacement", () => {
+    const harness = createTransportHarness();
+    const scope = epicScope("epic-1");
+    const generationOf = (key: string): number => {
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      return state.connectionGeneration;
+    };
+
+    const first = acquire({ scope, openTransport: harness.openTransport });
+    const disposedGenerations = [generationOf(first.key)];
+    soleSession(soleClient(harness.clients)).emitStatus("reconnecting");
+    soleSession(soleClient(harness.clients)).emitStatus("open");
+    disposedGenerations.push(generationOf(first.key));
+
+    // The last consumer leaving is what disposes it.
+    first.release();
+    expect(hasBrowserSessionsCoordinator(first.key)).toBe(false);
+
+    const second = acquire({ scope, openTransport: harness.openTransport });
+    expect(second.key).toBe(first.key);
+    const replacementGeneration = generationOf(second.key);
+
+    // Relative, never absolute: the counter is module-scoped, so its values
+    // carry across every test in this file.
+    expect(disposedGenerations).not.toContain(replacementGeneration);
+    expect(replacementGeneration).toBeGreaterThan(
+      Math.max(...disposedGenerations),
+    );
+  });
+
   it("resolves attachTab from its own actionAck, leaving an interleaved closeTab pending", async () => {
     const harness = createTransportHarness();
     const { key } = acquire({

@@ -51,6 +51,7 @@ vi.mock(
       lifecycle: "connecting",
       inventoryReady: false,
       canMaterializeElectron: false,
+      connectionGeneration: 0,
       items: [],
       errorMessage: null,
       retry: () => undefined,
