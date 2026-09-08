@@ -958,13 +958,43 @@ export async function runHostStart(
   // crash and must not consume crash allowance, but it still needs a bound.
   let consecutiveImmediateRestarts = 0;
   let shuttingDown = false;
-  // WHICH stop latched `shuttingDown`, when a record said. A forwarded signal
-  // reads no record and leaves this `null`; a raced stop intent (below) keeps
-  // the reason it read, because `restart` is the one reason that promises a
-  // comeback and has to exit `RESTART_OWED_EXIT_CODE` rather than 0 - the
+  // WHICH stop latched `shuttingDown`, once a record has been read. A raced
+  // stop intent (below) keeps the reason it read; a forwarded signal reads no
+  // record at the moment it latches - the handler cannot await - so the
+  // reason is resolved LAZILY at the settlement sites through
+  // `resolveShutdownReason`. `restart` is the one reason that promises a
+  // comeback and has to exit `RESTART_OWED_EXIT_CODE` rather than 0: the
   // latch alone was collapsing it to a plain stop, and the service manager
   // then left the host down (Codex, traycerai/traycer#1773 round 8).
   let shutdownReason: StopIntentReason | null = null;
+  // The signal path matters as much as the raced path, and for the same
+  // reason (CodeRabbit, #1773 round 9). On POSIX every `host restart` and
+  // every update's pre-swap stop writes the `restart` record FIRST and only
+  // then signals this process: `launchctl kill TERM` on macOS, `systemctl
+  // kill --signal=SIGTERM` on Linux - chosen over a stop JOB precisely so the
+  // manager's restart policy stays armed (`platforms/linux.ts`, "The restart
+  // half's stop"). That policy - `KeepAlive{SuccessfulExit:false}`,
+  // `Restart=on-failure` - relaunches on a NON-ZERO exit and nothing else. A
+  // signal-latched supervisor that answered the latch with 0 told the
+  // manager the job finished, and when the CLI that promised the comeback
+  // died between its kill and its start, nothing on a CLI-only install ever
+  // brought the host back - the E6L wedge, re-created by the exit code.
+  //
+  // Read AT MOST ONCE per process, at the site that settles: every consumer
+  // - the refusal in `decideRelaunch`, the child's own 87 - exits the
+  // supervisor with the answer, and a raced read (which sets
+  // `shutdownReason` before the ending can settle, while `shuttingDown` is
+  // still false) is preferred over a fresh one, so the refusal and the exit
+  // code always come from one read (`hasStopIntent`'s contract).
+  // `servedStopIntentAtStartup` is honoured, so a supervisor relaunched to
+  // SERVE a restart does not read the same record as owing another.
+  const resolveShutdownReason = async (): Promise<StopIntentReason | null> =>
+    shutdownReason ??
+    (await deps.hasStopIntent(
+      opts.environment,
+      Date.now(),
+      servedStopIntentAtStartup,
+    ));
   let currentChild: ChildProcess | null = null;
   // Resolves the first time a shutdown signal arrives, so a backoff can be
   // ABANDONED rather than merely re-checked once it finishes.
@@ -1136,7 +1166,7 @@ export async function runHostStart(
           reason: "target-resolution-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
-          shutdownReason: () => shutdownReason,
+          shutdownReason: resolveShutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1347,7 +1377,7 @@ export async function runHostStart(
           reason: "attempt-setup-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
-          shutdownReason: () => shutdownReason,
+          shutdownReason: resolveShutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1486,8 +1516,10 @@ export async function runHostStart(
       // CLI-only install, nothing brings the host back if the CLI that
       // promised the restart dies first. `stop`, `uninstall` and - despite its
       // name - `install-swap` all mean "do not bring this back" and keep this
-      // branch's 0. A forwarded POSIX signal reads `null` and takes 0 too: no
-      // record was consulted, so it asks for nothing.
+      // branch's 0. This branch reads the record for the signal case too, and
+      // so do the settlement sites below (`resolveShutdownReason`): a forwarded
+      // POSIX signal is how the record's own writer delivers a restart, so a
+      // signal with no record standing is the only case that asks for nothing.
       return exitSupervisor(
         stopAnnounced === "restart" ? RESTART_OWED_EXIT_CODE : 0,
       );
@@ -1846,7 +1878,7 @@ export async function runHostStart(
             reason: "target-resolution-failed-after-admission",
             consecutiveRelaunches,
             isShuttingDown: () => shuttingDown,
-            shutdownReason: () => shutdownReason,
+            shutdownReason: resolveShutdownReason,
             servedStopIntentAtStartup,
             shutdownRequested,
           });
@@ -1923,7 +1955,7 @@ export async function runHostStart(
           reason: "spawn-threw",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
-          shutdownReason: () => shutdownReason,
+          shutdownReason: resolveShutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -2074,10 +2106,13 @@ export async function runHostStart(
       } catch {
         // Already gone - the ending below still settles.
       }
-      // Bounded, because on THIS path nothing else escalates. The forwarded
-      // path is signalled by launchd/systemd, which follow up with SIGKILL
-      // against the job; here the stop announced itself on disk, `host stop`
-      // has already returned, and no one is watching this supervisor. A child
+      // Bounded, because on THIS path nothing else escalates. On the forwarded
+      // path the signaller owns the escalation - a stop job follows up with
+      // SIGKILL against the job, and the restart route's `systemctl kill` /
+      // `launchctl kill` runs the CLI's own ladder (`platforms/linux.ts`,
+      // "The ladder is now OURS"); here the stop announced itself on disk,
+      // `host stop` has already returned, and no one is watching this
+      // supervisor. A child
       // that never handles SIGTERM would leave `await childEnding` below
       // waiting forever, holding the job slot open while the host it was told
       // to stop keeps serving.
@@ -2138,7 +2173,7 @@ export async function runHostStart(
           reason: "spawn-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
-          shutdownReason: () => shutdownReason,
+          shutdownReason: resolveShutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -2229,15 +2264,18 @@ export async function runHostStart(
       // replacement that the one-shot signal has already been spent on, so an
       // explicit stop leaves the service running.
       if (shuttingDown) {
+        // The same record read `decideRelaunch` settles from: a `restart`
+        // intent - raced, or delivered by the signal that latched - still
+        // owes the comeback it promised.
+        const latchedBy = await resolveShutdownReason();
         logger.info("Ignoring a requested restart during shutdown", {
           environment: opts.environment,
           exitCode: RESTART_EXIT_CODE,
           attemptId,
-          stopReason: shutdownReason,
+          stopReason: latchedBy,
         });
-        // A raced `restart` intent still owes the comeback it promised.
         return exitSupervisor(
-          shutdownReason === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+          latchedBy === "restart" ? RESTART_OWED_EXIT_CODE : 0,
         );
       }
       logger.info("Host child requested an intentional restart", {
@@ -2344,7 +2382,7 @@ export async function runHostStart(
       reason: ending.signal !== null ? "fatal-signal" : "crashed",
       consecutiveRelaunches,
       isShuttingDown: () => shuttingDown,
-      shutdownReason: () => shutdownReason,
+      shutdownReason: resolveShutdownReason,
       servedStopIntentAtStartup,
       shutdownRequested,
     });
@@ -2434,8 +2472,13 @@ async function decideRelaunch(input: {
   readonly reason: string;
   readonly consecutiveRelaunches: number;
   readonly isShuttingDown: () => boolean;
-  /** The reason a RECORD latched the shutdown, or `null` for a forwarded signal. */
-  readonly shutdownReason: () => StopIntentReason | null;
+  /**
+   * The reason the shutdown was latched with, resolved from the record: the
+   * one a raced intent read, or - for a forwarded signal, which reads nothing
+   * when it latches - one memoised read taken now. `null` = no actionable
+   * record stands (a plain teardown).
+   */
+  readonly shutdownReason: () => Promise<StopIntentReason | null>;
   readonly servedStopIntentAtStartup: StopIntentIdentity | null;
   readonly shutdownRequested: Promise<void>;
 }): Promise<RelaunchDecision> {
@@ -2446,17 +2489,19 @@ async function decideRelaunch(input: {
     when: "before" | "after",
   ): Promise<RelaunchStopCause | null> => {
     if (input.isShuttingDown()) {
-      const latchedBy = input.shutdownReason();
+      const latchedBy = await input.shutdownReason();
       logger.info("Host supervisor not relaunching - shutting down", {
         environment,
         reason,
         observed: when,
         stopReason: latchedBy,
       });
-      // A forwarded SIGTERM is this process being torn down, not a record
-      // being honoured. No intent has been read, so it takes the exit that
-      // asks for nothing. A raced stop INTENT did read one, and `restart` is
-      // the reason that owes a comeback.
+      // `restart` is the reason that owes a comeback, whichever way the latch
+      // was set: a raced intent read it, and a forwarded signal is how the
+      // record's own writer delivers it on POSIX (`launchctl kill TERM`,
+      // `systemctl kill`), so the record is consulted for the signal too. A
+      // signal with no record standing is this process being torn down, and
+      // takes the exit that asks for nothing.
       return latchedBy === "restart" ? "restart-requested" : "stop-requested";
     }
     const announced = await deps.hasStopIntent(

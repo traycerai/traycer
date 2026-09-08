@@ -2657,6 +2657,227 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(recorded.exited).toBe(77);
   });
 
+  it("a SIGNAL-latched shutdown with a standing RESTART intent exits restart-owed (77) when the child dies by the forwarded signal", async () => {
+    // On POSIX every `host restart` and every update's pre-swap stop write
+    // the `restart` record FIRST and only THEN signal this process
+    // (`launchctl kill TERM` on macOS, `systemctl kill --signal=SIGTERM` on
+    // Linux) - chosen over a stop JOB precisely so the manager's on-failure
+    // policy stays armed. A 0 here told the manager the job had finished and
+    // left the host down when the CLI that promised the comeback died
+    // between its kill and its start (CodeRabbit, #1773 round 9). Ablation:
+    // make `refused()` read the `shutdownReason` variable directly instead
+    // of awaiting `input.shutdownReason()` and this reads 0.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    // Same gate as the raced row's `stopLanded`: the record only stands from
+    // the spawn onward, so the pre-spawn guard and the admission-callback
+    // re-check both see `null`, and only the LATE read inside
+    // `resolveShutdownReason` - taken after the signal has already latched
+    // `shuttingDown` - observes it.
+    let stopLanded = false;
+    const forwarded: string[] = [];
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () =>
+              stopLanded ? ("restart" as const) : null,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              // The child dies ONLY from the forwarded signal.
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                forwarded.push(String(signal));
+                setImmediate(() => {
+                  child.emit("exit", null, signal ?? "SIGTERM");
+                });
+                return true;
+              };
+              setImmediate(() => {
+                // `currentChild` is assigned once this spawn call returns.
+                // The record only stands from HERE, immediately before the
+                // signal - not from the spawn - so the racedStop re-check
+                // that runs synchronously right after spawn still sees
+                // `null` and this stays a pure signal-latch case rather than
+                // also tripping the raced-stop kill.
+                stopLanded = true;
+                process.emit("SIGTERM");
+                if (forwarded.length === 0) {
+                  child.emit("exit", null, "SIGTERM");
+                }
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(forwarded).toEqual(["SIGTERM"]);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(77);
+  });
+
+  it("a SIGNAL-latched shutdown with a STOP intent still exits 0", async () => {
+    // The other half of the same latch: `stop` means do not bring this back,
+    // unlike a standing `restart`. Still exercises `resolveShutdownReason`'s
+    // one memoised read, just answered differently.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let stopLanded = false;
+    const forwarded: string[] = [];
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => (stopLanded ? ("stop" as const) : null),
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                forwarded.push(String(signal));
+                setImmediate(() => {
+                  child.emit("exit", null, signal ?? "SIGTERM");
+                });
+                return true;
+              };
+              setImmediate(() => {
+                // Same reasoning as the row above: stand the record up right
+                // before the signal, not at spawn, so this stays the
+                // signal-latch case rather than also tripping the raced-stop
+                // re-check.
+                stopLanded = true;
+                process.emit("SIGTERM");
+                if (forwarded.length === 0) {
+                  child.emit("exit", null, "SIGTERM");
+                }
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(forwarded).toEqual(["SIGTERM"]);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("a SIGNAL-latched shutdown with no stop intent still exits 0", async () => {
+    // No record ever stands: a bare forwarded signal with nothing on disk is
+    // this process being torn down, asking for nothing.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const forwarded: string[] = [];
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => null,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                forwarded.push(String(signal));
+                setImmediate(() => {
+                  child.emit("exit", null, signal ?? "SIGTERM");
+                });
+                return true;
+              };
+              setImmediate(() => {
+                process.emit("SIGTERM");
+                if (forwarded.length === 0) {
+                  child.emit("exit", null, "SIGTERM");
+                }
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(forwarded).toEqual(["SIGTERM"]);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("a child's own 87 during a SIGNAL-latched shutdown with a standing RESTART intent exits restart-owed (77), not 0", async () => {
+    // The OTHER settlement site: the child's own exit-87 restart request
+    // landing while `shuttingDown` is already latched by a forwarded signal
+    // ("Ignoring a requested restart during shutdown"). It has to resolve
+    // through the SAME `resolveShutdownReason` the rows above exercise, so a
+    // standing `restart` intent still owes its comeback here too. Ablation:
+    // change this branch's `const latchedBy = await resolveShutdownReason();`
+    // to `const latchedBy = null;` and this reads 0.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let stopLanded = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () =>
+              stopLanded ? ("restart" as const) : null,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              // The forwarded signal is IGNORED by this child - it dies from
+              // its own exit-87 restart request instead, on a LATER
+              // setImmediate so the 87 lands only after `shuttingDown` has
+              // already latched.
+              child.kill = (_signal: NodeJS.Signals | undefined) => true;
+              setImmediate(() => {
+                // Stand the record up right before the signal, not at
+                // spawn, so the racedStop re-check (which runs synchronously
+                // right after spawn) still sees `null` and this stays a
+                // pure signal-latch case.
+                stopLanded = true;
+                process.emit("SIGTERM");
+                setImmediate(() => {
+                  child.emit("exit", RESTART_EXIT_CODE, null);
+                });
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(77);
+  });
+
   it("relaunches a host the OOM killer took, which no diagnostic whitelist names", async () => {
     // Recoverability and diagnosability are different questions, and deciding
     // one with the other's answer is the bug this pins. `describeFatalSignal`
