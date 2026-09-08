@@ -33,6 +33,7 @@ vi.mock("../../store/cli-lock", async () => {
   };
 });
 
+import { ownProcessStartIdentity } from "../../store/process-identity";
 import { probeHostHealth } from "../health-probe";
 
 function sampleMetadata(
@@ -187,6 +188,55 @@ describe("probeHostHealth", () => {
     expect(result.healthy).toBe(false);
     expect(result.detail).toContain("did not accept a TCP connection");
   });
+});
+
+describe("probeHostHealth judges the record's process by its creation stamp", () => {
+  // The post-update caller clears its progress marker and reports success
+  // on `healthy: true`. A crashed host's pid recycled onto an unrelated
+  // process, beside some listener on the old port, must not earn that.
+  const own = ownProcessStartIdentity();
+
+  it.skipIf(own === null)(
+    "reports unhealthy for a recycled pid - alive, a listener on the old port, but not the process the record stamped - without ever checking TCP",
+    async () => {
+      mocks.isProcessAliveMock.mockReturnValue(true);
+      const tag = (own ?? "").slice(0, (own ?? "").indexOf(":"));
+      mocks.readHostPidMetadataMock.mockResolvedValue({
+        ...sampleMetadata({ pid: process.pid }),
+        processStartIdentity: `${tag}:not the host this record named 1`,
+      });
+      const checkTcpReachable = vi.fn(async () => true);
+      const result = await probeHostHealth({
+        environment: "production",
+        checkProcessAlive: null,
+        checkTcpReachable,
+        totalBudgetMs: 0,
+        retryDelayMs: 5,
+      });
+      expect(result.healthy).toBe(false);
+      expect(result.detail).toContain("belongs to another process");
+      expect(checkTcpReachable).not.toHaveBeenCalled();
+    },
+  );
+
+  it.skipIf(own === null)(
+    "reports healthy for the process the record stamped when its port answers (control)",
+    async () => {
+      mocks.isProcessAliveMock.mockReturnValue(true);
+      mocks.readHostPidMetadataMock.mockResolvedValue({
+        ...sampleMetadata({ pid: process.pid }),
+        processStartIdentity: own,
+      });
+      const result = await probeHostHealth({
+        environment: "production",
+        checkProcessAlive: null,
+        checkTcpReachable: async () => true,
+        totalBudgetMs: 0,
+        retryDelayMs: 5,
+      });
+      expect(result.healthy).toBe(true);
+    },
+  );
 });
 
 describe("probeHostHealth CS-reachability separation", () => {

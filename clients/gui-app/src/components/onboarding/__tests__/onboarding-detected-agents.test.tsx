@@ -281,6 +281,7 @@ describe("OnboardingDetectedAgents", () => {
       "Kilo Code",
       "Kimi",
       "Qwen Code",
+      "Antigravity",
       "Amp",
       "Devin",
       "Pi",

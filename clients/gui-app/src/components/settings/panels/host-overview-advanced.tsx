@@ -91,6 +91,7 @@ export function HostOverviewAdvancedDisclosure(props: {
 
 export interface VersionPickerProps {
   readonly rows: readonly HostVersionRow[];
+  readonly storeFloorNotice: boolean;
   readonly totalCount: number;
   readonly showAll: boolean;
   readonly onToggleShowAll: () => void;
@@ -108,7 +109,7 @@ export interface VersionPickerProps {
   readonly includePreReleasesExplanation: string | null;
   readonly installingVersion: string | null;
   readonly disabled: boolean;
-  readonly onInstall: (version: string) => void;
+  readonly onInstall: (version: string, acceptStoreFormatLoss: boolean) => void;
   /** True before the first check has answered — no list to show yet. */
   readonly awaitingFirstCheck: boolean;
   readonly checking: boolean;
@@ -124,6 +125,19 @@ export interface VersionPickerProps {
  * semver.
  */
 function VersionPicker(props: VersionPickerProps): ReactNode {
+  const [confirmingVersion, setConfirmingVersion] = useState<string | null>(
+    null,
+  );
+  const confirmation = props.rows.find(
+    (row) => row.version === confirmingVersion,
+  );
+  const confirmationBody = confirmation?.storeFormatConfirmation ?? null;
+  // A catalog/status refresh can withdraw the offer or finish the survey.
+  // Clear the selection immediately so an old confirmation cannot reappear
+  // later for a different observation of the same version.
+  if (confirmingVersion !== null && confirmationBody === null) {
+    setConfirmingVersion(null);
+  }
   return (
     <div
       className="flex flex-col gap-3"
@@ -168,6 +182,13 @@ function VersionPicker(props: VersionPickerProps): ReactNode {
           ) : null}
         </label>
       </div>
+      {props.storeFloorNotice ? (
+        <p role="status" className="text-ui-sm text-muted-foreground">
+          Older versions that can't open this device's chat stores can still be
+          installed with Install anyway, at the cost of access to those chats
+          until the host is updated again.
+        </p>
+      ) : null}
       {props.awaitingFirstCheck ? (
         <p className="text-ui-sm text-muted-foreground">
           {props.checking
@@ -191,9 +212,31 @@ function VersionPicker(props: VersionPickerProps): ReactNode {
           // screen — freezing them is what stops an excluded RC from being
           // installable in the gap after unchecking the option.
           disabled={props.disabled || props.checking}
-          onInstall={props.onInstall}
+          onInstall={(version) => props.onInstall(version, false)}
+          onInstallAnyway={setConfirmingVersion}
         />
       )}
+      <ConfirmDestructiveDialog
+        open={confirmingVersion !== null && confirmationBody !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmingVersion(null);
+        }}
+        title={`Install v${confirmingVersion ?? ""} and lose access to newer chats?`}
+        description={confirmationBody ?? ""}
+        cascadeSummary={null}
+        actionLabel="Install anyway"
+        isPending={props.installingVersion !== null}
+        blockedReason={
+          props.disabled || props.checking
+            ? "Wait for this device's current operation to finish."
+            : null
+        }
+        onConfirm={() => {
+          if (confirmingVersion === null || confirmationBody === null) return;
+          props.onInstall(confirmingVersion, true);
+          setConfirmingVersion(null);
+        }}
+      />
     </div>
   );
 }

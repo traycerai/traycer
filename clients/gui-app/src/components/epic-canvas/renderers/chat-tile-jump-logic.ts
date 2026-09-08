@@ -156,6 +156,58 @@ export function sentMessageAnchorId(
 }
 
 /**
+ * Resolves a `receipt` transcript jump: the block id of this chat's own "Sent
+ * message" card whose `agentMessageReceipt` names the delivered message. Exact
+ * where `sentMessageAnchorId` is nearest-by-clock: the receipt is a host-minted
+ * id one delivery owns. `null` when no rendered tool segment carries it - the
+ * row is cold, or the send predates receipts.
+ */
+export function receiptAnchorBlockId(
+  messages: ReadonlyArray<ChatMessageModel>,
+  messageId: string,
+): string | null {
+  const visit = (node: BackgroundBlockSearchNode): string | null => {
+    if (
+      "kind" in node &&
+      node.kind === "tool" &&
+      node.agentMessageReceipt !== null &&
+      node.agentMessageReceipt.messageId === messageId
+    ) {
+      return node.id;
+    }
+    for (const child of backgroundBlockSearchChildren(node)) {
+      const found = visit(child);
+      if (found !== null) return found;
+    }
+    return null;
+  };
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      const found = visit(segment);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * The block a jump LANDS ON, for the two kinds that name a card rather than a
+ * row: a `block` target names it outright, a `receipt` target resolves it via
+ * {@link receiptAnchorBlockId}. `null` for every row-landing kind, and for a
+ * receipt no rendered segment carries yet.
+ */
+export function landingBlockIdForJumpTarget(
+  messages: ReadonlyArray<ChatMessageModel>,
+  target: ChatTranscriptJumpTarget,
+): string | null {
+  if (target.kind === "block") return target.blockId;
+  if (target.kind === "receipt") {
+    return receiptAnchorBlockId(messages, target.messageId);
+  }
+  return null;
+}
+
+/**
  * The ordinal a cold jump target sits at. `null` means "nothing to ask for":
  * the legacy line, or a host-locatable target whose answer has not landed.
  *
@@ -175,6 +227,7 @@ export function coldJumpOrdinal(
     // The two whose row id needs rendered models, which a cold row has none of.
     case "block":
     case "sent-message":
+    case "receipt":
       return hostLocatedOrdinal;
     // A message id is a row id for a USER record only. An assistant record is
     // projected into turn-keyed rows and keeps its durable id off the skeleton
@@ -248,6 +301,11 @@ export function hostLocatorForJumpTarget(input: {
           messageText: target.messageText,
           timestamp: target.timestamp,
         }
+      : null;
+  }
+  if (target.kind === "receipt") {
+    return receiptAnchorBlockId(messages, target.messageId) === null
+      ? { kind: "receipt", messageId: target.messageId }
       : null;
   }
   if (target.kind === "message") {

@@ -4,10 +4,14 @@ import {
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
 import { dirname, isAbsolute } from "node:path";
-import { readHostPidMetadata } from "../../host/pid-metadata";
+import {
+  publishedHostProcessGone,
+  readHostPidMetadata,
+  readHostPidMetadataEvidence,
+  type HostPidMetadataEvidence,
+} from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
-import { isProcessAlive } from "../../store/cli-lock";
-import { forceStopHostProcess } from "./desktop-agent-shutdown";
+import { forceStopHostProcessReporting } from "./desktop-agent-shutdown";
 import type { CliInvocation } from "../cli-binary";
 import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
@@ -19,6 +23,7 @@ import {
 } from "@traycer/protocol/host/lifecycle-constants";
 import type {
   InstallServiceOptions,
+  RestartStop,
   ServiceController,
   ServiceStatus,
   UninstallServiceOptions,
@@ -50,20 +55,39 @@ export function createLinuxController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label),
-    stop: (label, options) => stopService(label, run, options.force, "stop"),
+    stop: (label, options) =>
+      stopService(
+        label,
+        run,
+        options.force,
+        "stop",
+        options.onHostAddressed ?? null,
+      ),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
-    // There is no Desktop/SMAppService split on Linux, so the restart halves
-    // are exactly the stop and start the command already performed - the
-    // named seam only exists so `host restart` has one shape on every
-    // platform. `forcedRecycle` is never set: `stopService` is a real
-    // systemd stop, so the unit is genuinely down before the start.
-    stopForRestart: async (label, options) => {
-      await stopService(label, run, options.force, "restart");
-      return { forcedRecycle: false };
-    },
-    relaunchAfterRestart: (label) => startService(label, run),
+    // No longer `stopService` (Q13). A restart's stop must not disarm the
+    // service manager, and `systemctl stop` does exactly that - see
+    // `stopForRestartService`.
+    stopForRestart: (label, options) =>
+      stopForRestartService(label, run, options.force),
+    // Consumes `forcedRecycle`, and must (cold review B). A plain
+    // `systemctl --user start` no-ops against a unit systemd still considers
+    // active - the SAME no-op `forcedRecycle` was invented to name on macOS.
+    // So the Linux stop that could not prove the old instance gone would issue
+    // a start that does nothing, and the run would proceed to activation over
+    // a host still serving the PRE-SWAP bytes: the exact failure the field
+    // exists for, on the one platform this round changed.
+    //
+    // `restart` rather than a second kill: it is an explicit stop job followed
+    // by a start, so it tears down whatever still holds the unit and leaves it
+    // ACTIVE. That last part is why it is safe here and `stop` is not - the
+    // Q13 hazard is a unit left INACTIVE with `Restart=` disarmed, and a
+    // restart job never ends there.
+    relaunchAfterRestart: (label, stop) =>
+      stop.forcedRecycle
+        ? restartService(label, run)
+        : startService(label, run),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with systemd's user unit here.
     retireCompetingRegistration: () =>
@@ -250,7 +274,7 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
     return statusNotInstalled();
   }
   const pidMetadata = await readHostPidMetadata(label.environment);
-  if (pidMetadata !== null && isProcessAlive(pidMetadata.pid)) {
+  if (pidMetadata !== null && !publishedHostProcessGone(pidMetadata)) {
     return {
       state: "running",
       version: pidMetadata.version,
@@ -261,12 +285,247 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
   return { state: "stopped", version: null, listenUrl: null, pid: null };
 }
 
+/**
+ * The restart half's stop: take the host down WITHOUT disarming systemd.
+ *
+ * ## Why this cannot be `systemctl stop` (Q13)
+ *
+ * `systemctl --user stop` puts the unit in `inactive`, and `Restart=` does
+ * not apply to a unit stopped that way - this file already relies on that,
+ * in `cancelScheduledAutoRestart`, which uses a stop precisely BECAUSE it
+ * cancels a scheduled relaunch. So an update's pre-swap stop turned the
+ * service manager off with the manager's own off-switch, and the only thing
+ * that turned it back on was the CLI that had just promised the restart. Kill
+ * that CLI between the stop and the start - the Linux E6L wedge - and nothing
+ * on a CLI-only install ever brings the host back: the reconciler that could
+ * lives inside the host that is down.
+ *
+ * Signalling the unit leaves it loaded and its restart policy armed, so the
+ * manager is still the actor that finishes what this stop started. What
+ * decides whether the relaunched supervisor may actually spawn is the attempt
+ * record, not this function.
+ *
+ * ## The ladder is now OURS, and that is not a workaround
+ *
+ * PLATFORM SEMANTICS, citation not pin, because systemd owns it and no test
+ * here can observe it: `systemctl kill` delivers a signal and returns - it
+ * runs no stop JOB - so `TimeoutStopSec` does not apply to this path at all.
+ * Nothing escalates but us. The ladder below is therefore the sole deadline,
+ * and it is derived from the host's own force-exit watchdog rather than from
+ * a unit directive, exactly as the force path's is.
+ *
+ * That also REMOVES a mismatch rather than adding one. The old non-force stop
+ * could not promise the host was down: its runner caps the subprocess at 15s
+ * while the unit inherits systemd's 90s default, which is why `--force` needs
+ * a confirm-and-escalate dance to promise anything. Owning the whole ladder
+ * lets this path promise what the old one could not.
+ *
+ * ## Confirmation is INSTANCE-BOUND, and must be
+ *
+ * Two obvious confirmations are both wrong here, and wrong because of this
+ * very change. Unit state never settles to `inactive` any more - the manager
+ * is armed, so it keeps starting supervisors. And endpoint liveness is worse
+ * than useless: a relaunched host ANSWERS the probe, so "something is
+ * serving" would report the old instance alive when it is gone, or a
+ * replacement as the thing we signalled.
+ *
+ * So the question is "is THIS process gone", asked against the identity
+ * captured BEFORE the signal. `publishedHostProcessGone` answers it with the
+ * polarity this needs: `false` means "not proven gone", never "proven alive".
+ *
+ * A host that published no identity at all - a pre-stamp `pid.json`, or a
+ * platform whose probe returned nothing - is therefore UNPROVABLE, not gone.
+ * It falls through to `forcedRecycle: true`, which is the safe direction: a
+ * needless recycle costs a restart, a false "gone" activates over a host that
+ * is still running.
+ *
+ * ## Three answers, not two, and the third one pays
+ *
+ * Unprovable is not one case. A record that is ABSENT means nothing was
+ * published and no grace is owed - the ladder may run straight through. A
+ * record that is UNREADABLE means we cannot tell, and the host it names may be
+ * draining right now, so the ladder serves its full budget before escalating
+ * and again before giving up (see `waitForSignalledHostGone`). Both still end
+ * at `forcedRecycle: true`; what differs is what the host is given first.
+ *
+ * That has a price and it lands on `--force`: `host restart --force` against
+ * an unreadable `pid.json` now pays the host's own force-exit watchdog -
+ * `SHUTDOWN_FORCE_EXIT_MS` plus the margin, then the SIGKILL grace - before
+ * reporting. That is the correct direction (the alternative is SIGKILL with no
+ * grace at all, on a record whose unreadability is not evidence of anything),
+ * and it is exactly what the same command already costs against a record that
+ * reads and names a live host. An unreadable record is never cheaper than a
+ * live one, because it may be one.
+ */
+// The exhausted-ladder path is untestable at production timing: proving the
+// escalation runs means letting the SIGTERM grace expire, and that grace is
+// the host's own force-exit watchdog. Tests inject a short ladder here.
+// Mirrors `setSwapRenameDelaysForTests`'s shape. Never set in production.
+let restartStopGracesOverrideMs: {
+  readonly sigtermMs: number;
+  readonly sigkillMs: number;
+} | null = null;
+export function setRestartStopGracesForTests(
+  graces: { readonly sigtermMs: number; readonly sigkillMs: number } | null,
+): void {
+  restartStopGracesOverrideMs = graces;
+}
+
+function restartStopGraces(): {
+  readonly sigtermMs: number;
+  readonly sigkillMs: number;
+} {
+  return (
+    restartStopGracesOverrideMs ?? {
+      sigtermMs: FORCE_STOP_SIGTERM_GRACE_MS,
+      sigkillMs: FORCE_STOP_SIGKILL_GRACE_MS,
+    }
+  );
+}
+
+async function stopForRestartService(
+  label: ServiceLabel,
+  run: ProcessRunner,
+  force: boolean,
+): Promise<RestartStop> {
+  const graces = restartStopGraces();
+  // BEFORE the signal. Captured afterwards, this would read whatever the
+  // armed manager has started since, and confirm the death of a process that
+  // was never signalled.
+  //
+  // EVIDENCE, not the folding read: "no record" and "could not read the
+  // record" are different facts here and only one of them means no grace is
+  // owed. See `waitForSignalledHostGone`.
+  const signalled = await readHostPidMetadataEvidence(label.environment);
+  await killUnit(label, run, "SIGTERM");
+  if (await waitForSignalledHostGone(signalled, graces.sigtermMs)) {
+    return { forcedRecycle: false };
+  }
+  await killUnit(label, run, "SIGKILL");
+  if (await waitForSignalledHostGone(signalled, graces.sigkillMs)) {
+    return { forcedRecycle: false };
+  }
+  // The signalled instance could not be proven gone through the unit's own
+  // cgroup. For an ordinary restart that is simply `forcedRecycle`: the
+  // relaunch recycles instead of starting, and the update proceeds.
+  //
+  // `--force` promises more than that, and Q13's first cut silently dropped
+  // the promise. This function replaced `stopService(label, run,
+  // options.force, "restart")`, and the replacement took no `force` at all -
+  // so `host restart --force` on Linux stopped escalating to the published
+  // host and stopped REPORTING a stop that had not taken effect. A hung host
+  // is not "unprovable, carry on"; it is a forced stop that failed, and the
+  // caller asked to be told.
+  //
+  // So the last escalation is restored, with the operation carried through
+  // so the message names `host restart --force` rather than `host stop
+  // --force`. It reaches the host process directly, outside the unit's
+  // cgroup, which is the one place left that a unit-scoped kill cannot.
+  if (force) {
+    await finishForcedStopForPublishedHost(label, "restart", null);
+  }
+  // `true` even when the forced stop above SUCCEEDED, and that is deliberate
+  // rather than a missed branch (cold review B: the obvious tidy here returns
+  // `false`, which is the dangerous direction).
+  //
+  // What a successful `finishForcedStopForPublishedHost` proves is that the
+  // PUBLISHED host is gone. It says nothing about the unit instance this
+  // function signalled, which the ladder above already failed to prove dead -
+  // and the manager is still armed, so a replacement may be starting anyway.
+  // `false` would tell the relaunch to `systemctl start`, which no-ops against
+  // a unit systemd still considers active; the update would then activate over
+  // whatever is still serving. A needless recycle costs one restart. A false
+  // "gone" costs the swap.
+  return { forcedRecycle: true };
+}
+
+async function killUnit(
+  label: ServiceLabel,
+  run: ProcessRunner,
+  signal: "SIGTERM" | "SIGKILL",
+): Promise<void> {
+  await run(
+    "systemctl",
+    ["--user", "kill", `--signal=${signal}`, unitName(label)],
+    {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: true,
+    },
+  );
+}
+
+/**
+ * Poll until the instance we signalled is provably gone, or the budget runs
+ * out. `false` is always "could not prove", never "still alive".
+ *
+ * ## Why this takes EVIDENCE and not a folded `HostPidMetadata | null`
+ *
+ * `readHostPidMetadata` folds "no record" and "could not read the record" into
+ * one `null`, and `pid-metadata.ts` says at the fold itself that this is
+ * "right for discovery … and wrong for a gate that must fail closed: a torn or
+ * momentarily unreadable record is not evidence that no host is running".
+ *
+ * This is such a gate, and the fold cost it the whole SIGTERM grace: `null`
+ * returned instantly, so the caller sent SIGKILL in the same tick. A host
+ * whose `pid.json` was being rewritten as the signal landed was killed outright
+ * instead of draining. The outcome was never wrong - `forcedRecycle: true`
+ * either way - only the ladder collapsed, which is invisible in the return
+ * value and therefore in every test that only asserted the return value.
+ *
+ * `macos.ts`'s takeover gate took the same correction in an earlier round
+ * (`refuseIfPublishedHostAlive`, "Codex, traycer#1761, round 7"); this is the
+ * same reader misused at a different site.
+ */
+async function waitForSignalledHostGone(
+  signalled: HostPidMetadataEvidence,
+  timeoutMs: number,
+): Promise<boolean> {
+  // Nothing was published, so there is no instance to prove anything about
+  // and nothing that a grace could protect. Unprovable, and the caller treats
+  // that as a forced recycle.
+  if (signalled.kind === "absent") return false;
+  // Unreadable is the case the fold used to hide. There is no identity to
+  // poll, so this can never return `true` - but the reason it cannot is our
+  // ignorance, not the host's absence, and escalating on ignorance kills a
+  // host that is exiting exactly as designed. So it costs what a LIVE record
+  // costs: the full budget, then "could not prove". An unreadable record must
+  // never be cheaper than a live one, because it may be one.
+  if (signalled.kind === "unreadable") {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, timeoutMs);
+    });
+    return false;
+  }
+  const metadata = signalled.metadata;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (publishedHostProcessGone(metadata)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, FORCE_STOP_POLL_MS);
+    });
+  }
+}
+
 async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
   force: boolean,
   operation: "stop" | "restart",
+  // See `StopServiceOptions.onHostAddressed`: reported from this route's own
+  // read of the record, immediately before the unit is told to stop.
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
+  const before = await readHostPidMetadataEvidence(label.environment);
+  // At most once for the whole route: once this read has reported, the
+  // forced fallback below gets no callback, whatever its own read finds.
+  let reportToFallback = onHostAddressed;
+  if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
+    onHostAddressed?.();
+    reportToFallback = null;
+  }
   await run("systemctl", ["--user", "stop", unitName(label)], {
     env: undefined,
     cwd: undefined,
@@ -292,7 +551,11 @@ async function stopService(
     // unconfirmed cancel falls through to the SIGKILL escalation instead of
     // reporting a stop it cannot prove.
     if (await waitForUnitInactive(label, run, FORCE_STOP_CONFIRM_GRACE_MS)) {
-      await finishForcedStopForPublishedHost(label, operation);
+      await finishForcedStopForPublishedHost(
+        label,
+        operation,
+        reportToFallback,
+      );
       return;
     }
   }
@@ -315,7 +578,7 @@ async function stopService(
   // state settle at inactive/failed.
   await cancelScheduledAutoRestart(label, run);
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGKILL_GRACE_MS)) {
-    await finishForcedStopForPublishedHost(label, operation);
+    await finishForcedStopForPublishedHost(label, operation, reportToFallback);
     return;
   }
   throw cliError({
@@ -370,11 +633,53 @@ async function cancelScheduledAutoRestart(
 // teardown already ran with positive confirmation, and an absent record is
 // the NORMAL trace of a host that exited gracefully and unlinked its own
 // file - success, nothing further to finish.
+/**
+ * The clause both forced-stop failures open with - and Q13 made it false on
+ * one of the two paths (cold review B).
+ *
+ * Only the VERB was parameterised when `stopForRestart` started reusing this
+ * function; the PREMISE stayed "the systemd unit is stopped". That is true
+ * after `stop --force`, which really does run `systemctl stop`. It is false
+ * after `restart --force`: the ladder is `systemctl kill`, which runs no stop
+ * job, so the unit stays LOADED with `Restart=` armed and `RestartSec=5` means
+ * systemd is very likely starting a replacement while the operator reads the
+ * message. This is the sentence someone reads while deciding whether their
+ * host is down, so it has to describe the world they are actually in.
+ */
+function forcedStopPremise(operation: "stop" | "restart"): string {
+  return operation === "stop"
+    ? "the systemd unit is stopped"
+    : "the unit was signalled and remains armed, so systemd will relaunch it";
+}
+
+/**
+ * What to actually do about it, which differs for the same reason.
+ *
+ * "Remove the stale record and reinstall" is advice for a unit that is down
+ * and staying down. Given to someone whose unit is cycling it is worse than
+ * unhelpful - it invites an uninstall in the middle of a relaunch.
+ */
+function forcedStopRemediation(operation: "stop" | "restart"): string {
+  return operation === "stop"
+    ? "Retry in a moment; if the host is known dead, remove the stale record via 'traycer host service uninstall' and reinstall."
+    : "Retry in a moment; a replacement host is probably already starting, so check 'traycer host status' before intervening - do not uninstall a unit that is still cycling.";
+}
+
 async function finishForcedStopForPublishedHost(
   label: ServiceLabel,
   operation: "stop" | "restart",
+  // `null` once the route's own pre-`systemctl` read has reported; otherwise
+  // the engine reports a host that published only AFTER that read and is
+  // killed here, so no actuator on this route signals silently and none
+  // reports twice.
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
-  const outcome = await forceStopHostProcess(label.environment, operation);
+  const outcome = await forceStopHostProcessReporting(
+    label.environment,
+    operation,
+    onHostAddressed,
+  );
+  const premise = forcedStopPremise(operation);
   switch (outcome.kind) {
     case "stopped":
     case "no-host":
@@ -383,14 +688,32 @@ async function finishForcedStopForPublishedHost(
     case "identity-unverified":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host ${operation} --force: the systemd unit is stopped, but pid.json names pid=${outcome.pid} and its identity cannot be verified (the pid may have been recycled), so refusing to signal it. Retry in a moment; if the host is known dead, remove the stale record via 'traycer host service uninstall' and reinstall.`,
+        message: `host ${operation} --force: ${premise}, but pid.json names pid=${outcome.pid} and its identity cannot be verified (the pid may have been recycled), so refusing to signal it. ${forcedStopRemediation(operation)}`,
         details: { unit: unitName(label), pid: outcome.pid },
         exitCode: 1,
       });
     case "hung":
+      // "MAY come up beside it" is hedged on purpose, and the hedge is load
+      // bearing - do not harden it to "will" (reviewer C). The two-host
+      // reading assumes the survivor is genuinely OUTSIDE the unit, which is
+      // the case this message names and the one that costs a data dir. It is
+      // not the only way to survive SIGKILL: a process INSIDE the cgroup stuck
+      // in uninterruptible sleep survives it too, and there the unit stays
+      // active, systemd relaunches nothing, and the operator has one stuck
+      // process rather than two hosts.
+      //
+      // Nothing here can tell those apart, which is why the remedy is the same
+      // either way - `host status` first, before intervening. The sentence
+      // describes the worse branch because that is the one worth planning for;
+      // stating it as certain would send an operator hunting a second host
+      // that does not exist.
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host ${operation} --force: the systemd unit is stopped, but the published host (pid=${outcome.pid}, running outside the unit) survived SIGKILL through the exit grace; the stop did not take effect.`,
+        message: `host ${operation} --force: ${premise}, but the published host (pid=${outcome.pid}, running outside the unit) survived SIGKILL through the exit grace; the stop did not take effect.${
+          operation === "restart"
+            ? " A relaunched host may come up beside it, so treat this as two hosts over one data dir until the survivor is dealt with."
+            : ""
+        }`,
         details: { unit: unitName(label), pid: outcome.pid },
         exitCode: 1,
       });
@@ -465,6 +788,51 @@ async function probeUnitSettled(
   // as not settled, and the caller keeps waiting, escalates, or fails
   // loudly.
   return state === "inactive" || state === "failed" || state === "unknown";
+}
+
+/**
+ * Whether systemd could start this unit's host on its own before a swap lands.
+ *
+ * The same hazard as macOS's `macosServiceMayRespawn`, through the same seam:
+ * `statusService` here also reports purely from `pid.json`, so a unit sitting
+ * in `Restart=on-failure`'s relaunch window reads `stopped` while systemd is
+ * about to bring it back.
+ *
+ * `systemctl is-active` names that state directly. `activating` is systemd
+ * bringing the unit UP - which for a crashed unit is the `auto-restart`
+ * sub-state - so it is the one answer that means "a writer is coming". Its
+ * settled answers do not: `inactive` is a deliberate stop (`Restart=` does not
+ * apply to a unit stopped that way, which this file already relies on in
+ * `cancelScheduledAutoRestart`), `failed` is a unit whose restart budget is
+ * exhausted, and `unknown` is not loaded at all.
+ *
+ * Anything else - `deactivating`, an unrecognized word, or the empty output a
+ * probe that could not reach the user manager produces - is UNPROVEN and reads
+ * as "may respawn". That is the same positive-confirmation-only discipline the
+ * settle probe above uses, pointed the other way.
+ */
+export async function linuxServiceMayRespawn(
+  label: ServiceLabel,
+  runner: ProcessRunner | null,
+  // Bounds the `systemctl` call; the caller's settle loop sizes it from its
+  // remaining budget.
+  timeoutMs: number,
+): Promise<boolean> {
+  const run = runner ?? runCommand;
+  let result: RunResult;
+  try {
+    result = await run("systemctl", ["--user", "is-active", unitName(label)], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs,
+      tolerateNonZeroExit: true,
+    });
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return true;
+  }
+  const state = result.stdout.trim();
+  return !(state === "inactive" || state === "failed" || state === "unknown");
 }
 
 async function startService(

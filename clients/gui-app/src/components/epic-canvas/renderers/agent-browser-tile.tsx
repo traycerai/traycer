@@ -519,6 +519,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       />
       <BrowserTileToolbar
         controller={chromeController}
+        loading={effectiveStatus === "loading"}
         pictureInPicture={{
           disabled: epicId === null,
           convert: () => {

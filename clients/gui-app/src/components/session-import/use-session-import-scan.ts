@@ -69,6 +69,9 @@ export function useSessionImportScan(active: boolean): SessionImportScanHandle {
       updatedAfter:
         scanWindow === null ? null : Date.now() - scanWindow * DAY_IN_MS,
       callbacks: {
+        onImportedSupport: (support) => {
+          dispatch({ kind: "scanImportedSupportChanged", support });
+        },
         onStarted: (providers) => {
           // The full provider roster, before any folder lands: it is what
           // keeps the pill row present and stable for the whole scan.

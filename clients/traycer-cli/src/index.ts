@@ -71,6 +71,7 @@ import { configShellResetCommand } from "./commands/config-shell-reset";
 import { buildConfigShellRevertArgsCommand } from "./commands/config-shell-revert-args";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
 import { buildHostApplyCommand } from "./commands/host-apply";
+import { buildHostStoreFormatsCommand } from "./commands/host-store-formats";
 import { buildHostPurgeStageCommand } from "./commands/host-purge-stage";
 import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
@@ -88,6 +89,11 @@ import {
 import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
+import {
+  acknowledgeRelocationEntry,
+  relocateOutOfHostCgroupIfNeeded,
+  type CgroupRelocation,
+} from "./host/cgroup-relocation";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
 import { runHostCapabilities } from "./host/capabilities";
 import {
@@ -108,7 +114,12 @@ import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
 import { buildWhoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
-import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
+import {
+  createCliLogger,
+  describeErrorOrigin,
+  errorFromUnknown,
+  type ILogger,
+} from "./logger";
 import {
   isRunningFromWellKnownSlot,
   refreshWellKnownSlotForSupervisedStart,
@@ -116,7 +127,11 @@ import {
   wellKnownSlotRefreshHasConverged,
 } from "./store/well-known-cli";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
-import { finishAndExit, markProcessFatal } from "./runner/exit";
+import {
+  finishAfterProcessFatal,
+  finishAndExit,
+  markProcessFatal,
+} from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
@@ -186,6 +201,22 @@ function attemptAdoptionOption(): Option {
   ).hideHelp();
 }
 
+/**
+ * `--accept-store-format-loss` - one help string across `host install`,
+ * `host ensure`, `host apply` and `host update`, so the four commands cannot
+ * describe the same escape hatch differently.
+ *
+ * Visible, not hidden: it is the documented way out of a refusal a user can
+ * legitimately want to override (pinning an old host for compatibility
+ * testing), and an escape hatch nobody can find is a support ticket. Modelled
+ * on the repo's `--accept-data-loss` rule - named after the loss it accepts,
+ * and never implied by a broader flag. The last sentence is load-bearing:
+ * `--force` and `--allow-downgrade` are what people reach for first, and both
+ * deliberately leave the floor standing.
+ */
+const ACCEPT_STORE_FORMAT_LOSS_HELP =
+  "Install the selected host even when a chat store on this machine was written in a newer format than it reads. Those chats are unavailable for as long as that host is installed, and a host that meets a store it cannot open may crash-loop rather than report it. Never implied by --force or --allow-downgrade.";
+
 function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
   const value = opts.attemptAdoption;
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -222,6 +253,12 @@ function withRunner(
   ) => CommandFn,
 ): CommanderCommand {
   return addRunnerFlags(cmd).action(async (...actionArgs: unknown[]) => {
+    // First, before anything else this action does. On a relocated run the
+    // parent is holding fd 3 open waiting to learn whether a CLI exists in the
+    // new scope at all; until this byte is written, every failure here is
+    // indistinguishable from `systemd-run` failing to start us. A no-op on an
+    // ordinary run. See host/cgroup-relocation.ts.
+    acknowledgeRelocationEntry();
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const positionals = extractActionPositionals(actionArgs);
     const optsBag = command.optsWithGlobals() as Record<string, unknown>;
@@ -253,7 +290,40 @@ function withRunner(
       );
       return build(optsBag, positionals)(ctx);
     };
-    await runCommand(guarded, extractRunnerFlags(optsBag));
+    const flags = extractRunnerFlags(optsBag);
+    // Linux: a command that is about to stop the host runs in a transient
+    // scope of its own, because on this platform it would otherwise be killed
+    // by the stop it issues (see host/cgroup-relocation.ts).
+    //
+    // Here, once, for the same reason the capability check above is: BEFORE the
+    // command body, which is where every CLI lock, update-contender claim,
+    // dispatch ACK and progress marker is taken. The relocated child must own
+    // all of them, and the parent - which is about to die with the host's
+    // cgroup - must own none. Building `fn` lazily keeps argument parsing
+    // behind this point too, so nothing the command does has happened yet.
+    let relocation: CgroupRelocation;
+    try {
+      // Keyed by command path AND the parsed options: `host uninstall` without
+      // `--all`, and the bytes-only forms of install/ensure/apply, never reach
+      // a stop, so relocating them would only expose them to its failure modes.
+      relocation = await relocateOutOfHostCgroupIfNeeded(commandPath, optsBag);
+    } catch (error) {
+      // Rendered through the runner's normal error path rather than thrown from
+      // the action: an error escaping Commander lands in the entry's generic
+      // handler, which reports E_UNEXPECTED and loses the code the host and
+      // Desktop switch on.
+      await runCommand(() => Promise.reject(error), flags);
+      return;
+    }
+    if (relocation.kind === "completed") {
+      // The child ran the command and owned the output stream through inherited
+      // stdio. This process adds nothing to it - under `--json` writing a
+      // second terminal envelope would corrupt the child's NDJSON - and exits
+      // with the child's code through the runner's own terminator.
+      await finishAndExit(relocation.exitCode);
+      return;
+    }
+    await runCommand(guarded, flags);
   });
 }
 
@@ -798,10 +868,10 @@ function registerAuthCommands(program: Command): void {
         [
           "",
           "Requires an existing sign-in on this machine (`traycer login`) and an",
-          "interactive terminal. --json, a non-interactive environment (CI=1 or",
-          "TRAYCER_NONINTERACTIVE=1), and a stdin that is not a TTY are each refused",
-          "up front (exit 1), because only a human at this terminal can give the",
-          "approval this command exists to collect.",
+          "interactive terminal. --json is not available for link-phone, and a",
+          "non-interactive environment (CI=1 or TRAYCER_NONINTERACTIVE=1) or a stdin",
+          "that is not a TTY is refused up front (exit 1), because only a human at",
+          "this terminal can give the approval this command exists to collect.",
           "",
           "This command waits, with no deadline of its own: it prints a code and",
           "reprints a fresh one before each expires, then blocks until you approve",
@@ -1062,6 +1132,20 @@ function registerHostCommands(program: Command): void {
     )
     .requiredOption("--service-uid <uid>", "Internal: target GUI service uid")
     .action(async (opts) => {
+      // Deliberately NOT relocated out of the host's cgroup on Linux, unlike
+      // every other route that reaches a host stop (host/cgroup-relocation.ts).
+      // The script that spawns this lease is in the same cgroup as the lease:
+      // started from a Traycer-hosted terminal, the two land inside the host
+      // unit together, and the stop the lease would perform kills the script
+      // mid-maintenance whether or not the lease itself survives it. Moving
+      // the lease alone would also turn the script's direct child into a
+      // waiting wrapper, so its cancellation (TERM/KILL to that child, exit as
+      // death evidence) would no longer prove the lease holder is gone. The
+      // second-line guard in `withStopIntent` therefore refuses the action,
+      // the refusal travels to the script as the protocol's own `refused`
+      // frame ("run this from a shell outside the Traycer host"), and the
+      // lease releases with nothing touched - which is the outcome a caller
+      // that cannot outlive the stop should get.
       const admission =
         opts.admission === "desktop-activation-maintenance" ||
         opts.admission === "uninstall-maintenance"
@@ -1234,6 +1318,7 @@ function registerHostCommands(program: Command): void {
           "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before the service stop",
         ).hideHelp(),
       )
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(attemptAdoptionOption())
       .addHelpText(
         "after",
@@ -1294,6 +1379,7 @@ function registerHostCommands(program: Command): void {
           noServiceRegister: opts.serviceRegister === false,
           ifIdle: opts.ifIdle === true,
           force: opts.force === true,
+          acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
         })(ctx);
       };
     },
@@ -1333,6 +1419,11 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Reinstall and restart the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
+      .option(
+        "--keep-installed",
+        "Liveness only: keep whatever non-yanked host is installed, whatever its version, instead of converging to this build's default. Ignored when --release names a version. The default when nothing is installed still installs the packaged/pinned host.",
+      )
       .addOption(attemptAdoptionOption()),
     (opts) => {
       const explicitVersion =
@@ -1362,6 +1453,8 @@ function registerHostCommands(program: Command): void {
           // `serviceRegister: false`.
           noServiceRegister: opts.serviceRegister === false,
           force: opts.force === true,
+          acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
+          keepInstalled: opts.keepInstalled === true,
         })(ctx);
       };
     },
@@ -1377,6 +1470,7 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Apply even if the host has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(
         new Option(
           "--expected-stage-fingerprint <fingerprint>",
@@ -1390,6 +1484,12 @@ function registerHostCommands(program: Command): void {
         new Option(
           "--no-service",
           "Internal: skip the busy check and service stop/start; rejected on Windows",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--respect-hold",
+          "Internal: for an implicit (launch/reconcile) apply - no-op instead of applying when the installed host is the deliberately-held install instance and is still viable (a held build the registry has yanked is applied over), re-checked under the CLI lock",
         ).hideHelp(),
       )
       .addOption(attemptAdoptionOption())
@@ -1417,14 +1517,25 @@ function registerHostCommands(program: Command): void {
     (opts) =>
       buildHostApplyCommand({
         force: opts.force === true,
+        acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
         // commander materialises `--no-service` as `service: false`.
         noService: opts.service === false,
         expectedStageFingerprint:
           typeof opts.expectedStageFingerprint === "string"
             ? opts.expectedStageFingerprint
             : null,
+        respectHold: opts.respectHold === true,
         attemptAdoption: attemptAdoptionNonce(opts),
       }),
+  );
+
+  withRunner(
+    host
+      .command("store-formats", { hidden: true })
+      .description(
+        "Internal: report the on-disk chat store format stamp of every epic under this environment's host data root, plus what the installed host reads. Read-only - it never migrates a store.",
+      ),
+    () => buildHostStoreFormatsCommand(),
   );
 
   withRunner(
@@ -1565,6 +1676,7 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Update the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       // Hidden: the host resolver's dispatch-ACK correlation nonce (Ticket 07
       // §5.2.8). A nonce and never a token - it grants nothing, which is why
       // argv is a legitimate carrier. Not a user-facing switch.
@@ -1572,6 +1684,47 @@ function registerHostCommands(program: Command): void {
         new Option(
           "--ack-nonce <nonce>",
           "Internal: correlation nonce for the dispatching host's ACK wait",
+        ).hideHelp(),
+      )
+      // Hidden: the BOUND INTENT contract (Plan D16). These are argv options
+      // and not environment variables on purpose. The trigger is provenance
+      // and must keep working on every CLI, so it rides the env an old CLI
+      // ignores; an intent is AUTHORITY and must fail closed on every CLI that
+      // cannot honour it, and the only gate that can do that is the executing
+      // parser: a pre-cutover Commander program rejects `--intent` as an
+      // unknown option and exits before this command's body runs - whatever
+      // image the slot holds at that instant, including one the CLI's own
+      // pre-parse self-refresh (`refreshCliSlotBeforeCommand`, awaited in
+      // `runEntry` before `program.parseAsync`) just staged. `--version`
+      // preflights cannot substitute: they prove the image that ANSWERED, not
+      // the image that runs next. `allowUnknownOption` is never enabled on
+      // root, `host` or `update`, which is what makes that exit reachable.
+      .addOption(
+        new Option(
+          "--intent <intent>",
+          "Internal: the bound intent this dispatch is authorized for (activate|continue)",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--expect-attempt <id>",
+          "Internal: the attempt id the bound intent is bound to",
+        ).hideHelp(),
+      )
+      // The other two thirds of the identity the dispatcher observed (P1
+      // window B). TWO options rather than one packed `id:gen:seq`, so a
+      // malformed component is reported as the wrong component rather than
+      // silently splitting into a field that happens to parse.
+      .addOption(
+        new Option(
+          "--expect-generation <generation>",
+          "Internal: the attempt generation the dispatcher observed",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--expect-sequence <sequence>",
+          "Internal: the attempt sequence the dispatcher observed",
         ).hideHelp(),
       )
       .addHelpText(
@@ -1600,27 +1753,40 @@ function registerHostCommands(program: Command): void {
     (opts) => {
       const release = typeof opts.release === "string" ? opts.release : null;
       return async (ctx) => {
-        // An EXPLICIT empty target is a mistake, not a request for latest.
-        // `--version=`, `--release=` and an unset shell variable
-        // (`--release "$PIN"`) all arrive here as "", and treating that as
-        // "resolve latest" would silently update a machine the caller meant
-        // to pin. The hidden-flag version of this option passed "" through to
-        // SemVer validation, which rejected it; keep that refusal, with a
-        // message that names the flag.
-        if (release !== null && release.length === 0) {
-          throw cliError({
-            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-            message:
-              "host update: --release (or its --version alias) needs a version; pass one, or omit the flag entirely to update to the latest release",
-            details: { release },
-            exitCode: 1,
-          });
-        }
         return buildHostUpdateCommand({
           force: opts.force === true,
           allowDowngrade: opts.allowDowngrade === true,
+          acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
+          // RAW, empty string included. An EXPLICIT empty target is a mistake
+          // and not a request for latest - `--version=`, `--release=` and an
+          // unset shell variable (`--release "$PIN"`) all arrive as "" - and
+          // it is still refused with the same error. It is refused INSIDE the
+          // run, though, because Commander ACCEPTS these arguments: this is
+          // not the unknown-option exit an old parser takes, so a refusal
+          // thrown out here happens before the dispatch-ACK settlement exists
+          // and leaves a host that passed `--ack-nonce` waiting to its
+          // deadline for a refusal the CLI knew instantly.
           versionRequest: release,
           ackNonce: typeof opts.ackNonce === "string" ? opts.ackNonce : null,
+          // Passed through RAW: the pairing rule and the legal-value check
+          // live in the command body, which is the only place that can report
+          // them as a CLI error rather than a parser exit.
+          intent: typeof opts.intent === "string" ? opts.intent : null,
+          expectAttempt:
+            typeof opts.expectAttempt === "string" ? opts.expectAttempt : null,
+          // RAW like their sibling above, and for the SAME reason: Commander
+          // accepts any string here, so a malformed value must be refused
+          // inside the run - after the dispatch-ACK settlement exists - not
+          // thrown out here where a host that passed `--ack-nonce` would wait
+          // to its deadline for a refusal the CLI knew instantly.
+          expectGeneration:
+            typeof opts.expectGeneration === "string"
+              ? opts.expectGeneration
+              : null,
+          expectSequence:
+            typeof opts.expectSequence === "string"
+              ? opts.expectSequence
+              : null,
         })(ctx);
       };
     },
@@ -3362,13 +3528,24 @@ function exitAfterUnhandledFailure(
   const error = errorFromUnknown(cause);
   logger.error(message, { exitCode: 1 }, error);
   Sentry.captureException(cause);
+  // The `[code=...]` token is the machine-readable half and stays exactly as
+  // it was. What follows it is for the human: a fixed sentence told a user
+  // nothing about WHAT failed, so a field report arrived as "it printed
+  // unexpected CLI failure" with no way to tell an out-of-disk from an
+  // assertion inside the HTTP client. One sanitized frame is what separates
+  // them. The full message and stack are in the CLI log, not here.
   writeStderr(
-    `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
+    `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}] (${describeErrorOrigin(error)})\n`,
   );
-  // Routed through the same terminator as every other exit. This is the one
-  // path where an abrupt teardown could be argued for - the process is already
-  // in an unknown state - but that is exactly the state the win32 abort fires
-  // in, and `finishAndExit`'s watchdog bounds how long a wedged handle can
-  // hold it. See exit.ts.
-  void finishAndExit(1);
+  // Routed through the same terminator as every other exit - but only when no
+  // command is in flight to finish the process itself. While one is, the
+  // code is recorded at once and the watchdog is armed by the runner AFTER
+  // the command's work (an install-directory swap, a service restart) is
+  // done; a watchdog armed here fired one second after that swap on the
+  // real-host matrix. This is the one path where an abrupt teardown could be
+  // argued for - the process is already in an unknown state - but that is
+  // exactly the state the win32 abort fires in, and the watchdog still bounds
+  // how long a wedged handle can hold it once armed. See
+  // `finishAfterProcessFatal` in exit.ts.
+  void finishAfterProcessFatal();
 }

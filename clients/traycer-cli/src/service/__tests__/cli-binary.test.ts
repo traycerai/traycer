@@ -44,7 +44,7 @@ const execControl = vi.hoisted(() => ({
   // exercised, and a `catch { return false }` rewrite would stay green.
   failWithEtimedoutForPaths: [] as string[],
   versionForPath: new Map<string, string>(),
-  defaultVersion: "v22.11.0\n",
+  defaultVersion: "v22.14.0\n",
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -742,7 +742,7 @@ describe("resolveServiceCliInvocation", () => {
   });
 
   // Being executable is not being USABLE. The npm package declares
-  // `engines.node >= 20.18.1`, and npm enforces that at INSTALL time only -
+  // `engines.node >= 22.13.0`, and npm enforces that at INSTALL time only -
   // which says nothing about the interpreter a service definition written
   // later will name. The configuration this protects is ordinary rather than
   // exotic: an nvm or asdf user installs under a current Node while
@@ -767,7 +767,7 @@ describe("resolveServiceCliInvocation", () => {
     // Both are perfectly executable regular files - the ONLY difference is
     // what they report, which is the whole point of the check.
     execControl.versionForPath.set(oldNode, "v18.20.4\n");
-    execControl.versionForPath.set(newNode, "v22.11.0\n");
+    execControl.versionForPath.set(newNode, "v22.14.0\n");
     try {
       const { resolveServiceCliInvocation } = await import("../cli-binary");
 
@@ -829,7 +829,7 @@ describe("resolveServiceCliInvocation", () => {
     },
   );
 
-  // The boundary itself. `20.18.1` is the declared floor, so it must be
+  // The boundary itself. `22.13.0` is the declared floor, so it must be
   // ACCEPTED - a `>` where `>=` belongs would reject the exact version the
   // package says it supports, and a test that only ever checked 18 vs 22
   // could not tell the two comparisons apart.
@@ -846,7 +846,7 @@ describe("resolveServiceCliInvocation", () => {
     });
     const dir = mkdtempSync(join(tmpdir(), "traycer-cli-node-exact-"));
     const exactNode = writeFakeExecutableNode(dir);
-    execControl.versionForPath.set(exactNode, "v20.18.1\n");
+    execControl.versionForPath.set(exactNode, "v22.13.0\n");
     try {
       const { resolveServiceCliInvocation } = await import("../cli-binary");
 
@@ -864,11 +864,12 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // One patch below the floor, which no major-only comparison can see - and,
-  // like the other two node-version tests above, no longer a refusal on
-  // POSIX: the bare script is registered with a warning instead.
+  // One minor version below the floor, same major - which no major-only
+  // comparison can see - and, like the other two node-version tests above,
+  // no longer a refusal on POSIX: the bare script is registered with a
+  // warning instead.
   it.skipIf(process.platform === "win32")(
-    "registers the bare script with a warning for a node one patch below the declared minimum version (POSIX fallback)",
+    "registers the bare script with a warning for a node one minor version below the declared minimum version (POSIX fallback)",
     async () => {
       const binaryPath = join(workHome, "npm-bundle.js");
       writeFileSync(binaryPath, "#!/usr/bin/env node\n");
@@ -882,7 +883,7 @@ describe("resolveServiceCliInvocation", () => {
       });
       const dir = mkdtempSync(join(tmpdir(), "traycer-cli-node-just-below-"));
       const justBelow = writeFakeExecutableNode(dir);
-      execControl.versionForPath.set(justBelow, "v20.18.0\n");
+      execControl.versionForPath.set(justBelow, "v22.12.0\n");
       try {
         const { resolveServiceCliInvocation } = await import("../cli-binary");
 

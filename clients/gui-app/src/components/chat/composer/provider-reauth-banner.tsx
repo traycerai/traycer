@@ -225,10 +225,9 @@ function BannerRefreshButton() {
 }
 
 // The reconnect methods to offer a signed-out (web-login) provider. `canOauth`
-// requires a local host (the `<cli> auth login` loopback runs on the host's
-// machine) plus a real (non-empty) OAuth login command (an empty `oauthArgs`
-// would spawn the bare binary, which can't browser-OAuth headlessly); `envVars`
-// are the credential vars the
+// requires a local host (the sign-in loopback runs on the host's machine) plus
+// a declared OAuth login argv - non-null, empty included, see the note at the
+// check itself; `envVars` are the credential vars the
 // paste form can write (an API key / OAuth token) via `providers.setEnvOverride`,
 // which works on any host. Both are reconnect affordances - distinct from a
 // *rejected* credential, which never reaches here (it surfaces as a generic error
@@ -264,16 +263,18 @@ function deriveLoginOptions(
   // this surface and the two gate helpers, so they cannot answer differently
   // for the same provider.
   const canTerminalLogin = providerSupportsTerminalLogin(loginCapability);
-  // A real HEADLESS login needs a non-empty subcommand. `null` = no OAuth;
-  // `[]` is also inert because the host would spawn the bare binary under
-  // piped stdio, which for an interactive-TUI CLI (e.g. droid) opens no
-  // browser and hangs the banner on "Waiting for browser sign-in…". (The
-  // terminal row above has no such constraint - a TUI is what it is for.)
-  const canOauth =
-    !canTerminalLogin &&
-    isLocalHost &&
-    oauthArgs !== null &&
-    oauthArgs.length > 0;
+  // A headless login needs a non-null argv - and ONLY non-null. `[]` used to
+  // be rejected here too, on the reasoning that the host would spawn the bare
+  // binary under piped stdio, which for an interactive-TUI CLI opens no
+  // browser and hangs this banner on "Waiting for browser sign-in…". That
+  // reasoning no longer covers the empty case: the ACP-authenticate providers
+  // spawn a server and drive the ACP `authenticate` method, needing no
+  // subcommand, so `[]` is their real sign-in (antigravity). The host gates
+  // that on its own table and answers an actually-inert argv with an error -
+  // guessing here instead stripped the OAuth option from the banner of the one
+  // provider it was meant to serve. (The terminal row above has no such
+  // constraint - a TUI is what it is for.)
+  const canOauth = !canTerminalLogin && isLocalHost && oauthArgs !== null;
   return {
     envVars,
     canOauth,

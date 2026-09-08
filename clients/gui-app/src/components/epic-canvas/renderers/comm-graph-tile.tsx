@@ -1,9 +1,18 @@
 /**
  * The `comm-graph` tile body: the per-epic communication graph CANVAS.
  *
- * Unlike every other tile, this one is NOT bound to a host - it opens one
- * `epic.communicationGraph.subscribe` per host the epic's agents live on and
- * merges the frames, so it must never read `useTabHostId()`.
+ * Unlike every other tile, this one is NOT bound to a host on the LOCAL plane -
+ * it opens one `epic.communicationGraph.subscribe` per host the epic's agents
+ * live on and merges the frames, so it must never read `useTabHostId()` (its
+ * own ref carries an inert placeholder host for exactly that reason).
+ *
+ * The CLOUD relay is a separate question and rides the tab's host. The cloud
+ * feed is the same rows from any relay, so the only thing that choice decides
+ * is which link carries it - and this epic tab is already riding one, which is
+ * the host `useEpicSessionHostId()` names. That host is passed down to
+ * `useCommGraphSnapshot`, which puts it first among the dialable relay
+ * candidates and keeps the rest in ID order as failover. The per-host local
+ * merge above is untouched by it.
  *
  * CANVAS PLUS TRANSPORT. The graph fills the tile and a media-player bar is
  * docked under it: play/pause, speed, and a scrubber whose track carries one
@@ -25,6 +34,7 @@ import { CommGraphViewModeToggle } from "@/components/epic-canvas/comm-graph/com
 import { useCommGraphAgents } from "@/components/epic-canvas/comm-graph/use-comm-graph-agents";
 import { useCommGraphJump } from "@/components/epic-canvas/comm-graph/use-comm-graph-jump";
 import { useCommGraphSnapshot } from "@/components/epic-canvas/comm-graph/use-comm-graph-snapshot";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useCommGraphTimelineProjection } from "@/components/epic-canvas/comm-graph/use-comm-graph-timeline";
 import { CommGraphTransportBar } from "@/components/epic-canvas/comm-graph/comm-graph-transport-bar";
 import {
@@ -70,7 +80,10 @@ function EmptyCommGraph(props: { readonly tileInstanceId: string }) {
 export function CommGraphTile(props: CommGraphTileProps) {
   const { node, viewTabId } = props;
   const { nodes: agents, hostIds } = useCommGraphAgents();
-  const snapshot = useCommGraphSnapshot(node.epicId, hostIds);
+  // The Epic SESSION's host - the machine this epic tab rides. NOT
+  // `useTabHostId()`: this tile's own binding is the inert placeholder.
+  const tabHostId = useEpicSessionHostId();
+  const snapshot = useCommGraphSnapshot(node.epicId, hostIds, tabHostId);
   const projection = useCommGraphTimelineProjection(
     node.epicId,
     snapshot.events,

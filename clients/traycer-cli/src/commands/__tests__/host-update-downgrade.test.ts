@@ -19,8 +19,48 @@ const mocks = vi.hoisted(() => ({
   createDefaultRegistryClientMock: vi.fn(),
   busy: false,
   beforeSwapError: false,
-  lifecycleCalls: [] as Array<{ readonly force: boolean }>,
+  lifecycleCalls: [] as Array<{
+    readonly force: boolean;
+    readonly onWillStopHost: (() => void) | null;
+  }>,
+  gateStoreFormatFloorMock: vi.fn(),
+  serviceManagerMayRespawnMock: vi.fn(),
 }));
+
+// The commit tail's post-stop check asks `serviceManagerMayRespawn` (the
+// `service/index.ts` facade) and, since the settle-wait, POLLS it for up to
+// 15 s while it answers "may respawn". Left real it reads the developer's own
+// launchd/systemd state - on a machine with a loaded Traycer job every commit
+// here would sit through that window and time the test out. Stubbed to
+// "cannot respawn", the ordinary quiescent machine these fixtures assume.
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
+  return {
+    ...actual,
+    serviceManagerMayRespawn: (
+      ...callArgs: Parameters<typeof actual.serviceManagerMayRespawn>
+    ) => mocks.serviceManagerMayRespawnMock(...callArgs),
+  };
+});
+mocks.serviceManagerMayRespawnMock.mockResolvedValue(false);
+
+// Real by default (the sandboxed `hostHomeDir` below points it at an empty
+// temp tree, which the floor clears unconditionally) - mocked only for the
+// gate-site test that proves a refusal here happens BEFORE any bytes are
+// staged, which a real empty sandbox can never observe.
+vi.mock("../../host/store-format-floor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/store-format-floor")>();
+  return {
+    ...actual,
+    gateStoreFormatFloor: (
+      ...callArgs: Parameters<typeof actual.gateStoreFormatFloor>
+    ) =>
+      mocks.gateStoreFormatFloorMock.getMockImplementation() === undefined
+        ? actual.gateStoreFormatFloor(...callArgs)
+        : mocks.gateStoreFormatFloorMock(...callArgs),
+  };
+});
 
 // Keep the real staging and commit primitives, but route their host paths to a
 // disposable tree. The downgrade helper must therefore replace real bytes and
@@ -101,8 +141,22 @@ vi.mock("../../host/busy-check", () => ({
 }));
 
 vi.mock("../../service/install-lifecycle", () => ({
-  createServiceInstallLifecycle: (options: { readonly force: boolean }) => {
-    mocks.lifecycleCalls.push({ force: options.force });
+  createServiceInstallLifecycle: (options: {
+    // The production lifecycle forwards the caller's `InstallPhaseHooks` at
+    // the two barriers of the same name, so this stand-in does too: without
+    // that the `beforeSwapCommit` pins below would assert against a hook
+    // nothing calls.
+    readonly hooks: {
+      readonly beforeSwapCommit: () => Promise<void>;
+      readonly afterSwap: () => Promise<void>;
+    };
+    readonly force: boolean;
+    readonly onWillStopHost: (() => void) | null;
+  }) => {
+    mocks.lifecycleCalls.push({
+      force: options.force,
+      onWillStopHost: options.onWillStopHost,
+    });
     const state = {
       priorState: "running" as ServiceInstallLifecycleState["priorState"],
       stoppedBeforeSwap: false,
@@ -116,8 +170,12 @@ vi.mock("../../service/install-lifecycle", () => ({
           if (mocks.beforeSwapError) throw new Error("precommit failed");
           state.stoppedBeforeSwap = true;
         },
+        beforeSwapCommit: async () => {
+          await options.hooks.beforeSwapCommit();
+        },
         afterSwap: async () => {
           state.postSwapAction = "install";
+          await options.hooks.afterSwap();
         },
         swapLockRecovery: null,
       },
@@ -129,6 +187,7 @@ import {
   readHostInstallRecord,
   writeHostInstallRecord,
 } from "../../manifest/host-install";
+import { NO_INSTALL_PHASE_HOOKS } from "../../installer/install";
 import { installHostDowngrade } from "../host-update-downgrade";
 
 const ENV: Environment = "production";
@@ -227,19 +286,103 @@ describe("installHostDowngrade", () => {
       environment: ENV,
       version: "1.2.0",
       force: true,
+      acceptStoreFormatLoss: false,
       onProgress: noopProgress,
+      onBeforeCommit: async () => undefined,
+      onWillDisruptHost: () => undefined,
+      beforeExtract: async () => undefined,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
 
     expect(outcome.outcome).toBe("applied");
+    if (outcome.outcome !== "applied") throw new Error("unreachable");
     expect(outcome.previous?.version).toBe("1.3.0-rc.1");
     expect(outcome.record.version).toBe("1.2.0");
     expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
       "new",
     );
-    expect(mocks.lifecycleCalls).toEqual([{ force: true }]);
+    expect(mocks.lifecycleCalls).toMatchObject([{ force: true }]);
     expect(await readHostInstallRecord(ENV)).toMatchObject({
       version: "1.2.0",
     });
+  });
+
+  it("re-derives the install record under its lock: the requested version already installed by another actor is a no-op - no commit, no busy gate, no onBeforeCommit, the owned staged tree discarded", async () => {
+    // The caller decided "requested below installed" before this lock. An
+    // explicit `host update 1.2.0` of another actor landed meanwhile.
+    // Falsification: drop the under-lock version check and identical bytes
+    // are committed over the install with a lifecycle stop/start.
+    await writeInstalled("1.2.0", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = true;
+    let onBeforeCommitCalls = 0;
+
+    const outcome = await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      acceptStoreFormatLoss: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => {
+        onBeforeCommitCalls += 1;
+      },
+      onWillDisruptHost: () => undefined,
+      beforeExtract: async () => undefined,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    expect(outcome).toEqual({ outcome: "no-op", installedVersion: "1.2.0" });
+    expect(onBeforeCommitCalls).toBe(0);
+    expect(mocks.lifecycleCalls).toEqual([]);
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "old",
+    );
+    expect(await readHostInstallRecord(ENV)).toMatchObject({
+      version: "1.2.0",
+    });
+    expect(readdirSync(stagingRoot())).toEqual([]);
+  });
+
+  it("hands ONE disruption boundary to both actuators - the lifecycle's onWillStopHost and the commit's onWillSwap - and it fires before the install record changes", async () => {
+    // The downgrade forwards `onWillDisruptHost` to the lifecycle
+    // (`onWillStopHost`, fired before the stop under its authority check -
+    // mocked here, so the identity is what this half pins) and to the
+    // commit (`onWillSwap`, fired after the pre-swap verify - real here,
+    // so the ORDER is what that half pins: the record read inside the
+    // callback is still the old install). Falsification: drop either
+    // forward in `installHostDowngrade` - the identity assertion or the
+    // call count below goes red.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    // The hook is synchronous, so what it can observe is read synchronously:
+    // the installed bytes at the instant it fires.
+    const bytesAtCall: string[] = [];
+    const onWillDisruptHost = (): void => {
+      bytesAtCall.push(
+        readFileSync(join(installDir(), "traycer-host"), "utf8"),
+      );
+    };
+    await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      acceptStoreFormatLoss: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => undefined,
+      onWillDisruptHost,
+      beforeExtract: async () => undefined,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    expect(mocks.lifecycleCalls).toHaveLength(1);
+    expect(mocks.lifecycleCalls[0].onWillStopHost).toBe(onWillDisruptHost);
+    // The real commit fired the same function exactly once (`onWillSwap`),
+    // while the old bytes were still installed; the mocked lifecycle never
+    // calls its copy, so the count isolates the commit's forward.
+    expect(bytesAtCall).toEqual(["old"]);
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "new",
+    );
   });
 
   it("checks busy before commit and discards the owned staged tree without replacing the install", async () => {
@@ -252,7 +395,12 @@ describe("installHostDowngrade", () => {
         environment: ENV,
         version: "1.2.0",
         force: false,
+        acceptStoreFormatLoss: false,
         onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       }),
     ).rejects.toThrow("host is busy");
 
@@ -275,7 +423,12 @@ describe("installHostDowngrade", () => {
         environment: ENV,
         version: "1.2.0",
         force: false,
+        acceptStoreFormatLoss: false,
         onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       }),
     ).rejects.toThrow("precommit failed");
 
@@ -284,5 +437,299 @@ describe("installHostDowngrade", () => {
     );
     expect(existsSync(join(stagingRoot(), "install-"))).toBe(false);
     expect(readdirSync(stagingRoot())).toEqual([]);
+  });
+
+  it("invokes onBeforeCommit exactly once, after the busy gate and before the commit lands", async () => {
+    // `onBeforeCommit` is `host update`'s marker-takeover hook, run under
+    // the mutation lock AFTER the busy gate and immediately before the
+    // commit - the first point at which this command is the only updater
+    // acting AND has committed to acting (a busy refusal must come first,
+    // so a parked run never seizes a marker for work it then does not do).
+    // Observing the install record from INSIDE the callback (rather than
+    // just counting calls) pins the "before the commit" half: a call that
+    // ran after the swap would see the NEW version already committed.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = false;
+    let beforeCommitCalls = 0;
+    let installedVersionAtCallTime: string | undefined;
+
+    await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      acceptStoreFormatLoss: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => {
+        beforeCommitCalls += 1;
+        const installed = await readHostInstallRecord(ENV);
+        installedVersionAtCallTime = installed?.version;
+      },
+      onWillDisruptHost: () => undefined,
+      beforeExtract: async () => undefined,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    expect(beforeCommitCalls).toBe(1);
+    expect(installedVersionAtCallTime).toBe("1.3.0-rc.1");
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "new",
+    );
+  });
+
+  it("is NOT called when the busy gate throws - a parked run never seizes the marker for work it then does not do", async () => {
+    // Falsification: move the `onBeforeCommit()` call in
+    // `installHostDowngrade` to before `assertHostNotBusy` and
+    // `beforeCommitCalls` below goes to 1 even though the run is busy.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = true;
+    let beforeCommitCalls = 0;
+
+    await expect(
+      installHostDowngrade({
+        environment: ENV,
+        version: "1.2.0",
+        force: false,
+        acceptStoreFormatLoss: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => {
+          beforeCommitCalls += 1;
+        },
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      }),
+    ).rejects.toThrow("host is busy");
+
+    expect(beforeCommitCalls).toBe(0);
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "old",
+    );
+  });
+
+  it("invokes hooks.beforeSwapCommit exactly once, after the busy gate and before the commit lands", async () => {
+    // `hooks.beforeSwapCommit` is the attempt-driving caller's `applying`
+    // barrier (ticket 03). It sits one step LATER than `onBeforeCommit`
+    // above - that one runs before the cooperative stop, this one only once
+    // that stop has resolved - and both are before the commit, which is what
+    // this pins. Observing the install record from INSIDE the callback
+    // (rather than just counting calls) pins the "before the commit" half: a
+    // call that ran after the swap would see the NEW version already
+    // committed.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = false;
+    let barrierCalls = 0;
+    let installedVersionAtCallTime: string | undefined;
+
+    await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      acceptStoreFormatLoss: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => undefined,
+      onWillDisruptHost: () => undefined,
+      beforeExtract: async () => undefined,
+      hooks: {
+        beforeSwapCommit: async () => {
+          barrierCalls += 1;
+          const installed = await readHostInstallRecord(ENV);
+          installedVersionAtCallTime = installed?.version;
+        },
+        afterSwap: async () => undefined,
+      },
+    });
+
+    expect(barrierCalls).toBe(1);
+    expect(installedVersionAtCallTime).toBe("1.3.0-rc.1");
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "new",
+    );
+    // Falsification: drop the `beforeSwapCommit` forwarding from
+    // `createServiceInstallLifecycle` and `barrierCalls` stays 0; move it
+    // after the swap and `installedVersionAtCallTime` becomes "1.2.0".
+  });
+
+  it("never reaches hooks.beforeSwapCommit when the busy gate throws", async () => {
+    // Falsification: move the busy gate in `installHostDowngradeInSegment`
+    // to after `commitHostInstallSourceWithAttempt` and `barrierCalls` below
+    // goes to 1 even though the run is busy.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = true;
+    let barrierCalls = 0;
+
+    await expect(
+      installHostDowngrade({
+        environment: ENV,
+        version: "1.2.0",
+        force: false,
+        acceptStoreFormatLoss: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: {
+          beforeSwapCommit: async () => {
+            barrierCalls += 1;
+          },
+          afterSwap: async () => undefined,
+        },
+      }),
+    ).rejects.toThrow("host is busy");
+
+    expect(barrierCalls).toBe(0);
+  });
+
+  it("reaches beforeExtract on the private staging path, before any commit", async () => {
+    // The verified-bytes barrier: the private source is staged and verified
+    // on THIS arm too, so an attempt-driving caller reaches `preparing` here
+    // exactly as it does on the shared stage.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = false;
+    const order: string[] = [];
+
+    await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      acceptStoreFormatLoss: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => {
+        order.push("onBeforeCommit");
+      },
+      onWillDisruptHost: () => undefined,
+      beforeExtract: async () => {
+        order.push("beforeExtract");
+      },
+      hooks: {
+        beforeSwapCommit: async () => {
+          order.push("beforeSwapCommit");
+        },
+        afterSwap: async () => {
+          order.push("afterSwap");
+        },
+      },
+    });
+
+    expect(order).toEqual([
+      "beforeExtract",
+      "onBeforeCommit",
+      "beforeSwapCommit",
+      "afterSwap",
+    ]);
+    // Falsification: stop forwarding `beforeExtract` into
+    // `stageHostInstallSource` and it drops out of `order` entirely; hand it
+    // to the lifecycle instead and it moves behind `onBeforeCommit`.
+  });
+
+  it("consults the store-format floor before staging, and refuses without ever reaching the registry when the floor refuses", async () => {
+    await writeInstalled("1.3.0-rc.4", "old");
+    mocks.gateStoreFormatFloorMock.mockRejectedValue(
+      Object.assign(new Error("host update: refusing to install host 1.2.0"), {
+        code: "E_HOST_STORE_FORMAT_FLOOR",
+      }),
+    );
+
+    await expect(
+      installHostDowngrade({
+        environment: ENV,
+        version: "1.2.0",
+        force: true,
+        acceptStoreFormatLoss: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+    expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledTimes(1);
+    expect(mocks.gateStoreFormatFloorMock.mock.calls[0]?.[0]).toMatchObject({
+      targetVersion: "1.2.0",
+      site: "host update",
+    });
+    // Nothing downstream of the refused gate ran - not even a network
+    // client was constructed, let alone a download or a stage.
+    expect(mocks.createDefaultRegistryClientMock).not.toHaveBeenCalled();
+  });
+
+  // Final hold model: the downgrade write now happens INSIDE
+  // `installHostDowngradeInSegment` itself, at the committed-swap boundary
+  // under `withCliAttemptMutation` - not in `downgradeArm`'s `afterSwap` hook
+  // (which no longer touches the hold at all). Exercised against the real
+  // `holdVersionIfDowngrade`/`readHostHeldVersion`, not a mock, since the
+  // point is the record on disk.
+  describe("version hold", () => {
+    // `ensureHostHomeDir` is overridden above to this suite's own
+    // `mocks.sandboxHome/host/<env>` tree, but the hold record's actual path
+    // comes from the PROTOCOL package's own (unmocked) `hostInstallHomeDir`,
+    // which resolves through the real (mocked-at-call-time) `os.homedir()`
+    // to `mocks.sandboxHome/.traycer/host/<env>` instead - a different root.
+    // Pre-creating that real parent keeps the write inside the sandbox
+    // rather than relying on the (here, mismatched) override.
+    async function heldVersionPath(): Promise<string> {
+      const { hostHeldVersionRecordPath } =
+        await import("@traycer/protocol/config/installation");
+      return hostHeldVersionRecordPath(ENV);
+    }
+
+    it("holds the committed version+installId on a genuine downgrade", async () => {
+      await writeInstalled("1.3.0", "old");
+      configureRegistry("1.2.0", "new");
+      const heldPath = await heldVersionPath();
+      mkdirSync(join(heldPath, ".."), { recursive: true });
+
+      const outcome = await installHostDowngrade({
+        environment: ENV,
+        version: "1.2.0",
+        force: false,
+        acceptStoreFormatLoss: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      expect(outcome.outcome).toBe("applied");
+      if (outcome.outcome !== "applied") throw new Error("unreachable");
+      const { readHostHeldVersion } =
+        await import("@traycer/protocol/config/installation");
+      await expect(readHostHeldVersion(ENV)).resolves.toEqual({
+        version: "1.2.0",
+        installId: outcome.record.installId,
+      });
+    });
+
+    // Strict compare: an equal-precedence rebuild (build metadata is
+    // ignored per SemVer, so `2.0.0+foo` and `2.0.0+bar` compare `equal`,
+    // not `less`) commits new bytes through this same downgrade-capable
+    // arm but is NOT a downgrade, and so must not be held.
+    it("does not hold an equal-precedence rebuild (2.0.0+foo -> 2.0.0+bar)", async () => {
+      await writeInstalled("2.0.0+foo", "old");
+      configureRegistry("2.0.0+bar", "new");
+      const heldPath = await heldVersionPath();
+      mkdirSync(join(heldPath, ".."), { recursive: true });
+
+      const outcome = await installHostDowngrade({
+        environment: ENV,
+        version: "2.0.0+bar",
+        force: false,
+        acceptStoreFormatLoss: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      expect(outcome.outcome).toBe("applied");
+      expect(existsSync(heldPath)).toBe(false);
+    });
   });
 });

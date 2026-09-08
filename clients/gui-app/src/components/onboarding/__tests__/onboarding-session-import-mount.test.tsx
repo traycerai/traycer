@@ -107,7 +107,7 @@ describe("startSessionImportRun", () => {
 
   it("forwards the submission to the mounted controller", () => {
     const start = vi.fn();
-    setSessionImportStartHandle({ start });
+    setSessionImportStartHandle({ start, attach: vi.fn() });
     const request = {
       selections: [SELECTION],
       titles: new Map([["claude:native-1", "My Session"]]),
@@ -139,7 +139,7 @@ describe("startSessionImportRun", () => {
 
   it("logs an error and does not call start when no host is bound", () => {
     const start = vi.fn();
-    setSessionImportStartHandle({ start });
+    setSessionImportStartHandle({ start, attach: vi.fn() });
     const consoleError = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);

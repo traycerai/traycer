@@ -267,8 +267,8 @@ const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
  * hits, untested. */
 function pressNotificationsChord(): void {
   fireEvent.keyDown(window, {
-    key: "N",
-    code: "KeyN",
+    key: "B",
+    code: "KeyB",
     ...(isMac() ? { metaKey: true } : { ctrlKey: true }),
     shiftKey: true,
   });

@@ -769,6 +769,53 @@ describe("LinkPhonePanel", () => {
     expect(screen.getByTestId("link-phone-rejected-elsewhere")).toBeTruthy();
   });
 
+  it("counts the claim's server-stated deadline down once a second, and shows none without it", () => {
+    // The deadline is the server's (`claimExpiresAt`), never a local copy of
+    // the claim window: what the card shows is what the server honours.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    const status = claimedStatus(Date.now(), "iPhone 16 Pro");
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult({
+        ...status,
+        claimant: { ...status.claimant, claimExpiresAt: Date.now() + 119_000 },
+      }),
+    );
+    const view = render(<LinkPhonePanel />);
+    const countdown = () =>
+      screen.getByTestId("link-phone-claim-countdown").textContent;
+    expect(countdown()).toBe("Expires in 1:59");
+    // Beneath the prompt in reading order but OUTSIDE the status live region:
+    // a region announces every change under it, and a once-a-second clock
+    // would have a screen reader talking over the code and the instructions.
+    const live = screen.getByRole("status");
+    expect(live.textContent).not.toContain("Expires in");
+    expect(
+      live.compareDocumentPosition(
+        screen.getByTestId("link-phone-claim-countdown"),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(countdown()).toBe("Expires in 0:59");
+    act(() => {
+      vi.advanceTimersByTime(58_000);
+    });
+    expect(countdown()).toBe("Expires in 0:01");
+    // Clamped at zero: the card's retirement is the status poll's (or the
+    // local guard's) job, never a clock that counts up.
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(countdown()).toBe("Expires in 0:00");
+
+    // An older server states no deadline: no countdown, nothing else changes.
+    mocks.useAuthLinkLoginStatus.mockReturnValue(statusResult(status));
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-claim-countdown")).toBeNull();
+    expect(screen.getByTestId("link-phone-confirm")).toBeTruthy();
+  });
+
   it("falls back to the description prompt when the server sends no match code", () => {
     // A server that predates the code: today's prompt, unchanged, and no
     // empty code slot on the card.
