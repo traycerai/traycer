@@ -25,18 +25,19 @@ interface WorktreeCleanupViewState {
   /** The run to scroll to and expand once history mounts. */
   readonly focusedRunId: string | null;
   /**
-   * A ONE-SHOT request to bring the Automatic cleanup card itself into view,
-   * left by a surface elsewhere that sent the user here to set cleanup up
-   * (the Sweep dialog's discovery line). `null` is "nobody asked".
+   * A ONE-SHOT request to open the Automatic cleanup policy itself — the
+   * popover behind the inventory toolbar's cleanup chip — left by a surface
+   * elsewhere that sent the user here to set cleanup up (the Sweep dialog's
+   * discovery line). `null` is "nobody asked".
    *
    * Names the HOST it was asked for, not merely that it was asked. The policy
-   * is per host and the card administers exactly one, so a request the card
+   * is per host and the chip administers exactly one, so a request the chip
    * never consumed — the host was offline, too old, or the panel was never
    * opened — must not be picked up by whichever host is scoped next. A bare
    * boolean did precisely that: it outlived its own destination and then
-   * scrolled to a different machine's card.
+   * opened a different machine's policy.
    *
-   * Like `focusedRunId` it is a HINT: the card may be absent, and nothing
+   * Like `focusedRunId` it is a HINT: the chip may be absent, and nothing
    * about the destination depends on it being consumed.
    */
   readonly autoCleanupFocusHostId: string | null;
@@ -57,9 +58,9 @@ export const useWorktreeCleanupViewStore = create<WorktreeCleanupViewState>(
     view: "settings",
     focusedRunId: null,
     autoCleanupFocusHostId: null,
-    // History is the OTHER sub-view, so a card-focus request that has not been
-    // consumed yet is stale the moment the panel leaves the inventory - it
-    // would otherwise fire on whatever return to the card came next.
+    // History is the OTHER sub-view, so a policy-focus request that has not
+    // been consumed yet is stale the moment the panel leaves the inventory -
+    // it would otherwise fire on whatever return to the chip came next.
     openHistory: (focusedRunId) =>
       set({
         view: "cleanupHistory",
