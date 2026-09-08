@@ -9,8 +9,8 @@ import {
 // The picker shows each row's ⌘⇧-digit shortcut - it's live-dispatchable
 // there (`usePickerLeaderScope`'s `model.profile.byDigit`). Settings has no
 // such wiring, so it injects a function that always returns `null` instead
-// (see `provider-profile-scoped-section.tsx`) rather than a boolean the
-// dropdown itself would have to branch on.
+// (see `profile-switcher.tsx`'s `noProfileShortcutHint`) rather than a
+// boolean the dropdown itself would have to branch on.
 export function pickerProfileShortcutHintForIndex(
   index: number,
 ): ProfileDropdownShortcutHint | null {

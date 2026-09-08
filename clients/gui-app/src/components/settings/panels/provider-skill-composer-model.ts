@@ -350,6 +350,11 @@ export function skillActionAdvertised(
 
 export function skillIsEditable(skill: ProviderSkill): boolean {
   if (skill.conflict === true) return false;
+  // D28/D17: an external root (e.g. `~/.agents/skills`) can carry a `shared`
+  // source badge too - `writable` is the field that actually distinguishes
+  // it from the profile's own shared canon root, so it gates ahead of the
+  // source check rather than instead of it.
+  if (!skill.writable) return false;
   return skill.source === "shared" || skill.source === "provider";
 }
 

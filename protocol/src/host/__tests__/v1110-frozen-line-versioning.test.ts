@@ -152,6 +152,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
         providerId: "claude-code",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
       },
     });
     for (const major of RELEASED_REQUEST_MAJORS) {
@@ -193,18 +194,21 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
       providerId: "claude-code",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     },
     plugins: {
       kind: "plugins",
       providerId: "codex",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     },
     skills: {
       kind: "skills",
       providerId: "opencode",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     },
     // Project-scoped on purpose: carries the extra discovery fields AND the
     // scope/workspaceRoot invariant across the hop.
@@ -215,6 +219,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
       workspaceRoot: "/w",
       serverName: "some-server",
       forceRefresh: true,
+      profileId: null,
     },
     pluginIcon: {
       kind: "pluginIcon",
@@ -223,6 +228,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
       workspaceRoot: null,
       pluginId: "pdf",
       theme: "dark",
+      profileId: null,
     },
   };
 
@@ -254,7 +260,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
     });
     const down = downgradeResponseAcrossMajors(
       providersListRegistry,
-      8,
+      9,
       6,
       canonicalResponse,
     );

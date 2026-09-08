@@ -14,6 +14,7 @@ function renderEditor(input: {
     readonly key: string;
     readonly value: string | null;
   }[];
+  readonly reservedKeys: readonly string[];
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
 }) {
@@ -23,6 +24,7 @@ function renderEditor(input: {
       disabled={false}
       namePlaceholder="OPENAI_API_KEY"
       emptyLabel="No environment variables."
+      reservedKeys={input.reservedKeys}
       onCommit={input.onCommit}
       onDelete={input.onDelete}
     />,
@@ -34,7 +36,7 @@ describe("EnvOverrideEditor", () => {
     const onCommit = vi.fn<EnvCommit>();
     const onDelete = vi.fn<EnvDelete>();
 
-    renderEditor({ overrides: [], onCommit, onDelete });
+    renderEditor({ overrides: [], reservedKeys: [], onCommit, onDelete });
 
     expect(screen.queryByLabelText("New environment variable name")).toBeNull();
 
@@ -63,7 +65,7 @@ describe("EnvOverrideEditor", () => {
     const onCommit = vi.fn<EnvCommit>();
     const onDelete = vi.fn<EnvDelete>();
 
-    renderEditor({ overrides: [], onCommit, onDelete });
+    renderEditor({ overrides: [], reservedKeys: [], onCommit, onDelete });
 
     fireEvent.click(
       screen.getByRole("button", { name: "Add environment variable" }),
@@ -85,6 +87,7 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "OPENAI_API_KEY", value: "token" }],
+      reservedKeys: [],
       onCommit,
       onDelete,
     });
@@ -102,6 +105,7 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "KIMI_CODE_HOME", value: " /workspace/kimi " }],
+      reservedKeys: [],
       onCommit,
       onDelete,
     });
@@ -130,6 +134,7 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "KIMI_CODE_HOME", value: "/workspace/kimi" }],
+      reservedKeys: [],
       onCommit,
       onDelete,
     });
@@ -143,7 +148,7 @@ describe("EnvOverrideEditor", () => {
     const onCommit = vi.fn<EnvCommit>();
     const onDelete = vi.fn<EnvDelete>();
 
-    renderEditor({ overrides: [], onCommit, onDelete });
+    renderEditor({ overrides: [], reservedKeys: [], onCommit, onDelete });
 
     fireEvent.click(
       screen.getByRole("button", { name: "Add environment variable" }),
@@ -170,5 +175,103 @@ describe("EnvOverrideEditor", () => {
       "COPILOT_HOME",
       "/workspace/copilot",
     );
+  });
+
+  it("masks values whose key looks like a secret and leaves ordinary keys plain", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    const onDelete = vi.fn<EnvDelete>();
+
+    renderEditor({
+      overrides: [
+        { key: "ANTHROPIC_API_KEY", value: "sk-1" },
+        { key: "GH_TOKEN", value: "gh-1" },
+        { key: "MY_SECRET", value: "s-1" },
+        { key: "DB_PASSWORD", value: "p-1" },
+        { key: "PATH", value: "/usr/bin" },
+        { key: "NODE_ENV", value: "production" },
+      ],
+      reservedKeys: [],
+      onCommit,
+      onDelete,
+    });
+
+    for (const key of [
+      "ANTHROPIC_API_KEY",
+      "GH_TOKEN",
+      "MY_SECRET",
+      "DB_PASSWORD",
+    ]) {
+      const field = screen.getByLabelText(
+        `Value for ${key}`,
+      ) as HTMLInputElement;
+      expect(field.type).toBe("password");
+    }
+    for (const key of ["PATH", "NODE_ENV"]) {
+      const field = screen.getByLabelText(
+        `Value for ${key}`,
+      ) as HTMLInputElement;
+      expect(field.type).toBe("text");
+    }
+  });
+
+  it("reveals a masked value on demand and hides it again on toggle", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    const onDelete = vi.fn<EnvDelete>();
+
+    renderEditor({
+      overrides: [{ key: "ANTHROPIC_API_KEY", value: "sk-secret" }],
+      reservedKeys: [],
+      onCommit,
+      onDelete,
+    });
+
+    const field = screen.getByLabelText(
+      "Value for ANTHROPIC_API_KEY",
+    ) as HTMLInputElement;
+    expect(field.type).toBe("password");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reveal Value for ANTHROPIC_API_KEY",
+      }),
+    );
+    expect(field.type).toBe("text");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide Value for ANTHROPIC_API_KEY" }),
+    );
+    expect(field.type).toBe("password");
+  });
+
+  it("disables Add for a reserved key and names it", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    const onDelete = vi.fn<EnvDelete>();
+
+    renderEditor({
+      overrides: [],
+      reservedKeys: ["CLAUDE_CONFIG_DIR"],
+      onCommit,
+      onDelete,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add environment variable" }),
+    );
+    fireEvent.change(screen.getByLabelText("New environment variable name"), {
+      target: { value: "CLAUDE_CONFIG_DIR" },
+    });
+
+    const applyButton = screen.getByRole("button", {
+      name: "Apply environment variable",
+    }) as HTMLButtonElement;
+    expect(applyButton.disabled).toBe(true);
+    expect(
+      screen.queryByText(/"CLAUDE_CONFIG_DIR" is reserved/),
+    ).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apply environment variable" }),
+    );
+    expect(onCommit).not.toHaveBeenCalled();
   });
 });

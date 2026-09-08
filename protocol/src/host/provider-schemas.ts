@@ -35,7 +35,9 @@ import {
   nativeListQuerySchemaV80,
   nativeListResultSchema,
   nativeListResultSchemaV70Preimage,
+  nativeListResultSchemaV80,
   nativeMutationResultSchema,
+  nativeMutationResultSchemaV10,
   nativeMutationSchema,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaV70Preimage,
@@ -1181,6 +1183,47 @@ export type ProviderProfileAuthType = z.infer<
 >;
 
 /**
+ * D06 (critique B1): the v7.0/v8.0 row embeds `providerProfileAuthTypeSchema`
+ * by identity, and `host-v1.3.0-rc.3` ships `providers.list@8.0`. Widening
+ * that enum grows two shipped lines. `apiKey` therefore lives only here, on
+ * the 9.0 row, and every 9→≤8 bridge strips the rows that use it.
+ */
+export const providerProfileAuthTypeSchemaV90 = z.enum(["oauth", "apiKey"]);
+export type ProviderProfileAuthTypeV90 = z.infer<
+  typeof providerProfileAuthTypeSchemaV90
+>;
+
+/**
+ * D02: whether a managed profile's Skills/Plugins category is shared with the
+ * default account (`"linked"`) or is the profile's own copy (`"own"`).
+ *
+ * Defined HERE rather than in `provider-profile-config-schemas.ts` (which
+ * re-exports it) because both files need it and that one already imports from
+ * this one: the `providers.list@9.0` row's `config` summary and the
+ * profile-config surface must never be able to drift into two spellings of
+ * the same enum (rule 11).
+ *
+ * NOT `providerSkillOwnershipSchema` (`provider-native-schemas.ts`), which is
+ * `managed | external` and describes a single skill ROW's root provenance
+ * (D28). Both ride `providers.list@9.0` under the name `ownership`.
+ */
+export const profileCategoryOwnershipSchema = z.enum(["linked", "own"]);
+export type ProfileCategoryOwnership = z.infer<
+  typeof profileCategoryOwnershipSchema
+>;
+
+/**
+ * D06: which env var an API-key profile's credential fills. Defined here and
+ * re-exported by `provider-profile-config-schemas.ts` for the same reason as
+ * {@link profileCategoryOwnershipSchema}: the `providers.list@9.0` row's
+ * `endpoint` summary, the state's `endpointCapabilities` and the
+ * profile-config surface all spell it, and one enum with three call sites
+ * beats three literal copies.
+ */
+export const profileCredentialKindSchema = z.enum(["api_key", "auth_token"]);
+export type ProfileCredentialKind = z.infer<typeof profileCredentialKindSchema>;
+
+/**
  * Live provider identity resolved for display. Deliberately distinct from the
  * profile snapshot persisted on chat session anchors
  * (`persistence/epic/senders.ts`): `providers.list` is a host-local RPC
@@ -1342,6 +1385,65 @@ export const providerProfileSchema = z.object({
     .nullable()
     .catch(null)
     .optional(),
+  // D06 (critique B1): OVERRIDES the spread's `authType: providerProfileAuthTypeSchema`
+  // (`z.enum(["oauth"])`) below - this key must come AFTER the spread or the
+  // frozen v7.0 enum wins silently and an `apiKey` row fails to parse. Only
+  // `providers.list@9.0` can describe an API-key profile; every ≤8 downgrade
+  // bridge strips rows this enum accepts that the frozen row shape does not.
+  authType: providerProfileAuthTypeSchemaV90,
+  // D06/D07: host only, never the URL path, never the credential. `host` is
+  // `<scheme>://<host>` (D30's logging shape, same discipline on the wire),
+  // or `null` when there is no origin to report - no base URL configured (an
+  // API-key row against the vendor's own endpoint, and every default account
+  // whose only endpoint fact is a stored credential) or a stored value that
+  // does not parse as a URL. Nullable rather than a sentinel string: the
+  // host's own `describeEndpointOrigin` renders `"none"`/`"invalid"` for LOG
+  // lines, and a client would render either as the host's actual name.
+  // `.catch(null)` (critique M12): `profiles` itself is `.catch([])`, so one
+  // un-understood field here must not wipe every profile for the provider.
+  endpoint: z
+    .object({
+      host: z.string().nullable(),
+      model: z.string().nullable(),
+      credentialKind: profileCredentialKindSchema,
+      credentialConfigured: z.boolean(),
+      lastTest: z
+        .object({
+          at: z.number(),
+          ok: z.boolean(),
+          reason: z.string().max(512).nullable(),
+        })
+        .nullable(),
+    })
+    .nullable()
+    .catch(null),
+  // D02/D20 summary for the switcher badges: ownership per category and
+  // whether this profile has a CLI pin of its own.
+  config: z
+    .object({
+      skills: profileCategoryOwnershipSchema,
+      plugins: profileCategoryOwnershipSchema,
+      // Deliberately a flat enum, not `profileCliSelectionSchema`'s
+      // discriminants (`provider-profile-config-schemas.ts`): that union is
+      // the EDITABLE selection and carries `path`/`version` payloads, this is
+      // a provenance label for a switcher badge. Same words, different fact -
+      // keep them in step by hand if a fifth kind ever lands.
+      cliSelection: z.object({
+        kind: z.enum(["bundled", "path", "custom", "managed"]),
+        // `true` when the profile pins its own CLI, `false` when it rides the
+        // default account's pick - `kind` names the pick in force either way.
+        // NOT D20's "the pin vanished, launch fell back" verdict: that is
+        // `resolveProviderCli`'s `fallbackFromProfile`, reachable only by
+        // resolving the CLI, which this synchronous row projection does not
+        // do on every list poll. The field was called `fallback` and set to
+        // "has no pin", which made the client warn "this profile's pinned
+        // version is not installed" for every UNPINNED profile and never for
+        // a broken pin.
+        pinned: z.boolean(),
+      }),
+    })
+    .nullable()
+    .catch(null),
 });
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
 
@@ -1576,6 +1678,31 @@ const providerCliStateBaseShape = {
   // Null when the host could not resolve any runnable binary, which is the
   // same condition `cliBinaryResolved: false` reports.
   nextRunBinary: providerNextRunBinarySchema.nullable().catch(null).optional(),
+  // D11/D21: whether this provider supports managed profiles at all, so the
+  // GUI stops deriving it from `profiles.length`. `.catch(false).optional()`
+  // for the reason `cliBinaryResolved` is optional.
+  profilesSupported: z.boolean().catch(false).optional(),
+  // D21/W2-T10b: the wire-safe subset of the host's endpoint-projection
+  // descriptor (`native-config/contract-registry/endpoint-projections.ts`'s
+  // `ProviderEndpointCapabilitiesWire`) - `null` when this provider has no
+  // endpoint projection at all, so the GUI hides the endpoint form instead
+  // of guessing from a client-side provider-id table (closes the gap two
+  // such tables in `profile-account-tab.tsx` were standing in for). Mirrors
+  // that host type field-for-field; never carries `project`/
+  // `envCredentialVars`, which stay host-only. `.catch(null).optional()` for
+  // the same "old host never had this field" reason `profilesSupported` is
+  // optional.
+  endpointCapabilities: z
+    .object({
+      supportsBaseUrl: z.boolean(),
+      credentialKinds: z.array(profileCredentialKindSchema),
+      requiresModel: z.boolean(),
+      extraFields: z.array(z.string()),
+      credentialStoredInNativeConfig: z.boolean(),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -1683,11 +1810,14 @@ export type ProvidersListRequestBeforeV70 = z.infer<
  * grew v4.0/v5.0/v6.0 with `native`, and an `.extend()` inherits whatever the
  * base grows next.
  *
- * `nativeListQuerySchema` is still the LIVE query schema, and that is a
- * deliberate stop rather than an oversight: this pin freezes v7.0's own key
- * set, and growth INSIDE the native query is caught by the deep JSON-Schema
- * snapshot in `__tests__/__fixtures__/frozen-catalog-lines.ts` rather than
- * silently. Same for the live sub-schemas the response shape below keeps.
+ * Repointed at the frozen `nativeListQuerySchemaV80` (W2-T2), NOT the live
+ * `nativeListQuerySchema`. Binding the live query used to be a deliberate
+ * stop - v7.0 was released before `native` itself grew any further - but
+ * `providers.list@9.0` now adds `profileId` to every arm of the live query,
+ * and leaving this pin on the live schema would have widened the already-
+ * released v7.0 line the instant that landed. `nativeListQuerySchemaV80` has
+ * the same five arms v7.0 shipped with, so this repoint changes nothing about
+ * what v7.0 actually serialized.
  *
  * `providersListV70`'s contract now binds this constant (W1-T9); it used to
  * bind the live `providersListRequestSchema` above instead, which is the
@@ -1695,7 +1825,7 @@ export type ProvidersListRequestBeforeV70 = z.infer<
  */
 export const providersListRequestSchemaV70 = z.object({
   forceAuthRefresh: z.boolean().optional(),
-  native: nativeListQuerySchema.nullable().default(null),
+  native: nativeListQuerySchemaV80.nullable().default(null),
 });
 export type ProvidersListRequestV70 = z.infer<
   typeof providersListRequestSchemaV70
@@ -2063,9 +2193,18 @@ export const providerCliStateSchemaV70 = z.object({
 });
 export type ProviderCliStateV70 = z.infer<typeof providerCliStateSchemaV70>;
 
+// `native` is repointed at the frozen `nativeListResultSchemaV80` (W2-T12b),
+// NOT the live `nativeListResultSchema`. Until now this bound the live shape
+// - a "deliberate stop" documented on `nativeListResultSchema`'s own union
+// comment - because at the v7.0 cut nothing had grown past what v7.0 shipped.
+// `providers.list@9.0` now grows the skill row with `ownership` / `writable`
+// (D28/D17), so leaving this pin on the live schema would have widened this
+// already-released line the instant that landed. `nativeListResultSchemaV80`
+// carries the same five arms this line shipped with, so the repoint changes
+// nothing about what v7.0 actually serialized.
 export const providersListResponseSchemaV70 = z.object({
   providers: z.array(providerCliStateSchemaV70),
-  native: nativeListResultSchema.nullable().default(null),
+  native: nativeListResultSchemaV80.nullable().default(null),
 });
 export type ProvidersListResponseV70 = z.infer<
   typeof providersListResponseSchemaV70
@@ -2125,9 +2264,14 @@ export const providerCliStateSchemaV80 = z.object({
 });
 export type ProviderCliStateV80 = z.infer<typeof providerCliStateSchemaV80>;
 
+// `native` is repointed at the frozen `nativeListResultSchemaV80` (W2-T12b),
+// same reason as the v7.0 line just above: this bound the live
+// `nativeListResultSchema` until `providers.list@9.0` grew the skill row with
+// `ownership` / `writable`, and the released 8.0 line must not silently
+// widen with it.
 export const providersListResponseSchemaV80 = z.object({
   providers: z.array(providerCliStateSchemaV80),
-  native: nativeListResultSchema.nullable().default(null),
+  native: nativeListResultSchemaV80.nullable().default(null),
 });
 export type ProvidersListResponseV80 = z.infer<
   typeof providersListResponseSchemaV80
@@ -2596,6 +2740,79 @@ export type ProvidersStartLoginResponseV11 = z.infer<
 >;
 
 /**
+ * `providers.startLogin@1.2` request (D21/D22). Client-selected sign-in
+ * mode: `browser` is today's loopback/paste behaviour, `device` asks the
+ * host for a code-based flow (Codex: `login --device-auth`). Defaults to
+ * `browser`, so a v1.1 request upgraded to v1.2 reproduces today's behaviour
+ * exactly - the host decides what `device` means per provider (W2-T6), this
+ * field only selects it.
+ */
+export const providersStartLoginRequestSchemaV12 =
+  providersStartLoginRequestSchemaV11.extend({
+    mode: z.enum(["browser", "device"]).default("browser"),
+  });
+export type ProvidersStartLoginRequestV12 = z.infer<
+  typeof providersStartLoginRequestSchemaV12
+>;
+
+/**
+ * `providers.startLogin@1.2` response. `userCode` is the separate one-time
+ * code a device flow prints (Codex); `null` for browser/paste flows and for
+ * providers that carry the code in the URL instead.
+ */
+export const providersStartLoginResponseSchemaV12 =
+  providersStartLoginResponseSchemaV11.extend({
+    userCode: z.string().nullable().default(null),
+  });
+export type ProvidersStartLoginResponseV12 = z.infer<
+  typeof providersStartLoginResponseSchemaV12
+>;
+
+/**
+ * `providers.startLogin@1.3` request (D32/W2-T10b). "Start from" seeding
+ * (owned scalar categories + MCP - never a credential, D32) applied when
+ * `createProfile` mints a fresh managed profile; ignored on the reauth path
+ * (`createProfile === null`) since that targets an already-seeded profile.
+ *
+ * Defaults to `{ kind: "empty" }`, and the default is the WIRE default, not
+ * the dialog's: `providers.startLogin` is on `RELEASED_FLOOR_METHOD_NAMES`,
+ * so the only growth this line may take is an additive minor whose fill
+ * reproduces what the old peer already did - and a released v1.1/v1.2 client
+ * minting a profile seeded nothing at all. Filling `defaultAccount` here
+ * would make a shipped client's "Add profile -> sign in" silently inherit the
+ * default account's CLI selection, terminal args, env and MCP servers, which
+ * it has never done. D25's "Default account" IS the Add-profile dialog's
+ * default, but it belongs to a client that knows the field exists: the GUI
+ * sends `startFrom` explicitly on every call (`add-profile-dialog.tsx`
+ * -> `useProviderProfileLoginFlow`), and the reauth panel sends
+ * `{ kind: "empty" }` outright.
+ *
+ * Mirrors `profileSeedSourceSchema`
+ * (`provider-profile-config-schemas.ts`) field-for-field rather than
+ * importing it: that module imports `providerIdSchema` etc. FROM this one, so
+ * an import here would close a cycle. Exported so
+ * `provider-profile-config-schemas.test.ts` can hold the two serializations
+ * equal - a forced duplicate needs a guard on it (rule 11).
+ */
+export const providersStartLoginSeedSourceSchema = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({ kind: z.literal("empty") }),
+    z.object({ kind: z.literal("defaultAccount") }),
+    z.object({ kind: z.literal("profile"), profileId: z.string().min(1) }),
+  ],
+);
+export const providersStartLoginRequestSchemaV13 =
+  providersStartLoginRequestSchemaV12.extend({
+    startFrom: providersStartLoginSeedSourceSchema.default({
+      kind: "empty",
+    }),
+  });
+export type ProvidersStartLoginRequestV13 = z.infer<
+  typeof providersStartLoginRequestSchemaV13
+>;
+
+/**
  * `providers.awaitLogin@2.1` request. Blocks until an in-flight
  * `providers.startLogin` child finishes (the browser loopback completes or the
  * CLI exits), then returns the freshly re-probed state - the honest "did the
@@ -2743,9 +2960,31 @@ export type ProvidersCancelLoginResponse = z.infer<
 // success state - the resolver either answers with a result (including the
 // typed `error`/`unsupported` arms) or throws.
 
-/** `providers.mcpAuth@1.0` request - the full MCP auth action set. */
+/**
+ * Frozen `providers.mcpAuth@1.0` request - a hand copy of the request as it
+ * shipped, taken now (W2-T3) because `providers.mcpAuth@2.0` adds `profileId`
+ * to the live request below. `providers.mcpAuth` is `degrade: unsupported`
+ * (not on `RELEASED_FLOOR_METHOD_NAMES`), but `@1.0` already went out in
+ * `host-v1.3.0-rc.*` as an optional capability, so it is still a real peer
+ * shape a `@2.0`->`@1.0` downgrade must reproduce exactly.
+ */
+export const providersMcpAuthRequestSchemaV10 = z.object({
+  providerId: providerIdSchema,
+  action: nativeAuthActionSchema,
+});
+export type ProvidersMcpAuthRequestV10 = z.infer<
+  typeof providersMcpAuthRequestSchemaV10
+>;
+
+/**
+ * `providers.mcpAuth@2.0` request. D17/D21: `profileId` is `null` for the
+ * default account; a `@2.0` -> `@1.0` downgrade FAILS CLOSED on a non-null
+ * value (never rewrites to ambient - the exact bug this refactor exists to
+ * remove), see `providersMcpAuthDowngradeV20ToV10` in `registry.ts`.
+ */
 export const providersMcpAuthRequestSchema = z.object({
   providerId: providerIdSchema,
+  profileId: z.string().nullable(),
   action: nativeAuthActionSchema,
 });
 export type ProvidersMcpAuthRequest = z.infer<
@@ -2765,8 +3004,22 @@ export type ProvidersMcpAuthResponse = z.infer<
  * the 30s unary frame deadline), never a long poll. The host pending-auth
  * registry (R02) owns concurrency.
  */
+/**
+ * Frozen `providers.awaitMcpAuth@1.0` request - same hand-copy discipline as
+ * `providersMcpAuthRequestSchemaV10` and for the same reason (W2-T3).
+ */
+export const providersAwaitMcpAuthRequestSchemaV10 = z.object({
+  providerId: providerIdSchema,
+  context: nativeAuthPollContextSchema,
+});
+export type ProvidersAwaitMcpAuthRequestV10 = z.infer<
+  typeof providersAwaitMcpAuthRequestSchemaV10
+>;
+
+/** `providers.awaitMcpAuth@2.0` request. D17/D21, same as `mcpAuth@2.0`. */
 export const providersAwaitMcpAuthRequestSchema = z.object({
   providerId: providerIdSchema,
+  profileId: z.string().nullable(),
   context: nativeAuthPollContextSchema,
 });
 export type ProvidersAwaitMcpAuthRequest = z.infer<
@@ -2781,9 +3034,22 @@ export type ProvidersAwaitMcpAuthResponse = z.infer<
   typeof providersAwaitMcpAuthResponseSchema
 >;
 
-/** `providers.cancelMcpAuth@1.0` request. */
+/**
+ * Frozen `providers.cancelMcpAuth@1.0` request - same hand-copy discipline as
+ * `providersMcpAuthRequestSchemaV10` and for the same reason (W2-T3).
+ */
+export const providersCancelMcpAuthRequestSchemaV10 = z.object({
+  providerId: providerIdSchema,
+  context: nativeAuthCancelContextSchema,
+});
+export type ProvidersCancelMcpAuthRequestV10 = z.infer<
+  typeof providersCancelMcpAuthRequestSchemaV10
+>;
+
+/** `providers.cancelMcpAuth@2.0` request. D17/D21, same as `mcpAuth@2.0`. */
 export const providersCancelMcpAuthRequestSchema = z.object({
   providerId: providerIdSchema,
+  profileId: z.string().nullable(),
   context: nativeAuthCancelContextSchema,
 });
 export type ProvidersCancelMcpAuthRequest = z.infer<
@@ -2805,12 +3071,28 @@ export type ProvidersCancelMcpAuthResponse = z.infer<
 >;
 
 /**
- * `providers.nativeMutate@1.0` request - MCP/plugins/skills mutations. The
- * scope tuple and its `scope`/`workspaceRoot` invariant live inside
- * `nativeMutationSchema`, so no XOR refinement is needed on this envelope.
+ * Frozen `providers.nativeMutate@1.0` request - a hand copy taken now
+ * (W2-T3) for the same reason as the mcpAuth trio above:
+ * `providers.nativeMutate@2.0` adds `profileId` to the live request below.
+ */
+export const providersNativeMutateRequestSchemaV10 = z.object({
+  providerId: providerIdSchema,
+  mutation: nativeMutationSchema,
+});
+export type ProvidersNativeMutateRequestV10 = z.infer<
+  typeof providersNativeMutateRequestSchemaV10
+>;
+
+/**
+ * `providers.nativeMutate@2.0` request. D17: `null` = the default account. A
+ * managed id scopes the write to that profile's config root; there is no
+ * third state. The scope tuple and its `scope`/`workspaceRoot` invariant live
+ * inside `nativeMutationSchema`, so no XOR refinement is needed on this
+ * envelope.
  */
 export const providersNativeMutateRequestSchema = z.object({
   providerId: providerIdSchema,
+  profileId: z.string().nullable(),
   mutation: nativeMutationSchema,
 });
 export type ProvidersNativeMutateRequest = z.infer<
@@ -2818,7 +3100,7 @@ export type ProvidersNativeMutateRequest = z.infer<
 >;
 
 /**
- * `providers.nativeMutate@1.0` response. Returns only the mutated native
+ * `providers.nativeMutate@2.0` response. Returns only the mutated native
  * collection: the old `setEnabled` carrier also echoed the full
  * `ProviderCliState`, but no client ever read it on the native arm, and
  * recomputing a whole provider catalog for a tool toggle is pure overhead.
@@ -2828,6 +3110,25 @@ export const providersNativeMutateResponseSchema = z.object({
 });
 export type ProvidersNativeMutateResponse = z.infer<
   typeof providersNativeMutateResponseSchema
+>;
+
+/**
+ * Frozen `providers.nativeMutate@1.0` response. Unlike the mcpAuth trio,
+ * whose responses did not grow, this one had to be hand-frozen too: its
+ * `result` reaches `providerSkillSchema`, which W2-T12b grew with
+ * `ownership` / `writable`, so leaving `@1.0` on the live shape silently
+ * widened a response `host-v1.3.0-rc.*` already shipped - a new client
+ * negotiating `@1.0` against an rc host would then parse that host's skills
+ * rows against a schema requiring two fields it never sent. Bound by
+ * `providersNativeMutateV10`, and the `@2.0` -> `@1.0` downgrade reparses
+ * through it (that reparse is what strips the two fields), exactly as
+ * `providersListDowngradeV9ToV8` does with `providersListResponseSchemaV80`.
+ */
+export const providersNativeMutateResponseSchemaV10 = z.object({
+  result: nativeMutationResultSchemaV10,
+});
+export type ProvidersNativeMutateResponseV10 = z.infer<
+  typeof providersNativeMutateResponseSchemaV10
 >;
 
 // ── Model providers (optional capability channel) ──────────────────────────
@@ -3121,6 +3422,52 @@ export const providersStartTerminalLoginResponseSchema = z.object({
 });
 export type ProvidersStartTerminalLoginResponse = z.infer<
   typeof providersStartTerminalLoginResponseSchema
+>;
+
+/**
+ * `providers.startTerminalLogin@3.0` request (D21/D22). `host-v1.3.0-rc.3`
+ * ships `@2.0`, so an rc peer already negotiates "2.0" - this is a MAJOR, not
+ * a minor, because the `@2.0` doc's own escape clause ("if terminal login
+ * ever reaches a provider WITH managed profiles, add the field then and
+ * normalize it at the resolver boundary") has now been triggered, and a
+ * minor gives the newer side no way to REFUSE: widening 2.0 in place would
+ * put two shapes under one number, and an old host would simply drop the
+ * profile id at the negotiated version - the user would sign in to the
+ * default account instead of the profile they picked, with no signal
+ * anywhere. Major 3 buys the refusal (`DOWNGRADE_UNSUPPORTED`, never a
+ * silent rewrite to ambient).
+ */
+export const providersStartTerminalLoginRequestSchemaV30 = z.object({
+  providerId: providerIdSchema,
+  scope: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("epic"), epicId: z.string().min(1) }),
+    z.object({ kind: z.literal("independent") }),
+  ]),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+  // D22: re-sign-in an existing managed profile. `null` = the default account.
+  profileId: z.string().nullable(),
+  // D22/D32: mint a profile and spawn the sign-in terminal against it.
+  // Mutually exclusive with `profileId`; the resolver treats a non-null
+  // `createProfile` as authoritative, matching `startLogin@1.1`'s rule.
+  createProfile: z.object({ label: z.string().max(64) }).nullable(),
+});
+export type ProvidersStartTerminalLoginRequestV30 = z.infer<
+  typeof providersStartTerminalLoginRequestSchemaV30
+>;
+
+/**
+ * `providers.startTerminalLogin@3.0` response. Echoes the profile this login
+ * targeted so a `createProfile` caller learns the host-minted id without a
+ * second round trip - same shape as `startLogin@1.1`'s response.
+ */
+export const providersStartTerminalLoginResponseSchemaV30 = z.object({
+  sessionId: z.string().min(1),
+  replacedSessionId: z.string().nullable(),
+  profileId: z.string().nullable(),
+});
+export type ProvidersStartTerminalLoginResponseV30 = z.infer<
+  typeof providersStartTerminalLoginResponseSchemaV30
 >;
 
 /**
@@ -3578,6 +3925,12 @@ export function downgradeProviderAuthV20ToV10(
 // this call.
 export type DowngradableToV10ProviderState = (
   | ProviderCliState
+  // W1-T9 froze `providers.list@8.0`, which turned `providersListDowngradeV8ToV1`
+  // into a bridge whose source rows are V80-shaped rather than live. A V80 row
+  // is a genuine source for this hop - it is the live row minus the v9.0
+  // additions - so it belongs in the union rather than being cast into one of
+  // the arms above.
+  | ProviderCliStateV80
   | ProviderCliStateV70
   | ProviderCliStateV70Preimage
   | ProviderCliStateV60
@@ -3588,7 +3941,10 @@ export type DowngradableToV10ProviderState = (
   | ProviderMutationCliStateV20
   | ProviderMutationCliStateV21
 ) & {
-  profiles?: ProviderCliState["profiles"] | ProviderCliStateV70["profiles"];
+  profiles?:
+    | ProviderCliState["profiles"]
+    | ProviderCliStateV80["profiles"]
+    | ProviderCliStateV70["profiles"];
   // Widened to the pre-image capability shape as well as the live one for
   // the same reason `loginCapability` below is widened across its own frozen
   // snapshots: callers reach this function holding either shape, and the
@@ -3781,6 +4137,23 @@ export function upgradeProviderCliStateListToV70Preimage(
 }
 
 /**
+ * D21/M12: no line below 9.0 can represent an API-key profile — its own
+ * `authType` enum is `["oauth"]`, so the row fails to parse and the
+ * array-level `.catch([])` would wipe EVERY profile for that provider on an
+ * already-shipped client. Strip the rows here, before any reparse.
+ */
+export function oauthProviderProfilesOnly(
+  providers: readonly ProviderCliState[],
+): ProviderCliState[] {
+  return providers.map((provider) => ({
+    ...provider,
+    profiles: provider.profiles.filter(
+      (profile) => profile.authType === "oauth",
+    ),
+  }));
+}
+
+/**
  * v7.0 clients cannot render disabled profiles safely. Omit those rows, then
  * reparse through the frozen v7.0 profile shape to strip `enabled` from the
  * remaining rows without disturbing the rest of the catalog.
@@ -3803,6 +4176,22 @@ export function downgradeProviderCliStateListToV70(
     const current = parseProviderStateWithEnabledProfiles(state);
     if (current === null) return [];
     const parsed = providerCliStateSchemaV70.safeParse(current);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
+ * D21/M12: a v9.0 → v8.0 caller. The frozen v8.0 profile row has no
+ * `authType:"apiKey"` arm, `endpoint`, `config` or `profilesSupported` -
+ * callers strip apiKey rows with {@link oauthProviderProfilesOnly} first, and
+ * the reparse through `providerCliStateSchemaV80` is what drops the rest.
+ * Same filter-by-reparse shape as `downgradeProviderCliStateListToV70`.
+ */
+export function downgradeProviderCliStateListToV80(
+  states: readonly unknown[],
+): ProviderCliStateV80[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV80.safeParse(state);
     return parsed.success ? [parsed.data] : [];
   });
 }

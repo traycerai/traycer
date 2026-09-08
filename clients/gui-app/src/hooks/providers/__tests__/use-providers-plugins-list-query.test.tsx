@@ -61,6 +61,7 @@ describe("useProvidersPluginsList", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         enabled: true,
       }),
     );
@@ -84,6 +85,7 @@ describe("useProvidersPluginsList", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         enabled: true,
       }),
     );
@@ -107,6 +109,7 @@ describe("useProvidersPluginsList", () => {
     renderHook(() =>
       useProvidersPluginsList({
         providerId: "codex",
+        profileId: null,
         scope: "global",
         workspaceRoot: null,
         enabled: false,

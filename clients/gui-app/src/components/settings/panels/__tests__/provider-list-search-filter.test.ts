@@ -63,12 +63,16 @@ const SKILLS: readonly ProviderSkill[] = [
     description: "Helps users discover and install agent skills.",
     path: "/Users/dev/.agents/skills/find-skills",
     source: "shared",
+    ownership: "managed",
+    writable: true,
   },
   {
     name: "release-notes",
     description: "Write release notes from a changeset.",
     path: "/Users/dev/.traycer/managed-skills/release-notes",
     source: "managed",
+    ownership: "managed",
+    writable: true,
   },
 ];
 

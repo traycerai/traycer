@@ -21,6 +21,7 @@ export type PluginsMutateVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly mutation: ProvidersPluginsMutateAction;
   /**
    * When true, the hook skips the global toast so the caller can render the
@@ -38,6 +39,7 @@ interface PluginsMutateContext {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
     readonly workspaceRoot: string | null;
+    readonly profileId: string | null;
   };
 }
 
@@ -59,6 +61,7 @@ export function useProvidersPluginsMutate(): UseMutationResult<
     mutationFn: async (variables) => {
       const response = await client.request("providers.nativeMutate", {
         providerId: variables.providerId,
+        profileId: variables.profileId,
         mutation: {
           kind: "plugins",
           scope: variables.scope,
@@ -74,6 +77,7 @@ export function useProvidersPluginsMutate(): UseMutationResult<
         providerId: variables.providerId,
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
+        profileId: variables.profileId,
       },
     }),
     onSuccess: (data, _variables, ctx) => {

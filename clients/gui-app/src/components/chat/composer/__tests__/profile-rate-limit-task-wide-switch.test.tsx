@@ -18,6 +18,7 @@ import {
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const usage = vi.hoisted(() => ({
   entries: new Map() as Map<string | null, ProfileDropdownUsageEntry>,
@@ -36,7 +37,7 @@ function profile(
   label: string,
   rateLimitStatus: "ok" | "hard_limit" | "unknown",
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -55,7 +56,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 const CURRENT = profile(
@@ -88,6 +89,7 @@ function destination(
     profile: candidate,
     profileId: profileCommitId(candidate),
     selectable,
+    isApiKey: candidate.authType === "apiKey",
   };
 }
 
@@ -393,7 +395,12 @@ describe("rate-limit banner task-wide switch", () => {
     expect(onSwitchProfile).not.toHaveBeenCalled();
   });
 
-  it("preserves the composer's model and reasoning when committing a profile", () => {
+  // D09 (G10) reverses the rule this case used to pin ("preserves the
+  // composer's model and reasoning"). Model memory is per `(harness,
+  // profile)`, so a rate-limit switch lands on the DESTINATION profile's own
+  // model - its `defaultModel` when that pair has never been used - and
+  // effort/tier follow the model, not the credential.
+  it("moves the composer to the destination profile's default model when committing a profile (D09)", () => {
     const store = createComposerToolbarStore({
       seedKey: "rate-limit-banner",
       values: {
@@ -415,7 +422,8 @@ describe("rate-limit banner task-wide switch", () => {
       destinations: undefined,
       primaryTarget: undefined,
       profiles: undefined,
-      onSwitchProfile: (profileId) => commitProfileSelection(store, profileId),
+      onSwitchProfile: (profileId) =>
+        commitProfileSelection(store, profileId, "opus-4.1"),
       onSwitchProfileForTask: () => undefined,
     });
     fireEvent.click(
@@ -423,10 +431,13 @@ describe("rate-limit banner task-wide switch", () => {
     );
     expect(store.getState().selection).toEqual({
       harnessId: "claude",
-      modelSlug: "sonnet-4.5",
+      modelSlug: "opus-4.1",
       profileId: ALTERNATIVE.profileId,
     });
-    expect(store.getState().reasoning).toBe("high");
+    // Effort stays keyed by `(harness, model)`: an unseen model carries the
+    // model's own default (the `""` no-carry lever), never the source
+    // profile's setting.
+    expect(store.getState().reasoning).toBe("");
   });
 
   it("reveals an ambient preview on hover and routes R only to its null-keyed entry", () => {
@@ -457,7 +468,7 @@ describe("rate-limit banner task-wide switch", () => {
     });
 
     expect(
-      screen.getByRole("button", { name: "Switch to Terminal account" }),
+      screen.getByRole("button", { name: "Switch to Default account" }),
     ).toBeDefined();
 
     fireEvent.pointerDown(
@@ -470,14 +481,14 @@ describe("rate-limit banner task-wide switch", () => {
     expect(blockedRefresh).not.toHaveBeenCalled();
 
     const ambientRow = screen.getByRole("menuitem", {
-      name: /Terminal account/,
+      name: /Default account/,
     });
     expect(ambientRow.getAttribute("aria-label")).toMatch(/Main action target/);
     expect(screen.queryByText("Main action")).toBeNull();
     expect(screen.getByTestId("profile-usage-bar-null")).toBeDefined();
     expect(
       screen.queryByRole("complementary", {
-        name: "Usage details for Terminal account",
+        name: "Usage details for Default account",
       }),
     ).toBeNull();
 
@@ -487,12 +498,12 @@ describe("rate-limit banner task-wide switch", () => {
 
     fireEvent.pointerMove(ambientRow);
     const sidecar = screen.getByRole("complementary", {
-      name: "Usage details for Terminal account",
+      name: "Usage details for Default account",
     });
     expect(sidecar.getAttribute("data-profile-usage-sidecar")).toBe("");
     expect(
       screen.getByRole("button", {
-        name: "Refresh usage for Terminal account",
+        name: "Refresh usage for Default account",
       }),
     ).toBeDefined();
 
@@ -542,11 +553,13 @@ describe("initialPreviewProfileId (ambient destination handling)", () => {
     profile: AMBIENT,
     profileId: profileCommitId(AMBIENT),
     selectable: true,
+    isApiKey: false,
   };
   const managedDestination: ProfileRateLimitDestination = {
     profile: ALTERNATIVE,
     profileId: profileCommitId(ALTERNATIVE),
     selectable: true,
+    isApiKey: false,
   };
 
   it("previews the ambient primary target instead of falling through a `??` chain", () => {
@@ -573,6 +586,7 @@ describe("initialPreviewProfileId (ambient destination handling)", () => {
       profile: BLOCKED,
       profileId: profileCommitId(BLOCKED),
       selectable: false,
+      isApiKey: false,
     };
     expect(
       initialPreviewProfileId(null, AMBIENT, [readOnlyDestination]),

@@ -23,6 +23,7 @@ const PROFILES: AgentListProviderProfilesResponse = {
       rateLimitStatus: "ok",
       usageUpdatedAt: CAPTURED_AT,
       isEffectiveLastUsed: false,
+      authType: "oauth",
     },
     {
       selection: { kind: "profile", profileId: "prof_work" },
@@ -31,6 +32,7 @@ const PROFILES: AgentListProviderProfilesResponse = {
       rateLimitStatus: "hard_limit",
       usageUpdatedAt: CAPTURED_AT,
       isEffectiveLastUsed: true,
+      authType: "oauth",
     },
     {
       selection: { kind: "profile", profileId: "prof_personal" },
@@ -39,6 +41,8 @@ const PROFILES: AgentListProviderProfilesResponse = {
       rateLimitStatus: "unknown",
       usageUpdatedAt: null,
       isEffectiveLastUsed: false,
+      // D06/W2-T3: `agent.listProviderProfiles@5.1` rows carry `authType`.
+      authType: "apiKey",
     },
   ],
 };

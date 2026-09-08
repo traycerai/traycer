@@ -27,6 +27,7 @@ import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 /**
  * Landing-surface durability for the rate-limit switch banner.
@@ -84,7 +85,7 @@ function profile(input: {
     rateLimitLimitedScopes,
     authenticated,
   } = input;
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -103,7 +104,7 @@ function profile(input: {
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
-  };
+  });
 }
 
 function claudeState(
@@ -242,7 +243,7 @@ function LandingRateLimitBannerHarness(props: {
             probeTarget={prompt.probeTarget}
             runTargetHostId={null}
             onSwitchProfile={(nextProfileId) => {
-              commitProfileSelection(props.toolbarStore, nextProfileId);
+              commitProfileSelection(props.toolbarStore, nextProfileId, null);
             }}
             affectedChatCount={0}
             onSwitchProfileForTask={() => undefined}

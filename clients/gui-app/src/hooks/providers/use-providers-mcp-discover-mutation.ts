@@ -20,6 +20,7 @@ export type McpDiscoverVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly serverName: string;
   readonly forceRefresh: boolean;
 };
@@ -30,6 +31,7 @@ interface McpDiscoverContext {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
     readonly workspaceRoot: string | null;
+    readonly profileId: string | null;
   };
 }
 
@@ -66,6 +68,7 @@ export function useProvidersMcpDiscover(): UseMutationResult<
         providerId: variables.providerId,
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
+        profileId: variables.profileId,
       },
     }),
     onSuccess: (data, _variables, ctx) => {

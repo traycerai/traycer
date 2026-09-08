@@ -47,6 +47,13 @@ export function buildUsageSummaryRequest(input: {
    * an epic's work wherever it ran).
    */
   readonly hostId?: string | null;
+  /**
+   * D21/D27 addition (plan §8): narrows totals to one profile. `null` = every
+   * profile on the provider (today's exact behavior) - a caller that has not
+   * cannot prove the host negotiated major 2 must pass `null`,
+   * never a real id the host cannot yet understand.
+   */
+  readonly profileId: string | null;
 }): UsageSummaryRequest {
   return {
     timezone: getViewerTimeZone(),
@@ -55,6 +62,7 @@ export function buildUsageSummaryRequest(input: {
     chatId: input.chatId ?? undefined,
     hostId: input.hostId ?? undefined,
     window: input.window,
+    profileId: input.profileId ?? undefined,
   };
 }
 

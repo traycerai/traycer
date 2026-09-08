@@ -23,6 +23,7 @@ import {
 import { resolveClonedChatSettings } from "@/lib/commands/actions/resolve-cloned-chat-settings";
 import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 /**
  * D-series cross-host clone edges (durability audit): "target host with
@@ -58,7 +59,7 @@ function profile(
   label: string,
   accountUuid: string | null,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -78,7 +79,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function claudeState(profiles: ProviderProfile[]): ProviderCliState {

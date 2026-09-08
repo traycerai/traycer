@@ -359,6 +359,7 @@ function renderTabWithCliBinary(
       capabilities={caps}
       providerLabel={providerId}
       cliBinaryResolved={cliBinaryResolved}
+      profileId={null}
     />,
   );
 }
@@ -1294,6 +1295,7 @@ describe("<ProviderMcpTab />", () => {
     );
     const entry = useMcpPendingAuthStore.getState().get({
       providerId: "codex",
+      profileId: null,
       scope: "global",
       workspaceRoot: null,
       serverName: "context7",
@@ -1306,6 +1308,7 @@ describe("<ProviderMcpTab />", () => {
     useMcpPendingAuthStore.getState().upsert({
       key: {
         providerId: "codex",
+        profileId: null,
         scope: "global",
         workspaceRoot: null,
         serverName: "context7",
@@ -1346,6 +1349,7 @@ describe("<ProviderMcpTab />", () => {
     useMcpPendingAuthStore.getState().upsert({
       key: {
         providerId: "codex",
+        profileId: null,
         scope: "global",
         workspaceRoot: null,
         serverName: "context7",
@@ -1384,6 +1388,7 @@ describe("<ProviderMcpTab />", () => {
     // forever. This asserts the entry is actually gone.
     const key = {
       providerId: "codex",
+      profileId: null,
       scope: "global",
       workspaceRoot: null,
       serverName: "context7",

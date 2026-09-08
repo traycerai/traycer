@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Plus, Trash2, X } from "lucide-react";
+import { Check, Eye, EyeOff, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,6 +20,10 @@ import { cn } from "@/lib/utils";
  */
 
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// D29. Key-name heuristic only — values are plaintext at rest; this hides them
+// from a shoulder/screenshare, it is not a secret store.
+export const SECRETISH_ENV_KEY = /(_API_KEY|_TOKEN|SECRET|PASSWORD)/i;
 
 // Single grid shared by the header, every row, and the add row so the column
 // edges line up exactly (the previous header/rows used different padding). The
@@ -131,6 +135,14 @@ export function EnvOverrideEditor(props: {
   readonly disabled: boolean;
   readonly namePlaceholder: string;
   readonly emptyLabel: string;
+  /**
+   * Keys this editor refuses to add, with the reason shown at the field
+   * (D29). Empty for a surface with no reserved-key concept (Shell
+   * host-process, the Default account's provider env) — this disables the
+   * Add button as a UX hint only; the host stays the authority and can
+   * still refuse a key this list omits.
+   */
+  readonly reservedKeys: readonly string[];
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -143,6 +155,7 @@ export function EnvOverrideEditor(props: {
     disabled,
     namePlaceholder,
     emptyLabel,
+    reservedKeys,
     onCommit,
     onDelete,
   } = props;
@@ -192,6 +205,7 @@ export function EnvOverrideEditor(props: {
           existingKeys={keys}
           disabled={disabled}
           namePlaceholder={namePlaceholder}
+          reservedKeys={reservedKeys}
           onAdd={(key, value) => {
             onCommit("", key, value);
             setAdding(false);
@@ -234,6 +248,9 @@ function EnvOverrideRow(props: {
     mode: modeForValue(entry.value),
     error: null,
   }));
+  // Per-row reveal, reset on unmount by construction: each row remounts under
+  // a fresh `key={entry.key}` when its key changes (see the list above).
+  const [revealed, setRevealed] = useState(false);
   const draftRef = useRef(draft);
   useEffect(() => {
     draftRef.current = draft;
@@ -310,6 +327,9 @@ function EnvOverrideRow(props: {
           disabled={disabled}
           ariaLabel={`Value for ${entry.key}`}
           className={VALUE_FIELD_PLACEMENT}
+          secretish={SECRETISH_ENV_KEY.test(entry.key)}
+          revealed={revealed}
+          onToggleRevealed={() => setRevealed((v) => !v)}
           onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
           onValueChange={(value) =>
             setDraft((current) => ({ ...current, value }))
@@ -340,18 +360,35 @@ function EnvOverrideAddRow(props: {
   readonly existingKeys: readonly string[];
   readonly disabled: boolean;
   readonly namePlaceholder: string;
+  readonly reservedKeys: readonly string[];
   readonly onAdd: (key: string, value: string | null) => void;
   readonly onCancel: () => void;
 }) {
-  const { existingKeys, disabled, namePlaceholder, onAdd, onCancel } = props;
+  const {
+    existingKeys,
+    disabled,
+    namePlaceholder,
+    reservedKeys,
+    onAdd,
+    onCancel,
+  } = props;
   const [draft, setDraft] = useState<Draft>(() => ({
     key: "",
     value: "",
     mode: "set",
     error: null,
   }));
+  const [revealed, setRevealed] = useState(false);
+  const trimmedKey = draft.key.trim();
+  // D29: a client-side hint only — the host stays authoritative (plan §2.1's
+  // `profile-env-reserved-key`), so this never substitutes for the write-time
+  // rejection, it only saves the round trip for the common case.
+  const reservedReason = reservedKeys.includes(trimmedKey)
+    ? `"${trimmedKey}" is reserved and can't be set here.`
+    : null;
 
   const add = (): void => {
+    if (reservedReason !== null) return;
     const nextKey = draft.key.trim();
     const error = draftError(nextKey, existingKeys);
     if (error !== null) {
@@ -381,6 +418,9 @@ function EnvOverrideAddRow(props: {
           disabled={disabled}
           ariaLabel="New environment variable value"
           className={VALUE_FIELD_PLACEMENT}
+          secretish={SECRETISH_ENV_KEY.test(draft.key)}
+          revealed={revealed}
+          onToggleRevealed={() => setRevealed((v) => !v)}
           onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
           onValueChange={(value) =>
             setDraft((current) => ({ ...current, value }))
@@ -392,7 +432,9 @@ function EnvOverrideAddRow(props: {
             type="button"
             size="icon-sm"
             variant="ghost"
-            disabled={disabled || draft.key.trim().length === 0}
+            disabled={
+              disabled || trimmedKey.length === 0 || reservedReason !== null
+            }
             aria-label="Apply environment variable"
             onClick={add}
           >
@@ -410,13 +452,17 @@ function EnvOverrideAddRow(props: {
           </Button>
         </div>
       </div>
-      <EnvRowFooter
-        draft={draft}
-        disabled={disabled}
-        onTrim={() =>
-          setDraft((current) => ({ ...current, value: current.value.trim() }))
-        }
-      />
+      {reservedReason !== null ? (
+        <p className="text-ui-xs text-destructive">{reservedReason}</p>
+      ) : (
+        <EnvRowFooter
+          draft={draft}
+          disabled={disabled}
+          onTrim={() =>
+            setDraft((current) => ({ ...current, value: current.value.trim() }))
+          }
+        />
+      )}
     </div>
   );
 }
@@ -427,6 +473,10 @@ function EnvValueField(props: {
   readonly disabled: boolean;
   readonly ariaLabel: string;
   readonly className: string;
+  /** D29: this row's key matches {@link SECRETISH_ENV_KEY}. */
+  readonly secretish: boolean;
+  readonly revealed: boolean;
+  readonly onToggleRevealed: () => void;
   readonly onModeChange: (mode: EnvMode) => void;
   readonly onValueChange: (value: string) => void;
   readonly onBlur: () => void;
@@ -437,10 +487,14 @@ function EnvValueField(props: {
     disabled,
     ariaLabel,
     className,
+    secretish,
+    revealed,
+    onToggleRevealed,
     onModeChange,
     onValueChange,
     onBlur,
   } = props;
+  const masked = secretish && !revealed && mode !== "unset";
   return (
     <div className={cn("flex min-w-0 items-center gap-2", className)}>
       <Select
@@ -463,19 +517,41 @@ function EnvValueField(props: {
           <SelectItem value="unset">Unset</SelectItem>
         </SelectContent>
       </Select>
-      <Input
-        value={mode === "unset" ? "" : value}
-        disabled={disabled || mode === "unset"}
-        spellCheck={false}
-        aria-label={ariaLabel}
-        placeholder={mode === "unset" ? "removed from environment" : "value"}
-        className="h-8 min-w-0 flex-1 font-mono text-code-xs"
-        onChange={(event) => onValueChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
-        onBlur={onBlur}
-      />
+      <div className="relative min-w-0 flex-1">
+        <Input
+          type={masked ? "password" : "text"}
+          value={mode === "unset" ? "" : value}
+          disabled={disabled || mode === "unset"}
+          spellCheck={false}
+          aria-label={ariaLabel}
+          placeholder={mode === "unset" ? "removed from environment" : "value"}
+          className={cn(
+            "h-8 min-w-0 font-mono text-code-xs",
+            secretish && mode !== "unset" ? "pr-8" : undefined,
+          )}
+          onChange={(event) => onValueChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+          onBlur={onBlur}
+        />
+        {secretish && mode !== "unset" ? (
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={revealed ? `Hide ${ariaLabel}` : `Reveal ${ariaLabel}`}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={onToggleRevealed}
+            className="absolute inset-y-0 right-0 flex w-8 items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            {revealed ? (
+              <EyeOff className="size-3.5" />
+            ) : (
+              <Eye className="size-3.5" />
+            )}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

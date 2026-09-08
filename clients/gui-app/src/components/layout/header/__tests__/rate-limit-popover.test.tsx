@@ -337,6 +337,7 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const NOW = Date.now();
 
@@ -452,7 +453,7 @@ function providerProfile(input: {
   readonly tier: string | null;
   readonly usageUpdatedAt: number | null;
 }): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: input.profileId,
     enabled: true,
     kind: input.kind,
@@ -475,7 +476,7 @@ function providerProfile(input: {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function unauthenticatedAmbientProfile(): ProviderProfile {
@@ -1301,14 +1302,16 @@ describe("<RateLimitPopover /> rail", () => {
 
     expect(screen.getByText("Codex")).toBeTruthy();
     expect(screen.getByText("Claude Code")).toBeTruthy();
-    expect(screen.getByText("Default Codex")).toBeTruthy();
-    expect(screen.getByText("Default Claude")).toBeTruthy();
+    // D26: every ambient row renders the ONE user-facing name
+    // (`DEFAULT_ACCOUNT_DISPLAY_LABEL`), never its host-internal wire label -
+    // so both providers' ambient rows read "Default account" here.
+    expect(screen.getAllByText("Default account")).toHaveLength(2);
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Personal")).toBeTruthy();
     expect(screen.getAllByText("Active")).toHaveLength(2);
     const activeRows = document.querySelectorAll('[aria-current="true"]');
     expect(activeRows).toHaveLength(2);
-    expect(activeRows[0].textContent).toContain("Default Codex");
+    expect(activeRows[0].textContent).toContain("Default account");
     expect(activeRows[0].textContent).not.toContain("Work");
     expect(activeRows[1].textContent).toContain("Personal");
     expect(screen.getByText("Pro 5x")).toBeTruthy();
@@ -1360,7 +1363,8 @@ describe("<RateLimitPopover /> rail", () => {
 
     renderPopover();
 
-    expect(screen.getByText("Terminal")).toBeTruthy();
+    // D26: the ambient row renders "Default account", not its wire label.
+    expect(screen.getByText("Default account")).toBeTruthy();
     expect(screen.getByText("4% used")).toBeTruthy();
     expect(screen.queryByText("No logged-in profiles")).toBeNull();
     expect(screen.queryByRole("button", { name: "Refresh all" })).toBeNull();
@@ -1404,7 +1408,8 @@ describe("<RateLimitPopover /> rail", () => {
 
     renderPopover();
 
-    expect(screen.getByText("Terminal")).toBeTruthy();
+    // D26: the ambient row renders "Default account", not its wire label.
+    expect(screen.getByText("Default account")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Refresh all" })).toBeTruthy();
     expect(mocks.enqueue).not.toHaveBeenCalled();
@@ -1530,7 +1535,8 @@ describe("<RateLimitPopover /> rail", () => {
 
     renderPopover();
 
-    expect(screen.getByText("Terminal")).toBeTruthy();
+    // D26: the ambient row renders "Default account", not its wire label.
+    expect(screen.getByText("Default account")).toBeTruthy();
     expect(screen.getByText("signed out")).toBeTruthy();
     expect(
       screen.getByText("Signed out — sign in to refresh usage."),

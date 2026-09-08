@@ -7,6 +7,7 @@ import {
   rateLimitScopeAffectsModel,
   rateLimitSeverityTier,
 } from "../rate-limit-scope-match";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function model(slug: string, label: string): ModelOption {
   return {
@@ -28,7 +29,7 @@ function profile(
   rateLimitStatus: ProviderProfile["rateLimitStatus"],
   rateLimitLimitedScopes: ProviderProfile["rateLimitLimitedScopes"],
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "p",
     enabled: true,
     kind: "managed",
@@ -47,7 +48,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 const OPUS = model("opus[1m]", "Opus");

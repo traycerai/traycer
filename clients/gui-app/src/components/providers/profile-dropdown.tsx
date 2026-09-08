@@ -204,7 +204,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           <button
             id={triggerId}
             type="button"
-            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile)}${activeProfile.enabled ? "" : ", Disabled"}`}
+            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${defaultAccountBadgeSuffix(activeProfile)}${activeProfile.enabled ? "" : ", Disabled"}`}
             className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
           >
             <AccentDot
@@ -225,7 +225,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                 {profileDisplayLabel(activeProfile)}
               </span>
               {activeProfile.kind === "ambient" ? (
-                <TerminalProfileBadge />
+                <DefaultAccountBadge />
               ) : null}
               {!activeProfile.enabled ? (
                 <span className="shrink-0 text-muted-foreground">Disabled</span>
@@ -520,7 +520,7 @@ function ProfileSelectionContents(props: {
       />
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span className="min-w-0 flex-1 truncate">{state.label}</span>
-        {profile.kind === "ambient" ? <TerminalProfileBadge /> : null}
+        {profile.kind === "ambient" ? <DefaultAccountBadge /> : null}
         <ProfileEnablementLabel
           enabled={profile.enabled}
           pending={props.enablementPending}
@@ -736,24 +736,25 @@ function admissionTooltipRow(
   );
 }
 
-/** Marks the terminal/default-CLI-login profile next to its name, on both the
- *  closed trigger and the open rows. */
-function TerminalProfileBadge() {
+/** Marks the ambient/default-CLI-login profile next to its name, on both the
+ *  closed trigger and the open rows. D26: user-facing vocabulary is "Default
+ *  account" - "Terminal" (and "ambient") stay wire/internal-only nouns. */
+function DefaultAccountBadge() {
   return (
     <Badge
       variant="outline"
       className="h-5 shrink-0 px-1.5 text-[10px] text-muted-foreground"
     >
-      Terminal
+      Default account
     </Badge>
   );
 }
 
-/** Restates the visual `TerminalProfileBadge` for aria-labels - both the
+/** Restates the visual `DefaultAccountBadge` for aria-labels - both the
  *  trigger and the rows carry aria-labels that replace their text content, so
  *  the badge is invisible to AT without this suffix. */
-function terminalBadgeSuffix(profile: ProviderProfile): string {
-  return profile.kind === "ambient" ? ", Terminal" : "";
+function defaultAccountBadgeSuffix(profile: ProviderProfile): string {
+  return profile.kind === "ambient" ? ", Default account" : "";
 }
 
 function profileRowAccessibleLabel(input: {
@@ -770,7 +771,7 @@ function profileRowAccessibleLabel(input: {
   readonly admissionReason: string | null;
   readonly enabled: boolean;
 }): string {
-  const label = `${input.label}${terminalBadgeSuffix(input.profile)}`;
+  const label = `${input.label}${defaultAccountBadgeSuffix(input.profile)}`;
   const base = profileRowAccessibleLabelBase(input, label);
   const eligibility = input.enabled ? base : `${base}, Disabled`;
   if (input.admissionReason === null) return eligibility;

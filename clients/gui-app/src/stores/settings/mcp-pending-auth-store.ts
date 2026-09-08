@@ -5,13 +5,19 @@ import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native
 /**
  * Navigate-safe MCP OAuth pending-auth store.
  *
- * Key matches the host registry tuple from R02:
- * `(providerId, scope, workspaceRoot, serverName)`.
+ * Key matches the host registry tuple from R02, now including `profileId`
+ * (D17, W2-T12b): `(providerId, profileId, scope, workspaceRoot,
+ * serverName)`, mirroring `McpPendingAuthKey` in the host's
+ * `mcp-pending-auth-registry.ts`. Without it, two profiles' concurrent auths
+ * for a same-named server collided on one client-side entry - only the
+ * host-side registry key had been widened before this ticket.
  * Re-issuing awaitLogin/cancelLogin with the same tuple resumes the same
  * host-side attempt after a settings navigation.
  */
 export type McpPendingAuthKey = {
   readonly providerId: ProviderId;
+  /** D17; `null` = the Default account. */
+  readonly profileId: string | null;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
   readonly serverName: string;
@@ -28,6 +34,7 @@ export type McpPendingAuthEntry = {
 function keyString(key: McpPendingAuthKey): string {
   return [
     key.providerId,
+    key.profileId ?? "",
     key.scope,
     key.workspaceRoot ?? "",
     key.serverName,

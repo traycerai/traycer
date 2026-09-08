@@ -11,13 +11,14 @@ import {
   isProviderAmbientAuthenticated,
   isProviderAmbientSignedOut,
 } from "../provider-ambient-auth";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function auth(status: ProviderAuthStatus): ProviderAuth {
   return { status, badgeText: null, label: null, detail: null };
 }
 
 function ambientProfile(status: ProviderAuthStatus): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -31,7 +32,7 @@ function ambientProfile(status: ProviderAuthStatus): ProviderProfile {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function providerState(
@@ -53,7 +54,13 @@ function providerState(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
-    profiles,
+    // `providers.mutate@2.1`'s row is oauth-only by construction
+    // (`z.enum(["oauth"])`); only `providers.list@9.0` describes an API-key
+    // profile. Narrow rather than widen the frozen line's shape.
+    profiles: profiles.map((profile) => ({
+      ...profile,
+      authType: "oauth" as const,
+    })),
   };
 }
 
@@ -146,7 +153,13 @@ function mutationState(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
-    profiles,
+    // `providers.mutate@2.1`'s row is oauth-only by construction
+    // (`z.enum(["oauth"])`); only `providers.list@9.0` describes an API-key
+    // profile. Narrow rather than widen the frozen line's shape.
+    profiles: profiles.map((profile) => ({
+      ...profile,
+      authType: "oauth" as const,
+    })),
   };
 }
 

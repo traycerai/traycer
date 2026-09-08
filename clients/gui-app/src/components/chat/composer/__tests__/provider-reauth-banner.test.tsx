@@ -1396,7 +1396,14 @@ describe("<ProviderReauthBanner />", () => {
     });
   });
 
-  it("shows a no-method stub for an OAuth-only provider (no paste vars) on a remote host", () => {
+  // D22 (W2-T10): the local-host admission gate is gone - a remote host no
+  // longer hides "Authenticate" (it signs in via `device` mode instead of
+  // the local loopback's `browser` mode). Locality now only picks the
+  // DEFAULT sign-in mode (`resolveDefaultSignInMode`), so these two cases
+  // assert the starting mode rather than the button's visibility. Renamed
+  // from "shows a no-method stub for an OAuth-only provider (no paste vars)
+  // on a remote host".
+  it("starts sign-in in device mode for an OAuth-only provider (no paste vars) on a remote host", () => {
     mocks.hostKind = "remote";
     render(
       <ProviderReauthBanner
@@ -1416,13 +1423,19 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    // Remote host → no OAuth loopback; no token vars → no paste form either.
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    expect(screen.getByText(/Reconnect .* from its CLI/)).toBeDefined();
+    // Remote host, no loopback - still offered, defaults to device mode.
+    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    expect(mocks.startLoginMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "claude-code", mode: "device" }),
+      expect.anything(),
+    );
   });
 
-  it("still offers the paste form on a remote host when OAuth is unavailable", () => {
+  // Renamed from "still offers the paste form on a remote host when OAuth is
+  // unavailable" - OAuth is no longer ever "unavailable" purely for being
+  // remote, so this now asserts both reconnect methods coexist and the
+  // OAuth one starts in device mode.
+  it("offers both Authenticate (device mode) and the paste form on a remote host", () => {
     mocks.hostKind = "remote";
     render(
       <ProviderReauthBanner
@@ -1437,9 +1450,13 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    // OAuth needs a local host, but pasting a credential works on any host.
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
     expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    expect(mocks.startLoginMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "claude-code", mode: "device" }),
+      expect.anything(),
+    );
   });
 
   it("offers the paste form for an API-key-only provider (Cursor) with no OAuth", () => {
@@ -1493,7 +1510,7 @@ describe("<ProviderReauthBanner />", () => {
       ).toBeDefined();
       expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
       fireEvent.click(
-        screen.getByRole("button", { name: "Continue on Terminal account" }),
+        screen.getByRole("button", { name: "Continue on Default account" }),
       );
       expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
 
@@ -1531,7 +1548,7 @@ describe("<ProviderReauthBanner />", () => {
 
       expect(screen.getByText('"Work" is signed out.')).toBeDefined();
       fireEvent.click(
-        screen.getByRole("button", { name: "Continue on Terminal account" }),
+        screen.getByRole("button", { name: "Continue on Default account" }),
       );
       expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
 

@@ -19,13 +19,14 @@ vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
 
 import { ProfileRateLimitSwitchBanner } from "../profile-rate-limit-switch-banner";
 import type { ProfileRateLimitDestination } from "../use-profile-rate-limit-switch-prompt";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function profile(
   profileId: string,
   label: string,
   rateLimitStatus: ProviderProfile["rateLimitStatus"],
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind: "managed",
@@ -44,7 +45,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function destination(
@@ -55,6 +56,7 @@ function destination(
     profile: candidate,
     profileId: profileCommitId(candidate),
     selectable,
+    isApiKey: candidate.authType === "apiKey",
   };
 }
 

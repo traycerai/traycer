@@ -87,6 +87,7 @@ import {
   configureRateLimitQueue,
   enqueueRateLimitFetch,
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const configureSpy = vi.mocked(configureRateLimitQueue);
 const enqueueSpy = vi.mocked(enqueueRateLimitFetch);
@@ -116,7 +117,7 @@ function profile(input: {
   readonly kind: ProviderProfile["kind"];
   readonly usageUpdatedAt: number | null;
 }): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: input.profileId,
     enabled: true,
     kind: input.kind,
@@ -139,7 +140,7 @@ function profile(input: {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function calledTargets(): ReadonlyArray<{

@@ -10,6 +10,7 @@ import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 /**
  * A profile id is HOST-LOCAL - it names a managed config dir on one machine -
@@ -37,7 +38,7 @@ const THIS_HOST = "host-1";
 const OTHER_HOST = "host-2";
 
 function claudeStateWithoutProfile(): ProviderCliState {
-  const ambient: ProviderProfile = {
+  const ambient: ProviderProfile = providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -56,7 +57,7 @@ function claudeStateWithoutProfile(): ProviderCliState {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
   return {
     providerId: "claude-code",
     enabled: true,

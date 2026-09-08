@@ -19,9 +19,10 @@ import {
 } from "@/components/providers/profile-dropdown";
 import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const PROFILES: ReadonlyArray<ProviderProfile> = [
-  {
+  providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -40,8 +41,8 @@ const PROFILES: ReadonlyArray<ProviderProfile> = [
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  },
-  {
+  }),
+  providerProfileFixture({
     profileId: "work",
     enabled: true,
     kind: "managed",
@@ -60,7 +61,7 @@ const PROFILES: ReadonlyArray<ProviderProfile> = [
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  },
+  }),
 ];
 
 function noShortcutHint(_index: number): ProfileDropdownShortcutHint | null {
@@ -137,13 +138,13 @@ describe("nested picker profile-dropdown keyboard ownership", () => {
 
     fireEvent.pointerDown(
       screen.getByRole("button", {
-        name: "Claude profile: Terminal account, Terminal",
+        name: "Claude profile: Default account, Default account",
       }),
       { button: 0, ctrlKey: false },
     );
     const menu = await screen.findByRole("menu");
     const terminalProfile = screen.getByRole("menuitem", {
-      name: "Terminal account, Terminal",
+      name: "Default account, Default account",
     });
     const workProfile = screen.getByRole("menuitem", { name: "Work" });
     terminalProfile.focus();
@@ -170,7 +171,7 @@ describe("nested picker profile-dropdown keyboard ownership", () => {
 });
 
 const PROFILES_WITH_MIDDLE_DISABLED: ReadonlyArray<ProviderProfile> = [
-  {
+  providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -189,8 +190,8 @@ const PROFILES_WITH_MIDDLE_DISABLED: ReadonlyArray<ProviderProfile> = [
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  },
-  {
+  }),
+  providerProfileFixture({
     profileId: "work",
     enabled: true,
     kind: "managed",
@@ -209,8 +210,8 @@ const PROFILES_WITH_MIDDLE_DISABLED: ReadonlyArray<ProviderProfile> = [
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  },
-  {
+  }),
+  providerProfileFixture({
     profileId: "personal",
     enabled: true,
     kind: "managed",
@@ -229,7 +230,7 @@ const PROFILES_WITH_MIDDLE_DISABLED: ReadonlyArray<ProviderProfile> = [
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  },
+  }),
 ];
 
 const WORK_LOCKED_ADMISSION: ReadonlyMap<string | null, ProfileRowAdmission> =
@@ -290,13 +291,13 @@ describe("real Radix DropdownMenu: disabled-row roving focus and dismissal", () 
 
     fireEvent.pointerDown(
       screen.getByRole("button", {
-        name: "Claude profile: Terminal account, Terminal",
+        name: "Claude profile: Default account, Default account",
       }),
       { button: 0, ctrlKey: false },
     );
     const menu = await screen.findByRole("menu");
     const terminalProfile = screen.getByRole("menuitem", {
-      name: "Terminal account, Terminal",
+      name: "Default account, Default account",
     });
     const workProfile = screen.getByRole("menuitem", {
       name: /Work.*Can't continue this session under Work\./,

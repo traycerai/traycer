@@ -16,8 +16,8 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import {
-  commitProfileSelection,
   commitSelection,
+  defaultModelForProfile,
 } from "@/stores/composer/commit-selection";
 import {
   harnessCatalogEntryNeedsRefresh,
@@ -33,6 +33,7 @@ import {
   createModelRowSearchIndex,
   filterModelRows,
   flattenModelRowSections,
+  isCustomModelPromptRow,
   sectionModelRowsByProviderRank,
   selectedModelRowId,
   type HarnessModelRow,
@@ -45,6 +46,7 @@ import {
   memo,
   useMemo,
   useRef,
+  useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -93,7 +95,6 @@ import {
   EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID,
   loginCapabilityByHarnessIdFromProviderStates,
   resolveCreateProfileGate,
-  useCreateProfileHostIsLocal,
 } from "@/components/home/pickers/harness-model-picker-create-profile-gate";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
@@ -126,6 +127,7 @@ const EMPTY_PROFILES_BY_HARNESS_ID: ReadonlyMap<
   GuiHarnessId,
   ReadonlyArray<ProviderProfile>
 > = new Map();
+const EMPTY_PROFILES: ReadonlyArray<ProviderProfile> = [];
 
 interface HarnessModelPickerProps {
   /** Per-composer toolbar store; the picker subscribes to the selection /
@@ -271,6 +273,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.profileId,
     disabled,
   );
+  // D09's `Custom…` row: whether its free-form field is showing. Owned here
+  // rather than by the row so click and Enter open it through one path
+  // (`selectRow`).
+  const [customRowOpen, setCustomRowOpen] = useState(false);
+  const closeCustomRow = useCallback(() => setCustomRowOpen(false), []);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const coarsePointer = useCoarsePointer();
   const listRef = useRef<VirtuosoHandle | null>(null);
@@ -368,8 +375,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
           ),
     [createProfileProvidersQuery.data],
   );
-  const createProfileHostIsLocal =
-    useCreateProfileHostIsLocal(createProfileHostId);
   // Not gated on `activityEnabled`: the query's own `enabled`/`subscribed`
   // already release the observer, and `enabled:false` keeps the cache. Blanking
   // this list on blur only blanked the trigger a background split pane still
@@ -590,11 +595,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     ],
   );
   // Mirrors Settings' `providerCanStartProfileOauth` gate: OAuth sign-in
-  // needs a local host that advertises login args for the browsed provider.
-  // A tab-bound composer gates on the TAB's host locality (`createProfileHostIsLocal`,
-  // resolved from `createProfileHostId`), never the renderer-default host.
+  // needs the browsed provider to advertise login args at all - D22 dropped
+  // the host-locality conjunct, since the device mode needs no loopback.
   const createProfileGate = resolveCreateProfileGate(
-    createProfileHostIsLocal,
     loginCapabilityByHarnessId.get(resolvedActiveProviderId),
   );
   const activeProvider = useBrowsedProviderCatalogEntry({
@@ -729,10 +732,27 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () =>
       buildAllHarnessModelRows(
         catalogHarnesses.flatMap((harness) =>
-          harness.available ? [{ harness, models: harness.models }] : [],
+          harness.available
+            ? [
+                {
+                  harness,
+                  models: harness.models,
+                  // Only `resolvedActiveProviderId` and (when different)
+                  // `selection.harnessId` actually get rendered/matched below
+                  // (`providerRows` and `selectedModelRowId` both filter by
+                  // harness) - `activeProfileIdByHarnessId` covers exactly
+                  // those two, so every other harness's rows (built but never
+                  // read) get `null` here, harmlessly.
+                  defaultModelId: defaultModelForProfile(
+                    profilesByHarnessId.get(harness.id) ?? EMPTY_PROFILES,
+                    activeProfileIdByHarnessId.get(harness.id) ?? null,
+                  ),
+                },
+              ]
+            : [],
         ),
       ),
-    [catalogHarnesses],
+    [catalogHarnesses, profilesByHarnessId, activeProfileIdByHarnessId],
   );
   const providerRows = useMemo(
     () => rows.filter((row) => row.harnessId === resolvedActiveProviderId),
@@ -778,11 +798,30 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         closeOnly();
         return;
       }
+      // D09's `Custom…` row is a prompt, not a model. Its pinned form carries
+      // `value: ""`, so committing it would blank the composer's model -
+      // which is exactly what Enter on the row used to do, because only the
+      // row's own `onClick` knew about this branch. It lives on the shared
+      // select path so click and Enter cannot diverge again. The COMMIT from
+      // the field arrives here too, carrying the typed slug, and falls
+      // through.
+      if (isCustomModelPromptRow(row)) {
+        setCustomRowOpen(true);
+        return;
+      }
       // Commit the picked model through the memory-aware funnel (restores that
       // (provider, model)'s remembered effort/tier, or the model's defaults).
       // Selecting a model keeps the picker open; it only closes on an outside
       // click / escape (handled by Popover's onOpenChange -> closeOnly).
-      commitSelection(store, row.harnessId, row.value, activePanelProfileId);
+      // `defaultModel` only matters on the harness-switch branch (`row.value`
+      // is a concrete slug here, an explicit pick), so `null` is correct.
+      commitSelection({
+        store,
+        harnessId: row.harnessId,
+        modelSlug: row.value,
+        profileId: activePanelProfileId,
+        defaultModel: null,
+      });
     },
     [activePanelProfileId, closeOnly, disabled, store],
   );
@@ -802,13 +841,23 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         providerId === selection.harnessId ? selection.profileId : null,
       );
       // Only an AVAILABLE, non-degraded entry commits a switch (restoring its
-      // remembered model/effort/tier). A degraded / unavailable entry just
-      // browses the rail - the panel shows its reauth / setup CTA, no commit.
+      // remembered model/effort/tier, seeded by D09's `defaultModel` on first
+      // use). A degraded / unavailable entry just browses the rail - the
+      // panel shows its reauth / setup CTA, no commit.
       const entry = railEntries.find(
         (candidate) => candidate.harness.id === providerId,
       );
       if (entry !== undefined && entry.harness.available && !entry.degraded) {
-        commitSelection(store, providerId, null, resolvedProfileId);
+        commitSelection({
+          store,
+          harnessId: providerId,
+          modelSlug: null,
+          profileId: resolvedProfileId,
+          defaultModel: defaultModelForProfile(
+            profilesByHarnessId.get(providerId) ?? EMPTY_PROFILES,
+            resolvedProfileId,
+          ),
+        });
       }
       setActiveRailEntry(providerId, resolvedProfileId);
     },
@@ -829,21 +878,26 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // Mirrors `handleRailEntryChange`'s lock rule: while a fork lock is
       // active the strip stays interactive for the locked provider only.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
-      // Same-provider profile changes only replace the credential, preserving
-      // the user's configured model, reasoning effort, and tier. The provider
-      // can differ after browsing a degraded rail entry without committing it,
-      // or when this globally retained create-profile callback resolves after
-      // another control changed the selection. In that case preserve the old
-      // provider-switch behavior and restore the target provider's remembered
-      // settings instead of pairing its profile with the current provider.
-      if (store.getState().selection.harnessId === providerId) {
-        commitProfileSelection(store, profileId);
-      } else {
-        commitSelection(store, providerId, null, profileId);
-      }
+      // D09: a profile change is a destination change whether or not the
+      // provider moved with it - memory is keyed per `(harness, profile)`, so
+      // both cases restore the destination pair's own model/effort/tier and
+      // seed an unused pair from that profile's `defaultModel`. There is no
+      // same-provider shortcut that preserves the source profile's model:
+      // that was the pre-D09 rule, and it silently pointed one profile's
+      // catalog at another profile's endpoint.
+      commitSelection({
+        store,
+        harnessId: providerId,
+        modelSlug: null,
+        profileId,
+        defaultModel: defaultModelForProfile(
+          profilesByHarnessId.get(providerId) ?? EMPTY_PROFILES,
+          profileId,
+        ),
+      });
       setActiveRailEntry(providerId, profileId);
     },
-    [lockedHarnessId, setActiveRailEntry, store],
+    [lockedHarnessId, profilesByHarnessId, setActiveRailEntry, store],
   );
 
   const handleKeyDown = useCallback(
@@ -1021,6 +1075,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onHoverRow={setHoveredRowId}
         onActiveRow={setActiveRowId}
         onSelectRow={selectRow}
+        customRowOpen={customRowOpen}
+        onCloseCustomRow={closeCustomRow}
         reasoningFooter={reasoningFooter}
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}

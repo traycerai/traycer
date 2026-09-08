@@ -12,7 +12,7 @@ import {
   listTerminalsResponseSchema,
   listTerminalsResponseSchemaV21,
   listTerminalsResponseSchemaV22,
-  listTerminalsResponseSchemaV23,
+  listTerminalsResponseSchemaV24,
   type CanonicalTerminalSessionInfo,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 
@@ -110,9 +110,20 @@ describe("terminal.list@2.2 currentCwd", () => {
       listRegistry,
       2,
       1,
-      listTerminalsResponseSchemaV23.parse({
+      // The registered v2 -> v1 bridge now starts at v2.4 (`terminal.list@2.4`,
+      // W2-T3): major 2's `latestMinor` moved, so `downgradeResponseAcrossMajors`
+      // wants a v2.4-shaped response here. The two new fields are irrelevant to
+      // what this test asserts, but are required to reach the registered
+      // contract honestly.
+      listTerminalsResponseSchemaV24.parse({
         sessions: [
-          { ...base, currentCwd: "/work/live", lifecycleOwner: "registry" },
+          {
+            ...base,
+            currentCwd: "/work/live",
+            lifecycleOwner: "registry",
+            spawnConfigRevision: null,
+            restartRequired: false,
+          },
         ],
         homeCwd: "/Users/dev",
       }),

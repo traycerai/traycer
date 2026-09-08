@@ -86,13 +86,14 @@ vi.mock("@/components/ui/dropdown-menu", () => {
 import { ProfileDropdown } from "../profile-dropdown";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 function profile(
   profileId: string,
   label: string,
   authStatus: ProviderProfile["auth"]["status"],
   enabled: boolean,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled,
     kind: profileId === "ambient" ? "ambient" : "managed",
@@ -111,7 +112,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 const AMBIENT = profile("ambient", "Terminal account", "authenticated", true);
@@ -303,14 +304,14 @@ describe("<ProfileDropdown />", () => {
     expect(onSetProfileEnabled).toHaveBeenCalledWith("work-profile", false);
   });
 
-  it("shows the Terminal badge on the closed trigger for the ambient profile", () => {
+  it("shows the Default account badge on the closed trigger for the ambient profile", () => {
     renderDropdown(baseDropdownInput({ activeProfileId: null }));
 
     const trigger = screen.getByRole("button", {
-      name: "Codex profile: Terminal account, Terminal",
+      name: "Codex profile: Default account, Default account",
     });
     expect(
-      within(trigger).getByText("Terminal", {
+      within(trigger).getByText("Default account", {
         selector: '[data-slot="badge"]',
       }),
     ).toBeDefined();
@@ -348,7 +349,9 @@ describe("<ProfileDropdown />", () => {
     );
 
     expect(
-      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+      screen.getByRole("menuitem", {
+        name: "Default account, Default account",
+      }),
     ).toBeDefined();
     expect(screen.getByRole("menuitem", { name: "Work" })).toBeDefined();
     screen.getByRole("menuitem", {
@@ -383,7 +386,7 @@ describe("<ProfileDropdown />", () => {
     const profileRows = screen.getAllByRole("menuitem").slice(0, 3);
     expect(profileRows[0]?.textContent).toContain("Personal");
     expect(profileRows[1]?.textContent).toContain("Work");
-    expect(profileRows[2]?.textContent).toContain("Terminal account");
+    expect(profileRows[2]?.textContent).toContain("Default account");
     const profileName = within(profileRows[0]).getByText("Personal");
     const disabledLabel = within(profileRows[0]).getByText("Disabled");
     expect(disabledLabel.parentElement).toBe(profileName.parentElement);
@@ -525,9 +528,9 @@ describe("<ProfileDropdown />", () => {
     expect(onSelectProfile).not.toHaveBeenCalled();
 
     const terminalRow = within(
-      screen.getByRole("group", { name: "Terminal account profile controls" }),
+      screen.getByRole("group", { name: "Default account profile controls" }),
     ).getByRole("menuitem", {
-      name: "Terminal account, Terminal",
+      name: "Default account, Default account",
     });
     fireEvent.click(terminalRow);
     expect(onSelectProfile).toHaveBeenCalledWith(null);
@@ -556,7 +559,7 @@ describe("<ProfileDropdown />", () => {
     expect(
       within(
         screen.getByRole("group", {
-          name: "Terminal account profile controls",
+          name: "Default account profile controls",
         }),
       ).getByTestId("model-profile-digit-1"),
     ).toBeDefined();
@@ -636,7 +639,9 @@ describe("<ProfileDropdown />", () => {
     renderDropdown(baseDropdownInput({ onSelectProfile }));
 
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+      screen.getByRole("menuitem", {
+        name: "Default account, Default account",
+      }),
     );
     expect(onSelectProfile).toHaveBeenLastCalledWith(null);
 
@@ -730,7 +735,7 @@ describe("<ProfileDropdown />", () => {
     ).toBe("true");
     expect(
       screen
-        .getByRole("menuitem", { name: "Terminal account, Terminal" })
+        .getByRole("menuitem", { name: "Default account, Default account" })
         .getAttribute("aria-current"),
     ).toBeNull();
   });
@@ -777,7 +782,9 @@ describe("<ProfileDropdown />", () => {
 
     // Ambient is not in the admission map - still selectable.
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+      screen.getByRole("menuitem", {
+        name: "Default account, Default account",
+      }),
     );
     expect(onSelectProfile).toHaveBeenLastCalledWith(null);
   });
@@ -806,7 +813,7 @@ describe("<ProfileDropdown />", () => {
     // The accessible label folds in the admission reason (amend-01 Fix 5) so
     // a keyboard/AT user can perceive it without hovering the tooltip.
     const ambient = screen.getByRole("menuitem", {
-      name: "Terminal account, Terminal, Ambient can't continue this session.",
+      name: "Default account, Default account, Ambient can't continue this session.",
     });
     if (!(ambient instanceof HTMLButtonElement)) {
       throw new Error("Expected ambient row mock to render as a button.");

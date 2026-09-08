@@ -21,6 +21,9 @@ import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-sub
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { resolveDefaultSignInMode } from "@/components/providers/provider-signin-availability";
+import { signInModeToggleSupported } from "./provider-sign-in-mode-support";
 import {
   AddProfileIdentityStep,
   AddProfileWaitingStep,
@@ -35,6 +38,14 @@ function noop(): void {}
 interface ProviderProfileReauthPanelProps {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
+  /** Settings' own host scope (`ProviderDetail`'s `hostId`) - needed only for
+   *  the `providers.startLogin` schema-version gate on the "Use a code
+   *  instead" toggle. */
+  readonly hostId: string | null;
+  /** D22: whether the scoped host owns the loopback - decides this panel's
+   *  sign-in DEFAULT mode (`resolveDefaultSignInMode`); the toggle below
+   *  offers `device` on top of it regardless. */
+  readonly isSelectedHostLocal: boolean;
   /** Settles a reconnect of the SAME account without the acknowledgment card.
    *  The profile is already authenticated and persisted by the time the flow
    *  reaches `identity` - the card only asks the user to confirm something
@@ -58,6 +69,8 @@ interface ProviderProfileReauthPanelProps {
 export function ProviderProfileReauthPanel({
   state,
   profile,
+  hostId,
+  isSelectedHostLocal,
   onSameAccountReconnected,
   onCancel,
   onDone,
@@ -68,6 +81,11 @@ export function ProviderProfileReauthPanel({
   const cancelLogin = useProvidersCancelLogin();
   const submitLoginCode = useProvidersSubmitLoginCode();
   const touchLogin = useProvidersTouchLogin();
+  const signInModeSchemaVersion = useHostMethodSchemaVersion(
+    hostId,
+    "providers.startLogin",
+  );
+  const toggleSupported = signInModeToggleSupported(signInModeSchemaVersion);
   // The `profile` prop is LIVE, and it turns over mid-flow:
   // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row into
   // the `providers.list` cache, and query-core awaits that before the flow's
@@ -85,6 +103,11 @@ export function ProviderProfileReauthPanel({
     providerId: state.providerId,
     existingProfileId: entryProfile.profileId,
     loginCapability: state.loginCapability,
+    signInMode: resolveDefaultSignInMode(isSelectedHostLocal),
+    // D32: reauth targets an already-seeded profile - the host ignores
+    // `startFrom` off the reauth path (`createProfile === null`), so this is
+    // the "nothing to seed" spelling, never read.
+    startFrom: { kind: "empty" },
     startLogin,
     awaitLogin,
     cancelLogin,
@@ -183,6 +206,11 @@ export function ProviderProfileReauthPanel({
         onRetry={start}
         onSignInAgain={signInAgain}
         onDone={onDone}
+        onUseCodeInstead={
+          toggleSupported && flow.activeSignInMode === "browser"
+            ? flow.switchToDeviceMode
+            : null
+        }
       />
     </div>
   );
@@ -201,6 +229,7 @@ function ProviderProfileReauthState({
   onRetry,
   onSignInAgain,
   onDone,
+  onUseCodeInstead,
 }: {
   readonly flow: ProviderProfileLoginFlow;
   /** The row as it was when the panel mounted - see the freeze at the call
@@ -217,12 +246,16 @@ function ProviderProfileReauthState({
   readonly onRetry: () => void;
   readonly onSignInAgain: () => void;
   readonly onDone: () => void;
+  /** D22 "Use a code instead" - `null` hides the toggle (old host, or the
+   *  attempt is already `device`). */
+  readonly onUseCodeInstead: (() => void) | null;
 }): ReactNode {
   return (
     <>
       {showWaiting ? (
         <AddProfileWaitingStep
           loginUrl={flow.state.kind === "waiting" ? flow.state.url : null}
+          userCode={flow.state.kind === "waiting" ? flow.state.userCode : null}
           queuePending={flow.startPending}
           cancelRequested={
             flow.state.kind === "starting" && flow.state.cancelRequested
@@ -233,6 +266,7 @@ function ProviderProfileReauthState({
           codePaste={flow.codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}
+          onUseCodeInstead={onUseCodeInstead}
         />
       ) : null}
 

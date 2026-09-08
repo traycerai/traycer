@@ -137,6 +137,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 
 import { TerminalAgentForkDialog } from "../terminal-agent-fork-dialog";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 interface TerminalForkCreateInput {
   readonly profileId: string | null;
@@ -215,7 +216,7 @@ function profile(
   kind: "ambient" | "managed",
   label: string,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -234,7 +235,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function claudeState(profiles: ProviderProfile[]): ProviderCliState {

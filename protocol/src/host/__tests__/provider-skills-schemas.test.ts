@@ -9,11 +9,13 @@ import { z } from "zod";
 import {
   nativeListResultSchema,
   nativeListResultSchemaV70Preimage,
+  nativeListResultSchemaV80,
   nativeMutationResultSchema,
   nativeMutationSchema,
   providerSkillInspectCandidateSchema,
   providerSkillSchema,
   providerSkillSchemaV70Preimage,
+  providerSkillSchemaV80,
   providerSkillsCapabilitiesSchema,
   providerSkillsCapabilitiesSchemaV70Preimage,
   providersSkillsInspectResultSchema,
@@ -40,6 +42,19 @@ const BASE_SKILL_ROW = {
   description: "UI skill",
   path: "/Users/me/.agents/skills/frontend-design",
   source: "shared" as const,
+};
+
+/**
+ * The live {@link providerSkillSchema} row (W2-T12b): `ownership` /
+ * `writable` are required there, so every test that parses against the LIVE
+ * skill schema (not a frozen pre-image) needs them on the fixture. The frozen
+ * `providerSkillSchemaV70Preimage` rows below stay on the four-field
+ * `BASE_SKILL_ROW` - that schema must keep dropping unknown keys.
+ */
+const LIVE_SKILL_ROW = {
+  ...BASE_SKILL_ROW,
+  ownership: "managed" as const,
+  writable: true,
 };
 
 const BASE_ACTION_SCOPES = {
@@ -544,12 +559,12 @@ describe("nativeMutationResultSchema skills success kinds", () => {
     const parsed = nativeMutationResultSchema.parse({
       ok: true,
       kind: "skills",
-      skills: [BASE_SKILL_ROW],
+      skills: [LIVE_SKILL_ROW],
     });
     expect(parsed).toEqual({
       ok: true,
       kind: "skills",
-      skills: [BASE_SKILL_ROW],
+      skills: [LIVE_SKILL_ROW],
     });
   });
 
@@ -576,29 +591,33 @@ describe("nativeMutationResultSchema skills success kinds", () => {
 });
 
 describe("providerSkillSchema origin and conflict", () => {
-  it("parses the legacy four-field row", () => {
-    expect(providerSkillSchema.parse(BASE_SKILL_ROW)).toEqual(BASE_SKILL_ROW);
+  it("rejects the four-field row - ownership and writable are required", () => {
+    expect(providerSkillSchema.safeParse(BASE_SKILL_ROW).success).toBe(false);
+  });
+
+  it("parses the live row with ownership and writable", () => {
+    expect(providerSkillSchema.parse(LIVE_SKILL_ROW)).toEqual(LIVE_SKILL_ROW);
   });
 
   it("accepts origin as a string or null, and conflict true", () => {
     expect(
       providerSkillSchema.parse({
-        ...BASE_SKILL_ROW,
+        ...LIVE_SKILL_ROW,
         origin: "Imported from github.com/org/skills",
         conflict: true,
       }),
     ).toEqual({
-      ...BASE_SKILL_ROW,
+      ...LIVE_SKILL_ROW,
       origin: "Imported from github.com/org/skills",
       conflict: true,
     });
     expect(
       providerSkillSchema.parse({
-        ...BASE_SKILL_ROW,
+        ...LIVE_SKILL_ROW,
         origin: null,
       }),
     ).toEqual({
-      ...BASE_SKILL_ROW,
+      ...LIVE_SKILL_ROW,
       origin: null,
     });
   });
@@ -609,7 +628,7 @@ describe("providerSkillSchema origin and conflict", () => {
       kind: "skills",
       skills: [
         {
-          ...BASE_SKILL_ROW,
+          ...LIVE_SKILL_ROW,
           origin: "Imported from github.com/org/skills",
           conflict: true,
         },
@@ -620,11 +639,62 @@ describe("providerSkillSchema origin and conflict", () => {
       kind: "skills",
       skills: [
         {
-          ...BASE_SKILL_ROW,
+          ...LIVE_SKILL_ROW,
           origin: "Imported from github.com/org/skills",
           conflict: true,
         },
       ],
+    });
+  });
+});
+
+describe("providerSkillSchema ownership and writable (D28/D17, W2-T12b)", () => {
+  it("rejects a row missing ownership or writable", () => {
+    expect(
+      providerSkillSchema.safeParse(omitKey(LIVE_SKILL_ROW, "ownership"))
+        .success,
+    ).toBe(false);
+    expect(
+      providerSkillSchema.safeParse(omitKey(LIVE_SKILL_ROW, "writable"))
+        .success,
+    ).toBe(false);
+  });
+
+  it("accepts an external, read-only row", () => {
+    const externalRow = {
+      ...BASE_SKILL_ROW,
+      ownership: "external" as const,
+      writable: false,
+    };
+    expect(providerSkillSchema.parse(externalRow)).toEqual(externalRow);
+  });
+
+  it("rejects an ownership value outside managed/external", () => {
+    expect(
+      providerSkillSchema.safeParse({ ...LIVE_SKILL_ROW, ownership: "linked" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("V80 skill row JSON schema rejects ownership and writable", () => {
+    const json = z.toJSONSchema(providerSkillSchemaV80, {
+      unrepresentable: "any",
+    });
+    expect(json).toMatchObject({ additionalProperties: false });
+    expect(json.properties).not.toHaveProperty("ownership");
+    expect(json.properties).not.toHaveProperty("writable");
+  });
+
+  it("V80 native list result drops ownership and writable on skill rows", () => {
+    const parsed = nativeListResultSchemaV80.parse({
+      ok: true,
+      kind: "skills",
+      skills: [LIVE_SKILL_ROW],
+    });
+    expect(parsed).toEqual({
+      ok: true,
+      kind: "skills",
+      skills: [BASE_SKILL_ROW],
     });
   });
 });

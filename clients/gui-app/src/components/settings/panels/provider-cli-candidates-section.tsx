@@ -19,7 +19,17 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-selection-mutation";
+import { useProvidersSetProfileCliSelection } from "@/hooks/providers/use-providers-set-profile-cli-mutation";
+import { useProvidersProfileConfig } from "@/hooks/providers/use-providers-profile-config-query";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
 import { useProvidersRemoveCustomPath } from "@/hooks/providers/use-providers-remove-custom-path-mutation";
 import { useProvidersDetectVersion } from "@/hooks/providers/use-providers-detect-version-query";
@@ -371,6 +381,74 @@ function CliBinaryMissingNotice({
 }
 
 /**
+ * What THIS profile pins, projected onto the two controls that render it: the
+ * candidate table's selected radio, and the managed-version select below it.
+ *
+ * D02: CLI selection is always profile-owned, so a managed profile reads its
+ * pin from its own config and writes it back there. `cliSelection: null` on a
+ * profile means "no pin of its own" - D20's fallback to the Default account's
+ * pick, which is what the table then shows selected. A managed pin
+ * (`{kind:"managed", version}`) has no candidate row - it is picked from the
+ * version list - so the radio group falls back the same way.
+ */
+interface ProfileCliPin {
+  readonly tableSelection: ProviderSelection;
+  readonly managedVersionPin: string | null;
+}
+
+function useProfileCliPin(input: {
+  readonly providerId: ProviderId;
+  readonly profileId: string | null;
+  readonly hostId: string | null;
+  readonly defaultSelection: ProviderSelection;
+}): ProfileCliPin {
+  const supportsProfileConfig = useHostSupportsMethod(
+    input.hostId,
+    "providers.setProfileConfig",
+  );
+  const profileConfigQuery = useProvidersProfileConfig({
+    providerId: input.providerId,
+    profileId: input.profileId,
+    enabled: input.profileId !== null && supportsProfileConfig,
+  });
+  const pin =
+    input.profileId === null
+      ? null
+      : (profileConfigQuery.data?.config.cliSelection ?? null);
+  if (pin === null || pin.kind === "managed") {
+    return {
+      tableSelection: input.defaultSelection,
+      managedVersionPin: pin === null ? null : pin.version,
+    };
+  }
+  return { tableSelection: pin, managedVersionPin: null };
+}
+
+/** The debounced `<bin> --version` probe behind the "Add custom path" row -
+ *  debounced so a keystroke does not spawn a process. */
+interface CustomPathProbe {
+  readonly probing: boolean;
+  readonly probeExecutable: boolean | null;
+  readonly probeVersion: string | null;
+}
+
+function useCustomPathProbe(
+  adding: boolean,
+  draftPath: string,
+): CustomPathProbe {
+  const debouncedPath = useDebouncedValue(draftPath.trim(), 250);
+  const probe = useProvidersDetectVersion({
+    candidatePath: debouncedPath,
+    enabled: adding && debouncedPath.length > 0,
+  });
+  return {
+    probing: probe.isFetching,
+    probeExecutable: probe.data?.executable ?? null,
+    probeVersion: probe.data?.version ?? null,
+  };
+}
+
+/**
  * S14: the CLI-path-management subsection of `ProviderDetail` (binary
  * selection table + "Add custom path" flow), extracted so the panel stays
  * orchestration.
@@ -386,10 +464,15 @@ export function ProviderCliCandidatesSection({
   state,
   providers,
   hostId,
+  profileId,
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
   readonly hostId: string | null;
+  /** The switcher's current selection (D25/D20). `null` = the Default
+   *  account, whose pick lives in `provider-overrides.json`; a managed
+   *  profile owns its own pin (D02) and never writes that row. */
+  readonly profileId: string | null;
 }): ReactNode {
   const providerId = state.providerId;
   const cliConfig = candidateConfigForProvider(state, providers);
@@ -408,17 +491,24 @@ export function ProviderCliCandidatesSection({
   }, []);
 
   const setSelection = useProvidersSetSelection();
+  const setProfileSelection = useProvidersSetProfileCliSelection();
+  const { tableSelection, managedVersionPin } = useProfileCliPin({
+    providerId,
+    profileId,
+    hostId,
+    defaultSelection: cliConfig.selected,
+  });
   const ensurePack = useProvidersEnsurePack();
   const addCustom = useProvidersAddCustomPath();
   const removeCustom = useProvidersRemoveCustomPath();
-  // Debounce so we don't spawn a `<bin> --version` probe on every keystroke.
-  const debouncedPath = useDebouncedValue(draftPath.trim(), 250);
-  const probe = useProvidersDetectVersion({
-    candidatePath: debouncedPath,
-    enabled: adding && debouncedPath.length > 0,
-  });
+  const probe = useCustomPathProbe(adding, draftPath);
 
   const onSelect = (selection: ProviderSelection): void => {
+    if (profileId !== null) {
+      if (setProfileSelection.isPending) return;
+      setProfileSelection.mutate({ providerId, profileId, selection });
+      return;
+    }
     if (setSelection.isPending) return;
     setSelection.mutate({ providerId, selection });
   };
@@ -472,7 +562,6 @@ export function ProviderCliCandidatesSection({
     probePending: state.availabilityPending,
     candidateCount: cliConfig.candidates.length,
   });
-
   return (
     <>
       <CandidateAreaContent
@@ -487,8 +576,11 @@ export function ProviderCliCandidatesSection({
           differingSessionCount:
             state.versionVisibility?.differingSessionCount ?? 0,
           radioName,
-          selection: cliConfig.selected,
-          busy: setSelection.isPending || removeCustom.isPending,
+          selection: tableSelection,
+          busy:
+            setSelection.isPending ||
+            setProfileSelection.isPending ||
+            removeCustom.isPending,
           onSelect,
           onRetryPack: () => ensurePack.mutate({ providerId }),
           retryingPack: ensurePack.isPending,
@@ -507,13 +599,94 @@ export function ProviderCliCandidatesSection({
             setAdding(false);
             setDraftPath("");
           },
-          probing: probe.isFetching,
-          probeExecutable: probe.data?.executable ?? null,
-          probeVersion: probe.data?.version ?? null,
+          ...probe,
         }}
       />
       <AddCustomPathButton hidden={adding} onClick={() => setAdding(true)} />
+      {profileId === null ? null : (
+        <ProfileManagedVersionPin
+          versions={state.managedVersions?.available ?? []}
+          pinnedVersion={managedVersionPin}
+          busy={setProfileSelection.isPending}
+          onPin={(version) =>
+            setProfileSelection.mutate({
+              providerId,
+              profileId,
+              selection: version === null ? null : { kind: "managed", version },
+            })
+          }
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * D20 (amended, critique B2): the `{kind:"managed", version}` arm of
+ * `ProfileCliSelection`, which `ProviderSelection` deliberately does not
+ * have - so it cannot be a row in the candidate table. Offered only where the
+ * host actually lists managed versions for this pack; a host with none
+ * renders nothing rather than an empty control.
+ */
+// Radix `Select` refuses an empty item value, so "no pin" needs a real one.
+const NO_MANAGED_PIN_VALUE = "none";
+
+function ProfileManagedVersionPin({
+  versions,
+  pinnedVersion,
+  busy,
+  onPin,
+}: {
+  readonly versions: readonly { readonly version: string }[];
+  readonly pinnedVersion: string | null;
+  readonly busy: boolean;
+  readonly onPin: (version: string | null) => void;
+}): ReactNode {
+  const selectId = useId();
+  if (versions.length === 0) return null;
+  return (
+    <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3">
+      <label
+        htmlFor={selectId}
+        className="text-ui-sm font-medium text-foreground"
+      >
+        Pin a managed version
+      </label>
+      <div className="flex items-center gap-2">
+        <Select
+          value={pinnedVersion ?? NO_MANAGED_PIN_VALUE}
+          disabled={busy}
+          onValueChange={(value) => {
+            if (value === NO_MANAGED_PIN_VALUE) {
+              onPin(null);
+              return;
+            }
+            // Parse, never cast: only a version the host currently lists may
+            // reach the wire as a pin.
+            const match = versions.find((entry) => entry.version === value);
+            if (match === undefined) return;
+            onPin(match.version);
+          }}
+        >
+          <SelectTrigger id={selectId} className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NO_MANAGED_PIN_VALUE}>No managed pin</SelectItem>
+            {versions.map((entry) => (
+              <SelectItem key={entry.version} value={entry.version}>
+                v{entry.version}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {busy ? <MutedAgentSpinner /> : null}
+      </div>
+      <p className="text-ui-xs text-muted-foreground">
+        This profile runs the pinned managed version. Clear the pin to use the
+        binary selected above.
+      </p>
+    </div>
   );
 }
 

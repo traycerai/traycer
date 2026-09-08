@@ -514,6 +514,8 @@ describe("skillIsEditable", () => {
     description: null,
     path: "/Users/dev/.agents/skills/find-skills",
     source: "shared",
+    ownership: "managed",
+    writable: true,
   };
 
   it.each(["shared", "provider"] as const)(
@@ -535,6 +537,18 @@ describe("skillIsEditable", () => {
       skillIsEditable({ ...row, source: "provider", conflict: true }),
     ).toBe(false);
   });
+
+  // D28/D17: `~/.agents/skills` also carries `source: "shared"`, so
+  // `writable` is what actually distinguishes it from the profile's own
+  // shared canon root - a writable-source badge alone is not enough.
+  it("refuses an external row even when the source is writable", () => {
+    expect(skillIsEditable({ ...row, source: "shared", writable: false })).toBe(
+      false,
+    );
+    expect(
+      skillIsEditable({ ...row, source: "provider", writable: false }),
+    ).toBe(false);
+  });
 });
 
 describe("skillOriginDisplay", () => {
@@ -543,6 +557,8 @@ describe("skillOriginDisplay", () => {
     description: null,
     path: "/Users/dev/.agents/skills/find-skills",
     source: "shared",
+    ownership: "managed",
+    writable: true,
   };
 
   it("returns null when origin is missing or blank", () => {
@@ -574,6 +590,8 @@ describe("skillEditPrefill", () => {
     description: "Row snapshot description",
     path: "/Users/dev/.agents/skills/find-skills",
     source: "shared",
+    ownership: "managed",
+    writable: true,
   };
 
   it("parses name, description, and body from the file via parseSkillMarkdown", () => {
@@ -735,6 +753,8 @@ describe("providerRootFromSkills", () => {
     description: null,
     path: "/Users/dev/.agents/skills/find-skills",
     source: "shared",
+    ownership: "managed",
+    writable: true,
   };
 
   it("takes the parent directory of the first provider-sourced row", () => {

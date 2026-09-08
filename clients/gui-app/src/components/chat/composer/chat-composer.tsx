@@ -87,7 +87,10 @@ import {
   type AmbientDriftSendNotice,
 } from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
-import { commitProfileSelection } from "@/stores/composer/commit-selection";
+import {
+  commitProfileSelection,
+  defaultModelForProfile,
+} from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
@@ -101,6 +104,7 @@ import {
 import { PromptStashControl } from "./prompt-stash-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+import { DEFAULT_ACCOUNT_DISPLAY_LABEL } from "@/components/providers/provider-profile-model";
 
 // Re-exported beside `ChatComposerSubmitInput` so a caller wiring both
 // handlers imports them from one place.
@@ -437,9 +441,19 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const onSwitchProfile = useCallback(
     (nextProfileId: string | null) => {
-      commitProfileSelection(toolbarStore, nextProfileId);
+      // D09: the destination profile's own `defaultModel` seeds a (harness,
+      // profile) pair that has never been used. The prompt already carries
+      // the provider's rows; an unresolved prompt has no destination to
+      // switch to either.
+      const profiles =
+        rateLimitPrompt.kind === "visible" ? rateLimitPrompt.profiles : [];
+      commitProfileSelection(
+        toolbarStore,
+        nextProfileId,
+        defaultModelForProfile(profiles, nextProfileId),
+      );
     },
-    [toolbarStore],
+    [toolbarStore, rateLimitPrompt],
   );
   // Task-wide extension of the rate-limit switch: sibling chats of this task
   // pinned to the same limited profile, and the action moving them together.
@@ -841,9 +855,12 @@ function AmbientDriftSendBanner({
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
         <div className="min-w-0">
-          <div className="font-medium">Terminal account changed</div>
+          <div className="font-medium">
+            {DEFAULT_ACCOUNT_DISPLAY_LABEL} changed
+          </div>
           <div className="text-ui-xs">
-            Terminal account is now {driftEmailCopy(notice.currentEmail)}; was{" "}
+            {DEFAULT_ACCOUNT_DISPLAY_LABEL} is now{" "}
+            {driftEmailCopy(notice.currentEmail)}; was{" "}
             {driftEmailCopy(notice.previousEmail)}.
           </div>
         </div>
@@ -854,7 +871,7 @@ function AmbientDriftSendBanner({
           className="rounded-md bg-foreground/90 px-2.5 py-1 text-ui-xs font-medium text-background transition-colors hover:bg-foreground"
           onClick={onContinue}
         >
-          Continue with Terminal account
+          Continue with {DEFAULT_ACCOUNT_DISPLAY_LABEL}
         </button>
         <button
           type="button"

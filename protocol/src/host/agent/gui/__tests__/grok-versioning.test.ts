@@ -75,6 +75,8 @@ import {
   PROVIDER_AUTH_STATUS_SCHEMA_V10,
   providerCliStateSchemaV10,
   providersListResponseSchema,
+  providersListResponseSchemaV80,
+  providerMutationCliStateSchemaV21,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -266,9 +268,13 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
   });
 
   it("downgrades provider-state mutation responses for v1.0 callers", () => {
-    const state = providersListResponseSchema.parse({
-      providers: [providerState("cursor", "unavailable")],
-    }).providers[0];
+    // Built from the mutation line's OWN state schema rather than borrowed
+    // from a `providers.list` response: `providers.list@9.0` grew the row with
+    // `authType:"apiKey"`, `endpoint` and `config`, none of which a
+    // `providers.setApiKey@2.1` state has ever carried.
+    const state = providerMutationCliStateSchemaV21.parse(
+      providerState("cursor", "unavailable"),
+    );
     const setApiKey = providersSetApiKeyDowngradeV21ToV10.downgradeResponse({
       state,
     });
@@ -438,14 +444,18 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
   });
 
   it("drops the Amp provider from providers.list for v3.0, v2.0, and v1.0 callers", () => {
-    const liveResponse = providersListResponseSchema.parse({
+    // v8.0-shaped: these are the `providersListDowngradeV8To*` bridges, whose
+    // source became `providersListResponseSchemaV80` when W1-T9 froze that
+    // line. The v9.0-source bridges are covered in
+    // `provider-profiles-compat.test.ts`.
+    const v80Response = providersListResponseSchemaV80.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
       ],
     });
 
-    const toV3 = providersListDowngradeV8ToV3.downgradeResponse(liveResponse);
+    const toV3 = providersListDowngradeV8ToV3.downgradeResponse(v80Response);
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
     expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -455,7 +465,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       providersListResponseSchemaV30.parse(toV3.value),
     ).not.toThrow();
 
-    const toV2 = providersListDowngradeV8ToV2.downgradeResponse(liveResponse);
+    const toV2 = providersListDowngradeV8ToV2.downgradeResponse(v80Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -465,7 +475,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = providersListDowngradeV8ToV1.downgradeResponse(liveResponse);
+    const toV1 = providersListDowngradeV8ToV1.downgradeResponse(v80Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -867,9 +877,10 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
   it("drops Hugging Face/Reasonix from providers.list for every released caller down to v1.0", () => {
     // `cli-v1.1.9` shipped v6.0 and `cli-v1.2.0` shipped v7.0, so neither
     // `huggingface` nor `reasonix` could join the line below it. Driven from
-    // v8.0, the newest line, which carries both because it is still
-    // unreleased.
-    const v8Response = providersListResponseSchema.parse({
+    // v8.0, which carries both and is the source these bridges take since
+    // W1-T9 froze `providersListResponseSchemaV80` (the newest line is now
+    // 9.0, whose own eight bridges live in `provider-profiles-compat.test.ts`).
+    const v8Response = providersListResponseSchemaV80.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),

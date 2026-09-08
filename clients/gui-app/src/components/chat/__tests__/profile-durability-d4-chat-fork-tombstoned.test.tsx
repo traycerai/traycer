@@ -198,6 +198,7 @@ import {
   useWorktreeIntentStagingStore,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 interface ChatForkCreateInput {
   readonly settings: ChatRunSettings | null;
@@ -254,7 +255,7 @@ function profile(
   kind: "ambient" | "managed",
   label: string,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -273,7 +274,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function claudeState(profiles: ProviderProfile[]): ProviderCliState {

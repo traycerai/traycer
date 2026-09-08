@@ -28,11 +28,12 @@ import {
 import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function profile(
   rateLimitStatus: ProviderProfileRateLimitStatus,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -51,7 +52,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {

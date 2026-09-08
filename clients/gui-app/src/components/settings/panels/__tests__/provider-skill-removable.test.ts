@@ -13,6 +13,7 @@ describe("skillRemovability", () => {
           source,
           effectiveScope: "global",
           conflict: false,
+          writable: true,
         }),
       ).toEqual({
         kind: "removable",
@@ -31,6 +32,7 @@ describe("skillRemovability", () => {
         source,
         effectiveScope: "global",
         conflict: false,
+        writable: true,
       });
       expect(result.kind).toBe("blocked");
       if (result.kind !== "blocked") throw new Error("expected blocked");
@@ -48,6 +50,7 @@ describe("skillRemovability", () => {
         source: "shared",
         effectiveScope: "global",
         conflict: false,
+        writable: true,
       }),
     ).toEqual({
       kind: "hidden",
@@ -65,6 +68,7 @@ describe("skillRemovability", () => {
         source: "shared",
         effectiveScope: "global",
         conflict: false,
+        writable: true,
       }),
     ).toEqual({ kind: "hidden" });
   });
@@ -76,6 +80,7 @@ describe("skillRemovability", () => {
         source: "shared",
         effectiveScope: "project",
         conflict: false,
+        writable: true,
       }),
     ).toEqual({ kind: "removable" });
   });
@@ -86,6 +91,7 @@ describe("skillRemovability", () => {
       source: "shared",
       effectiveScope: "global",
       conflict: true,
+      writable: true,
     });
     expect(result.kind).toBe("blocked");
     if (result.kind !== "blocked") throw new Error("expected blocked");
@@ -101,9 +107,26 @@ describe("skillRemovability", () => {
         source: "managed",
         effectiveScope: "global",
         conflict: false,
+        writable: true,
       }),
     ).toEqual({
       kind: "hidden",
     });
+  });
+
+  // D28/D17: `~/.agents/skills` also carries `source: "shared"`, so
+  // `writable` gates ahead of the source-badge check rather than instead of
+  // it - a writable-looking source alone must not offer removal.
+  it("blocks an external root even for an otherwise-writable source", () => {
+    const result = skillRemovability({
+      removeScopes: [...BOTH],
+      source: "shared",
+      effectiveScope: "global",
+      conflict: false,
+      writable: false,
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind !== "blocked") throw new Error("expected blocked");
+    expect(result.reason).toMatch(/external/i);
   });
 });

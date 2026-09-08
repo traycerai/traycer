@@ -112,6 +112,10 @@ describe("useLandingProviderStartTerminalLogin", () => {
         scope: { kind: "independent" },
         cols: 80,
         rows: 24,
+        // `startTerminalLogin@3.0` (D21): the landing gesture has no profile
+        // picker, so it re-authenticates the Default account explicitly.
+        profileId: null,
+        createProfile: null,
       },
     );
   });

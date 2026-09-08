@@ -7,13 +7,19 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * F4 (durability audit), settings surface: `ProviderProfileScopedSection` /
- * `ProviderProfileCard` (provider-profile-scoped-section.tsx,
- * provider-profile-card.tsx) render a profile's `label` and `identity.email`
- * as plain JSX text (`profileDisplayLabel`, `ProfileCardIdentityLine`) - no
- * `dangerouslySetInnerHTML` anywhere in either file (grepped). This proves
- * the runtime half: a hostile label/email renders as literal text with no
- * injected elements, and the panel doesn't crash.
+ * F4 (durability audit), settings surface: the profile switcher
+ * (`profile-switcher.tsx`) and the `ProfileDropdown` it composes
+ * (`components/providers/profile-dropdown.tsx`) render a profile's `label` as
+ * plain JSX text (`profileDisplayLabel`) - no `dangerouslySetInnerHTML`
+ * anywhere in either file (grepped). This proves the runtime half: a hostile
+ * label renders as literal text with no injected elements, and the panel
+ * doesn't crash.
+ *
+ * Email coverage: the multi-profile switcher (W2-T9) dropped the settings
+ * surface's identity-email display (`ProfileSummary`'s reveal toggle) along
+ * with the rest of the deleted `ProviderProfileScopedSection` - that surface
+ * is not reintroduced until W2-T10's Account tab. Until then there is no
+ * `identity.email` render path in Settings for this suite to exercise.
  */
 
 // Render the profile dropdown inline + always-open so the test can select
@@ -227,6 +233,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function renderProvidersSettingsPanel() {
   const queryClient = new QueryClient({
@@ -235,17 +242,16 @@ function renderProvidersSettingsPanel() {
       mutations: { retry: false },
     },
   });
-  const view = render(
+  // The profile switcher (D25, W2-T9) renders above the tab rail regardless
+  // of which tab is active, so the profile label is already in the DOM on
+  // first paint - no tab switch needed to reach it.
+  return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>
     </QueryClientProvider>,
   );
-  // Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
-  // tab. Radix Tabs activate on mouseDown, not click.
-  fireEvent.mouseDown(screen.getByRole("tab", { name: "Profiles & Limits" }));
-  return view;
 }
 
 const VERY_LONG_LABEL = "C".repeat(2000);
@@ -253,7 +259,7 @@ const HTML_LOOKING_LABEL = '<img src=x onerror="alert(1)">';
 const HTML_LOOKING_EMAIL = '<img src=x onerror="alert(1)">@example.com';
 
 function hostileProfile(label: string, email: string): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "hostile-uuid",
     enabled: true,
     kind: "managed",
@@ -272,11 +278,11 @@ function hostileProfile(label: string, email: string): ProviderProfile {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function ambientProfile(): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -295,7 +301,7 @@ function ambientProfile(): ProviderProfile {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function claudeStateWithProfiles(
@@ -361,17 +367,17 @@ describe("F4: hostile profile labels - settings Profiles section", () => {
     };
     const { container } = renderProvidersSettingsPanel();
 
-    // The section defaults to the ambient profile - select the hostile one to
-    // bring its details (and the raw label) into the DOM. It then also
-    // labels the (mocked, always-open) dropdown trigger, so more than one
-    // element carries the raw label - assert presence, not a single match.
+    // The switcher defaults to the ambient profile - select the hostile one
+    // to bring its label into the DOM. It then also labels the (mocked,
+    // always-open) dropdown trigger, so more than one element carries the raw
+    // label - assert presence, not a single match.
     fireEvent.click(screen.getByRole("menuitem", { name: VERY_LONG_LABEL }));
 
     expect(screen.getAllByText(VERY_LONG_LABEL).length).toBeGreaterThan(0);
     expect(container.querySelector("img")).toBeNull();
   });
 
-  it("renders an HTML-looking label AND HTML-looking email as literal text with no injected <img>", () => {
+  it("renders an HTML-looking label as literal text with no injected <img>", () => {
     providerMocks.listResult = {
       data: {
         providers: [
@@ -387,21 +393,13 @@ describe("F4: hostile profile labels - settings Profiles section", () => {
     };
     const { container } = renderProvidersSettingsPanel();
 
-    // The section defaults to the ambient profile - select the hostile one to
-    // bring its details (and the raw label) into the DOM. It then also
-    // labels the (mocked, always-open) dropdown trigger, so more than one
-    // element carries the raw label - assert presence, not a single match.
+    // The switcher defaults to the ambient profile - select the hostile one
+    // to bring its label into the DOM. It then also labels the (mocked,
+    // always-open) dropdown trigger, so more than one element carries the raw
+    // label - assert presence, not a single match.
     fireEvent.click(screen.getByRole("menuitem", { name: HTML_LOOKING_LABEL }));
 
     expect(screen.getAllByText(HTML_LOOKING_LABEL).length).toBeGreaterThan(0);
-    // The email is redacted by default (see the reveal toggle); click it to
-    // exercise the hostile string in its fully-rendered form too.
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: `Reveal email for ${HTML_LOOKING_LABEL}`,
-      }),
-    );
-    expect(screen.getByText(HTML_LOOKING_EMAIL)).not.toBeNull();
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("script")).toBeNull();
   });

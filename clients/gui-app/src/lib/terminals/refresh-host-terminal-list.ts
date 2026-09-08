@@ -98,6 +98,11 @@ function withListSessionFields(
       createdAt: session.createdAt,
       title: session.title,
       lifecycleOwner: "manager",
+      // `terminal.list@2.4` (D19/D21): a session Traycer has just created has
+      // never had its spawn config revised, so there is no revision to name
+      // and nothing to restart for. Same pair the ≤2.3 downgrade writes.
+      spawnConfigRevision: null,
+      restartRequired: false,
     }),
     ...session,
     currentCwd: existing?.currentCwd ?? session.cwd,

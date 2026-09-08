@@ -9,7 +9,10 @@ import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Switch } from "@/components/ui/switch";
-import { providerSignInUnavailableHint } from "@/components/providers/provider-signin-availability";
+import {
+  providerSignInUnavailableHint,
+  resolveDefaultSignInMode,
+} from "@/components/providers/provider-signin-availability";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
@@ -405,8 +408,18 @@ function SignInToEnableButton(props: {
     startLogin.mutate(
       // Ambient login, not a managed profile: onboarding has no profile
       // management surface, and the account a first sign-in creates is the
-      // provider's own CLI login.
-      { providerId, profileId: null, createProfile: null },
+      // provider's own CLI login. `createProfile: null` puts this on the
+      // reauth path (`providers.startLogin@1.3`'s own doc comment), where the
+      // host ignores `startFrom` outright - `{ kind: "empty" }` is the
+      // "nothing to seed" spelling every other null-`createProfile` caller
+      // sends (the composer re-auth banner, Settings' reauth panel).
+      {
+        providerId,
+        profileId: null,
+        createProfile: null,
+        mode: resolveDefaultSignInMode(isLocalHost),
+        startFrom: { kind: "empty" },
+      },
       {
         onSuccess: (result) => {
           if (!result.started) return;
@@ -498,9 +511,11 @@ function SignInToEnableButton(props: {
   // left, and the one this component exists to perform. It also made the
   // direct-enable branch below structurally unreachable for exactly those
   // combinations.
+  // D22: admission asks "can this be signed into by SOME mode" - `device`
+  // needs no loopback, so a remote host is no longer refused here.
   const unavailableHint = authenticatedAwaitingEnable
     ? null
-    : providerSignInUnavailableHint(state, isLocalHost);
+    : providerSignInUnavailableHint(state, "device", isLocalHost);
   if (unavailableHint !== null) {
     return (
       <TooltipWrapper

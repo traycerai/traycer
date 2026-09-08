@@ -42,6 +42,7 @@ import {
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
+  providersListRequestSchemaV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
   providersListResponseSchemaV80,
@@ -51,8 +52,13 @@ import {
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
+  providersNativeMutateResponseSchema,
+  providersNativeMutateResponseSchemaV10,
 } from "../../src/host/provider-schemas";
-import { agentListProviderProfilesResponseSchemaV5 } from "../../src/host/agent/profiles";
+import {
+  agentListProviderProfilesResponseSchema,
+  agentListProviderProfilesResponseSchemaV5,
+} from "../../src/host/agent/profiles";
 
 function dump(schema: z.ZodType): unknown {
   return z.toJSONSchema(schema, { unrepresentable: "any" });
@@ -140,11 +146,17 @@ const FIXTURES = {
   // `providersListResponseSchemaV80` instead; its bytes are unchanged by that
   // freeze, same as the v7.0 row above.
   "providers.list@8.0": dump(providersListResponseSchemaV80),
+  // The head line (W2-T2): `providers.list@9.0` grows the row with
+  // `authType:"apiKey"`, `endpoint`, `config` and `profilesSupported`.
+  // Dumps the LIVE schema so the NEXT growth attempt goes red here first,
+  // same discipline as v7.0/v8.0 when THEY were the head.
+  "providers.list@9.0": dump(providersListResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was
-  // the only thing that could see it. Two rows cover every line: v1.0..v6.0 all
-  // share `providersListRequestSchemaBeforeV70`, and v7.0 has its own.
+  // the only thing that could see it. v1.0..v6.0 all share
+  // `providersListRequestSchemaBeforeV70`; v7.0 and the v9.0 head line each
+  // have their own (W2-T2).
   // A FOURTH method, added when Reasonix found it the hard way. Its response
   // embeds the PERSISTED `guiHarnessIdSchema` - a second copy of the harness
   // enum, on a method whose name suggests no catalog at all - and it is
@@ -159,31 +171,39 @@ const FIXTURES = {
   "epic.getChatRunSettings@1.0": dump(getChatRunSettingsResponseSchemaV10),
   "epic.getChatRunSettings@2.0": dump(getChatRunSettingsResponseSchema),
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
-  // This row DOES get regenerated when a provider id is added, and it is the
-  // one row here where that is the right answer rather than the forbidden one.
-  // It dumps the LIVE request, and the growth reaches it through
-  // `nativeListQuerySchema.providerId`. A request is a client->host slot:
-  // `surface-compat.ts` scores enum growth there ADVISORY, because a released
-  // client never emits the new value and a new client sending it to an old
-  // host fails per-call with a clear upgrade path. The row exists to make
-  // that growth VISIBLE, not to forbid it.
-  //
-  // Neither `providers.list@7.0` nor `@8.0` binds this live request any more
-  // (W1-T9 froze both, `providersListRequestSchemaV70`/`V80`) - this row just
-  // keeps tracking the live shape under its historical name so provider-id
-  // growth here stays visible the same way it always has.
-  //
-  // The response rows are the opposite and must never be regenerated to green
-  // - see `providers.list@7.0`/`@8.0` above, and `providerManagedVersionsSchemaV70`
-  // for the sub-schema freeze that kept `@7.0` byte-identical when Reasonix
-  // landed.
-  "providers.list@7.0 request": dump(providersListRequestSchema),
+  // Repointed (W2-T2): `providers.list@9.0` adds `profileId` to every native
+  // arm of the live request, so tracking the live shape under this row's
+  // historical name would silently widen the already-released v7.0 request
+  // line the instant that landed - the exact defect this row used to exist to
+  // make visible, now pointed the other way. `providersListRequestSchemaV70`
+  // is the frozen copy `providersListV70` actually binds (W1-T9); this row
+  // dumps that instead and must NOT be regenerated to track live again.
+  "providers.list@7.0 request": dump(providersListRequestSchemaV70),
+  // The head line's own request (W2-T2): dumps the LIVE request so the next
+  // growth attempt (a `providers.list@10.0`) goes red here first, same
+  // discipline as `providers.list@9.0`'s response row above.
+  "providers.list@9.0 request": dump(providersListRequestSchema),
   // New (W1-T9): the shared `agentProviderProfileSummarySchema` is embedded
   // by identity in the frozen v1.0-v4.0 responses and the rc-shipped v5.0
   // line, so it needs its own guard the same way `providers.list@8.0` does.
   "agent.listProviderProfiles@5.0": dump(
     agentListProviderProfilesResponseSchemaV5,
   ),
+  // New (W2 fix pass, P7): the live `@5.1` HEAD had no row, so the next growth
+  // of `agentProviderProfileSummarySchema` would have gone red nowhere local -
+  // the same gap that let W2-T12b widen `providers.nativeMutate` unseen. A
+  // frozen row without its head line only records drift; the head row is what
+  // prevents it.
+  "agent.listProviderProfiles@5.1": dump(
+    agentListProviderProfilesResponseSchema,
+  ),
+  // New (W2 fix pass, P7): `providers.nativeMutate`'s response reaches
+  // `providerSkillSchema` too, and NOTHING dumped it - which is exactly how
+  // W2-T12b's `ownership`/`writable` growth widened the rc-shipped `@1.0`
+  // response without a single test going red. `@1.0` dumps the hand-frozen
+  // schema, `@2.0` dumps LIVE so the next growth attempt fails here first.
+  "providers.nativeMutate@1.0": dump(providersNativeMutateResponseSchemaV10),
+  "providers.nativeMutate@2.0": dump(providersNativeMutateResponseSchema),
 };
 
 const HEADER =

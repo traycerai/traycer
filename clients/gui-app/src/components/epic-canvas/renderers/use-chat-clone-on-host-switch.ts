@@ -12,6 +12,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { DEFAULT_ACCOUNT_DISPLAY_LABEL } from "@/components/providers/provider-profile-model";
 
 /**
  * Lifted out of `chat-tile.tsx` (P1.2 fixup F5) so the host it targets is
@@ -147,7 +148,7 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
         explicitTargetProfileId,
         onProfileFallbackToAmbient: () => {
           toast(
-            "Continuing on the Terminal account - your profile isn't available on this host.",
+            `Continuing on the ${DEFAULT_ACCOUNT_DISPLAY_LABEL} - your profile isn't available on this host.`,
           );
         },
         onProfileSelectionRequired: (resolution) => {

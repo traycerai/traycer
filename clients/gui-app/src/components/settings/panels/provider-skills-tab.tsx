@@ -27,6 +27,8 @@ import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { profileCommitId } from "@/components/providers/provider-profile-model";
+import { CategoryOwnershipToggle } from "./category-ownership-toggle";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
@@ -67,8 +69,13 @@ const EMPTY_SKILLS: readonly ProviderSkill[] = [];
 
 export function ProviderSkillsTab({
   state,
+  profileId,
+  hostId,
 }: {
   readonly state: ProviderCliState;
+  /** D17; the switcher's current selection. `null` = the Default account. */
+  readonly profileId: string | null;
+  readonly hostId: string | null;
 }): ReactNode {
   const caps = state.nativeCapabilities.skills;
   if (caps === null) {
@@ -81,11 +88,17 @@ export function ProviderSkillsTab({
       </div>
     );
   }
+  const selectedProfile = state.profiles.find(
+    (profile) => profileCommitId(profile) === profileId,
+  );
   return (
     <ProviderSkillsTabBody
       providerId={state.providerId}
       providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
       caps={caps}
+      profileId={profileId}
+      hostId={hostId}
+      ownership={selectedProfile?.config?.skills ?? null}
     />
   );
 }
@@ -94,10 +107,16 @@ function ProviderSkillsTabBody({
   providerId,
   providerLabel,
   caps,
+  profileId,
+  hostId,
+  ownership,
 }: {
   readonly providerId: ProviderId;
   readonly providerLabel: string;
   readonly caps: ProviderSkillsCapabilities;
+  readonly profileId: string | null;
+  readonly hostId: string | null;
+  readonly ownership: "linked" | "own" | null;
 }): ReactNode {
   const scopeState = useProviderNativeScope(caps.actionScopes.list);
   const {
@@ -127,6 +146,7 @@ function ProviderSkillsTabBody({
     providerId,
     scope: effectiveScope,
     workspaceRoot: listWorkspaceRoot,
+    profileId,
     enabled: canList,
   });
   const mutate = useProvidersSkillsMutate();
@@ -246,6 +266,7 @@ function ProviderSkillsTabBody({
           providerId,
           scope: effectiveScope,
           workspaceRoot: listWorkspaceRoot,
+          profileId,
           mutation: {
             action: "edit",
             path: target.path,
@@ -282,6 +303,7 @@ function ProviderSkillsTabBody({
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
+        profileId,
         mutation,
         // The composer renders failures inline, so the hook's global toast
         // would double-report the same error.
@@ -309,6 +331,7 @@ function ProviderSkillsTabBody({
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
+        profileId,
         mutation: confirm
           ? {
               action: "update",
@@ -355,6 +378,7 @@ function ProviderSkillsTabBody({
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
+        profileId,
         // `name` AND `path`: the host re-lists and matches on both (plus a
         // realpath containment check) before deleting anything, so sending the
         // pair the row was rendered from is what lets it refuse a stale one.
@@ -405,6 +429,7 @@ function ProviderSkillsTabBody({
               source: openSkill.source,
               effectiveScope,
               conflict: openSkill.conflict === true,
+              writable: openSkill.writable,
             })}
             removePending={removePending}
             removeDisabled={isMutating}
@@ -457,6 +482,16 @@ function ProviderSkillsTabBody({
 
   return (
     <div className="flex flex-col gap-3">
+      {effectiveScope === "global" ? (
+        <CategoryOwnershipToggle
+          hostId={hostId}
+          providerId={providerId}
+          profileId={profileId}
+          category="skills"
+          ownership={ownership}
+          entryCount={skills.length}
+        />
+      ) : null}
       {/*
         Global/project is WHERE the skill files live (host vs workspace). The
         composer's "Available to" control is a different axis — shared
@@ -984,6 +1019,15 @@ function SkillRow({
           {skill.description !== null && skill.description.length > 0 ? (
             <span className="mt-0.5 block truncate text-ui-xs text-muted-foreground">
               {skill.description}
+            </span>
+          ) : null}
+          {/* D28/D17: an external root (e.g. `~/.agents/skills`) is never
+              editable/removable here - the path is the provenance the row
+              trades an affordance for, so the entry stays inspectable
+              without offering a control that would fail. */}
+          {!skill.writable ? (
+            <span className="mt-0.5 block truncate font-mono text-ui-xs text-muted-foreground/80">
+              {skill.path}
             </span>
           ) : null}
         </span>

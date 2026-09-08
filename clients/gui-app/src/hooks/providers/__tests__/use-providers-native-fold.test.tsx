@@ -217,6 +217,7 @@ describe("useProvidersMcpList fold", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           enabled: true,
           pollWhilePending: false,
         }),
@@ -232,6 +233,7 @@ describe("useProvidersMcpList fold", () => {
       providerId: "codex",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     });
     expect(fixture.queryClient.getQueryData(key)).toEqual({
       servers: [EMPTY_SERVER],
@@ -260,6 +262,7 @@ describe("useProvidersMcpList fold", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           enabled: false,
           pollWhilePending: false,
         }),
@@ -298,6 +301,7 @@ describe("useProvidersMcpMutate fold", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           enabled: true,
           pollWhilePending: false,
         }),
@@ -316,6 +320,7 @@ describe("useProvidersMcpMutate fold", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         mutation: { action: "toggleServer", name: "ctx", enabled: false },
         suppressToast: undefined,
       });
@@ -348,6 +353,7 @@ describe("useProvidersMcpMutate fold", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           enabled: true,
           pollWhilePending: false,
         }),
@@ -368,6 +374,7 @@ describe("useProvidersMcpMutate fold", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           mutation: { action: "toggleServer", name: "ctx", enabled: false },
           suppressToast: undefined,
         });
@@ -393,6 +400,7 @@ describe("native list params", () => {
         providerId: "codex",
         scope: "project",
         workspaceRoot: "/ws",
+        profileId: "profile-a",
       }),
     ).toEqual({
       native: {
@@ -400,6 +408,7 @@ describe("native list params", () => {
         providerId: "codex",
         scope: "project",
         workspaceRoot: "/ws",
+        profileId: "profile-a",
       },
     });
   });

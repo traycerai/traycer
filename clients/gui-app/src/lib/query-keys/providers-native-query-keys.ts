@@ -17,6 +17,8 @@ export type NativeListScopeParams = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  /** D17; null = the Default account. Project scope ignores it host-side. */
+  readonly profileId: string | null;
 };
 
 /** Classic catalog list params (`native: null`). Shared by list/refresh/await. */
@@ -33,6 +35,7 @@ export function nativeMcpListParams(
       providerId: args.providerId,
       scope: args.scope,
       workspaceRoot: args.workspaceRoot,
+      profileId: args.profileId,
     },
   };
 }
@@ -46,6 +49,7 @@ export function nativePluginsListParams(
       providerId: args.providerId,
       scope: args.scope,
       workspaceRoot: args.workspaceRoot,
+      profileId: args.profileId,
     },
   };
 }
@@ -59,6 +63,7 @@ export function nativeSkillsListParams(
       providerId: args.providerId,
       scope: args.scope,
       workspaceRoot: args.workspaceRoot,
+      profileId: args.profileId,
     },
   };
 }
@@ -77,6 +82,7 @@ export function nativePluginIconParams(
       workspaceRoot: args.workspaceRoot,
       pluginId: args.pluginId,
       theme: args.theme,
+      profileId: args.profileId,
     },
   };
 }
@@ -95,6 +101,7 @@ export function nativeMcpDiscoverParams(
       workspaceRoot: args.workspaceRoot,
       serverName: args.serverName,
       forceRefresh: args.forceRefresh,
+      profileId: args.profileId,
     },
   };
 }

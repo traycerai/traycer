@@ -109,7 +109,13 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const [hostId, setHostId] = useState<string | null>(null);
 
   const request = useMemo(
-    () => buildUsageSummaryRequest({ windowDays, epicId: null, hostId }),
+    () =>
+      buildUsageSummaryRequest({
+        windowDays,
+        epicId: null,
+        hostId,
+        profileId: null,
+      }),
     [windowDays, hostId],
   );
   // The activity heatmap's own fixed-year read (ticket 15) - independent of
@@ -122,6 +128,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         windowDays: USAGE_ACTIVITY_WINDOW_DAYS,
         epicId: null,
         hostId,
+        profileId: null,
       }),
     [hostId],
   );
@@ -148,6 +155,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         windowDays: USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS,
         epicId: null,
         hostId,
+        profileId: null,
       }),
     [hostId],
   );

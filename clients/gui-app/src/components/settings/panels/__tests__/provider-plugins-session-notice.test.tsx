@@ -133,12 +133,24 @@ afterEach(() => {
 
 describe("ProviderPluginsTab session-tools notice", () => {
   it("renders the notice when caps.traycerSessionToolsNotice is true", () => {
-    render(<ProviderPluginsTab state={pluginsState("cursor", true)} />);
+    render(
+      <ProviderPluginsTab
+        state={pluginsState("cursor", true)}
+        profileId={null}
+        hostId={null}
+      />,
+    );
     expect(screen.getByText(SESSION_NOTICE)).toBeDefined();
   });
 
   it("renders no notice when caps.traycerSessionToolsNotice is false", () => {
-    render(<ProviderPluginsTab state={pluginsState("cursor", false)} />);
+    render(
+      <ProviderPluginsTab
+        state={pluginsState("cursor", false)}
+        profileId={null}
+        hostId={null}
+      />,
+    );
     expect(screen.queryByText(SESSION_NOTICE)).toBeNull();
   });
 
@@ -146,12 +158,22 @@ describe("ProviderPluginsTab session-tools notice", () => {
     // The cursor-specific arm is gone. Amp with the same flag must get the
     // same sentence - there is no provider-id branch left to diverge.
     const { unmount } = render(
-      <ProviderPluginsTab state={pluginsState("cursor", true)} />,
+      <ProviderPluginsTab
+        state={pluginsState("cursor", true)}
+        profileId={null}
+        hostId={null}
+      />,
     );
     const cursorText = screen.getByText(SESSION_NOTICE).textContent;
     unmount();
 
-    render(<ProviderPluginsTab state={pluginsState("amp", true)} />);
+    render(
+      <ProviderPluginsTab
+        state={pluginsState("amp", true)}
+        profileId={null}
+        hostId={null}
+      />,
+    );
     expect(screen.getByText(SESSION_NOTICE).textContent).toBe(cursorText);
   });
 });

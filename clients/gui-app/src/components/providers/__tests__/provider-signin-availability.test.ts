@@ -58,7 +58,9 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
  */
 describe("providerSignInUnavailableHint", () => {
   it("is null when sign-in actually works", () => {
-    expect(providerSignInUnavailableHint(providerState({}), true)).toBeNull();
+    expect(
+      providerSignInUnavailableHint(providerState({}), "browser", true),
+    ).toBeNull();
   });
 
   it("names the provider's own capability before anything situational", () => {
@@ -66,6 +68,7 @@ describe("providerSignInUnavailableHint", () => {
     // hosts would send them somewhere that changes nothing.
     const hint = providerSignInUnavailableHint(
       providerState({ loginCapability: null }),
+      "browser",
       false,
     );
     expect(hint).toContain("does not support browser sign-in");
@@ -77,6 +80,7 @@ describe("providerSignInUnavailableHint", () => {
   it("does not invent a CLI or API-key path for traycer", () => {
     const hint = providerSignInUnavailableHint(
       providerState({ providerId: "traycer", loginCapability: null }),
+      "browser",
       true,
     );
     expect(hint).toContain("does not support browser sign-in");
@@ -85,7 +89,27 @@ describe("providerSignInUnavailableHint", () => {
   });
 
   it("explains the remote-host case in terms of what sign-in does", () => {
-    const hint = providerSignInUnavailableHint(providerState({}), false);
+    const hint = providerSignInUnavailableHint(
+      providerState({}),
+      "browser",
+      false,
+    );
+    expect(hint).toContain("opens a browser on the machine running Traycer");
+  });
+
+  // D22: `device` needs no loopback on any host - a remote host is available
+  // in device mode, and browser mode on that same remote host still reports
+  // the loopback sentence. Locality now only picks the DEFAULT mode; it is
+  // no longer an admission gate on its own.
+  it("a remote host is available in device mode, and still refused in browser mode", () => {
+    expect(
+      providerSignInUnavailableHint(providerState({}), "device", false),
+    ).toBeNull();
+    const hint = providerSignInUnavailableHint(
+      providerState({}),
+      "browser",
+      false,
+    );
     expect(hint).toContain("opens a browser on the machine running Traycer");
   });
 
@@ -98,6 +122,7 @@ describe("providerSignInUnavailableHint", () => {
         candidates: [],
         managedInstallState: { status: "downloading", percent: 30 },
       }),
+      "browser",
       true,
     );
     expect(hint).toContain("30%");
@@ -112,6 +137,7 @@ describe("providerSignInUnavailableHint", () => {
         providerState({
           managedInstallState: { status: "downloading", percent: 30 },
         }),
+        "browser",
         true,
       ),
     ).toBeNull();
@@ -130,6 +156,7 @@ describe("providerSignInUnavailableHint", () => {
           terminalLogin: {},
         },
       }),
+      "browser",
       true,
     );
     expect(hint).toContain("signed in from a terminal");
@@ -153,6 +180,7 @@ describe("providerSignInUnavailableHint", () => {
             terminalLogin: {},
           },
         }),
+        "browser",
         true,
       );
       expect(hint).toContain("Qwen Code is signed in from a terminal");

@@ -1,4 +1,5 @@
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import { redactEmail } from "@/lib/providers/redact-email";
 
 /**
  * Canonical provider-profile identity model (multi-profile UX overhaul):
@@ -9,7 +10,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
  */
 
 /**
- * A profile's commit id: `null` for the ambient (Terminal account) profile,
+ * A profile's commit id: `null` for the ambient (Default account) profile,
  * its own `profileId` otherwise. The wire array's ambient row keys itself by
  * the literal "ambient" sentinel; every run/session-level profileId
  * (composer selection, rate-limit switching, ...) uses `null` for the same
@@ -19,8 +20,18 @@ export function profileCommitId(profile: ProviderProfile): string | null {
   return profile.kind === "ambient" ? null : profile.profileId;
 }
 
+/**
+ * D26 vocabulary: the ONE user-facing name for a profile row. The ambient
+ * row's wire label is the host's internal `"Terminal account"` string, which
+ * is barred from user-facing copy - every surface renders "Default account"
+ * instead. Managed rows render their own label verbatim.
+ */
+export const DEFAULT_ACCOUNT_DISPLAY_LABEL = "Default account";
+
 export function profileDisplayLabel(profile: ProviderProfile): string {
-  return profile.label;
+  return profile.kind === "ambient"
+    ? DEFAULT_ACCOUNT_DISPLAY_LABEL
+    : profile.label;
 }
 
 /**
@@ -127,4 +138,14 @@ export function profileAccentDotInput(
     accentColor: profile.accentColor,
     label: profileDisplayLabel(profile),
   };
+}
+
+/** The toast copy for a profile that just finished signing in - shared by the
+ *  Manage dialog's "Switch account" flow and the Account tab's oauth arm, so
+ *  the two never drift. Lives here rather than beside either surface because
+ *  a module that exports a component exports only components. */
+export function signedInMessage(profile: ProviderProfile): string {
+  const email = profile.identity?.email ?? null;
+  if (email !== null) return `Signed in as ${redactEmail(email)}`;
+  return `Signed in to ${profileDisplayLabel(profile)}`;
 }

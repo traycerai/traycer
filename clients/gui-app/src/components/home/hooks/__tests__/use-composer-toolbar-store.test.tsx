@@ -1460,9 +1460,11 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     });
 
     const memory = useComposerHarnessMemoryStore.getState();
-    expect(memory.byHost[TEST_HOST_ID].lastModelByHarness.codex).toBe(
-      "saved-model",
-    );
+    // Keyed by the (harnessId, profileId) tuple (D09); `seedDefault` seeds the
+    // ambient profile (`profileId: null`).
+    expect(
+      memory.byHost[TEST_HOST_ID].lastModelByHarness['["codex",null]'],
+    ).toBe("saved-model");
     expect(
       memory.resolveModelSelection(TEST_HOST_ID, "codex", "saved-model")
         .reasoningEffort,

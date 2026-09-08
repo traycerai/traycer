@@ -21,6 +21,7 @@ export type McpMutateVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly mutation: ProvidersMcpMutateAction;
   /**
    * When true, the hook skips the global toast so the caller can render a
@@ -37,6 +38,7 @@ interface McpMutateContext {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
     readonly workspaceRoot: string | null;
+    readonly profileId: string | null;
   };
 }
 
@@ -65,6 +67,7 @@ export function useProvidersMcpMutate(): UseMutationResult<
     mutationFn: async (variables) => {
       const response = await client.request("providers.nativeMutate", {
         providerId: variables.providerId,
+        profileId: variables.profileId,
         mutation: {
           kind: "mcp",
           scope: variables.scope,
@@ -80,6 +83,7 @@ export function useProvidersMcpMutate(): UseMutationResult<
         providerId: variables.providerId,
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
+        profileId: variables.profileId,
       };
       const listKey = providersNativeQueryKeys.mcpList(hostId, listParams);
       const previousServers = queryClient.getQueryData<McpListData>(listKey);

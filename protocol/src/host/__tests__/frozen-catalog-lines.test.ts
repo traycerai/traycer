@@ -25,6 +25,7 @@ import {
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
+  providersListRequestSchemaV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
   providersListResponseSchemaV80,
@@ -34,8 +35,13 @@ import {
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
+  providersNativeMutateResponseSchema,
+  providersNativeMutateResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
-import { agentListProviderProfilesResponseSchemaV5 } from "@traycer/protocol/host/agent/profiles";
+import {
+  agentListProviderProfilesResponseSchema,
+  agentListProviderProfilesResponseSchemaV5,
+} from "@traycer/protocol/host/agent/profiles";
 import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -118,6 +124,11 @@ const LIVE_FROZEN_EXPORTS = {
   // here without deleting the fixture (or the reverse) fails rather than
   // silently narrowing what is guarded.
   "providers.list@8.0": providersListResponseSchemaV80,
+  // The head line (W2-T2): `providers.list@9.0` grows the row with
+  // `authType:"apiKey"`, `endpoint`, `config` and `profilesSupported`,
+  // pinned so the next growth attempt fails here first, same discipline as
+  // the v7.0/v8.0 rows above when THEY were the head.
+  "providers.list@9.0": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate
@@ -125,7 +136,14 @@ const LIVE_FROZEN_EXPORTS = {
   "epic.getChatRunSettings@1.0": getChatRunSettingsResponseSchemaV10,
   "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
-  "providers.list@7.0 request": providersListRequestSchema,
+  // Repointed (W2-T2): `providers.list@9.0` adds `profileId` to every native
+  // arm, so this key now names the frozen `providersListRequestSchemaV70`
+  // instead of the live request - the two stopped serializing identically
+  // the instant the live native query grew.
+  "providers.list@7.0 request": providersListRequestSchemaV70,
+  // The head line's own request (W2-T2), so a `providers.list@10.0` growth
+  // attempt fails here first, same discipline as the response row above.
+  "providers.list@9.0 request": providersListRequestSchema,
   // New (W1-T9): the shared `agentProviderProfileSummarySchema` is embedded
   // by identity in the frozen v1.0-v4.0 responses and the rc-shipped v5.0
   // line (`host-v1.2.0-rc.*`/`host-v1.3.0-rc.*`), so this hand-frozen v5.0
@@ -133,6 +151,18 @@ const LIVE_FROZEN_EXPORTS = {
   // this key genuinely adds to the fixture (critique M13), unlike the
   // repoint above.
   "agent.listProviderProfiles@5.0": agentListProviderProfilesResponseSchemaV5,
+  // New (W2 fix pass, P7): the live `@5.1` head line. A frozen row with no
+  // head row above it only ever records drift after the fact; this is the one
+  // that makes the NEXT growth of `agentProviderProfileSummarySchema` fail
+  // locally, the same job `providers.list@9.0` does for its line.
+  "agent.listProviderProfiles@5.1": agentListProviderProfilesResponseSchema,
+  // New (W2 fix pass, P7): `providers.nativeMutate`'s response embeds
+  // `providerSkillSchema` and had NO row at either version, which is why
+  // W2-T12b's `ownership`/`writable` growth silently widened the rc-shipped
+  // `@1.0` response with every local suite green. `@1.0` names the frozen
+  // schema; `@2.0` names LIVE so the next attempt fails here first.
+  "providers.nativeMutate@1.0": providersNativeMutateResponseSchemaV10,
+  "providers.nativeMutate@2.0": providersNativeMutateResponseSchema,
 } as const;
 
 describe("frozen catalog line snapshots", () => {

@@ -37,6 +37,7 @@ describe("<AddProfileWaitingStep />", () => {
       render(
         <AddProfileWaitingStep
           loginUrl="https://auth.openai.com/oauth/authorize?state=test"
+          userCode={null}
           queuePending={false}
           cancelRequested={false}
           cancelPending={false}
@@ -45,6 +46,7 @@ describe("<AddProfileWaitingStep />", () => {
           codePaste={DISABLED_CODE_PASTE}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}
+          onUseCodeInstead={null}
         />,
       );
 

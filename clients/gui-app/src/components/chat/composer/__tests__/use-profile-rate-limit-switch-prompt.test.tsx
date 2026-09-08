@@ -27,6 +27,7 @@ import {
   useProfileRateLimitSwitchPrompt,
 } from "../use-profile-rate-limit-switch-prompt";
 import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function profile(input: {
   readonly profileId: string;
@@ -44,7 +45,7 @@ function profile(input: {
     rateLimitLimitedScopes,
     authenticated,
   } = input;
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -63,7 +64,7 @@ function profile(input: {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function model(slug: string, label: string): ModelOption {

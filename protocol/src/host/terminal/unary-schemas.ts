@@ -325,6 +325,38 @@ export type ListTerminalsResponseV23 = z.infer<
   typeof listTerminalsResponseSchemaV23
 >;
 
+/**
+ * D19: a config change never kills a live session. `spawnConfigRevision` is
+ * the resolver revision this PTY was spawned with (a non-secret hash - see
+ * `ResolvedProfileExecutionConfig.revision`); `restartRequired` is the host's
+ * own comparison against what the next spawn would resolve to. Both are
+ * hints: the client shows "restart to apply", nothing acts on them.
+ * `null`/`false` = an older host, or a session with no profile-bound config.
+ * A parallel schema, same discipline as `canonicalTerminalSessionInfoWithLifecycleOwnerSchema`
+ * above: `terminal.list@2.3` and `terminal.subscribe@1.6` already shipped and
+ * stay frozen.
+ */
+export const canonicalTerminalSessionInfoWithSpawnConfigSchema =
+  canonicalTerminalSessionInfoWithLifecycleOwnerSchema.extend({
+    spawnConfigRevision: z.string().nullable(),
+    restartRequired: z.boolean(),
+  });
+export type CanonicalTerminalSessionInfoWithSpawnConfig = z.infer<
+  typeof canonicalTerminalSessionInfoWithSpawnConfigSchema
+>;
+
+// `terminal.list@2.4` - additive `spawnConfigRevision`/`restartRequired` on
+// every session (critique M14: two additive fields do not earn a new major).
+// A v2.3 host upgraded to v2.4 fills `spawnConfigRevision: null,
+// restartRequired: false` ("old host never had profile-bound spawn config").
+export const listTerminalsResponseSchemaV24 = z.object({
+  sessions: z.array(canonicalTerminalSessionInfoWithSpawnConfigSchema),
+  homeCwd: z.string().min(1).nullable(),
+});
+export type ListTerminalsResponseV24 = z.infer<
+  typeof listTerminalsResponseSchemaV24
+>;
+
 // `terminal.readOutput@1.0` - read-only access to one session's output for a
 // caller that is an AGENT rather than a renderer. The host materializes the
 // session's scrollback, current screen and a short metadata header to a file

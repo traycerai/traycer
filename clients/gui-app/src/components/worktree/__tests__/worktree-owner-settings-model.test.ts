@@ -6,6 +6,7 @@ import {
   type OwnerSettingsHeaderInput,
 } from "@/components/worktree/worktree-owner-settings-model";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const BASE_CHAT_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -60,7 +61,7 @@ function providerProfile(
   kind: "ambient" | "managed",
   label: string,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -79,7 +80,7 @@ function providerProfile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function baseInput(
@@ -189,7 +190,7 @@ describe("deriveOwnerSettingsHeader", () => {
       }),
     );
 
-    expect(view?.profileAccentDot?.label).toBe("Terminal account");
+    expect(view?.profileAccentDot?.label).toBe("Default account");
   });
 
   it("omits the accent dot when the provider has a single profile", () => {

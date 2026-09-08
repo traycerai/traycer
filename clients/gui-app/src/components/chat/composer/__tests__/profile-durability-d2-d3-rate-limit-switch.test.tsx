@@ -74,6 +74,10 @@ function profile(input: {
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
+    // D06/D07 fields, required on the live `ProviderProfile` shape - every
+    // fixture here is an OAuth row with no endpoint/config summary to carry.
+    endpoint: null,
+    config: null,
   };
 }
 
@@ -199,7 +203,7 @@ function ComposerBannerPrecedenceHarness() {
         <div data-testid="top-banner-kind">{topBannerKind}</div>
         {topBannerKind === "ambient-drift" ? (
           <div role="alert">
-            <span>Terminal account changed</span>
+            <span>Default account changed</span>
             <button
               type="button"
               onClick={() => {
@@ -207,7 +211,7 @@ function ComposerBannerPrecedenceHarness() {
                 setPendingAmbientDrift(false);
               }}
             >
-              Continue with Terminal account
+              Continue with Default account
             </button>
           </div>
         ) : null}
@@ -281,7 +285,7 @@ describe("D2/D3: lifecycle, durability, and banner precedence", () => {
     );
     expect(screen.queryByRole("button", { name: "Switch to Work" })).toBeNull();
     fireEvent.click(
-      screen.getByRole("button", { name: "Continue with Terminal account" }),
+      screen.getByRole("button", { name: "Continue with Default account" }),
     );
     expect(screen.getByTestId("top-banner-kind").textContent).toBe(
       "rate-limit",

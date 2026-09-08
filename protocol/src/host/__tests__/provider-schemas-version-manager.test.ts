@@ -115,7 +115,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      9,
       6,
       response,
     );
@@ -154,7 +154,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        9,
         target,
         response,
       );
@@ -180,6 +180,7 @@ describe("providers.list@7.0 carries the version manager and bridges older lines
         providerId: "claude-code",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
       },
     });
 
@@ -260,7 +261,7 @@ describe("providers.list@6.0 -> @7.0 upgrades", () => {
 
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        9,
         6,
         response,
       );

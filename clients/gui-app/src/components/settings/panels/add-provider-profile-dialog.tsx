@@ -12,28 +12,21 @@ import {
 } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
-  PROVIDER_DISPLAY_NAMES,
-  PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderCliState,
   type ProviderProfile,
   type ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ProfileSeedSource } from "@traycer/protocol/host/provider-profile-config-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
-import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { CopyTextButton } from "@/components/copy-text-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useProvidersStartLoginForClient } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLoginForClient } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersCancelLoginForClient } from "@/hooks/providers/use-providers-cancel-login-mutation";
@@ -41,12 +34,16 @@ import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-prov
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { redactEmail } from "@/lib/providers/redact-email";
+import { resolveDefaultSignInMode } from "@/components/providers/provider-signin-availability";
+import { signInModeToggleSupported } from "./provider-sign-in-mode-support";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
 import { handleSignInLinkCopyError } from "./provider-sign-in-link";
 import { waitingStepCopy } from "./waiting-step-copy";
+import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
 import {
   useProviderProfileLoginFlow,
   type ProviderProfileLoginFlowCodePaste,
@@ -55,70 +52,52 @@ import {
 
 const COPY_CONFIRMATION_RESET_MS = 1600;
 
-/**
- * Whether a new managed profile for this provider can SHARE the ambient
- * `skills/` and `plugins/` directories instead of copying them - i.e. whether
- * the "Share skills and plugins" checkbox does anything.
- *
- * The real driver is host-side: `seedManagedProfileDir` honours
- * `shareSkillsAndPlugins` only on the `partial-overlay` layout branch
- * (`profile-seeding.ts`), which today is claude-code alone. Codex also has
- * profiles and is also excluded, and that exclusion is CORRECT rather than an
- * oversight: codex takes the `overlay` branch, whose seeding never reads the
- * flag, so offering the checkbox there would send a request the host silently
- * discards.
- *
- * Exhaustive rather than the `providerId === "claude-code"` test it replaces.
- * The old check would have kept quietly answering "no" for a future provider on
- * the partial-overlay layout - a checkbox that should render and doesn't is
- * invisible, so nothing would ever have reported it. This is still a second
- * registration point for a host-side fact; a capability flag on the wire would
- * be the deeper fix, and is deliberately not being minted for a single-member
- * set on a released schema.
- */
-const PROVIDER_SHARES_SKILLS_AND_PLUGINS: Record<
-  ProviderCliState["providerId"],
-  boolean
-> = {
-  "claude-code": true,
-  codex: false,
-  opencode: false,
-  cursor: false,
-  traycer: false,
-  openrouter: false,
-  huggingface: false,
-  grok: false,
-  qwen: false,
-  kiro: false,
-  droid: false,
-  kimi: false,
-  copilot: false,
-  kilocode: false,
-  amp: false,
-  devin: false,
-  pi: false,
-  hermes: false,
-  omp: false,
-  reasonix: false,
-};
-
 export interface FailedProviderProfileAttempt {
   readonly providerId: ProviderCliState["providerId"];
   readonly message: string;
 }
 
-export function AddProviderProfileDialog({
+/**
+ * The "Sign in" tab body of the D25 add-profile dialog
+ * (`add-profile-dialog.tsx`'s `AddProfileDialog`, which owns the outer
+ * `<Dialog>`/`<DialogContent>` and Step 1's name+color+"Start from" fields).
+ * Owns the login state machine and the naming/finalize steps that follow a
+ * successful sign-in; does NOT own the dialog's open state - a close
+ * attempt (Cancel, Escape, outside click) is routed through
+ * `closeRequestRef`, which this component installs its own guarded handler
+ * into (checking `dismissalLocked` and cancelling an in-flight login before
+ * actually closing), because only this component knows `flow`'s state.
+ */
+export function ProviderSignInPanel({
   state,
   client,
-  open,
-  onOpenChange,
+  label,
+  onLabelChange,
+  accentColor,
+  hostId,
+  isSelectedHostLocal,
+  startFrom,
   onFailedAttempt,
   onProfileCreated,
+  onRequestClose,
+  closeRequestRef,
 }: {
   readonly state: ProviderCliState;
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
+  /** Step 1's name field (lifted to the wrapper) - reused here for the
+   *  post-auth naming step's inline rename, since Step 1 itself is no longer
+   *  on screen once sign-in has started. */
+  readonly label: string;
+  readonly onLabelChange: (label: string) => void;
+  readonly accentColor: ProviderProfileAccentColor;
+  readonly hostId: string | null;
+  readonly isSelectedHostLocal: boolean;
+  /** D32/W2-T10b: Step 1's "Start from" selection (the wrapper dialog owns
+   *  the `Select` and converts it via `startFromValueToSeed`) - passed
+   *  straight through to `providers.startLogin`'s `startFrom` (D32) so a
+   *  sign-in-created profile is seeded the same way an API-key-created one
+   *  is. */
+  readonly startFrom: ProfileSeedSource;
   /** `null` retracts a previously reported failure: fired when a new attempt
    *  starts and when an attempt completes, so a stale "sign-in did not
    *  finish" banner never sits next to a profile that DID sign in. */
@@ -126,17 +105,15 @@ export function AddProviderProfileDialog({
     attempt: FailedProviderProfileAttempt | null,
   ) => void;
   readonly onProfileCreated: (profileId: string) => void;
+  /** The wrapper's real Dialog setter - call only once actually safe to
+   *  close (see `closeRequestRef`). */
+  readonly onRequestClose: (open: boolean) => void;
+  /** The wrapper's Dialog routes every dismissal attempt through
+   *  `closeRequestRef.current`; this component keeps that ref pointed at its
+   *  own guarded handler for as long as it is mounted (the active tab). */
+  readonly closeRequestRef: { current: (open: boolean) => void };
 }): ReactNode {
   const openLink = useOpenLink();
-  const supportsShareSkillsAndPlugins =
-    PROVIDER_SHARES_SKILLS_AND_PLUGINS[state.providerId];
-  const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
-    supportsShareSkillsAndPlugins,
-  );
-  const [label, setLabel] = useState("New profile");
-  const [accentColor, setAccentColor] = useState<ProviderProfileAccentColor>(
-    () => nextAvailableAccentColor(state.profiles),
-  );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const finalizeAttemptRef = useRef<string | null>(null);
   // Set once naming is committed (a rename RPC succeeded, or none was needed
@@ -158,11 +135,18 @@ export function AddProviderProfileDialog({
   const touchLogin = useProvidersTouchLoginForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
   const renameProfile = useRenameProviderProfileForClient(client);
+  const signInModeSchemaVersion = useHostMethodSchemaVersion(
+    hostId,
+    "providers.startLogin",
+  );
+  const toggleSupported = signInModeToggleSupported(signInModeSchemaVersion);
   const flow = useProviderProfileLoginFlow({
     mode: "create",
     providerId: state.providerId,
     existingProfileId: null,
     loginCapability: state.loginCapability,
+    signInMode: resolveDefaultSignInMode(isSelectedHostLocal),
+    startFrom,
     startLogin,
     awaitLogin,
     cancelLogin,
@@ -177,7 +161,6 @@ export function AddProviderProfileDialog({
       onFailedAttempt({ providerId: state.providerId, message }),
   });
   const trimmedLabel = label.trim();
-  const linking = flow.state.kind !== "start";
   const { finalizing, dismissalLocked } = resolveDialogLockState({
     flowState: flow.state,
     commitPending: flow.commitPending,
@@ -199,7 +182,7 @@ export function AddProviderProfileDialog({
   const complete = (profileId: string): void => {
     onFailedAttempt(null);
     onProfileCreated(profileId);
-    onOpenChange(false);
+    onRequestClose(false);
   };
 
   const finalizeProfile = (profile: ProviderProfile): void => {
@@ -247,7 +230,7 @@ export function AddProviderProfileDialog({
 
   useEffect(() => {
     if (flow.state.kind === "cancelled") {
-      onOpenChange(false);
+      onRequestClose(false);
       return;
     }
     if (
@@ -271,8 +254,21 @@ export function AddProviderProfileDialog({
     if (!nextOpen && flow.state.kind === "waiting") {
       flow.cancel();
     }
-    onOpenChange(nextOpen);
+    onRequestClose(nextOpen);
   };
+  // Keeps the wrapper's dismissal handler pointed at THIS panel's own guard
+  // for as long as it is mounted - after render commits, matching the same
+  // forwarding-ref technique `use-provider-profile-login-flow.ts` uses for
+  // `beginLoginRef`. The cleanup restores a plain pass-through on unmount
+  // (the wrapper's Tabs unmounts an inactive pane by default, so switching
+  // to the API key tab mid-flow must not leave this ref pointed at a stale
+  // closure over dead `flow` state).
+  useEffect(() => {
+    closeRequestRef.current = close;
+    return () => {
+      closeRequestRef.current = (nextOpen) => onRequestClose(nextOpen);
+    };
+  });
 
   const linkAccount = (): void => {
     if (trimmedLabel.length === 0) return;
@@ -280,9 +276,13 @@ export function AddProviderProfileDialog({
     // both the initial "Link account" and the failed-state Retry.
     onFailedAttempt(null);
     flow.start({
+      // D02/D32: new profiles start Linked unconditionally - this legacy
+      // wire field predates per-category ownership and only claude-code's
+      // create path still reads it (host-side `partial-overlay` seeding); the
+      // create-time checkbox that used to set it is gone (W2-T12 owns the
+      // Skills/Plugins tabs' Linked/Own toggle instead).
+      shareSkillsAndPlugins: true,
       label: trimmedLabel,
-      shareSkillsAndPlugins:
-        supportsShareSkillsAndPlugins && shareSkillsAndPlugins,
     });
   };
 
@@ -297,118 +297,80 @@ export function AddProviderProfileDialog({
       : null;
 
   return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent
-        className="max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] gap-0 overflow-y-auto p-0 sm:max-w-none"
-        showCloseButton={!linking}
-        onEscapeKeyDown={(event) => {
-          if (dismissalLocked) event.preventDefault();
+    <div className="flex flex-col gap-5">
+      <AddProfileAccountSection
+        flowState={flow.state}
+        startPending={flow.startPending}
+        cancelPending={flow.cancelPending}
+        cancelDisabled={flow.commitPending}
+        codePaste={flow.codePaste}
+        finalizing={finalizing}
+        finalizeError={recolorProfile.error}
+        duplicateProfile={duplicateProfile}
+        naming={naming}
+        namingError={renameProfile.error}
+        label={label}
+        onLabelChange={onLabelChange}
+        emailRevealed={emailRevealed}
+        setEmailRevealed={setEmailRevealed}
+        linkDisabled={trimmedLabel.length === 0 || flow.busy}
+        onLink={linkAccount}
+        onOpenExternalLink={(url) => {
+          void openLink(url, "auth", null);
         }}
-        onPointerDownOutside={(event) => {
-          if (dismissalLocked) event.preventDefault();
-        }}
-      >
-        <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
-          <DialogTitle className="text-ui font-semibold leading-snug">
-            Add new {PROVIDER_DISPLAY_NAMES[state.providerId]} profile
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-            Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
-            its color, then link the account it should use.
-          </DialogDescription>
-        </DialogHeader>
+        onCancel={() => close(false)}
+        onRetryLogin={linkAccount}
+        onRetryFinalize={retryFinalize}
+        userCode={flow.state.kind === "waiting" ? flow.state.userCode : null}
+        onUseCodeInstead={
+          toggleSupported && flow.activeSignInMode === "browser"
+            ? flow.switchToDeviceMode
+            : null
+        }
+      />
 
-        <div className="flex flex-col gap-5 px-5 pb-5">
-          <ProviderProfileCard
-            profile={null}
-            profiles={state.profiles}
-            label={label}
-            onLabelChange={setLabel}
-            selectedColor={accentColor}
-            onSelectColor={setAccentColor}
-            disabled={(linking && naming === null) || finalizing}
-          />
-
-          {supportsShareSkillsAndPlugins ? (
-            <ShareSkillsAndPluginsField
-              checked={shareSkillsAndPlugins}
-              disabled={linking || finalizing}
-              onCheckedChange={setShareSkillsAndPlugins}
-            />
-          ) : null}
-
-          <AddProfileAccountSection
-            flowState={flow.state}
-            startPending={flow.startPending}
-            cancelPending={flow.cancelPending}
-            cancelDisabled={flow.commitPending}
-            codePaste={flow.codePaste}
-            finalizing={finalizing}
-            finalizeError={recolorProfile.error}
-            duplicateProfile={duplicateProfile}
-            naming={naming}
-            namingError={renameProfile.error}
-            emailRevealed={emailRevealed}
-            setEmailRevealed={setEmailRevealed}
-            linkDisabled={trimmedLabel.length === 0 || flow.busy}
-            onLink={linkAccount}
-            onOpenExternalLink={(url) => {
-              void openLink(url, "auth", null);
-            }}
-            onCancel={() => close(false)}
-            onRetryLogin={linkAccount}
-            onRetryFinalize={retryFinalize}
-          />
-        </div>
-
-        {flow.state.kind === "start" ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => close(false)}
-            >
-              Cancel
-            </Button>
-          </DialogFooter>
-        ) : null}
-        {naming !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={trimmedLabel.length === 0 || finalizing}
-              onClick={() => commitNaming(naming.profile)}
-            >
-              {finalizing ? <MutedAgentSpinner /> : null}
-              Save profile
-            </Button>
-          </DialogFooter>
-        ) : null}
-        {duplicateProfile !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={linkAccount}
-            >
-              Sign in again
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => close(false)}
-            >
-              Done
-            </Button>
-          </DialogFooter>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+      {flow.state.kind === "start" ? (
+        <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => close(false)}
+          >
+            Cancel
+          </Button>
+        </DialogFooter>
+      ) : null}
+      {naming !== null ? (
+        <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={trimmedLabel.length === 0 || finalizing}
+            onClick={() => commitNaming(naming.profile)}
+          >
+            {finalizing ? <MutedAgentSpinner /> : null}
+            Save profile
+          </Button>
+        </DialogFooter>
+      ) : null}
+      {duplicateProfile !== null ? (
+        <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <Button type="button" size="sm" variant="ghost" onClick={linkAccount}>
+            Sign in again
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => close(false)}
+          >
+            Done
+          </Button>
+        </DialogFooter>
+      ) : null}
+    </div>
   );
 }
 
@@ -423,6 +385,8 @@ function AddProfileAccountSection({
   duplicateProfile,
   naming,
   namingError,
+  label,
+  onLabelChange,
   emailRevealed,
   setEmailRevealed,
   linkDisabled,
@@ -431,6 +395,8 @@ function AddProfileAccountSection({
   onCancel,
   onRetryLogin,
   onRetryFinalize,
+  userCode,
+  onUseCodeInstead,
 }: {
   readonly flowState: ProviderProfileLoginFlowState;
   readonly startPending: boolean;
@@ -442,6 +408,9 @@ function AddProfileAccountSection({
   readonly duplicateProfile: ProviderProfile | null;
   readonly naming: NamingStepState | null;
   readonly namingError: Error | null;
+  /** Step 1's name field, reused for the naming step's inline rename. */
+  readonly label: string;
+  readonly onLabelChange: (label: string) => void;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
   readonly linkDisabled: boolean;
@@ -450,6 +419,8 @@ function AddProfileAccountSection({
   readonly onCancel: () => void;
   readonly onRetryLogin: () => void;
   readonly onRetryFinalize: () => void;
+  readonly userCode: string | null;
+  readonly onUseCodeInstead: (() => void) | null;
 }): ReactNode {
   if (flowState.kind === "start") {
     return (
@@ -481,6 +452,7 @@ function AddProfileAccountSection({
       <div className="border-t border-border/60 pt-4">
         <AddProfileWaitingStep
           loginUrl={flowState.kind === "waiting" ? flowState.url : null}
+          userCode={userCode}
           queuePending={startPending}
           cancelRequested={
             flowState.kind === "starting" && flowState.cancelRequested
@@ -491,6 +463,7 @@ function AddProfileAccountSection({
           codePaste={codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}
+          onUseCodeInstead={onUseCodeInstead}
         />
       </div>
     );
@@ -525,6 +498,8 @@ function AddProfileAccountSection({
         profile={naming.profile}
         collisionProfile={naming.collisionProfile}
         error={namingError}
+        label={label}
+        onLabelChange={onLabelChange}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
       />
@@ -560,27 +535,38 @@ function DuplicateAccountNotice({
       <div className="min-w-0">
         <div className="text-ui-sm font-medium">Account already linked</div>
         <p className="mt-0.5 text-ui-xs leading-relaxed">
-          {profile.label} already uses this account and organization. Sign in
-          again and choose a different organization.
+          {profileDisplayLabel(profile)} already uses this account and
+          organization. Sign in again and choose a different organization.
         </p>
       </div>
     </div>
   );
 }
 
+/**
+ * Step 1's name field is not on screen once sign-in has started, so this step
+ * (an email collision after a successful auth) needs its OWN editable name
+ * input - it reuses Step 1's lifted `label`/`onLabelChange` state rather than
+ * a second, independent field.
+ */
 function AddProfileNamingStep({
   profile,
   collisionProfile,
   error,
+  label,
+  onLabelChange,
   emailRevealed,
   setEmailRevealed,
 }: {
   readonly profile: ProviderProfile;
   readonly collisionProfile: ProviderProfile;
   readonly error: Error | null;
+  readonly label: string;
+  readonly onLabelChange: (label: string) => void;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
 }): ReactNode {
+  const nameId = useId();
   return (
     <div className="flex flex-col gap-3">
       <AddProfileIdentityStep
@@ -593,6 +579,15 @@ function AddProfileNamingStep({
         {collisionProfile.label} already uses this email. Name this profile so
         you can tell them apart.
       </p>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={nameId}>Profile name</Label>
+        <Input
+          id={nameId}
+          value={label}
+          autoComplete="off"
+          onChange={(event) => onLabelChange(event.target.value)}
+        />
+      </div>
       {error !== null ? (
         <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-ui-xs text-destructive">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
@@ -603,41 +598,9 @@ function AddProfileNamingStep({
   );
 }
 
-function ShareSkillsAndPluginsField({
-  checked,
-  disabled,
-  onCheckedChange,
-}: {
-  readonly checked: boolean;
-  readonly disabled: boolean;
-  readonly onCheckedChange: (value: boolean) => void;
-}): ReactNode {
-  const id = useId();
-  return (
-    <div className="flex items-start gap-2 text-ui-sm text-muted-foreground">
-      <Checkbox
-        id={id}
-        aria-label="Use terminal account skills and plugins"
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={(value) => onCheckedChange(value === true)}
-      />
-      <label
-        htmlFor={id}
-        className="flex min-w-0 cursor-pointer flex-col gap-0.5 select-none"
-      >
-        <span className="text-foreground">Use terminal skills and plugins</span>
-        <span>
-          Share the terminal account&apos;s installed skills and plugins with
-          this profile.
-        </span>
-      </label>
-    </div>
-  );
-}
-
 export function AddProfileWaitingStep({
   loginUrl,
+  userCode,
   queuePending,
   cancelRequested,
   cancelPending,
@@ -646,8 +609,13 @@ export function AddProfileWaitingStep({
   codePaste,
   onOpenExternalLink,
   onCancel,
+  onUseCodeInstead,
 }: {
   readonly loginUrl: string | null;
+  /** D21/D22: the device flow's separate one-time code (Codex); `null` for
+   *  browser/paste flows and for providers that carry the code in the URL
+   *  instead. */
+  readonly userCode: string | null;
   readonly queuePending: boolean;
   readonly cancelRequested: boolean;
   readonly cancelPending: boolean;
@@ -661,6 +629,9 @@ export function AddProfileWaitingStep({
   readonly codePaste: ProviderProfileLoginFlowCodePaste;
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
+  /** D22 "Use a code instead" - `null` hides the toggle (an older host, or
+   *  the attempt is already `device`). */
+  readonly onUseCodeInstead: (() => void) | null;
 }): ReactNode {
   const { copied, copy } = useClipboardCopy({
     resetMs: COPY_CONFIRMATION_RESET_MS,
@@ -714,6 +685,35 @@ export function AddProfileWaitingStep({
             ) : (
               <Copy className="size-3.5" />
             )}
+          </Button>
+          {userCode !== null ? (
+            <div className="flex items-center gap-1.5 rounded-md border border-border/60 bg-foreground/5 px-2 py-1">
+              <code className="font-mono text-code-xs text-foreground">
+                {userCode}
+              </code>
+              <CopyTextButton
+                value={userCode}
+                label={null}
+                ariaLabel="Copy sign-in code"
+                disabled={false}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* D22: not offered until the flow settles into a real waiting child
+          (never during `starting`, where there is nothing yet to switch) -
+          `switchToDeviceMode` on the flow itself enforces this same gate. */}
+      {waiting && onUseCodeInstead !== null ? (
+        <div className="pl-6">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={onUseCodeInstead}
+          >
+            Use a code instead
           </Button>
         </div>
       ) : null}
@@ -849,16 +849,6 @@ function AddProfileFailureStep({
         />
       </div>
     </div>
-  );
-}
-
-function nextAvailableAccentColor(
-  profiles: readonly ProviderProfile[],
-): ProviderProfileAccentColor {
-  const used = new Set(profiles.map((profile) => profile.accentColor));
-  return (
-    PROVIDER_PROFILE_ACCENT_COLORS.find((color) => !used.has(color)) ??
-    PROVIDER_PROFILE_ACCENT_COLORS[0]
   );
 }
 

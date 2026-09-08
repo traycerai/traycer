@@ -30,7 +30,9 @@ function renderSection(input: {
 }): void {
   render(
     <ProviderEnvOverridesSection
+      hostId={null}
       providerId={input.providerId}
+      profileId={null}
       overrides={[]}
       envOverrideScope={input.envOverrideScope}
     />,

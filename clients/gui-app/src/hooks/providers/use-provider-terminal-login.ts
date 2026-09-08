@@ -170,6 +170,14 @@ export function useProviderTerminalLogin(args: {
       // the tile resizes itself on mount anyway.
       cols: 80,
       rows: 24,
+      // `startTerminalLogin@3.0` grew a target/creation pair so a
+      // terminal-login provider can mint a managed profile instead of only
+      // re-authenticating the default account - but this surface (the "Start
+      // again" gesture on a dead sign-in tile) has no profile picker of its
+      // own yet. `null`/`null` re-authenticates the default account, exactly
+      // today's behavior; a real picker is W3-T4/W4-*'s job.
+      profileId: null,
+      createProfile: null,
     });
   }, [epicId, providerId, startTerminalLogin, viewTabId]);
 

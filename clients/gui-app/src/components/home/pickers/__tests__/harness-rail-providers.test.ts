@@ -10,6 +10,7 @@ import {
 } from "@/components/home/pickers/harness-rail-providers";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const NO_ACTIVE_PROFILE_OVERRIDES = new Map<GuiHarnessId, string | null>();
 const NO_PREPARING = new Map<GuiHarnessId, ProviderPackPreparing>();
@@ -33,7 +34,7 @@ function profile(
   kind: "ambient" | "managed",
   label: string,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -52,7 +53,7 @@ function profile(
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
-  };
+  });
 }
 
 describe("visibleRailEntries", () => {
@@ -150,7 +151,8 @@ describe("visibleRailEntries", () => {
     expect(entries[0].accentDot).toEqual({
       profileId: "ambient",
       accentColor: null,
-      label: "Claude Terminal account",
+      // D26: the ambient row renders "Default account", never its wire label.
+      label: "Default account",
     });
   });
 });

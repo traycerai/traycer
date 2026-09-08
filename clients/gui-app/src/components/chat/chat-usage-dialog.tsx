@@ -71,6 +71,7 @@ export function ChatUsageDialog(): ReactNode {
         epicId: null,
         chatId: target?.chatId ?? null,
         window: target === null ? undefined : "epic",
+        profileId: null,
       }),
     [target],
   );

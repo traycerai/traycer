@@ -19,6 +19,7 @@ export function useProvidersSkillsList(args: {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly enabled: boolean;
 }): UseQueryResult<SkillsListData, HostRpcError> {
   const client = useHostClient();
@@ -27,6 +28,7 @@ export function useProvidersSkillsList(args: {
     providerId: args.providerId,
     scope: args.scope,
     workspaceRoot: args.workspaceRoot,
+    profileId: args.profileId,
   };
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,

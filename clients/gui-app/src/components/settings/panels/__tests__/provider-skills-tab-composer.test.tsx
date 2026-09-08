@@ -102,7 +102,9 @@ function skillsState(): ProviderCliState {
 }
 
 function renderTab(): void {
-  render(<ProviderSkillsTab state={skillsState()} />);
+  render(
+    <ProviderSkillsTab state={skillsState()} profileId={null} hostId={null} />,
+  );
 }
 
 // A non-empty list so the header Add skill is the only one on the page —
@@ -112,6 +114,8 @@ const SOME_SKILL: ProviderSkill = {
   description: "Helps users discover and install agent skills.",
   path: "/Users/dev/.agents/skills/find-skills",
   source: "shared",
+  ownership: "managed",
+  writable: true,
 };
 
 describe("<ProviderSkillsTab /> entry points", () => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
+import type { ProfileSeedSource } from "@traycer/protocol/host/provider-profile-config-schemas";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -18,6 +19,7 @@ import {
   isAmbientAuthVerdictPending,
   isDefinitiveProviderAuthStatus,
 } from "@/lib/providers/provider-ambient-auth";
+import type { ProviderSignInMode } from "@/components/providers/provider-signin-availability";
 import {
   Analytics,
   AnalyticsEvent,
@@ -66,6 +68,10 @@ export type ProviderProfileLoginFlowState =
       readonly kind: "waiting";
       readonly profileId: string | null;
       readonly url: string | null;
+      /** D22/D21: the device flow's separate one-time code (Codex); `null`
+       *  for browser/paste flows and for providers that carry the code in the
+       *  URL instead. */
+      readonly userCode: string | null;
     }
   | {
       readonly kind: "identity";
@@ -236,6 +242,18 @@ interface UseProviderProfileLoginFlowInput {
   /** Source of the `codePaste` capability gate - see
    *  `ProviderProfileLoginFlowCodePaste.enabled`. */
   readonly loginCapability: ProviderLoginCapability | null;
+  /** D22: the sign-in mode `start()` opens with (the caller's resolved
+   *  DEFAULT - `resolveDefaultSignInMode`, or an explicit override). Threaded
+   *  through this one hook rather than around it, so the add-profile dialog,
+   *  the Settings reauth panel and the composer banner's ambient reconnect
+   *  all get the "Use a code instead" toggle (`switchToDeviceMode`) for free. */
+  readonly signInMode: ProviderSignInMode;
+  /** D32/W2-T10b: `providers.startLogin@1.3`'s `startFrom` - "Start from"
+   *  seeding for a freshly created profile (`mode: "create"` only; the host
+   *  ignores it on the reauth path). Threaded through this one hook for the
+   *  same reason `signInMode` is: reauth callers (the Settings reauth panel,
+   *  the composer banner's ambient reconnect) pass `{ kind: "empty" }`. */
+  readonly startFrom: ProfileSeedSource;
   readonly startLogin: StartLoginMutation;
   readonly awaitLogin: AwaitLoginMutation;
   readonly cancelLogin: CancelLoginMutation;
@@ -262,10 +280,23 @@ export interface ProviderProfileLoginFlow {
    *  sign-in" wording only applies while this mutation, not `awaitLogin`,
    *  is pending. */
   readonly startPending: boolean;
+  /** The sign-in mode of the most recent `start()`/`switchToDeviceMode()`
+   *  call - what a caller renders the "Use a code instead" toggle against
+   *  (hidden once this is already `"device"`). Reads `input.signInMode`
+   *  until the first attempt begins. */
+  readonly activeSignInMode: ProviderSignInMode;
   readonly start: (options: {
     readonly label: string | null;
     readonly shareSkillsAndPlugins: boolean;
   }) => void;
+  /**
+   * D22 "Use a code instead": switches the in-flight (or about-to-start)
+   * attempt to `device` mode. No-op once already `device`. Bypasses `start`'s
+   * ordinary "already waiting" guard by cancelling the in-flight browser
+   * attempt first, so a caller mid-`waiting` can still switch without a
+   * separate Cancel click.
+   */
+  readonly switchToDeviceMode: () => void;
   readonly cancel: () => void;
   /** `providers.cancelLogin`'s own pending state, for the Cancel button's
    *  UX (gui-app AGENTS.md pending recipe: `disabled` + unchanged label +
@@ -323,6 +354,8 @@ export function useProviderProfileLoginFlow(
     providerId,
     existingProfileId,
     loginCapability,
+    signInMode,
+    startFrom,
     startLogin,
     awaitLogin,
     cancelLogin,
@@ -334,6 +367,16 @@ export function useProviderProfileLoginFlow(
   const [state, setState] = useState<ProviderProfileLoginFlowState>({
     kind: "start",
   });
+  // D22: the mode the MOST RECENT attempt actually opened with - distinct
+  // from `signInMode` (the caller's current default), which a re-render can
+  // change out from under an attempt already in flight. `activeModeRef` is
+  // the synchronous source `restart`/`switchToDeviceMode` read (a ref, since
+  // they run inside async mutation callbacks and event handlers, not render);
+  // `activeSignInMode` mirrors it into state purely so callers can render the
+  // toggle's visibility.
+  const activeModeRef = useRef<ProviderSignInMode>(signInMode);
+  const [activeSignInMode, setActiveSignInMode] =
+    useState<ProviderSignInMode>(signInMode);
   const [restartNotice, setRestartNotice] = useState<string | null>(null);
   // Mirrors `attemptIdRef` for render-safe reads (`codePaste.attemptId` is
   // read during render, where refs must not be touched). `attemptIdRef`
@@ -392,6 +435,7 @@ export function useProviderProfileLoginFlow(
         readonly shareSkillsAndPlugins: boolean;
       },
       notice: string | null,
+      signInMode: ProviderSignInMode,
     ) => void
   >(() => {});
 
@@ -492,6 +536,7 @@ export function useProviderProfileLoginFlow(
       beginLoginRef.current(
         lastStartOptionsRef.current,
         CODE_PASTE_RESTART_NOTICES[cause],
+        activeModeRef.current,
       );
     },
     [fail, finishCancellation],
@@ -570,8 +615,11 @@ export function useProviderProfileLoginFlow(
         readonly shareSkillsAndPlugins: boolean;
       },
       notice: string | null,
+      attemptSignInMode: ProviderSignInMode,
     ): void => {
       lastStartOptionsRef.current = options;
+      activeModeRef.current = attemptSignInMode;
+      setActiveSignInMode(attemptSignInMode);
       // A fresh attempt supersedes any pending ambient re-poll tick.
       clearRepollTimer();
       attemptIdRef.current += 1;
@@ -601,6 +649,8 @@ export function useProviderProfileLoginFlow(
                   shareSkillsAndPlugins: options.shareSkillsAndPlugins,
                 }
               : null,
+          mode: attemptSignInMode,
+          startFrom,
         },
         {
           onSuccess: (data) => {
@@ -631,6 +681,7 @@ export function useProviderProfileLoginFlow(
               kind: "waiting",
               profileId: nextProfileId,
               url: data.url,
+              userCode: data.userCode,
             });
             // Per-attempt budget for the ambient `authPending` re-poll (see
             // the constant's doc comment). Scoped to this attempt's closure -
@@ -721,6 +772,7 @@ export function useProviderProfileLoginFlow(
       providerId,
       restart,
       settleAttempt,
+      startFrom,
       startLogin,
       submitLoginCode,
       touchLogin,
@@ -754,17 +806,52 @@ export function useProviderProfileLoginFlow(
         provider: providerId,
         mode,
       });
-      beginLogin(options, null);
+      beginLogin(options, null, signInMode);
     },
     [
       awaitLogin.isPending,
       beginLogin,
       mode,
       providerId,
+      signInMode,
       startLogin.isPending,
       state.kind,
     ],
   );
+
+  /**
+   * D22 "Use a code instead". Cancels a browser-mode attempt already in
+   * flight (fire-and-forget - the fresh attempt below supersedes it via a new
+   * `attemptIdRef`) and immediately opens a fresh `device` attempt with the
+   * same label/share options, rather than going through the ordinary
+   * `start()` guard: `start()` refuses to re-fire while `state.kind ===
+   * "waiting"`, which is exactly the state this toggle is offered from.
+   *
+   * Resets `cancelRequestedRef`/`cancelledRef` the same way `start()` does
+   * before calling `cancelProfile` - both are one-shot latches for the flow
+   * INSTANCE, not the attempt, so calling `cancelProfile` here without
+   * resetting them first would leave `cancelledRef.current` stuck `true` and
+   * make the fresh device attempt's own `attemptAbandoned()` check treat
+   * itself as already abandoned.
+   *
+   * Only offered from `waiting` - not `starting` - deliberately. `starting`
+   * means `providers.startLogin` is still in flight for the current attempt;
+   * firing a second `startLogin` on top of it has no attempt-staleness guard
+   * to protect it (unlike `handleAwaitSuccess`, whose first line is
+   * `attemptAbandoned()`, the *first* attempt's `onSuccess` would still land
+   * and overwrite this one's state with a dead profile id). `waiting` always
+   * has a real child to cancel first, so the fresh attempt below is the only
+   * one left standing.
+   */
+  const switchToDeviceMode = useCallback((): void => {
+    if (activeModeRef.current === "device") return;
+    if (state.kind !== "waiting") return;
+    cancelRequestedRef.current = false;
+    cancelledRef.current = false;
+    cancelProfile(state.profileId);
+    restartCountRef.current = 0;
+    beginLoginRef.current(lastStartOptionsRef.current, null, "device");
+  }, [cancelProfile, state]);
 
   const commitPending =
     submitLoginCode.isPending ||
@@ -872,7 +959,9 @@ export function useProviderProfileLoginFlow(
     busy:
       state.kind === "starting" || startLogin.isPending || awaitLogin.isPending,
     startPending: state.kind === "starting" || startLogin.isPending,
+    activeSignInMode,
     start,
+    switchToDeviceMode,
     cancel,
     cancelPending: cancelLogin.isPending,
     commitPending,

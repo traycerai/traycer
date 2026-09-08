@@ -80,6 +80,7 @@ describe("useProvidersSkillsList", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         enabled: true,
       }),
     );
@@ -103,6 +104,7 @@ describe("useProvidersSkillsList", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         enabled: true,
       }),
     );
@@ -128,6 +130,7 @@ describe("useProvidersSkillsList", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         enabled: false,
       }),
     );
@@ -144,6 +147,7 @@ describe("useProvidersSkillsList", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         enabled: true,
       }),
     );
@@ -160,6 +164,7 @@ describe("useProvidersSkillsList", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         enabled: true,
       }),
     );
@@ -175,6 +180,7 @@ describe("useProvidersSkillsList", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         enabled: true,
       }),
     );

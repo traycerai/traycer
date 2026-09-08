@@ -12,6 +12,7 @@ import {
   rateLimitFetchLane,
   resolveRateLimitFetchEligibility,
 } from "@/lib/rate-limit-providers";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function state(
   overrides: Partial<ProviderCliState> & { readonly providerId: ProviderId },
@@ -146,7 +147,7 @@ function profile(
   status: ProviderAuthStatus,
   enabled: boolean,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled,
     kind,
@@ -160,7 +161,7 @@ function profile(
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
-  };
+  });
 }
 
 describe("resolveRateLimitFetchEligibility", () => {

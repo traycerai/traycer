@@ -113,7 +113,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
     }).not.toThrow();
     expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(3);
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(8);
-    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       2,
     );
@@ -633,7 +633,7 @@ describe("stream compatibility", () => {
     expect(openAckManifest["browser.screencast"]).toBeUndefined();
     expect(openAckManifest["terminal.subscribe"]).toEqual({
       major: 1,
-      minor: 6,
+      minor: 7,
       supportedMajors: [1],
     });
 

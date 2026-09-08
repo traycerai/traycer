@@ -15,6 +15,7 @@ import type {
 } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 
 import { LandingComposer } from "../landing-composer";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 interface CapturedPromptArgs {
   readonly harnessId: unknown;
@@ -119,11 +120,19 @@ vi.mock(
   },
 );
 
-vi.mock("@/stores/composer/commit-selection", () => ({
-  commitProfileSelection: (...args: Array<unknown>): void => {
-    testState.commitProfileSelection(...args);
-  },
-}));
+vi.mock("@/stores/composer/commit-selection", async (importOriginal) => {
+  // D09 (G10): the composer resolves the destination profile's own
+  // `defaultModel` before committing, so the real reader has to stay - only
+  // the commit is captured.
+  const actual =
+    await importOriginal<typeof import("@/stores/composer/commit-selection")>();
+  return {
+    ...actual,
+    commitProfileSelection: (...args: Array<unknown>): void => {
+      testState.commitProfileSelection(...args);
+    },
+  };
+});
 
 vi.mock("@/hooks/providers/use-refresh-providers-list-on-turn", () => ({
   useRefreshProvidersListOnTurn: vi.fn(),
@@ -281,7 +290,7 @@ function profile(
   profileId: string,
   kind: "ambient" | "managed",
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -300,7 +309,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function renderLandingComposer(): RenderResult {
@@ -342,12 +351,18 @@ describe("LandingComposer rate-limit banner wiring", () => {
       current,
       profiles: [current, other],
       destinations: [
-        { profile: other, profileId: "profile-b", selectable: true },
+        {
+          profile: other,
+          profileId: "profile-b",
+          selectable: true,
+          isApiKey: false,
+        },
       ],
       primaryTarget: {
         profile: other,
         profileId: "profile-b",
         selectable: true,
+        isApiKey: false,
       },
       probeTarget: null,
       dismiss,

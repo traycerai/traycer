@@ -10,6 +10,8 @@ const REVIEW_PR: ProviderSkill = {
   description: "Reviews a pull request.",
   path: "/Users/dev/.agents/skills/review-pr",
   source: "shared",
+  ownership: "managed",
+  writable: true,
 };
 
 describe("mapNativeMutateToSkillsMutate", () => {

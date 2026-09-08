@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProfileRateLimitSwitchBanner } from "../profile-rate-limit-switch-banner";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
   useProfileUsagePresentation: () => ({
@@ -22,7 +23,7 @@ function profile(
   label: string,
   rateLimitStatus: "ok" | "hard_limit",
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -41,7 +42,7 @@ function profile(
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
-  };
+  });
 }
 
 describe("F4: hostile profile labels in the rate-limit banner", () => {
@@ -61,6 +62,7 @@ describe("F4: hostile profile labels in the rate-limit banner", () => {
         profile: target,
         profileId: target.profileId,
         selectable: true,
+        isApiKey: false,
       } as const;
       const { container } = render(
         <TooltipProvider delayDuration={0}>

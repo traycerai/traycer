@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileDropdownUsageEntry } from "../profile-dropdown-usage";
 import { ProfileUsageSidecar } from "../profile-usage-sidecar";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const NOW = Date.now();
 const UNPOSITIONED_TRANSFORM = "translate(0px, -200%)";
 const POSITIONED_TRANSFORM = "translate(228px, 100px)";
-const PROFILE: ProviderProfile = {
+const PROFILE: ProviderProfile = providerProfileFixture({
   profileId: "work",
   enabled: true,
   kind: "managed",
@@ -26,7 +27,7 @@ const PROFILE: ProviderProfile = {
   duplicateOfProfileId: null,
   accentColor: null,
   ambientDriftNotice: null,
-};
+});
 
 function entry(
   overrides: Pick<ProfileDropdownUsageEntry, "projection" | "refreshStatus">,

@@ -318,6 +318,7 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
       rateLimitStatus: "ok",
       usageUpdatedAt: 1735689600000,
       isEffectiveLastUsed: true,
+      authType: "oauth",
     });
     expect(summary).toMatchObject({
       selection: { kind: "profile", profileId: "profile-1" },
@@ -345,6 +346,7 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
       rateLimitStatus: "unknown",
       usageUpdatedAt: null,
       isEffectiveLastUsed: false,
+      authType: "oauth",
     });
     expect(summary).not.toHaveProperty("kind");
     expect(summary.selection).toEqual({ kind: "ambient" });
@@ -374,6 +376,7 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
             rateLimitStatus: "unknown",
             usageUpdatedAt: null,
             isEffectiveLastUsed: false,
+            authType: "oauth",
           },
         ],
       }),
@@ -584,9 +587,11 @@ describe("optional-method capability negotiation", () => {
     // widens it to [1..5] on all three. It is not a restatement of `major`:
     // `major` is the canonical one a peer picks by default, `supportedMajors`
     // is the set it can still be talked down to.
+    // `agent.listProviderProfiles` alone grew an additive minor (W2-T3,
+    // critique H8's `authType`) - the other two on this major stay at 5.0.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
       major: 5,
-      minor: 0,
+      minor: 1,
       supportedMajors: [1, 2, 3, 4, 5],
     });
     expect(

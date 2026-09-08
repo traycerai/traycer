@@ -1,4 +1,5 @@
 export const providersMutationKeys = {
+  applyCopySettings: () => ["providers.applyCopySettings"] as const,
   setSelection: () => ["providers.setSelection"] as const,
   addCustomPath: () => ["providers.addCustomPath"] as const,
   removeCustomPath: () => ["providers.removeCustomPath"] as const,
@@ -39,4 +40,16 @@ export const providersMutationKeys = {
     ["providers.consumeRateLimitResetCredit"] as const,
   refreshProfileStatus: (hostId: string | null) =>
     ["providers.refreshProfileStatus", hostId] as const,
+  setProfileOwnership: () => ["providers.setProfileOwnership"] as const,
+  setProfileEnv: () => ["providers.setProfileConfig", "env", "set"] as const,
+  deleteProfileEnv: () =>
+    ["providers.setProfileConfig", "env", "delete"] as const,
+  setProfileEndpoint: () =>
+    ["providers.setProfileConfig", "endpoint", "set"] as const,
+  setProfileCliSelection: () =>
+    ["providers.setProfileConfig", "cliSelection", "set"] as const,
+  setProfileTerminalAgentArgs: () =>
+    ["providers.setProfileConfig", "terminalAgentArgs", "set"] as const,
+  testProfileConnection: () => ["providers.testProfileConnection"] as const,
+  createApiKeyProfile: () => ["providers.createApiKeyProfile"] as const,
 };

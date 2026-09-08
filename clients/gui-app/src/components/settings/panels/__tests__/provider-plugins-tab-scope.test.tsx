@@ -272,7 +272,13 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
 
   it("lists with global scope and null workspaceRoot by default", () => {
     pluginMocks.plugins = [plugin({})];
-    render(<ProviderPluginsTab state={defaultMultiScopeCaps()} />);
+    render(
+      <ProviderPluginsTab
+        state={defaultMultiScopeCaps()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     const globalCall = pluginMocks.listCalls.find(
       (c) => c.scope === "global" && c.enabled,
@@ -284,7 +290,13 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
   });
 
   it("labels the scope picker Plugins location (not MCP)", () => {
-    render(<ProviderPluginsTab state={defaultMultiScopeCaps()} />);
+    render(
+      <ProviderPluginsTab
+        state={defaultMultiScopeCaps()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     expect(scopeTrigger().getAttribute("aria-label")).toMatch(
       /^Plugins location:/,
@@ -299,7 +311,13 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
 
   it("switches to project scope and stamps workspaceRoot on list", () => {
     pluginMocks.plugins = [plugin({})];
-    render(<ProviderPluginsTab state={defaultMultiScopeCaps()} />);
+    render(
+      <ProviderPluginsTab
+        state={defaultMultiScopeCaps()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     chooseScopeOption(/app/);
 
@@ -323,6 +341,8 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
           setEnabled: [],
           addModes: undefined,
         })}
+        profileId={null}
+        hostId={null}
       />,
     );
 
@@ -337,6 +357,7 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
         providerId: "codex",
         scope: "project",
         workspaceRoot: "/Users/dev/app",
+        profileId: null,
         mutation: { action: "remove", id: "pdf@openai" },
         suppressToast: true,
       },
@@ -353,6 +374,8 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
           setEnabled: undefined,
           addModes: ["cli-source"],
         })}
+        profileId={null}
+        hostId={null}
       />,
     );
 
@@ -368,6 +391,7 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
         providerId: "codex",
         scope: "project",
         workspaceRoot: "/Users/dev/app",
+        profileId: null,
         mutation: { action: "add", source: "demo@marketplace" },
         suppressToast: true,
       },
@@ -412,7 +436,9 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
       },
     };
 
-    render(<ProviderPluginsTab state={projectOnly} />);
+    render(
+      <ProviderPluginsTab state={projectOnly} profileId={null} hostId={null} />,
+    );
 
     expect(screen.getByText("Select a workspace")).toBeDefined();
     expect(
@@ -434,6 +460,8 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
           setEnabled: undefined,
           addModes: ["cli-source"],
         })}
+        profileId={null}
+        hostId={null}
       />,
     );
 

@@ -4,6 +4,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileUsageWindow } from "@/lib/rate-limits/profile-usage-projection";
 import { AccentDot } from "@/components/providers/accent-dot";
 import type { ProfileDropdownUsageEntry } from "@/components/providers/profile-dropdown-usage";
+import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
 import {
   deriveProfileUsageSidecarPosition,
   type ProfileUsageSidecarPosition,
@@ -104,7 +105,7 @@ export function ProfileUsageSidecar(
   return createPortal(
     <aside
       ref={setSidecarNode}
-      aria-label={`Usage details for ${profile.label}`}
+      aria-label={`Usage details for ${profileDisplayLabel(profile)}`}
       aria-live="off"
       data-profile-usage-sidecar=""
       data-side={position?.side}
@@ -163,7 +164,7 @@ function ProfileUsageSidecarContent({
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-ui-sm font-semibold">
-            {profile.label}
+            {profileDisplayLabel(profile)}
           </div>
           <FreshnessLine entry={entry} now={now} />
         </div>
@@ -172,7 +173,7 @@ function ProfileUsageSidecarContent({
             type="button"
             size="xs"
             variant="ghost"
-            aria-label={`${refreshLabel} usage for ${profile.label}`}
+            aria-label={`${refreshLabel} usage for ${profileDisplayLabel(profile)}`}
             aria-keyshortcuts="R"
             disabled={!isHostReady || refreshing}
             onPointerDown={(event) => event.preventDefault()}

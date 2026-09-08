@@ -31,6 +31,7 @@ import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { ReactNode } from "react";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const LEADER_HINT_DELAY_MS = 300;
 
@@ -165,7 +166,7 @@ function expectTaskTabHintsVisible(visible: boolean): void {
 }
 
 function testProfile(profileId: string, label: string): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind: "managed",
@@ -184,7 +185,7 @@ function testProfile(profileId: string, label: string): ProviderProfile {
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
-  };
+  });
 }
 
 const NOOP_PROFILE_CHANGE = (): void => undefined;

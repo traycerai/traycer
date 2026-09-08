@@ -995,6 +995,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     const hostBClassicKey = providersListQueryKey("host-b");
     const hostBNativeMcpKey = providersNativeQueryKeys.mcpList("host-b", {
       providerId: "claude-code",
+      profileId: null,
       scope: "global",
       workspaceRoot: null,
     });

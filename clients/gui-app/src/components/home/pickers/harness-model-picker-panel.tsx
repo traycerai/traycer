@@ -99,6 +99,8 @@ interface HarnessModelPickerPanelProps {
   readonly onHoverRow: (rowId: string) => void;
   readonly onActiveRow: (rowId: string) => void;
   readonly onSelectRow: (row: HarnessModelRow) => void;
+  readonly customRowOpen: boolean;
+  readonly onCloseCustomRow: () => void;
   readonly reasoningFooter: ReasoningFooterConfig | null;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
@@ -166,6 +168,8 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     onHoverRow,
     onActiveRow,
     onSelectRow,
+    customRowOpen,
+    onCloseCustomRow,
     reasoningFooter,
     serviceTierFooter,
     createProfileHostId,
@@ -317,6 +321,8 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               onHover={onHoverRow}
               onActive={onActiveRow}
               onSelect={onSelectRow}
+              customRowOpen={customRowOpen}
+              onCloseCustomRow={onCloseCustomRow}
               onOpenProviderSettings={onOpenProviderSettings}
               terminalLoginSurface={terminalLoginSurface}
               runTargetHostId={runTargetHostId}

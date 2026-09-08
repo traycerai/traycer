@@ -42,6 +42,16 @@ const BLOCKED_REASON: Record<ProviderSkillSourceBadge, string> = {
 };
 
 /**
+ * D28/D17: shown for a row whose wire `writable` is `false` - an external
+ * root (e.g. `~/.agents/skills`) that is never per-profile and never
+ * rerooted. Distinct from `BLOCKED_REASON`: those explain why an entry
+ * inside a WRITABLE root isn't ours to delete; this explains why the root
+ * itself isn't.
+ */
+const EXTERNAL_ROOT_BLOCKED_REASON =
+  "This skill comes from a shared, external location and can't be removed from here.";
+
+/**
  * `actionScopes.remove` advertising a scope is NOT on its own a licence to
  * offer removal: it says the provider supports the verb, while the source
  * badge says whether THIS skill's files are ours to delete. A plugin-provided
@@ -58,6 +68,8 @@ export function skillRemovability(args: {
    * folder is not ours to delete, and a link row is never a remove target.
    */
   readonly conflict: boolean;
+  /** D28/D17: the row's wire `writable` - false for an external root. */
+  readonly writable: boolean;
 }): SkillRemovability {
   // The selected scope specifically, not "any scope": the tab lists and
   // mutates at `effectiveScope`, so a provider advertising only the other
@@ -74,6 +86,12 @@ export function skillRemovability(args: {
       reason:
         "This row is a conflict. A folder already occupies the provider link, so it cannot be removed from here.",
     };
+  }
+  // Checked ahead of the source-badge check: `~/.agents/skills` also carries
+  // `source: "shared"`, so `isWritableSkillSource` alone cannot tell it apart
+  // from the profile's own shared canon root.
+  if (!args.writable) {
+    return { kind: "blocked", reason: EXTERNAL_ROOT_BLOCKED_REASON };
   }
   if (!isWritableSkillSource(args.source)) {
     return { kind: "blocked", reason: BLOCKED_REASON[args.source] };

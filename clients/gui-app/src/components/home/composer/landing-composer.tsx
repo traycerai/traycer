@@ -48,7 +48,10 @@ import { ProfileRateLimitSwitchBanner } from "@/components/chat/composer/profile
 import { ProfileDisabledBanner } from "@/components/chat/composer/profile-disabled-banner";
 import { useProfileEligibilityGate } from "@/components/chat/composer/use-profile-eligibility-gate";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
-import { commitProfileSelection } from "@/stores/composer/commit-selection";
+import {
+  commitProfileSelection,
+  defaultModelForProfile,
+} from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
 import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
@@ -343,9 +346,19 @@ export function LandingComposer(props: LandingComposerProps) {
   useRefreshProvidersListOnTurn(harnessId, resolvedHostId);
   const onSwitchRateLimitedProfile = useCallback(
     (nextProfileId: string | null) => {
-      commitProfileSelection(toolbarStore, nextProfileId);
+      // D09: the destination profile's own `defaultModel` seeds a (harness,
+      // profile) pair that has never been used. The prompt already carries
+      // the provider's rows; an unresolved prompt has no destination to
+      // switch to either.
+      const profiles =
+        rateLimitPrompt.kind === "visible" ? rateLimitPrompt.profiles : [];
+      commitProfileSelection(
+        toolbarStore,
+        nextProfileId,
+        defaultModelForProfile(profiles, nextProfileId),
+      );
     },
-    [toolbarStore],
+    [toolbarStore, rateLimitPrompt],
   );
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,

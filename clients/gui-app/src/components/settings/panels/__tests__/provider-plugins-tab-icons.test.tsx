@@ -123,7 +123,13 @@ function plugin(over: Partial<ProviderPlugin>): ProviderPlugin {
  * pass whether or not the image rendered.
  */
 function renderTab(): HTMLElement {
-  return render(<ProviderPluginsTab state={pluginsState()} />).container;
+  return render(
+    <ProviderPluginsTab
+      state={pluginsState()}
+      profileId={null}
+      hostId={null}
+    />,
+  ).container;
 }
 
 describe("<ProviderPluginsTab /> icons and manifest labels", () => {

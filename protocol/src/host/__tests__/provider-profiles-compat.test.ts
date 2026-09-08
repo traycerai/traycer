@@ -8,16 +8,25 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   downgradeProviderCliStateToV10,
+  providersListRequestSchema,
   providersListResponseSchema,
   providerCliStateSchema,
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
   providerCliStateSchemaV30,
   providerMutationCliStateSchemaV20,
+  providerMutationCliStateSchemaV21,
   providerProfileActionSchema,
+  providerProfileSchema,
   providerProfileSchemaV80,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
+  providersListResponseSchemaV80,
+  providersListResponseSchemaV70,
+  providersListResponseSchemaV60,
+  providersListResponseSchemaV50,
+  providersListResponseSchemaV40,
+  providersListResponseSchemaV10,
   providersSetEnabledRequestSchemaV21,
 } from "@traycer/protocol/host/provider-schemas";
 // Importing from the registry runs `defineVersionedRpcRegistry` (full
@@ -27,7 +36,14 @@ import {
 import {
   providersAwaitLoginDowngradeV21ToV10,
   providersSetEnabledDowngradeV2ToV1,
+  providersStartLoginUpgradeV11ToV12,
+  providersStartLoginUpgradeV12ToV13,
 } from "@traycer/protocol/host/registry";
+import {
+  providersStartLoginRequestSchemaV12,
+  providersStartLoginRequestSchemaV13,
+  providersStartLoginResponseSchemaV12,
+} from "@traycer/protocol/host/provider-schemas";
 import { prepareTuiLaunchRequestSchema } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -363,13 +379,13 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
     // them. The major is spelled out because `downgradeResponseAcrossMajors`
     // resolves it at the type level, so it cannot be read off the registry at
     // runtime - it has to be bumped by hand every time a new major opens
-    // (v5.0 and v6.0 were each frozen by a release; v7.0 is the newest line
-    // and is not released yet). The latest major also carries
+    // (v5.0/v6.0/v7.0/v8.0 were each frozen by a release; v9.0 is the newest
+    // line and is not released yet). The latest major also carries
     // `nativeCapabilities` and `native`, which this downgrade strips alongside
     // `profiles`.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      9,
       2,
       providersListResponseSchema.parse({
         providers: [stateWithProfile],
@@ -429,7 +445,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
   it("latest -> v3.0 downgrade never leaks profile identity to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      9,
       3,
       providersListResponseSchema.parse({
         providers: [stateWithProfile],
@@ -525,7 +541,10 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
       hostRpcRegistry["providers.setSelection"],
       2,
       1,
-      { state: stateWithProfile },
+      // Re-parsed through the mutation line's own `@2.1` state: a
+      // `providers.setSelection` response has never carried
+      // `providers.list@9.0`'s `authType:"apiKey"` / `endpoint` / `config`.
+      { state: providerMutationCliStateSchemaV21.parse(stateWithProfile) },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -559,6 +578,136 @@ describe("providers.startLogin@1.1 (create profile / re-login to a profile)", ()
       started: true,
       profileId: null,
     });
+  });
+});
+
+describe("providers.startLogin@1.2 (D21/D22 mode/userCode)", () => {
+  it("upgrades a v1.1 request to v1.2 with mode defaulted to browser", () => {
+    const upgraded = providersStartLoginUpgradeV11ToV12.upgradeRequest({
+      providerId: "codex",
+      profileId: null,
+      createProfile: null,
+    });
+    expect(upgraded).toEqual({
+      providerId: "codex",
+      profileId: null,
+      createProfile: null,
+      mode: "browser",
+    });
+  });
+
+  it("upgrades a v1.1 response to v1.2 with userCode defaulted to null", () => {
+    const upgraded = providersStartLoginUpgradeV11ToV12.upgradeResponse({
+      url: "https://example.com/oauth",
+      started: true,
+      profileId: null,
+    });
+    expect(upgraded).toEqual({
+      url: "https://example.com/oauth",
+      started: true,
+      profileId: null,
+      userCode: null,
+    });
+  });
+
+  it("upgrades through the real registry with the same fill", () => {
+    const upgradedRequest = upgradeRequestToVersion(
+      hostRpcRegistry["providers.startLogin"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 2 },
+      { providerId: "codex", profileId: null, createProfile: null },
+    );
+    expect(upgradedRequest).toMatchObject({ mode: "browser" });
+
+    const upgradedResponse = upgradeResponseToVersion(
+      hostRpcRegistry["providers.startLogin"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 2 },
+      { url: null, started: true, profileId: null },
+    );
+    expect(upgradedResponse).toMatchObject({ userCode: null });
+  });
+
+  it("a v1.2 response round-trips a device-flow userCode", () => {
+    const parsed = providersStartLoginResponseSchemaV12.parse({
+      url: null,
+      started: true,
+      profileId: null,
+      userCode: "ABCD-1234",
+    });
+    expect(parsed.userCode).toBe("ABCD-1234");
+  });
+
+  it("a v1.2 request accepts an explicit device mode", () => {
+    const parsed = providersStartLoginRequestSchemaV12.parse({
+      providerId: "codex",
+      profileId: null,
+      createProfile: null,
+      mode: "device",
+    });
+    expect(parsed.mode).toBe("device");
+  });
+});
+
+// ── providers.startLogin@1.3 (D32/W2-T10b `startFrom`) ────────────────────
+//
+// `providers.startLogin` is on the released floor, so the ONLY growth it may
+// take is an additive minor whose fill is what the old peer already meant. A
+// released v1.1/v1.2 client's "Add profile -> sign in" seeded nothing, so the
+// fill and the schema default are both `{ kind: "empty" }`. D25's "Default
+// account" is the Add-profile DIALOG's default and the GUI sends it
+// explicitly; it is not the meaning of an absent field.
+describe("providers.startLogin@1.3 (D32 startFrom)", () => {
+  const V12_REQUEST = {
+    providerId: "codex" as const,
+    profileId: null,
+    createProfile: null,
+    mode: "browser" as const,
+  };
+
+  it("upgrades a v1.2 request to v1.3 with startFrom: empty", () => {
+    expect(
+      providersStartLoginUpgradeV12ToV13.upgradeRequest(V12_REQUEST),
+    ).toEqual({ ...V12_REQUEST, startFrom: { kind: "empty" } });
+  });
+
+  it("upgrades through the real registry with the same fill", () => {
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["providers.startLogin"],
+        { major: 1, minor: 2 },
+        { major: 1, minor: 3 },
+        V12_REQUEST,
+      ),
+    ).toMatchObject({ startFrom: { kind: "empty" } });
+  });
+
+  it("a v1.3 request with no startFrom parses to the same value the upgrade fills", () => {
+    const parsed = providersStartLoginRequestSchemaV13.parse({
+      providerId: "codex",
+      profileId: null,
+      createProfile: null,
+      mode: "browser",
+    });
+    expect(parsed.startFrom).toEqual({ kind: "empty" });
+  });
+
+  it("round-trips an explicit profile seed source", () => {
+    const parsed = providersStartLoginRequestSchemaV13.parse({
+      ...V12_REQUEST,
+      startFrom: { kind: "profile", profileId: "p1" },
+    });
+    expect(parsed.startFrom).toEqual({ kind: "profile", profileId: "p1" });
+    expect(
+      providersStartLoginRequestSchemaV13.safeParse({
+        ...V12_REQUEST,
+        startFrom: { kind: "profile", profileId: "" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("1.3 is the latest installed minor of major 1", () => {
+    expect(hostRpcRegistry["providers.startLogin"][1].latestMinor).toBe(3);
   });
 });
 
@@ -720,5 +869,417 @@ describe("acknowledgeAmbientDrift profileAction (rides the unreleased @2.1)", ()
       ok: true,
       value: { providerId: "codex", enabled: true },
     });
+  });
+});
+
+// ── providers.list@9.0 (W2-T2, D21) ─────────────────────────────────────────
+
+function oauthProfileRow(profileId: string) {
+  return {
+    profileId,
+    kind: "managed" as const,
+    authType: "oauth" as const,
+    label: "Work",
+    auth: {
+      status: "authenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+  };
+}
+
+function apiKeyProfileRow(profileId: string) {
+  return {
+    profileId,
+    kind: "managed" as const,
+    authType: "apiKey" as const,
+    label: "API key",
+    auth: {
+      status: "authenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    endpoint: {
+      host: "https://api.example.com",
+      model: null,
+      credentialKind: "api_key" as const,
+      credentialConfigured: true,
+      lastTest: null,
+    },
+    config: {
+      skills: "linked" as const,
+      plugins: "linked" as const,
+      cliSelection: { kind: "bundled" as const, pinned: false },
+    },
+  };
+}
+
+describe("providers.list@9.0 downgrade bridges strip apiKey rows (D21/M12)", () => {
+  it.each([8, 7, 6, 5, 4] as const)(
+    "downgrades to v%i.0 with the oauth row surviving, the apiKey row gone, and the provider itself not dropped",
+    (target) => {
+      const response = providersListResponseSchema.parse({
+        providers: [
+          {
+            ...providerState("claude-code"),
+            profiles: [
+              apiKeyProfileRow("profile-key"),
+              oauthProfileRow("profile-oauth"),
+            ],
+          },
+        ],
+        native: null,
+      });
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        9,
+        target,
+        response,
+      );
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) return;
+      expect(downgraded.value.providers).toHaveLength(1);
+      const profileIds = downgraded.value.providers[0].profiles.map(
+        (profile: { profileId: string }) => profile.profileId,
+      );
+      expect(profileIds).toContain("profile-oauth");
+      expect(profileIds).not.toContain("profile-key");
+    },
+  );
+
+  // v1.0..v3.0 never modelled `profiles[]` at all (it arrived at v4.0), so
+  // there is no per-row assertion to make below v4.0 - only that the
+  // provider row itself survives the downgrade rather than being dropped.
+  it.each([3, 2, 1] as const)(
+    "downgrades to v%i.0 with the provider row surviving (profiles[] isn't modelled below v4.0)",
+    (target) => {
+      const response = providersListResponseSchema.parse({
+        providers: [
+          {
+            ...providerState("claude-code"),
+            profiles: [
+              apiKeyProfileRow("profile-key"),
+              oauthProfileRow("profile-oauth"),
+            ],
+          },
+        ],
+        native: null,
+      });
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        9,
+        target,
+        response,
+      );
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) return;
+      expect(downgraded.value.providers).toHaveLength(1);
+      expect(downgraded.value.providers[0]).not.toHaveProperty("profiles");
+    },
+  );
+
+  it("the apiKey row first in the array does not wipe the rest (critique M12)", () => {
+    const response = providersListResponseSchema.parse({
+      providers: [
+        {
+          ...providerState("claude-code"),
+          profiles: [
+            apiKeyProfileRow("profile-key"),
+            oauthProfileRow("profile-oauth"),
+          ],
+        },
+      ],
+      native: null,
+    });
+    const downgraded = downgradeResponseAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      9,
+      8,
+      response,
+    );
+    expect(downgraded.ok).toBe(true);
+    if (!downgraded.ok) return;
+    expect(downgraded.value.providers[0].profiles).toHaveLength(1);
+    expect(downgraded.value.providers[0].profiles[0].profileId).toBe(
+      "profile-oauth",
+    );
+  });
+
+  it("providerProfileSchemaV80.parse of a row carrying unknown endpoint/config keys keeps the profiles array non-empty", () => {
+    const raw = {
+      ...oauthProfileRow("profile-oauth"),
+      endpoint: { host: "https://api.example.com" },
+      config: { skills: "own" },
+    };
+    const parsed = providerProfileSchemaV80.safeParse(raw);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).not.toHaveProperty("endpoint");
+    expect(parsed.data).not.toHaveProperty("config");
+  });
+
+  it("providerProfileSchema.parse degrades a garbage endpoint to null and keeps every other field", () => {
+    const parsed = providerProfileSchema.parse({
+      ...oauthProfileRow("profile-oauth"),
+      endpoint: "garbage",
+    });
+    expect(parsed.endpoint).toBeNull();
+    expect(parsed.profileId).toBe("profile-oauth");
+    expect(parsed.label).toBe("Work");
+  });
+
+  it("providers.list@8.0 freeze is behaviour-preserving for the v9.0 additions: the fully-populated row round trip still holds", () => {
+    const canonical = providerCliStateSchema.parse({
+      ...providerState("claude-code"),
+      profiles: [oauthProfileRow("profile-oauth")],
+      // W2-T10b: the row's endpoint-capabilities summary - present on the
+      // live/v9.0 shape, absent from the v8.0/v7.0 frozen bases (neither
+      // extends the live `providerCliStateBaseShape`).
+      endpointCapabilities: {
+        supportsBaseUrl: true,
+        credentialKinds: ["api_key", "auth_token"],
+        requiresModel: false,
+        extraFields: [],
+        credentialStoredInNativeConfig: false,
+      },
+    });
+    const viaLive = providersListResponseSchema.parse({
+      providers: [canonical],
+      native: null,
+    });
+    const viaV80 = providersListResponseSchemaV80.parse({
+      providers: [canonical],
+      native: null,
+    });
+    // v8.0 never modelled `endpoint`/`config`/`profilesSupported`/
+    // `endpointCapabilities` - they drop on reparse, exactly like `enabled`
+    // never modelled anything past v7.0.
+    expect(viaV80.providers[0].profiles[0]).not.toHaveProperty("endpoint");
+    expect(viaV80.providers[0].profiles[0]).not.toHaveProperty("config");
+    expect(viaV80.providers[0]).not.toHaveProperty("profilesSupported");
+    expect(viaV80.providers[0]).not.toHaveProperty("endpointCapabilities");
+    expect(viaLive.providers[0].endpointCapabilities).not.toBeNull();
+    expect(viaV80.providers[0].profiles[0].profileId).toBe(
+      viaLive.providers[0].profiles[0].profileId,
+    );
+    expect(viaV80.providers[0].profiles[0].label).toBe(
+      viaLive.providers[0].profiles[0].label,
+    );
+  });
+
+  it("request downgrade drops profileId from the native arm at v8.0 and v7.0, and drops native entirely at v6.0 and below", () => {
+    const request = providersListRequestSchema.parse({
+      forceAuthRefresh: true,
+      native: {
+        kind: "skills",
+        providerId: "claude-code",
+        scope: "global",
+        workspaceRoot: null,
+        profileId: "profile-1",
+      },
+    });
+    const toV8 = downgradeRequestAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      9,
+      8,
+      request,
+    );
+    expect(toV8.ok).toBe(true);
+    if (toV8.ok) {
+      expect(toV8.value.native).not.toHaveProperty("profileId");
+    }
+
+    // v7.0 is the target with its OWN reparse
+    // (`providersListRequestSchemaV70`); 6 and below share
+    // `providersListRequestSchemaBeforeV70`, so 8 and 6 alone leave the
+    // middle bridge unproved.
+    const toV7 = downgradeRequestAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      9,
+      7,
+      request,
+    );
+    expect(toV7.ok).toBe(true);
+    if (toV7.ok) {
+      expect(toV7.value.native).not.toBeNull();
+      expect(toV7.value.native).not.toHaveProperty("profileId");
+    }
+
+    const toV6 = downgradeRequestAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      9,
+      6,
+      request,
+    );
+    expect(toV6.ok).toBe(true);
+    if (toV6.ok) {
+      expect(toV6.value).not.toHaveProperty("native");
+    }
+  });
+
+  it("upgrade v8.0 -> v9.0 fills profilesSupported: false and endpoint/config: null on every profile", () => {
+    const v80Response = providersListResponseSchemaV80.parse({
+      providers: [
+        {
+          ...providerState("claude-code"),
+          profiles: [oauthProfileRow("profile-oauth")],
+        },
+      ],
+      native: null,
+    });
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 8, minor: 0 },
+      { major: 9, minor: 0 },
+      v80Response,
+    );
+    expect(upgraded.providers[0].profilesSupported).toBe(false);
+    expect(upgraded.providers[0].profiles[0].endpoint).toBeNull();
+    expect(upgraded.providers[0].profiles[0].config).toBeNull();
+    expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
+  });
+});
+
+// ── agent.listProviderProfiles@5.1 (W2-T3, critique H8) ────────────────────
+
+function agentProfileSummaryRow(authType: "oauth" | "apiKey") {
+  return {
+    selection: { kind: "ambient" as const },
+    label: "Row",
+    authStatus: "authenticated" as const,
+    rateLimitStatus: "unknown" as const,
+    usageUpdatedAt: null,
+    isEffectiveLastUsed: false,
+    authType,
+  };
+}
+
+describe("agent.listProviderProfiles@5.1 authType (D06/D27, critique H8)", () => {
+  it("5.0 -> 5.1 upgrade fills authType: oauth on every row", () => {
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["agent.listProviderProfiles"],
+      { major: 5, minor: 0 },
+      { major: 5, minor: 1 },
+      {
+        providerId: "claude-code",
+        profiles: [
+          {
+            selection: { kind: "ambient" },
+            label: "Row",
+            authStatus: "authenticated",
+            rateLimitStatus: "unknown",
+            usageUpdatedAt: null,
+            isEffectiveLastUsed: false,
+          },
+        ],
+      },
+    );
+    expect(upgraded.profiles[0].authType).toBe("oauth");
+  });
+
+  it.each([4, 3, 2, 1] as const)(
+    "an apiKey row downgraded to v%i.0 keeps the row and drops authType",
+    (target) => {
+      const response = {
+        providerId: "claude-code" as const,
+        profiles: [agentProfileSummaryRow("apiKey")],
+      };
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["agent.listProviderProfiles"],
+        5,
+        target,
+        response,
+      );
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) return;
+      expect(downgraded.value.profiles).toHaveLength(1);
+      expect(downgraded.value.profiles[0]).not.toHaveProperty("authType");
+    },
+  );
+});
+
+// ── The v8.0-SOURCE bridges (W1-T9 freeze fallout) ────────────────────────
+//
+// W1-T9 froze `providersListResponseSchemaV80`, which turned every
+// `providersListDowngradeV8ToV*` bridge into one whose SOURCE rows are
+// V80-shaped rather than live. Nothing exercised them from a v8.0-shaped
+// response afterwards, so the two things that broke - the live-typed
+// `enabledProviderProfilesOnly` filter and `downgradeProviderCliStateToV10`'s
+// `DowngradableToV10ProviderState` union, which had no V80 arm - failed at
+// type-check only and no test could see it. Driven through the real registry
+// so it is major 8's own `downgradePathsFromLatest` table being used, not the
+// bridge objects directly.
+describe("providers.list@8.0 -> every older major via the real registry", () => {
+  const FROZEN_BY_MAJOR = {
+    7: providersListResponseSchemaV70,
+    6: providersListResponseSchemaV60,
+    5: providersListResponseSchemaV50,
+    4: providersListResponseSchemaV40,
+    3: providersListResponseSchemaV30,
+    2: providersListResponseSchemaV20,
+    1: providersListResponseSchemaV10,
+  } as const;
+
+  function v80ResponseWithMixedProfiles() {
+    return providersListResponseSchemaV80.parse({
+      providers: [
+        {
+          ...providerState("claude-code"),
+          profiles: [
+            { ...oauthProfileRow("profile-on"), enabled: true },
+            { ...oauthProfileRow("profile-off"), enabled: false },
+          ],
+        },
+      ],
+      native: null,
+    });
+  }
+
+  it.each([7, 6, 5, 4, 3, 2, 1] as const)(
+    "downgrades a v8.0 response to v%i.0 and drops the disabled profile",
+    (targetMajor) => {
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        8,
+        targetMajor,
+        v80ResponseWithMixedProfiles(),
+      );
+      expect(downgraded.ok, `v${targetMajor}.0`).toBe(true);
+      if (!downgraded.ok) return;
+      expect(
+        FROZEN_BY_MAJOR[targetMajor].safeParse(downgraded.value).success,
+        `v${targetMajor}.0 parses`,
+      ).toBe(true);
+      // `profile-off` must not survive at any target: majors 6 and below run
+      // it through `enabledProviderProfilesOnly`, major 7 through
+      // `downgradeProviderCliStateListToV70`'s own enabled filter, and majors
+      // 3 and below model no `profiles` at all.
+      expect(JSON.stringify(downgraded.value)).not.toContain("profile-off");
+    },
+  );
+
+  it("keeps the enabled profile for the two majors that still model profiles", () => {
+    for (const targetMajor of [7, 6] as const) {
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        8,
+        targetMajor,
+        v80ResponseWithMixedProfiles(),
+      );
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) continue;
+      expect(
+        downgraded.value.providers[0]?.profiles.map(
+          (profile) => profile.profileId,
+        ),
+        `v${targetMajor}.0`,
+      ).toEqual(["profile-on"]);
+    }
   });
 });

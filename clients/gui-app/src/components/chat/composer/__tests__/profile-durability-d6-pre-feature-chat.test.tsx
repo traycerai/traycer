@@ -40,6 +40,7 @@ vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
 import { useProviderReauthGate } from "../use-provider-reauth-gate";
 import { useProfileRateLimitSwitchPrompt } from "../use-profile-rate-limit-switch-prompt";
 import { ProfileRateLimitSwitchBanner } from "../profile-rate-limit-switch-banner";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function legacyChatRunSettingsBlob(): ChatRunSettings {
   const json = JSON.stringify({
@@ -59,7 +60,7 @@ function profile(
   label: string,
   rateLimitStatus: ProviderProfileRateLimitStatus,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -78,7 +79,7 @@ function profile(
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
-  };
+  });
 }
 
 function claudeState(profiles: ProviderProfile[]): ProviderCliState {

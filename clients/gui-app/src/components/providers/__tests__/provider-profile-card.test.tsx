@@ -6,6 +6,7 @@ import {
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const AMBIENT_COLOR = PROVIDER_PROFILE_ACCENT_COLORS[0];
 const MANAGED_COLOR = PROVIDER_PROFILE_ACCENT_COLORS[2];
@@ -16,7 +17,7 @@ function profile(
   label: string,
   accentColor: ProviderProfileAccentColor,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -35,7 +36,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 const AMBIENT = profile(
@@ -105,7 +106,7 @@ describe("<ProviderProfileCard />", () => {
     );
 
     expect(
-      screen.getByText(/Terminal account already uses this color/),
+      screen.getByText(/Default account already uses this color/),
     ).toBeDefined();
   });
 

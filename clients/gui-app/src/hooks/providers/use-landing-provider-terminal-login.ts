@@ -119,6 +119,11 @@ export function useLandingProviderStartTerminalLogin(args: {
         // geometry the epic hook sends, for the same reason.
         cols: 80,
         rows: 24,
+        // See the epic hook's identical comment: no profile picker on this
+        // surface yet, so this re-authenticates the default account exactly
+        // as before `startTerminalLogin@3.0` grew the field.
+        profileId: null,
+        createProfile: null,
       });
     },
     [providerId, startTerminalLogin],

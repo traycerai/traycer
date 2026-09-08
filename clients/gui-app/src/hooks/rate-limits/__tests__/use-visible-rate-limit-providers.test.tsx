@@ -53,6 +53,7 @@ import {
   useConfiguredRateLimitProviders,
   useVisibleRateLimitProviders,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const NOW = Date.now();
 
@@ -278,7 +279,7 @@ describe("useVisibleRateLimitProviders", () => {
   });
 
   it("keeps an authenticated managed profile visible and queue-eligible while excluding its unauthenticated ambient target", () => {
-    const ambient: ProviderProfile = {
+    const ambient: ProviderProfile = providerProfileFixture({
       profileId: "ambient",
       enabled: true,
       kind: "ambient",
@@ -292,7 +293,7 @@ describe("useVisibleRateLimitProviders", () => {
       duplicateOfProfileId: null,
       accentColor: null,
       ambientDriftNotice: null,
-    };
+    });
     const managed: ProviderProfile = {
       ...ambient,
       profileId: "work-profile",

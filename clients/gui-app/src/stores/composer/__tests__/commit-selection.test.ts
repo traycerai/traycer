@@ -23,7 +23,7 @@ function resetMemory(): void {
 describe("commitProfileSelection", () => {
   beforeEach(resetMemory);
 
-  it("changes only the profile when provider memory contains different model settings", () => {
+  it("restores the destination profile's own remembered model/effort/tier (D09)", () => {
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
       harnessId: "claude",
       model: "opus-4",
@@ -63,20 +63,24 @@ describe("commitProfileSelection", () => {
       hostId: HOST_A,
     });
 
-    commitProfileSelection(store, "profile-b");
+    commitProfileSelection(store, "profile-b", null);
 
+    // D09 reverses the pre-multi-profile rule this case used to pin
+    // ("changes only the profile"): model memory is per `(harness, profile)`,
+    // so profile-b arrives with the model, effort and tier profile-b last
+    // used - not profile-a's.
     expect(store.getState().selection).toEqual({
       harnessId: "claude",
-      modelSlug: "sonnet-4.5",
+      modelSlug: "opus-4",
       profileId: "profile-b",
     });
-    expect(store.getState().reasoning).toBe("high");
-    expect(store.getState().serviceTier).toBe("fast");
+    expect(store.getState().reasoning).toBe("low");
+    expect(store.getState().serviceTier).toBe("standard");
     expect(emitted.at(-1)).toEqual({
-      model: "sonnet-4.5",
+      model: "opus-4",
       profileId: "profile-b",
-      reasoningEffort: "high",
-      serviceTier: "fast",
+      reasoningEffort: "low",
+      serviceTier: "standard",
     });
     expect(
       useComposerHarnessMemoryStore
@@ -89,7 +93,7 @@ describe("commitProfileSelection", () => {
 describe("commitSelection - provider switch", () => {
   beforeEach(resetMemory);
 
-  it("restores the provider's last model independently of its selected profile", () => {
+  it("restores the (harness, profile) pair's OWN last model on a provider switch (D09)", () => {
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
       harnessId: "claude",
       model: "opus-4",
@@ -132,18 +136,59 @@ describe("commitSelection - provider switch", () => {
     });
 
     // Provider-rail click: modelSlug is null, so the provider switch restores
-    // its last model/config while committing the independently chosen profile.
-    commitSelection(store, "claude", null, "profile-b");
+    // profile-b's OWN remembered model (opus-4), not profile-a's (sonnet-4.5)
+    // - D09 scopes model memory per (harness, profile), reversing the prior
+    // "profile memory is separate" behavior.
+    commitSelection({
+      store,
+      harnessId: "claude",
+      modelSlug: null,
+      profileId: "profile-b",
+      defaultModel: null,
+    });
 
     expect(store.getState().selection).toEqual({
       harnessId: "claude",
-      modelSlug: "sonnet-4.5",
+      modelSlug: "opus-4",
       profileId: "profile-b",
     });
-    expect(store.getState().reasoning).toBe("high");
-    expect(store.getState().serviceTier).toBe("fast");
+    expect(store.getState().reasoning).toBe("low");
+    expect(store.getState().serviceTier).toBe("");
     expect(emitted.at(-1)).toEqual({
-      modelSlug: "sonnet-4.5",
+      modelSlug: "opus-4",
+      profileId: "profile-b",
+    });
+  });
+
+  it("seeds the profile's defaultModel (D09) when the (harness, profile) pair has never been used", () => {
+    const store = createComposerToolbarStore({
+      seedKey: "seed-default-model",
+      values: {
+        permission: "supervised",
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-5.5",
+          profileId: null,
+        },
+        reasoning: "high",
+        serviceTier: "",
+      },
+      onSettingsChange: null,
+      tuiOnly: false,
+      hostId: HOST_A,
+    });
+
+    commitSelection({
+      store,
+      harnessId: "claude",
+      modelSlug: null,
+      profileId: "profile-b",
+      defaultModel: "opus-4.1",
+    });
+
+    expect(store.getState().selection).toEqual({
+      harnessId: "claude",
+      modelSlug: "opus-4.1",
       profileId: "profile-b",
     });
   });
@@ -182,7 +227,13 @@ describe("commitSelection - host scoping", () => {
 
     // Host B has no memory of its own, so the provider switch does NOT pick
     // up host A's remembered model.
-    commitSelection(store, "claude", null, null);
+    commitSelection({
+      store,
+      harnessId: "claude",
+      modelSlug: null,
+      profileId: null,
+      defaultModel: null,
+    });
 
     expect(store.getState().selection.modelSlug).toBe("");
   });
@@ -205,7 +256,13 @@ describe("commitSelection - host scoping", () => {
       hostId: HOST_A,
     });
 
-    commitSelection(store, "claude", "sonnet-4.5", "profile-a");
+    commitSelection({
+      store,
+      harnessId: "claude",
+      modelSlug: "sonnet-4.5",
+      profileId: "profile-a",
+      defaultModel: null,
+    });
 
     expect(
       useComposerHarnessMemoryStore
@@ -237,7 +294,13 @@ describe("commitSelection - host scoping", () => {
       hostId: null,
     });
 
-    commitSelection(store, "claude", "sonnet-4.5", "profile-a");
+    commitSelection({
+      store,
+      harnessId: "claude",
+      modelSlug: "sonnet-4.5",
+      profileId: "profile-a",
+      defaultModel: null,
+    });
 
     expect(useComposerHarnessMemoryStore.getState().byHost).toEqual({});
   });

@@ -38,8 +38,13 @@ export interface ComposerHarnessMemoryHostBucket {
   // Terminal profile and is stored deliberately (rather than represented by
   // a missing key) so it can replace an earlier managed-profile selection.
   readonly lastProfileByHarness: Partial<Record<GuiHarnessId, string | null>>;
-  // harnessId -> last committed model slug. Profile memory is deliberately
-  // separate so changing credentials cannot change the remembered model.
+  // (harnessId, profileId) -> last committed model slug, keyed by the same
+  // JSON tuple spelling `parseLegacyHarnessProfileKey` parses (D09 reverses
+  // the prior "profile memory is separate" split, reused below as
+  // `harnessProfileKey`). An API-key profile can point at a different
+  // endpoint with an entirely different model catalog, so a profile is no
+  // longer "the same models under different credentials" - one remembered
+  // model per harness is wrong for exactly the rows this refactor adds.
   readonly lastModelByHarness: Record<string, string>;
   // (harnessId, modelSlug) -> effort/tier, LRU-capped by updatedAt. Like the
   // last model, these settings belong to the provider/model, not a profile.
@@ -79,11 +84,20 @@ interface ComposerHarnessMemoryStore {
     harnessId: GuiHarnessId,
   ) => string | null;
   // READ — harness switch: last model + its record (or "" / null defaults).
+  // `profileId` selects which (harness, profile) pair's remembered model to
+  // read (D09) - required so a profile switch can never restore another
+  // profile's last model. The "" result carries no defaultModel fallback:
+  // that seeding lives in the reader the toolbar calls, never here, because
+  // the store must stay a pure persisted map with no knowledge of the wire.
   resolveHarnessSwitch: (
     hostId: string | null,
     harnessId: string,
+    profileId: string | null,
   ) => ResolvedHarnessSwitch;
-  // READ — explicit model pick: that pair's record (or null defaults).
+  // READ — explicit model pick: that pair's effort/tier record (or null
+  // defaults). No `profileId` parameter - `effortByHarnessModel` stays keyed
+  // by (harnessId, modelSlug) only (D09 scopes just the model memory), so a
+  // profile has no branch here to select.
   resolveModelSelection: (
     hostId: string | null,
     harnessId: string,
@@ -122,6 +136,17 @@ export function selectLastProfileByHarness(
 // migrate without rewriting their provider/model identity.
 function harnessModelKey(harnessId: string, modelSlug: string): string {
   return `${harnessId} ${modelSlug}`;
+}
+
+// (harnessId, profileId) -> `lastModelByHarness` key (D09). Same JSON tuple
+// spelling `parseLegacyHarnessProfileKey` already parses - that was the v1
+// per-profile shape the v1->v2 collapse flattened away - so V4-migrated and
+// freshly written records share one key format with no fresh migration.
+function harnessProfileKey(
+  harnessId: string,
+  profileId: string | null,
+): string {
+  return JSON.stringify([harnessId, profileId]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -370,6 +395,133 @@ export function migrateComposerHarnessMemoryPersistedStateV3(
   };
 }
 
+function parseLastProfileByHarnessField(
+  value: unknown,
+): Record<string, string | null> {
+  if (!isRecord(value)) return {};
+  return Object.entries(value).reduce<Record<string, string | null>>(
+    (profiles, [harnessId, profileId]) => {
+      if (typeof profileId === "string" || profileId === null) {
+        profiles[harnessId] = profileId;
+      }
+      return profiles;
+    },
+    {},
+  );
+}
+
+function parseFlatStringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  return Object.entries(value).reduce<Record<string, string>>(
+    (candidates, [key, candidate]) => {
+      if (typeof candidate === "string") candidates[key] = candidate;
+      return candidates;
+    },
+    {},
+  );
+}
+
+function parseEffortByHarnessModelField(
+  value: unknown,
+): Record<string, HarnessModelEffortRecord> {
+  if (!isRecord(value)) return {};
+  return Object.entries(value).reduce<Record<string, HarnessModelEffortRecord>>(
+    (records, [key, candidate]) => {
+      const record = parseEffortRecord(candidate);
+      if (record !== null) records[key] = record;
+      return records;
+    },
+    {},
+  );
+}
+
+// Parses one host bucket (or the `legacy` bucket) from a V3-shaped persisted
+// blob defensively, field by field - the same tolerance level the v1/v2
+// collapse above applies, so one malformed field degrades to empty rather
+// than throwing or discarding the bucket's other fields (rule 10: fail
+// closed on the corrupt piece, not on everything reachable from it).
+function parseHostBucket(value: unknown): ComposerHarnessMemoryHostBucket {
+  if (!isRecord(value)) return EMPTY_HOST_BUCKET;
+  return {
+    lastProfileByHarness: parseLastProfileByHarnessField(
+      value.lastProfileByHarness,
+    ),
+    lastModelByHarness: parseFlatStringRecord(value.lastModelByHarness),
+    effortByHarnessModel: parseEffortByHarnessModelField(
+      value.effortByHarnessModel,
+    ),
+  };
+}
+
+/**
+ * Re-keys one host bucket's `lastModelByHarness` from flat `harnessId` to the
+ * `(harnessId, profileId)` tuple (D09), attributing each remembered model to
+ * THAT SAME bucket's `lastProfileByHarness[harnessId]` - the same association
+ * the V1->V2 collapse used above, and the only honest attribution a migration
+ * can make: the flat map never recorded which profile a model belonged to.
+ */
+function rekeyHostBucketModelMemory(
+  bucket: ComposerHarnessMemoryHostBucket,
+): ComposerHarnessMemoryHostBucket {
+  // `Object.entries` always returns plain-string keys regardless of the
+  // source's key union, so this side-steps indexing `lastProfileByHarness`
+  // (keyed by `GuiHarnessId`) with the plain `string` harnessId that
+  // `lastModelByHarness`'s own keys carry.
+  const profileByHarnessId = new Map(
+    Object.entries(bucket.lastProfileByHarness),
+  );
+  return {
+    ...bucket,
+    lastModelByHarness: Object.fromEntries(
+      Object.entries(bucket.lastModelByHarness).map(
+        ([harnessId, modelSlug]) => [
+          harnessProfileKey(
+            harnessId,
+            profileByHarnessId.get(harnessId) ?? null,
+          ),
+          modelSlug,
+        ],
+      ),
+    ),
+  };
+}
+
+/**
+ * v4 migration (D09): every V3 host bucket's `lastModelByHarness` is re-keyed
+ * from bare `harnessId` to the `(harnessId, profileId)` tuple via
+ * {@link rekeyHostBucketModelMemory}. Input predating v3 host-scoping (no
+ * `byHost` field) is first collapsed the same way v3 did - its `byHost`
+ * starts empty, so there is nothing to re-key. The `legacy` tier is left
+ * exactly as v3 produced it: it predates per-host `lastProfileByHarness`
+ * entirely, so there is no attribution to re-key it with (D09's own
+ * `resolveHarnessSwitch` keeps reading it flat, by harnessId).
+ */
+export function migrateComposerHarnessMemoryPersistedStateV4(
+  persisted: unknown,
+): ComposerHarnessMemoryPersistedStateV3 {
+  const v3: ComposerHarnessMemoryPersistedStateV3 =
+    isRecord(persisted) && isRecord(persisted.byHost)
+      ? {
+          byHost: Object.fromEntries(
+            Object.entries(persisted.byHost).map(([hostId, bucket]) => [
+              hostId,
+              parseHostBucket(bucket),
+            ]),
+          ),
+          legacy: parseHostBucket(persisted.legacy),
+        }
+      : migrateComposerHarnessMemoryPersistedStateV3(persisted);
+  return {
+    byHost: Object.fromEntries(
+      Object.entries(v3.byHost).map(([hostId, bucket]) => [
+        hostId,
+        rekeyHostBucketModelMemory(bucket),
+      ]),
+    ),
+    legacy: v3.legacy,
+  };
+}
+
 export const useComposerHarnessMemoryStore =
   create<ComposerHarnessMemoryStore>()(
     persist(
@@ -391,6 +543,10 @@ export const useComposerHarnessMemoryStore =
           // `globalLastRunSettings` fallback.
           if (settings.model.length === 0) return;
           const modelKey = harnessModelKey(settings.harnessId, settings.model);
+          const profileModelKey = harnessProfileKey(
+            settings.harnessId,
+            profileId,
+          );
           set((state) => {
             const bucket = hostBucket(state, hostId);
             return {
@@ -400,7 +556,7 @@ export const useComposerHarnessMemoryStore =
                   ...bucket,
                   lastModelByHarness: {
                     ...bucket.lastModelByHarness,
-                    [settings.harnessId]: settings.model,
+                    [profileModelKey]: settings.model,
                   },
                   // Always write - no value dedup. `updatedAt` is the recency
                   // key the cap sorts on, so even re-selecting the same pair
@@ -459,7 +615,7 @@ export const useComposerHarnessMemoryStore =
           }
           return state.legacy.lastProfileByHarness[harnessId] ?? null;
         },
-        resolveHarnessSwitch: (hostId, harnessId) => {
+        resolveHarnessSwitch: (hostId, harnessId, profileId) => {
           const state = get();
           // Per-host memory first at BOTH tiers (a record on this host is
           // always fresher than the frozen legacy fallback), then the same
@@ -469,7 +625,7 @@ export const useComposerHarnessMemoryStore =
           // which applies iff the last-run tuple belongs to the same harness.
           const hostModel = ownRecordValue(
             hostBucket(state, hostId).lastModelByHarness,
-            harnessId,
+            harnessProfileKey(harnessId, profileId),
           );
           if (hostModel !== undefined) {
             // Reuse the model-pick resolver for the exact same (harness,
@@ -492,6 +648,10 @@ export const useComposerHarnessMemoryStore =
               serviceTier: hostGlobal.serviceTier,
             };
           }
+          // The legacy tier predates host scoping AND profile scoping - it is
+          // never re-keyed by the V4 migration (there is no per-host
+          // `lastProfileByHarness` to attribute it to) - so it stays a flat
+          // per-harness lookup, same as before D09.
           const legacyModel = ownRecordValue(
             state.legacy.lastModelByHarness,
             harnessId,
@@ -537,14 +697,14 @@ export const useComposerHarnessMemoryStore =
       }),
       {
         ...basePersistOptions(composerHarnessMemoryKey(null)),
-        version: 3,
+        version: 4,
         storage: createJSONStorage(() => window.localStorage),
         partialize: (state) => ({
           byHost: state.byHost,
           legacy: state.legacy,
         }),
         migrate: (persisted) =>
-          migrateComposerHarnessMemoryPersistedStateV3(persisted),
+          migrateComposerHarnessMemoryPersistedStateV4(persisted),
       },
     ),
   );

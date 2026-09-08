@@ -317,6 +317,11 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   {
+    camelName: "providersProfileSelection",
+    leaf: "providers-profile-selection",
+    kind: "static",
+  },
+  {
     camelName: "providerLoginTerminals",
     leaf: "provider-login-terminals",
     kind: "static",

@@ -62,6 +62,8 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 const PANEL_DESCRIPTION =
   "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; host env changes apply on restart.";
 const SAVED_FLASH_MS = 1600;
+// D29's reserved-key concept is profile-scoped only; the host process has none.
+const EMPTY_RESERVED_KEYS: readonly string[] = [];
 type ShellSaveTarget = "program" | "flags";
 
 // WSL is the one shell selection where the choice silently diverges from what
@@ -887,6 +889,7 @@ function HostEnvironmentGroup(props: {
             disabled={props.pending}
             namePlaceholder="OPENAI_API_KEY"
             emptyLabel="No host environment variables. The host starts with the environment your shell produces."
+            reservedKeys={EMPTY_RESERVED_KEYS}
             onCommit={props.onCommit}
             onDelete={props.onDelete}
           />

@@ -22,7 +22,7 @@ import {
   listTerminalsResponseSchema,
   listTerminalsResponseSchemaV20,
   listTerminalsResponseSchemaV21,
-  listTerminalsResponseSchemaV23,
+  listTerminalsResponseSchemaV24,
   type CanonicalTerminalSessionInfo,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 
@@ -119,7 +119,10 @@ describe("terminal.list v2.0 → v2.1 upgrade", () => {
   });
 
   it("upgrades through the host registry minor chain", () => {
-    expect(listRegistry[2]?.latestMinor).toBe(3);
+    // `@2.4` (W2-T3, `spawnConfigRevision`/`restartRequired`) is now major
+    // 2's latest; this test exercises the V20 -> V21 hop specifically, which
+    // that growth does not touch.
+    expect(listRegistry[2]?.latestMinor).toBe(4);
     const sessions = [epicSession({})];
     const upgraded = upgradeResponseToVersion(
       listRegistry,
@@ -191,11 +194,18 @@ describe("terminal.list v2.1 → v1.0 downgrade", () => {
       listRegistry,
       2,
       1,
-      listTerminalsResponseSchemaV23.parse({
+      // The registered v2 -> v1 bridge now starts at v2.4 (`terminal.list@2.4`,
+      // W2-T3): major 2's `latestMinor` moved, so `downgradeResponseAcrossMajors`
+      // wants a v2.4-shaped response here. The two new fields are irrelevant to
+      // what this test asserts, but are required to reach the registered
+      // contract honestly.
+      listTerminalsResponseSchemaV24.parse({
         sessions: sessions.map((session) => ({
           ...session,
           currentCwd: session.cwd,
           lifecycleOwner: "registry" as const,
+          spawnConfigRevision: null,
+          restartRequired: false,
         })),
         homeCwd: "/Users/dev",
       }),

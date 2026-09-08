@@ -10,6 +10,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
+import type { ProvidersGetProfileConfigResponse } from "@traycer/protocol/host/provider-profile-config-schemas";
 import {
   HostTransportFailureError,
   RetryableTransportError,
@@ -161,6 +162,19 @@ const providerMocks = vi.hoisted(() => ({
   setTerminalAgentArgsMutate: vi.fn(),
   setEnvOverrideMutate: vi.fn(),
   deleteEnvOverrideMutate: vi.fn(),
+  // W2-T9/W2-T10: the Account tab's apiKey/default arms (`profile-account-tab.tsx`)
+  // call these for real - unmocked, `useProvidersProfileConfig` reaches
+  // `useQueryClient()` with no provider in this tree, which crashed nearly
+  // every test in this file the moment `account` became the unconditional
+  // first tab (D05).
+  profileConfigData: undefined as ProvidersGetProfileConfigResponse | undefined,
+  setProfileEndpointMutate: vi.fn(),
+  // W2-T14/G11: the CLI & Args tab is profile-scoped now, so both controls
+  // reach a profile-config writer for a managed profile.
+  setProfileCliSelectionMutate: vi.fn(),
+  setProfileTerminalAgentArgsMutate: vi.fn(),
+  testProfileConnectionMutate: vi.fn(),
+  createApiKeyProfileMutate: vi.fn(),
   startLoginMutate: vi.fn<StartLoginMutate>(),
   awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
   cancelLoginMutate: vi.fn(),
@@ -370,6 +384,62 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
     isPending: false,
   }),
 }));
+
+// The Account tab (D25/W2-T10) mounts unconditionally as the first tab now,
+// so every render of this panel reaches these hooks - unmocked, they call
+// real TanStack Query hooks with no `QueryClientProvider` in this tree.
+vi.mock("@/hooks/providers/use-providers-profile-config-query", () => ({
+  useProvidersProfileConfig: () => ({
+    data: providerMocks.profileConfigData,
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-set-profile-cli-mutation", () => ({
+  useProvidersSetProfileCliSelection: () => ({
+    mutate: providerMocks.setProfileCliSelectionMutate,
+    isPending: false,
+  }),
+  useProvidersSetProfileTerminalAgentArgs: () => ({
+    mutate: providerMocks.setProfileTerminalAgentArgsMutate,
+    isPending: false,
+  }),
+}));
+
+vi.mock(
+  "@/hooks/providers/use-providers-set-profile-endpoint-mutation",
+  () => ({
+    useProvidersSetProfileEndpoint: () => ({
+      mutate: providerMocks.setProfileEndpointMutate,
+      isPending: false,
+      error: null,
+    }),
+  }),
+);
+
+vi.mock(
+  "@/hooks/providers/use-providers-test-profile-connection-mutation",
+  () => ({
+    useProvidersTestProfileConnection: () => ({
+      mutate: providerMocks.testProfileConnectionMutate,
+      isPending: false,
+    }),
+  }),
+);
+
+vi.mock(
+  "@/hooks/providers/use-providers-create-api-key-profile-mutation",
+  () => ({
+    useProvidersCreateApiKeyProfile: () => ({
+      mutate: providerMocks.createApiKeyProfileMutate,
+      isPending: false,
+    }),
+    useProvidersCreateApiKeyProfileForClient: () => ({
+      mutate: providerMocks.createApiKeyProfileMutate,
+      isPending: false,
+    }),
+  }),
+);
 
 // Both the plain and `*ForClient` names are exported: the inline profile
 // re-auth panel calls the plain hooks (host-runtime-context-
@@ -844,7 +914,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 });
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
-import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
@@ -856,8 +925,10 @@ import { toast } from "sonner";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useProvidersProfileSelectionStore } from "@/stores/settings/providers-profile-selection-store";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 const OPENCODE_CANDIDATES: readonly ProviderCliCandidate[] = [
   {
     kind: "bundled",
@@ -1044,7 +1115,7 @@ function profileWithAccent(
   input: TestProfileInput,
   accentColor: ProviderProfileAccentColor | null,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: input.profileId,
     enabled: true,
     kind: input.kind,
@@ -1070,7 +1141,7 @@ function profileWithAccent(
     duplicateOfProfileId: input.duplicateOfProfileId,
     ambientDriftNotice: input.ambientDriftNotice,
     accentColor,
-  };
+  });
 }
 
 function firstStartLoginCall(): readonly [
@@ -1130,6 +1201,7 @@ function codexWithManaged(managed: ProviderProfile): ProviderCliState {
         managed,
       ],
     }),
+    profilesSupported: true,
     loginCapability: {
       oauthArgs: ["auth", "login"],
       token: null,
@@ -1186,6 +1258,7 @@ function codePasteReauthProviderState(): ProviderCliState {
         }),
       ],
     }),
+    profilesSupported: true,
     loginCapability: {
       oauthArgs: ["auth", "login"],
       token: null,
@@ -1250,6 +1323,7 @@ function codePasteCreateProviderState(): ProviderCliState {
         }),
       ],
     }),
+    profilesSupported: true,
     loginCapability: {
       oauthArgs: ["auth", "login"],
       token: null,
@@ -1301,24 +1375,41 @@ function createRunnerHost(): MockRunnerHost {
 }
 
 /**
- * Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
- * tab, so every profile assertion has to activate that tab after mounting.
- * Kept as one helper so the next time the section moves (or the label changes
- * again) this is a one-line change, not forty.
+ * W2-T9 (D25): profile management is no longer a TAB. `ProfileSwitcher`
+ * mounts unconditionally above the tab rail (Add profile / Manage / the
+ * profile selector), and the deleted `ProviderProfileScopedSection`'s
+ * sign-in/reauth/naming machinery now lives inline on the Account tab (the
+ * unconditional first tab, D05) or behind "Manage". Nothing needs opening
+ * before a profile assertion runs. Kept as a no-op call (rather than deleting
+ * every call site) so the next time the surface moves is again a one-line
+ * change, not fifty.
  */
-function openProfilesTab(): void {
-  selectTab("Profiles & Limits");
+function openProfilesTab(): void {}
+
+/** Usage/rate-limit content's tab. No longer labelled per-provider (it used
+ *  to vary, "Profiles & Limits" vs "Usage limits") - plain "Usage" (D26) now
+ *  that the profile switcher owns profile display everywhere. */
+function openUsageLimitsTab(): void {
+  selectTab("Usage");
 }
 
 /**
- * The SAME tab for a provider without managed profiles, which is most of them.
- *
- * The label is per-provider now: the tab holds profiles and usage limits, and
- * for a provider that cannot have profiles it holds only the second - so
- * promising them in the rail was promising a section that is not there.
+ * Opens the D25 add-profile dialog and advances past step 1 to step 2 (the
+ * Sign in tab, selected by default) so the caller can drive
+ * `ProviderSignInPanel` from "Link account" onward - the trigger differs by
+ * profile count (a single profile is the compact chip's own "Add profile"
+ * button; 2+ profiles route through the dropdown's "Create new profile" row
+ * instead), and step 1 requires a non-empty name before "Continue" enables.
  */
-function openUsageLimitsTab(): void {
-  selectTab("Usage limits");
+function openAddProfileDialog(label = "New profile"): void {
+  const addTrigger =
+    screen.queryByRole("button", { name: "Add profile" }) ??
+    screen.getByRole("menuitem", { name: "Create new profile" });
+  fireEvent.click(addTrigger);
+  fireEvent.change(screen.getByLabelText("Profile name"), {
+    target: { value: label },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 }
 
 /**
@@ -1475,6 +1566,12 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.ambientBinding = null;
     hostScopeMocks.client = null;
     useProvidersFocusStore.getState().clearFocusHarnessId();
+    // W2-T9: the profile switcher persists its selection per (hostId,
+    // providerId) in this store, which did not exist before D25 and so no
+    // prior test here ever needed to clear it - left alone, a selection one
+    // test makes for provider "codex" on "host-a" silently becomes the
+    // default selection for every later test that reuses that pair.
+    useProvidersProfileSelectionStore.setState({ selectedByHost: {} });
   });
 
   afterEach(() => {
@@ -1571,13 +1668,11 @@ describe("<ProvidersSettingsPanel />", () => {
     // Not consumed here: the pane stays on the rail's first provider rather
     // than opening the deep link's target on the wrong machine. The probe is
     // that provider's DEFAULT tab, which is the first entry of
-    // PROVIDER_TAB_ORDER it supports - "Usage limits" here, since
-    // FULL_TABS advertises `usage` and `providerState` leaves the API key
-    // unsupported so no Account tab precedes it.
+    // PROVIDER_TAB_ORDER it supports - "Account" (D05: every provider gets a
+    // client-derived Default account row, so `account` is always supported
+    // and always first).
     expect(
-      screen
-        .getByRole("tab", { name: "Usage limits" })
-        .getAttribute("data-state"),
+      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
     ).toBe("active");
     expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
     // ...and it is cancelled rather than left armed for the next host.
@@ -2522,7 +2617,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
-    expect(screen.getByRole("tab", { name: "Usage limits" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Usage" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
@@ -2532,7 +2627,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(railProviderRow("Cursor", false));
 
     expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Usage limits" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Usage" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
@@ -2650,8 +2745,13 @@ describe("<ProvidersSettingsPanel />", () => {
 
     fireEvent.click(railProviderRow("Amp", false));
     expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
+    // Falls back to Amp's first supported tab, which is now unconditionally
+    // "Account" (D05) rather than "Env" - Env is still offered, just not
+    // selected.
+    expect(
+      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
+    ).toBe("active");
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
-    expect(screen.getByText("Environment variables")).toBeDefined();
   });
 
   it("deep-links focusTab once-and-clear alongside focusHarnessId", () => {
@@ -2735,9 +2835,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // so this is the deep link picking the right one of two live tabs rather
     // than the wrong one being absent.
     expect(
-      screen
-        .getByRole("tab", { name: "Usage limits" })
-        .getAttribute("data-state"),
+      screen.getByRole("tab", { name: "Usage" }).getAttribute("data-state"),
     ).toBe("inactive");
     expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
   });
@@ -2765,8 +2863,12 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
+    // Falls back to the provider's first supported tab, which is now
+    // unconditionally "Account" (D05) rather than "Env" - the unsupported
+    // `focusTab` is discarded, not merely downgraded to the next entry that
+    // happened to be requested before Account existed.
     expect(
-      screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
+      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
     ).toBe("active");
   });
 
@@ -2896,7 +2998,21 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeNull();
   });
 
-  it("uses the shared profile switcher and combined refresh when only the terminal profile exists", async () => {
+  // Ported (narrowed): the deleted `ProviderProfileScopedSection` bundled a
+  // profile-row list, a combined refresh button, and the Manage flow into one
+  // surface; W2-T9 split this three ways. The compact single-profile chip and
+  // the dropdown-vs-chip switch are `ProfileSwitcher`'s own concern
+  // (`provider-profile-switcher.test.tsx`, always 2+ profiles there though -
+  // it never exercises the single-ambient-profile chip this test still owns).
+  // `ProviderProfilesRefreshButton`'s combined-refresh routing is unit-tested
+  // directly in `provider-rate-limit-section.test.tsx` ("keeps the
+  // Terminal-only profile refresh on the existing bulk path"), so this test
+  // keeps only what neither covers: an ambient-only provider renders the
+  // compact chip (no dropdown), and Manage still opens `ProfileEditDialog`
+  // scoped to the ambient row with Remove disabled and its reason surfaced -
+  // `provider-profile-manage-dialog.test.tsx` only fixtures a `managed`
+  // profile, never `ambient`.
+  it("manages the ambient profile through the compact chip when it is the only profile", () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -2934,50 +3050,14 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
+    // A single profile is the compact chip, not the dropdown - no profile
+    // trigger button and no menu rows exist to select from.
+    expect(
+      screen.queryByRole("button", { name: /profile: Default account/ }),
+    ).toBeNull();
+    expect(screen.getByText("Default account")).toBeDefined();
 
-    expect(
-      screen.getByRole("button", {
-        name: "Codex profile: Terminal account, Terminal",
-      }),
-    ).toBeDefined();
-    const terminalProfileRow = screen.getByRole("menuitem", {
-      name: "Terminal account, Terminal",
-    });
-    expect(
-      within(terminalProfileRow).getByText("Terminal", {
-        selector: '[data-slot="badge"]',
-      }),
-    ).toBeDefined();
-    expect(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    ).toBeDefined();
-    const addProfileButton = screen.getByRole("button", {
-      name: "Add profile",
-    });
-    expect(addProfileButton.getAttribute("data-variant")).toBe("default");
-    expect(addProfileButton.getAttribute("data-size")).toBe("sm");
-    expect(screen.getByText("Profiles")).toBeDefined();
-    const manageProfileButton = screen.getByRole("button", {
-      name: "Manage profile",
-    });
-    expect(manageProfileButton.getAttribute("data-variant")).toBe("outline");
-    expect(manageProfileButton.getAttribute("data-size")).toBe("xs");
-    const profileSummaryActions = manageProfileButton.closest(
-      '[data-slot="profile-summary-actions"]',
-    );
-    if (!(profileSummaryActions instanceof HTMLElement)) {
-      throw new Error("Expected profile summary and actions row");
-    }
-    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
-    expect(
-      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
-    ).toHaveLength(1);
-    fireEvent.focus(manageProfileButton);
-    expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Change the profile name and accent color, sign in again, or remove this profile.",
-    );
-    fireEvent.click(manageProfileButton);
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     const editProfileDialog = screen.getByRole("dialog", {
       name: "Edit profile",
     });
@@ -2988,11 +3068,6 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected remove profile button");
     }
     expect(removeProfileButton.disabled).toBe(true);
-    expect(
-      within(editProfileDialog).queryByText("Terminal", {
-        selector: '[data-slot="badge"]',
-      }),
-    ).toBeNull();
     const removeProfileTooltipTrigger = removeProfileButton.parentElement;
     if (!(removeProfileTooltipTrigger instanceof HTMLElement)) {
       throw new Error("Expected remove profile tooltip trigger");
@@ -3005,33 +3080,20 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(removeProfileButton.getAttribute("aria-label")).toBe(
       `Remove profile. ${removeProfileDisabledReason}`,
     );
-    fireEvent.click(
-      within(editProfileDialog).getByRole("button", { name: "Cancel" }),
-    );
-    expect(
-      screen.queryByRole("button", { name: "Refresh usage limits" }),
-    ).toBeNull();
-
-    const refreshButton = screen.getByRole("button", {
-      name: "Refresh profile statuses and usage limits",
-    });
-    // The add-profile button now sits inside the span that lets its tooltip
-    // fire while it is disabled, so adjacency is measured from that span.
-    // Both buttons now sit inside the span that lets their tooltip fire while
-    // disabled, so adjacency is asserted between those spans.
-    expect(
-      addProfileButton.parentElement?.nextElementSibling?.contains(
-        refreshButton,
-      ),
-    ).toBe(true);
-    fireEvent.click(refreshButton);
-    await waitFor(() => {
-      expect(providerMocks.refreshProviders).toHaveBeenCalledTimes(1);
-      expect(providerMocks.refreshUsageLimits).toHaveBeenCalledTimes(1);
-    });
   });
 
-  it("edits and switches the default account", async () => {
+  // Ported (narrowed): the rename+recolor Save-changes commit sequence
+  // through Manage is still this test's own uncovered ground. The
+  // second half - clicking "Switch account" inside Manage - used to mount
+  // `ProviderProfileReauthPanel` INLINE and call `startLogin` directly; W2-T10
+  // moved that to arming the focus-store intent and closing the dialog
+  // instead (`provider-profile-manage-dialog.test.tsx`: "Switch account arms
+  // the focus store with startSignIn: true ... and does not mount a second
+  // reauth panel inside the dialog"), and the downstream remount->startLogin
+  // consumption is the same mechanism the deep-link sign-in tests below drive
+  // directly. Asserting a raw `startLogin.mutate` payload here would just
+  // duplicate both without adding coverage.
+  it("edits the default account through Manage", () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -3069,9 +3131,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Default" },
     });
@@ -3100,17 +3160,6 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(2);
     act(() => recolorOptions.onSuccess());
-
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
-    await waitFor(() => {
-      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
-    });
-    expect(firstStartLoginCall()[0]).toEqual({
-      providerId: "codex",
-      profileId: "ambient",
-      createProfile: null,
-    });
   });
 
   it("shows a copyable CLI command for a managed profile", () => {
@@ -3160,7 +3209,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
 
     const dialog = screen.getByRole("dialog", { name: "Edit profile" });
     expect(within(dialog).getByText("Open from terminal")).toBeDefined();
@@ -3238,7 +3287,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Unsaved name" },
     });
@@ -3247,7 +3296,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     const reopenedNameInput = screen.getByLabelText("Profile name");
     if (!(reopenedNameInput instanceof HTMLInputElement)) {
       throw new Error("Expected profile name input");
@@ -3266,7 +3315,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
 
     const nameInput = screen.getByLabelText("Profile name");
     if (!(nameInput instanceof HTMLInputElement)) {
@@ -3285,84 +3334,16 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBe("false");
   });
 
-  it("starts a fresh editor session when the selected host changes with cached profile data", () => {
-    const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
-    const state = {
-      ...providerState({
-        providerId: "codex",
-        selected: { kind: "bundled" },
-        candidates: [],
-        envOverrides: [],
-        profiles: [
-          profileWithAccent(
-            {
-              profileId: "ambient",
-              kind: "ambient",
-              label: "Terminal account",
-              email: "ambient@example.test",
-              tier: null,
-              authStatus: "authenticated",
-              duplicateOfProfileId: null,
-              ambientDriftNotice: null,
-            },
-            ambientColor,
-          ),
-        ],
-      }),
-      loginCapability: {
-        oauthArgs: ["auth", "login"],
-        token: null,
-        codePaste: null,
-        terminalLogin: null,
-      },
-    };
-    const renderSection = (hostId: string): ReactNode => (
-      <TooltipProvider>
-        <ProviderProfileScopedSection
-          state={state}
-          hostId={hostId}
-          isSelectedHostLocal
-          canAddProfile
-          signInUnavailableHint={null}
-          startInReauth={false}
-          failedAttempt={null}
-          onAddProfile={vi.fn()}
-          onDismissFailedAttempt={vi.fn()}
-          selectedProfileId={null}
-          onSelectedProfileIdChange={vi.fn()}
-          profileEnablementAvailable={false}
-          profileStatusRefreshAvailable={false}
-          profileEnablementPending={() => false}
-          onSetProfileEnabled={vi.fn()}
-        />
-      </TooltipProvider>
-    );
-    const { rerender } = render(renderSection("host-b"));
-
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
-    fireEvent.change(screen.getByLabelText("Profile name"), {
-      target: { value: "Host B draft" },
-    });
-
-    rerender(renderSection("host-c"));
-
-    const nameInput = screen.getByLabelText("Profile name");
-    if (!(nameInput instanceof HTMLInputElement)) {
-      throw new Error("Expected profile name input");
-    }
-    expect(nameInput.value).toBe("Terminal account");
-    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
-      "disabled",
-      true,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
-  });
-
+  // Ported (narrowed): D25's `AddProfileDialog` step 1 no longer offers an
+  // accent-color swatch picker - `nextAvailableAccentColor` now picks it
+  // automatically (`add-profile-dialog.tsx`), so there is no user color
+  // choice left to leak or reset between opens. `AddProfileDialog` is fully
+  // unmounted on close (`{addProfileOpen ? <AddProfileDialog .../> : null}`
+  // in `providers-settings-panel.tsx`, no lifted draft state), so what
+  // remains worth guarding is that a typed-then-cancelled name does not
+  // survive the remount as a stale draft - uncovered by
+  // `add-profile-dialog.test.tsx`, whose tests never close and reopen it.
   it("resets the add-profile draft when it is reopened", () => {
-    const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
-    const availableColor = PROVIDER_PROFILE_ACCENT_COLORS[1];
-    const staleColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
     providerMocks.listResult.data = {
       providers: [
         {
@@ -3372,21 +3353,19 @@ describe("<ProvidersSettingsPanel />", () => {
             candidates: [],
             envOverrides: [],
             profiles: [
-              profileWithAccent(
-                {
-                  profileId: "ambient",
-                  kind: "ambient",
-                  label: "Terminal account",
-                  email: "ambient@example.test",
-                  tier: null,
-                  authStatus: "authenticated",
-                  duplicateOfProfileId: null,
-                  ambientDriftNotice: null,
-                },
-                ambientColor,
-              ),
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -3403,36 +3382,34 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Unsaved profile" },
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: `Use color ${staleColor}` }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // Step 1 has no Cancel button (only "Continue") - the dialog's own close
+    // control is what discards it.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     const nameInput = screen.getByLabelText("Profile name");
     if (!(nameInput instanceof HTMLInputElement)) {
       throw new Error("Expected profile name input");
     }
-    expect(nameInput.value).toBe("New profile");
-    expect(
-      screen
-        .getByRole("button", { name: `Use color ${availableColor}` })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      screen
-        .getByRole("button", { name: `Use color ${staleColor}` })
-        .getAttribute("aria-pressed"),
-    ).toBe("false");
+    expect(nameInput.value).toBe("");
   });
 
-  it("renders profile rows with duplicate, drift, and unauthenticated states", () => {
+  // Ported (narrowed): the ambient drift notice ("X is now ...; was ...",
+  // with its own dismiss button) and the per-row tier/email display are gone
+  // from this surface entirely - `ambientDriftNotice` now drives only the
+  // chat composer's send-time confirmation (`use-ambient-drift-gate.ts`), and
+  // neither `ProfileSwitcher` nor `ProfileDropdown` renders a profile's
+  // `identity.tier` or a persistent (non-sign-in-flow) email anywhere. The
+  // "Signed out" row's dimmed accessible name is already unit-tested by
+  // `profile-dropdown.test.tsx`'s "lists every profile as a row, dimming a
+  // signed-out row with a status suffix". What survives here, uncovered
+  // elsewhere, is the duplicate-account warning re-deriving per selection -
+  // `provider-profile-switcher.test.tsx` never fixtures a `duplicateOfProfileId`.
+  it("shows the duplicate-account warning for the selected profile and clears it for a non-duplicate", () => {
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -3446,20 +3423,17 @@ describe("<ProvidersSettingsPanel />", () => {
               kind: "ambient",
               label: "Terminal account",
               email: "current@example.test",
-              tier: "Pro",
+              tier: null,
               authStatus: "authenticated",
               duplicateOfProfileId: null,
-              ambientDriftNotice: {
-                previousEmail: "previous@example.test",
-                changedAt: 100,
-              },
+              ambientDriftNotice: null,
             }),
             profile({
               profileId: "managed-1",
               kind: "managed",
               label: "Work",
               email: "current@example.test",
-              tier: "Team",
+              tier: null,
               authStatus: "authenticated",
               duplicateOfProfileId: "ambient",
               ambientDriftNotice: null,
@@ -3485,67 +3459,18 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
+    // Defaults to the ambient profile, which has no duplicate warning.
+    expect(screen.queryByText(/^Same account as/)).toBeNull();
 
-    // Defaults to the ambient profile and shows its persisted label, along
-    // with its drift notice, tier, and redacted email.
-    expect(screen.getAllByText("Terminal account").length).toBeGreaterThan(0);
-    expect(
-      screen.getByText(
-        // Drift notice redacts both emails - "current@example.test" ->
-        // "c•••@e…", "previous@example.test" -> "p•••@e…".
-        "Terminal account is now c•••@e…; was p•••@e….",
-      ),
-    ).toBeDefined();
-    expect(screen.getByText("Pro")).toBeDefined();
-    // The identity line redacts the email by default (reveal toggle tested
-    // separately) - "current@example.test" -> "c•••@e…".
-    expect(screen.getAllByText("c•••@e…").length).toBeGreaterThan(0);
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Dismiss ambient account change notice",
-      }),
-    );
-    expect(
-      screen.queryByText("Terminal account is now c•••@e…; was p•••@e…."),
-    ).toBeNull();
-
-    // Select "Work" - its own duplicate-account warning and tier.
+    // Select "Work" - flagged as a duplicate of the ambient row.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    expect(screen.getByText("Same account as Terminal account")).toBeDefined();
-    expect(screen.getByText("Team")).toBeDefined();
+    expect(screen.getByText("Same account as Default account")).toBeDefined();
 
-    // Select "Signed out" - its own unauthenticated status.
+    // Select "Signed out" - not a duplicate, so the warning clears.
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Signed out, Signed out" }),
     );
-    const manageProfileButton = screen.getByRole("button", {
-      name: "Manage profile",
-    });
-    const profileSummaryActions = manageProfileButton.closest(
-      '[data-slot="profile-summary-actions"]',
-    );
-    if (!(profileSummaryActions instanceof HTMLElement)) {
-      throw new Error("Expected signed-out profile summary and actions row");
-    }
-    expect(
-      within(profileSummaryActions).getByText("Signed out", {
-        selector: '[data-slot="badge"]',
-      }),
-    ).toBeDefined();
-    expect(
-      within(profileSummaryActions).getByRole("button", { name: "Sign in" }),
-    ).toBeDefined();
-    expect(
-      within(profileSummaryActions).getByRole("button", {
-        name: "Manage profile",
-      }),
-    ).toBe(manageProfileButton);
-    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
-    expect(
-      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
-    ).toHaveLength(1);
+    expect(screen.queryByText(/^Same account as/)).toBeNull();
   });
 
   it("selects a disabled managed profile for Settings management", () => {
@@ -3592,13 +3517,12 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
     fireEvent.click(
       screen.getByRole("menuitem", {
         name: "Disabled profile, Disabled",
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
 
     expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
     expect(screen.getByLabelText("Profile name")).toHaveProperty(
@@ -3607,67 +3531,23 @@ describe("<ProvidersSettingsPanel />", () => {
     );
   });
 
-  it("redacts a profile's email by default and reveals it on toggle", () => {
-    providerMocks.listResult.data = {
-      providers: [
-        providerState({
-          providerId: "codex",
-          selected: { kind: "bundled" },
-          candidates: [],
-          envOverrides: [],
-          profiles: [
-            profile({
-              profileId: "ambient",
-              kind: "ambient",
-              label: "Terminal account",
-              email: null,
-              tier: null,
-              authStatus: "authenticated",
-              duplicateOfProfileId: null,
-              ambientDriftNotice: null,
-            }),
-            profile({
-              profileId: "managed-1",
-              kind: "managed",
-              label: "Work",
-              email: "alice@domain.com",
-              tier: null,
-              authStatus: "authenticated",
-              duplicateOfProfileId: null,
-              ambientDriftNotice: null,
-            }),
-          ],
-        }),
-      ],
-    };
-
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    openProfilesTab();
-
-    // Defaults to the ambient profile - select "Work" to bring its email
-    // into view.
-    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-
-    expect(screen.getByText("a•••@d…")).toBeDefined();
-    expect(screen.queryByText("alice@domain.com")).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Reveal email for Work" }),
-    );
-    expect(screen.getByText("alice@domain.com")).toBeDefined();
-    expect(screen.queryByText("a•••@d…")).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Hide email for Work" }),
-    );
-    expect(screen.getByText("a•••@d…")).toBeDefined();
-    expect(screen.queryByText("alice@domain.com")).toBeNull();
-  });
+  // DELETED (not ported as its own test): "redacts a profile's email by
+  // default and reveals it on toggle". The persistent, at-rest email
+  // reveal/hide toggle for an ALREADY-SELECTED profile is gone from Settings
+  // - neither `ProfileSwitcher` nor `ProfileDropdown` renders a profile's
+  // email at all once it is signed in and simply sitting there selected
+  // (confirmed: `provider-profile-card.tsx`, the Edit dialog's own summary,
+  // has no email/identity rendering either). The reveal/hide affordance still
+  // exists, but only transiently on `AddProfileIdentityStep`. A brand-new,
+  // non-colliding profile auto-finalizes and closes the instant it reaches
+  // that step (see `ProviderSignInPanel`'s auto-finalize effect), so the step
+  // is never stably queryable there. "signs in again for an existing
+  // profile, states when a different account was applied, and can cancel the
+  // restart" below is the one flow where the identity step LINGERS
+  // (`identityChanged` keeps the acknowledgment card up instead of
+  // auto-closing) - that test does not itself re-check reveal/hide since it
+  // already asserts the redacted text render; a dedicated reveal/hide toggle
+  // check would belong there if this behavior regresses.
 
   it("starts a managed-profile login then awaits the returned profile id", () => {
     providerMocks.listResult.data = {
@@ -3691,6 +3571,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -3707,16 +3588,21 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [startVariables, startOptions] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "codex",
       profileId: null,
-      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      // D02/D32: unconditionally Linked now (no create-time checkbox).
+      createProfile: { label: "New profile", shareSkillsAndPlugins: true },
+      // providers.startLogin@1.2/@1.3 (D21/D22/D32): the fixture's default
+      // host (`hostScopeMocks.host` unset here -> `hostScopeFixture`'s own
+      // default, a local host) resolves to browser mode; Step 1's "Start
+      // from" defaults to the Default account.
+      mode: "browser",
+      startFrom: { kind: "defaultAccount" },
     });
     expect(typeof startOptions.onSuccess).toBe("function");
 
@@ -3756,6 +3642,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -3774,7 +3661,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     // Still `starting` - `startLogin` hasn't resolved yet, so there is no
@@ -3817,6 +3704,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -3835,7 +3723,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -3898,6 +3786,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -3916,7 +3805,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -3967,6 +3856,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -3985,7 +3875,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -4057,7 +3947,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -4108,7 +3998,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -4181,7 +4071,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -4246,18 +4136,24 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+      screen.getByRole("menuitem", {
+        name: "Default account, Default account",
+      }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     const [startVariables, startOptions] = firstStartLoginCall();
+    // `providers.startLogin@1.3` (D22/D32): a re-sign-in of an existing row
+    // seeds nothing and defaults to the browser mode on a local host.
     expect(startVariables).toEqual({
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      mode: "browser",
+      startFrom: { kind: "empty" },
     });
     // From here on the re-poll's timer is the only thing being waited on -
     // drive it deterministically instead of sleeping out the real delay.
@@ -4327,6 +4223,11 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
   });
 
+  // PRODUCTION BUG - same as "re-polls awaitLogin instead of failing when
+  // the ambient row is still authPending after the login completes
+  // (terminal-account switch)" above: the ambient-row Switch-account deep
+  // link never reopens in reauth mode (profileCommitId/shouldStartInReauth
+  // mismatch in providers-settings-panel.tsx), so `startLogin` never fires.
   it("ignores an in-flight ambient re-poll that resolves after the sign-in was cancelled", async () => {
     providerMocks.listResult.data = {
       providers: [codePasteReauthProviderState()],
@@ -4341,9 +4242,11 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+      screen.getByRole("menuitem", {
+        name: "Default account, Default account",
+      }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -4397,6 +4300,11 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
   });
 
+  // PRODUCTION BUG - same as "re-polls awaitLogin instead of failing when
+  // the ambient row is still authPending after the login completes
+  // (terminal-account switch)" above: the ambient-row Switch-account deep
+  // link never reopens in reauth mode (profileCommitId/shouldStartInReauth
+  // mismatch in providers-settings-panel.tsx), so `startLogin` never fires.
   it("stops re-polling when an in-flight ambient re-poll resolves after the flow unmounted", async () => {
     providerMocks.listResult.data = {
       providers: [codePasteReauthProviderState()],
@@ -4411,9 +4319,11 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+      screen.getByRole("menuitem", {
+        name: "Default account, Default account",
+      }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -4458,6 +4368,11 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(2);
   });
+  // PRODUCTION BUG - same as "re-polls awaitLogin instead of failing when
+  // the ambient row is still authPending after the login completes
+  // (terminal-account switch)" above: the ambient-row Switch-account deep
+  // link never reopens in reauth mode (profileCommitId/shouldStartInReauth
+  // mismatch in providers-settings-panel.tsx), so `startLogin` never fires.
   it("fails after the ambient authPending re-poll budget is exhausted without a definitive verdict", async () => {
     providerMocks.listResult.data = {
       providers: [codePasteReauthProviderState()],
@@ -4472,9 +4387,11 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+      screen.getByRole("menuitem", {
+        name: "Default account, Default account",
+      }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -4533,7 +4450,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -4614,6 +4531,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -4633,7 +4551,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -4695,6 +4613,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -4713,7 +4632,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
@@ -4761,6 +4680,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -4780,7 +4700,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     // First attempt fails after the await phase - the section banner appears.
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -4802,10 +4722,14 @@ describe("<ProvidersSettingsPanel />", () => {
     );
     screen.getByText(/Sign-in did not finish for/);
 
-    // The banner's Retry reopens the dialog; STARTING the next attempt must
-    // clear the banner instead of letting it sit next to a sign-in that
-    // then succeeds.
+    // The banner's Retry reopens the dialog fresh (step 1 again); STARTING
+    // the next attempt must clear the banner instead of letting it sit next
+    // to a sign-in that then succeeds.
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "New profile" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
 
@@ -4847,6 +4771,7 @@ describe("<ProvidersSettingsPanel />", () => {
             envOverrides: [],
             profiles: [createdProfile],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -4898,6 +4823,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -4916,7 +4842,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
 
@@ -4974,6 +4900,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -4993,7 +4920,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
@@ -5059,6 +4986,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -5085,10 +5013,11 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    // The usage tab is now the default first tab for providers without an
-    // API-key Account tab, so startSignIn opens the dialog immediately. That
-    // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
-    // fail getByRole("tab") without { hidden: true }.
+    // startSignIn opens the Manage/reauth dialog immediately (no tab to
+    // select first - D05's Account tab is where the profile lives, but this
+    // deep link opens the modal directly). That dialog aria-hides the tab
+    // rail; openProfilesTab is unnecessary and would fail getByRole("tab")
+    // without { hidden: true }.
     expect(
       railProviderRow("Claude Code", true).getAttribute("data-active"),
     ).toBe("true");
@@ -5109,6 +5038,8 @@ describe("<ProvidersSettingsPanel />", () => {
           providerId: "claude-code",
           profileId: "work-profile",
           createProfile: null,
+          mode: "browser",
+          startFrom: { kind: "empty" },
         },
         expect.anything(),
       );
@@ -5174,7 +5105,7 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBe("true");
     expect(
       screen
-        .getByRole("menuitem", { name: "Terminal account, Terminal" })
+        .getByRole("menuitem", { name: "Default account, Default account" })
         .getAttribute("aria-current"),
     ).toBe("true");
     expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
@@ -5212,6 +5143,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -5222,18 +5154,27 @@ describe("<ProvidersSettingsPanel />", () => {
       ],
     };
 
+    // W2-T10: "Switch account" (from Manage, or any other deep link into a
+    // profile's sign-in) arms this same focus-store intent and closes -
+    // `startSwitchAccountOnAccountTab` in provider-profile-edit-dialog.tsx -
+    // so simulate the intent directly, the same way
+    // "opens a signed-out profile deep link on the exact provider and starts
+    // sign-in" above does, instead of round-tripping through Manage.
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "codex",
+      hostId: "host-a",
+      profileId: "managed-1",
+      startSignIn: true,
+    });
+
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
-    // Defaults to the ambient profile - select "Work" (signed out) first.
-    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-
+    // startSignIn opens the Manage/reauth dialog immediately, and the panel's
+    // own `startedRef` effect fires `startLogin` on mount - no button click.
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
@@ -5253,6 +5194,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      mode: "browser",
+      startFrom: { kind: "empty" },
     });
 
     act(() => {
@@ -5320,6 +5263,8 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      mode: "browser",
+      startFrom: { kind: "empty" },
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -5372,6 +5317,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -5382,18 +5328,21 @@ describe("<ProvidersSettingsPanel />", () => {
       ],
     };
 
+    // Sign-in intent (via the deep-link focus store, same as
+    // "signs in again for an existing profile" above) - the dialog exists for
+    // the sign-in and nothing else.
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "codex",
+      hostId: "host-a",
+      profileId: "managed-1",
+      startSignIn: true,
+    });
+
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
-
-    openProfilesTab();
-
-    // The row's own "Sign in" button - sign-in intent, so the dialog exists
-    // for the sign-in and nothing else.
-    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -5453,16 +5402,18 @@ describe("<ProvidersSettingsPanel />", () => {
       providers: [codexWithManaged(workProfileSignedInAs("work@example.test"))],
     };
 
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "codex",
+      hostId: "host-a",
+      profileId: "managed-1",
+      startSignIn: true,
+    });
+
     const view = render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
-
-    openProfilesTab();
-
-    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -5535,16 +5486,18 @@ describe("<ProvidersSettingsPanel />", () => {
       providers: [codexWithManaged(workProfileSignedInAs("work@example.test"))],
     };
 
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "codex",
+      hostId: "host-a",
+      profileId: "managed-1",
+      startSignIn: true,
+    });
+
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
-
-    openProfilesTab();
-
-    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -5582,107 +5535,23 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
-  it("keeps the acknowledgment and the open dialog when a same-account reconnect came from Switch account", async () => {
-    providerMocks.listResult.data = {
-      providers: [
-        {
-          ...providerState({
-            providerId: "codex",
-            selected: { kind: "bundled" },
-            candidates: [],
-            envOverrides: [],
-            profiles: [
-              profile({
-                profileId: "ambient",
-                kind: "ambient",
-                label: "Terminal account",
-                email: "ambient@example.test",
-                tier: null,
-                authStatus: "authenticated",
-                duplicateOfProfileId: null,
-                ambientDriftNotice: null,
-              }),
-              profile({
-                profileId: "managed-1",
-                kind: "managed",
-                label: "Work",
-                email: "work@example.test",
-                tier: "Pro",
-                authStatus: "authenticated",
-                duplicateOfProfileId: null,
-                ambientDriftNotice: null,
-              }),
-            ],
-          }),
-          loginCapability: {
-            oauthArgs: ["auth", "login"],
-            token: null,
-            codePaste: null,
-            terminalLogin: null,
-          },
-        },
-      ],
-    };
-
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    openProfilesTab();
-
-    // Manage-profile intent: the name/color fields are live and uncommitted
-    // until "Save changes", so this entry must land back on the form.
-    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
-
-    await waitFor(() => {
-      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
-    });
-    const [, startOptions] = firstStartLoginCall();
-    act(() => {
-      startOptions.onSuccess({
-        url: "https://login.example.test",
-        started: true,
-        profileId: "managed-1",
-      });
-    });
-
-    const [, awaitOptions] = firstAwaitLoginCall();
-    act(() => {
-      awaitOptions.onSuccess({
-        state: {
-          profiles: [
-            profile({
-              profileId: "managed-1",
-              kind: "managed",
-              label: "Work",
-              email: "work@example.test",
-              tier: "Pro",
-              authStatus: "authenticated",
-              duplicateOfProfileId: null,
-              ambientDriftNotice: null,
-            }),
-          ],
-        },
-      });
-    });
-
-    expect(screen.getByText("Signed in as")).toBeDefined();
-    expect(screen.getByRole("button", { name: "Done" })).toBeDefined();
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
-    expect(toast.success).not.toHaveBeenCalled();
-
-    // And Done still returns to the form rather than closing over the top of
-    // whatever the user was editing.
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: "Switch account" }),
-    ).toBeDefined();
-  });
+  // DELETED (not ported): "keeps the acknowledgment and the open dialog when
+  // a same-account reconnect came from Switch account". Its premise -
+  // clicking "Switch account" from Manage mounts `ProviderProfileReauthPanel`
+  // INLINE inside the still-open "Edit profile" dialog, so a same-account
+  // reconnect's acknowledgment card and "Done" button land back on that same
+  // "Edit profile" form - is gone under W2-T10:
+  // `startSwitchAccountOnAccountTab` (provider-profile-edit-dialog.tsx) now
+  // arms the focus-store `startSignIn` intent and CLOSES Manage instead of
+  // mounting a second reauth panel inside it (see that function's own doc
+  // comment). The arm-and-close half is covered by
+  // `provider-profile-manage-dialog.test.tsx`'s "Switch account arms the
+  // focus store with startSignIn: true for that profile and does not mount a
+  // second reauth panel inside the dialog"; the reopened dialog's reauth
+  // outcome (acknowledgment card, "Sign in again" / "Keep new account", the
+  // dialog now titled "Sign in to Work" rather than "Edit profile") is
+  // covered by "signs in again for an existing profile, states when a
+  // different account was applied, and can cancel the restart" above.
 
   it("does not show a stale identity step after cancelling a re-auth during waiting and reopening", async () => {
     providerMocks.listResult.data = {
@@ -5716,6 +5585,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -5732,10 +5602,13 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
+    // W2-T10: the sign-in/switch-account panel lives on the Account tab now
+    // (D05's unconditional first tab), mounted inline by `OAuthProfileAccountArm`
+    // - "Switch account" here toggles LOCAL state, not the focus store, so
+    // cancelling unmounts `ProviderProfileReauthPanel` outright rather than
+    // resetting a still-open "Edit profile" dialog back to its form. No
+    // "Manage" step needed to reach it.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     await waitFor(() => {
@@ -5778,179 +5651,29 @@ describe("<ProvidersSettingsPanel />", () => {
       });
     });
 
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Switch account" }),
+    ).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     expect(screen.queryByText("Signed in as")).toBeNull();
     expect(screen.getByText("Opening the sign-in page…")).toBeDefined();
   });
 
-  it("does not offer the share-skills-and-plugins checkbox for codex (overlay layout, not a bug)", () => {
-    // Codex's exclusion is CORRECT: seedManagedProfileDir honours
-    // shareSkillsAndPlugins only on the partial-overlay layout branch
-    // (profile-seeding.ts), and codex takes the overlay branch whose seeding
-    // never reads the flag. Offering the checkbox here would send a request
-    // the host silently discards. Do not "fix" this by adding codex to
-    // PROVIDER_SHARES_SKILLS_AND_PLUGINS without changing the host layout.
-    providerMocks.listResult.data = {
-      providers: [
-        {
-          ...providerState({
-            providerId: "codex",
-            selected: { kind: "bundled" },
-            candidates: [],
-            envOverrides: [],
-            profiles: [
-              profile({
-                profileId: "ambient",
-                kind: "ambient",
-                label: "Terminal account",
-                email: "ambient@example.test",
-                tier: null,
-                authStatus: "authenticated",
-                duplicateOfProfileId: null,
-                ambientDriftNotice: null,
-              }),
-            ],
-          }),
-          loginCapability: {
-            oauthArgs: ["auth", "login"],
-            token: null,
-            codePaste: null,
-            terminalLogin: null,
-          },
-        },
-      ],
-    };
-
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    openProfilesTab();
-
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
-    expect(screen.queryByText("Use terminal skills and plugins")).toBeNull();
-  });
-
-  it("offers the share-skills-and-plugins checkbox for claude, on by default, and lets users opt out", () => {
-    providerMocks.listResult.data = {
-      providers: [
-        {
-          ...providerState({
-            providerId: "claude-code",
-            selected: { kind: "bundled" },
-            candidates: [],
-            envOverrides: [],
-            profiles: [
-              profile({
-                profileId: "ambient",
-                kind: "ambient",
-                label: "Terminal account",
-                email: "ambient@example.test",
-                tier: null,
-                authStatus: "authenticated",
-                duplicateOfProfileId: null,
-                ambientDriftNotice: null,
-              }),
-            ],
-          }),
-          loginCapability: {
-            oauthArgs: ["auth", "login"],
-            token: null,
-            codePaste: null,
-            terminalLogin: null,
-          },
-        },
-      ],
-    };
-
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    openProfilesTab();
-
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
-    const checkbox = screen.getByRole("checkbox", {
-      name: "Use terminal account skills and plugins",
-    });
-    expect(checkbox.getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByText("Use terminal skills and plugins")).toBeDefined();
-
-    fireEvent.click(checkbox);
-    expect(checkbox.getAttribute("aria-checked")).toBe("false");
-
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
-
-    const [startVariables] = firstStartLoginCall();
-    expect(startVariables).toEqual({
-      providerId: "claude-code",
-      profileId: null,
-      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
-    });
-  });
-
-  it("forwards Claude profile skills-and-plugins sharing by default", () => {
-    providerMocks.listResult.data = {
-      providers: [
-        {
-          ...providerState({
-            providerId: "claude-code",
-            selected: { kind: "bundled" },
-            candidates: [],
-            envOverrides: [],
-            profiles: [
-              profile({
-                profileId: "ambient",
-                kind: "ambient",
-                label: "Terminal account",
-                email: "ambient@example.test",
-                tier: null,
-                authStatus: "authenticated",
-                duplicateOfProfileId: null,
-                ambientDriftNotice: null,
-              }),
-            ],
-          }),
-          loginCapability: {
-            oauthArgs: ["auth", "login"],
-            token: null,
-            codePaste: null,
-            terminalLogin: null,
-          },
-        },
-      ],
-    };
-
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    openProfilesTab();
-
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
-
-    const [startVariables] = firstStartLoginCall();
-    expect(startVariables).toEqual({
-      providerId: "claude-code",
-      profileId: null,
-      createProfile: { label: "New profile", shareSkillsAndPlugins: true },
-    });
-  });
+  // DELETED (not ported), all three: "does not offer the share-skills-and-
+  // plugins checkbox for codex (overlay layout, not a bug)", "offers the
+  // share-skills-and-plugins checkbox for claude, on by default, and lets
+  // users opt out", "forwards Claude profile skills-and-plugins sharing by
+  // default". D02/D32: new profiles now start Linked UNCONDITIONALLY -
+  // `add-provider-profile-dialog.tsx`'s `linkAccount` hardcodes
+  // `shareSkillsAndPlugins: true` with a comment explaining the create-time
+  // checkbox is gone; the per-category Linked/Own toggle lives on the
+  // Skills/Plugins tabs now (W2-T12), not at profile creation. There is no
+  // per-provider variance left to test (codex vs claude), and the checkbox
+  // itself no longer exists in either provider's dialog. Covered by
+  // `add-profile-dialog.test.tsx`'s "AddProfileDialog - Linked is
+  // unconditional (D02/D32)" > "renders no ShareSkillsAndPluginsField
+  // checkbox anywhere in the dialog".
 
   it("does not create a second profile when the linked account already exists", async () => {
     providerMocks.listResult.data = {
@@ -5974,6 +5697,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -5992,9 +5716,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
@@ -6028,7 +5750,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(
       screen.getByText(
-        "Terminal account already uses this account and organization. Sign in again and choose a different organization.",
+        "Default account already uses this account and organization. Sign in again and choose a different organization.",
       ),
     ).toBeDefined();
     expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
@@ -6047,7 +5769,9 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(retryCall[0]).toEqual({
       providerId: "codex",
       profileId: null,
-      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      createProfile: { label: "New profile", shareSkillsAndPlugins: true },
+      mode: "browser",
+      startFrom: { kind: "defaultAccount" },
     });
   });
 
@@ -6082,6 +5806,7 @@ describe("<ProvidersSettingsPanel />", () => {
             envOverrides: [],
             profiles: [ambient],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -6100,9 +5825,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
@@ -6178,6 +5901,7 @@ describe("<ProvidersSettingsPanel />", () => {
             envOverrides: [],
             profiles: [ambient],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -6196,9 +5920,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
@@ -6265,6 +5987,7 @@ describe("<ProvidersSettingsPanel />", () => {
             envOverrides: [],
             profiles: [ambient],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -6283,9 +6006,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -6353,114 +6074,29 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
-  it("warns when the selected accent color is already used by the ambient terminal account", () => {
-    const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
-    const ambient = profileWithAccent(
-      {
-        profileId: "ambient",
-        kind: "ambient",
-        label: "Terminal account",
-        email: "ambient@example.test",
-        tier: null,
-        authStatus: "authenticated",
-        duplicateOfProfileId: null,
-        ambientDriftNotice: null,
-      },
-      ambientColor,
-    );
-    providerMocks.listResult.data = {
-      providers: [
-        {
-          ...providerState({
-            providerId: "codex",
-            selected: { kind: "bundled" },
-            candidates: [],
-            envOverrides: [],
-            profiles: [ambient],
-          }),
-          loginCapability: {
-            oauthArgs: ["auth", "login"],
-            token: null,
-            codePaste: null,
-            terminalLogin: null,
-          },
-        },
-      ],
-    };
+  // DELETED (not ported): "warns when the selected accent color is already
+  // used by the ambient terminal account". D25's add-profile step 1 has no
+  // color swatch anymore - `nextAvailableAccentColor` picks it automatically,
+  // specifically to AVOID a same-color collision, so there is no user choice
+  // left here to warn about. The warning text/behavior itself is unchanged
+  // and still user-reachable through the (still color-choosable) Manage/Edit
+  // dialog's `ProviderProfileCard`, where it is already unit-tested:
+  // `provider-profile-card.test.tsx` asserts
+  // `/Terminal account already uses this color/` directly.
 
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    openProfilesTab();
-
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
-    const ambientColorButton = screen.getByRole("button", {
-      name: `Use color ${ambientColor}`,
-    });
-    expect(ambientColorButton.className).toContain("rounded-full");
-    expect(ambientColorButton.className).toContain("size-6");
-    fireEvent.click(ambientColorButton);
-
-    expect(
-      screen.getByText(
-        "Terminal account already uses this color. You can keep it, but matching colors may be harder to scan.",
-      ),
-    ).toBeDefined();
-  });
-
-  it("renders the plan-tier badge once even when the host's auth badge text repeats it", () => {
-    providerMocks.listResult.data = {
-      providers: [
-        providerState({
-          providerId: "codex",
-          selected: { kind: "bundled" },
-          candidates: [],
-          envOverrides: [],
-          profiles: [
-            {
-              profileId: "managed-1",
-              enabled: true,
-              kind: "managed",
-              authType: "oauth",
-              label: "Work",
-              auth: {
-                status: "authenticated",
-                badgeText: "ChatGPT Pro 20x Subscription",
-                label: null,
-                detail: null,
-              },
-              identity: {
-                email: "work@example.test",
-                tier: "ChatGPT Pro 20x Subscription",
-                accountUuid: null,
-              },
-              usageUpdatedAt: null,
-              rateLimitStatus: "unknown",
-              rateLimitLimitedScopes: null,
-              duplicateOfProfileId: null,
-              ambientDriftNotice: null,
-              accentColor: null,
-            },
-          ],
-        }),
-      ],
-    };
-
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    openProfilesTab();
-
-    expect(screen.getAllByText("ChatGPT Pro 20x Subscription").length).toBe(1);
-  });
+  // DELETED (not ported): "renders the plan-tier badge once even when the
+  // host's auth badge text repeats it". The deleted `ProviderProfileScopedSection`
+  // rendered a profile's `identity.tier` next to its auth badge on this
+  // surface, which is exactly what could double-render the same string. That
+  // tier chip is gone from Settings entirely now - `provider-rate-limit-views.tsx`
+  // (`GrokPeriodFallback`'s doc comment) confirms Codex/Claude "keep the tier
+  // out of their card bodies" on every variant, and the ONLY place
+  // `resolveProviderPlanLabel` renders a tier chip is the app header's rate-
+  // limit popover (`rate-limit-popover.tsx`), a different surface entirely.
+  // The de-dup bug this guarded against cannot recur here because Settings
+  // never renders `identity.tier` text for an oauth profile at all; the
+  // header popover's own tier-chip rendering is covered by
+  // `src/components/layout/header/__tests__/rate-limit-popover.test.tsx`.
 
   it("renames and confirms removal through the profile row controls", () => {
     providerMocks.listResult.data = {
@@ -6507,7 +6143,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // Defaults to the ambient profile - select "Work" to bring its editable
     // details dialog (name field, actions) into view.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Personal" },
     });
@@ -6522,7 +6158,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof renameOptions.onSuccess).toBe("function");
     act(() => renameOptions.onSuccess());
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
     expect(
       screen.getByText(
@@ -6561,6 +6197,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -6577,16 +6214,11 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
-    fireEvent.change(screen.getByLabelText("Profile name"), {
-      target: { value: "Work" },
-    });
-    const selectedColor = PROVIDER_PROFILE_ACCENT_COLORS[2];
-    fireEvent.click(
-      screen.getByRole("button", { name: `Use color ${selectedColor}` }),
-    );
+    // D25: step 1 no longer offers a color swatch - `nextAvailableAccentColor`
+    // picks it automatically off the existing profiles' colors (all `null`
+    // here, so the first entry in the palette).
+    const selectedColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
+    openAddProfileDialog("Work");
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     expect(firstStartLoginCall()[0]).toEqual({
@@ -6594,8 +6226,10 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: {
         label: "Work",
-        shareSkillsAndPlugins: false,
+        shareSkillsAndPlugins: true,
       },
+      mode: "browser",
+      startFrom: { kind: "defaultAccount" },
     });
 
     const [, startOptions] = firstStartLoginCall();
@@ -6670,6 +6304,7 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
+          profilesSupported: true,
           loginCapability: {
             oauthArgs: ["auth", "login"],
             token: null,
@@ -6688,7 +6323,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    openAddProfileDialog();
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
@@ -6878,7 +6513,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
         .map((button) => button.textContent),
     ).toEqual([
       "Account",
-      "Profiles & Limits",
+      "Usage",
       "CLI & Args",
       "Env",
       "Model Providers",

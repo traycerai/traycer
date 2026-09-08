@@ -27,11 +27,12 @@ vi.mock("@/hooks/providers/use-acknowledge-ambient-drift-mutation", () => ({
 }));
 
 import { useAmbientDriftGate } from "../use-ambient-drift-gate";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function ambientProfile(
   driftNotice: ProviderProfile["ambientDriftNotice"],
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -54,7 +55,7 @@ function ambientProfile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: driftNotice,
-  };
+  });
 }
 
 function claudeState(profiles: ProviderProfile[]): ProviderCliState {

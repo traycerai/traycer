@@ -265,11 +265,27 @@ export function useComposerToolbarStore(
       setPermission: actions.setPermission,
       // The command palette has no rail/profile context of its own - default
       // the independent profile choice to ambient while restoring the
-      // provider's last-used model/effort/tier.
+      // provider's last-used model/effort/tier. No profile data is in scope
+      // here to seed a D09 `defaultModel` either, so this path keeps today's
+      // "" no-carry behavior when the ambient (harness, profile) pair has
+      // never been used; the picker's own commits (which do have profile
+      // data) seed it.
       switchHarness: (harnessId: ProviderId) =>
-        commitSelection(store, harnessId, null, null),
+        commitSelection({
+          store,
+          harnessId,
+          modelSlug: null,
+          profileId: null,
+          defaultModel: null,
+        }),
       selectModel: (harnessId: ProviderId, modelSlug: string) =>
-        commitSelection(store, harnessId, modelSlug, null),
+        commitSelection({
+          store,
+          harnessId,
+          modelSlug,
+          profileId: null,
+          defaultModel: null,
+        }),
     };
   }, [store]);
   // The palette's composer subpages list the catalog of the SAME host this

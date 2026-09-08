@@ -121,19 +121,21 @@ import {
   agentListProviderProfilesDowngradeV40ToV10,
   agentListProviderProfilesDowngradeV40ToV20,
   agentListProviderProfilesDowngradeV40ToV30,
-  agentListProviderProfilesDowngradeV50ToV10,
-  agentListProviderProfilesDowngradeV50ToV20,
-  agentListProviderProfilesDowngradeV50ToV30,
-  agentListProviderProfilesDowngradeV50ToV40,
+  agentListProviderProfilesDowngradeV51ToV10,
+  agentListProviderProfilesDowngradeV51ToV20,
+  agentListProviderProfilesDowngradeV51ToV30,
+  agentListProviderProfilesDowngradeV51ToV40,
   agentListProviderProfilesV10,
   agentListProviderProfilesV20,
   agentListProviderProfilesV30,
   agentListProviderProfilesV40,
   agentListProviderProfilesV50,
+  agentListProviderProfilesV51,
   agentListProviderProfilesUpgradeV10ToV20,
   agentListProviderProfilesUpgradeV20ToV30,
   agentListProviderProfilesUpgradeV30ToV40,
   agentListProviderProfilesUpgradeV40ToV50,
+  agentListProviderProfilesUpgradeV50ToV51,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxAckV10,
@@ -323,7 +325,12 @@ import {
   chatLocateRowV10,
   chatReadAccumulatedFileChangeV10,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
+import {
+  hostUsageSummaryV10,
+  hostUsageSummaryV20,
+  hostUsageSummaryUpgradeV10ToV20,
+  hostUsageSummaryDowngradeV20ToV10,
+} from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
@@ -484,16 +491,18 @@ import {
   terminalCreateUpgradeV10ToV20,
   terminalCreateUpgradeV20ToV21,
   terminalKillV10,
-  terminalListDowngradeV23ToV10,
+  terminalListDowngradeV24ToV10,
   terminalListV10,
   terminalListV20,
   terminalListV21,
   terminalListV22,
   terminalListV23,
+  terminalListV24,
   terminalListUpgradeV10ToV20,
   terminalListUpgradeV20ToV21,
   terminalListUpgradeV21ToV22,
   terminalListUpgradeV22ToV23,
+  terminalListUpgradeV23ToV24,
   terminalReadOutputV10,
   terminalRenameV10,
   terminalSubscribeV10,
@@ -503,6 +512,7 @@ import {
   terminalSubscribeV14,
   terminalSubscribeV15,
   terminalSubscribeV16,
+  terminalSubscribeV17,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   browserSavedLoginSitesV10,
@@ -728,15 +738,20 @@ import {
   providersAwaitLoginResponseSchemaV20,
   providersCancelLoginRequestSchemaV10,
   providersAwaitMcpAuthRequestSchema,
+  providersAwaitMcpAuthRequestSchemaV10,
   providersAwaitMcpAuthResponseSchema,
   providersCancelLoginRequestSchemaV11,
   providersCancelLoginResponseSchema,
   providersCancelMcpAuthRequestSchema,
+  providersCancelMcpAuthRequestSchemaV10,
   providersCancelMcpAuthResponseSchema,
   providersMcpAuthRequestSchema,
+  providersMcpAuthRequestSchemaV10,
   providersMcpAuthResponseSchema,
   providersNativeMutateRequestSchema,
+  providersNativeMutateRequestSchemaV10,
   providersNativeMutateResponseSchema,
+  providersNativeMutateResponseSchemaV10,
   providersCancelLoginResponseSchemaV10,
   providersClearApiKeyRequestSchema,
   providersClearApiKeyRequestSchemaV10,
@@ -752,22 +767,27 @@ import {
   providersDetectVersionResponseSchema,
   providersStartLoginRequestSchemaV10,
   providersStartLoginRequestSchemaV11,
+  providersStartLoginRequestSchemaV12,
+  providersStartLoginRequestSchemaV13,
   providersStartLoginResponseSchemaV10,
   providersStartLoginResponseSchemaV11,
+  providersStartLoginResponseSchemaV12,
   providersSubmitLoginCodeRequestSchema,
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
   providersTouchLoginResponseSchema,
   providersStartTerminalLoginRequestSchema,
   providersStartTerminalLoginRequestSchemaV20,
+  providersStartTerminalLoginRequestSchemaV30,
   providersStartTerminalLoginResponseSchema,
+  providersStartTerminalLoginResponseSchemaV30,
   providersEnsurePackRequestSchema,
   providersEnsurePackResponseSchema,
-  // The canonical schemas currently back no contract here (W1-T9 froze v7.0
-  // and v8.0, the two lines that used to bind them); the next major to open
-  // publishes them - not imported below since nothing in this file still
-  // references them by value. Every released line below names a frozen
-  // shape.
+  // The canonical schemas backed no contract here for a while (W1-T9 froze
+  // v7.0 and v8.0, the two lines that used to bind them); `providers.list@9.0`
+  // is the next major to open and it publishes them below.
+  providersListRequestSchema,
+  providersListResponseSchema,
   providersListRequestSchemaBeforeV70,
   providersListRequestSchemaV70,
   providersListRequestSchemaV80,
@@ -796,6 +816,8 @@ import {
   downgradeProviderCliStateListToV50,
   downgradeProviderCliStateListToV60,
   downgradeProviderCliStateListToV70,
+  downgradeProviderCliStateListToV80,
+  oauthProviderProfilesOnly,
   providersInstallPackVersionRequestSchema,
   providersInstallPackVersionResponseSchema,
   providersRemovePackVersionRequestSchema,
@@ -850,6 +872,27 @@ import {
   type ProviderLoginCapabilityV10,
   type ProviderLoginCapabilityV40,
 } from "@traycer/protocol/host/provider-schemas";
+import {
+  upgradeNativeListResultFromV80,
+  upgradeNativeMutationResultFromV10,
+} from "@traycer/protocol/host/provider-native-schemas";
+import {
+  providersGetProfileConfigRequestSchema,
+  providersGetProfileConfigResponseSchema,
+  providersSetProfileConfigRequestSchema,
+  providersSetProfileConfigResponseSchema,
+  providersSetProfileOwnershipRequestSchema,
+  providersSetProfileOwnershipResponseSchema,
+  providersCreateApiKeyProfileRequestSchema,
+  providersCreateApiKeyProfileResponseSchema,
+  providersTestProfileConnectionRequestSchema,
+  providersTestProfileConnectionResponseSchema,
+  providersCopySettingsRequestSchema,
+  providersPreviewCopySettingsResponseSchema,
+  providersApplyCopySettingsResponseSchema,
+  providersResolveLaunchEnvRequestSchema,
+  providersResolveLaunchEnvResponseSchema,
+} from "@traycer/protocol/host/provider-profile-config-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
 export { hostGetRateLimitUsageV10 };
@@ -1964,6 +2007,62 @@ export const providersListUpgradeV70ToV80 = defineUpgradePath<
   }),
 });
 
+/**
+ * D21: `providers.list@9.0` - the row gains `authType:"apiKey"`, an
+ * `endpoint` summary, a `config` summary, and the state gains
+ * `profilesSupported`. Binds the LIVE `providersListRequestSchema` /
+ * `providersListResponseSchema`: v7.0 and v8.0 are hand-frozen (W1-T9) and
+ * bind their own copies, so this is the only line the live shapes back, and
+ * the next growth opens a new major here rather than widening this one in
+ * place.
+ */
+export const providersListV90 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 9, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV80ToV90 = defineUpgradePath<
+  typeof providersListV80,
+  typeof providersListV90
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 9, minor: 0 },
+  // A v8.0 caller's native query predates per-profile scoping: the default
+  // account is the honest projection (D05).
+  upgradeRequest: (request) => ({
+    ...request,
+    native:
+      request.native === null ? null : { ...request.native, profileId: null },
+  }),
+  // A v8.0 host never had API-key profiles, endpoints, ownership or the
+  // support flag - the same "old host never had this feature" fill every
+  // upgrade in this file applies.
+  //
+  // `native` is filled too, and it has to be: `providersListV80`'s response
+  // binds the FROZEN `nativeListResultSchemaV80`, whose skill rows have no
+  // `ownership` / `writable`, while v9.0 binds the live shape where both are
+  // REQUIRED (W2-T12b). `upgradeResponseToVersion` chains these callbacks by
+  // cast with no re-parse, so passing `response.native` through would hand a
+  // 9.0 client `writable: undefined` behind a type that says `boolean`.
+  // `upgradeNativeListResultFromV80` carries the honest reading of what an
+  // 8.0 host meant - see its own comment.
+  upgradeResponse: (response) => ({
+    ...response,
+    native: upgradeNativeListResultFromV80(response.native),
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      profilesSupported: false,
+      profiles: provider.profiles.map((profile) => ({
+        ...profile,
+        endpoint: null,
+        config: null,
+      })),
+    })),
+  }),
+});
+
 export const providersListUpgradeV5ToV6 = defineUpgradePath<
   typeof providersListV50,
   typeof providersListV60
@@ -2301,9 +2400,21 @@ export const providersListDowngradeV7ToV1 = defineDowngradePath<
   }),
 });
 
-function enabledProviderProfilesOnly(
-  providers: readonly ProviderCliState[],
-): ProviderCliState[] {
+/**
+ * Drops disabled profile rows and changes nothing else.
+ *
+ * Generic over the row type rather than pinned to the live `ProviderCliState`:
+ * W1-T9 froze `providers.list@8.0`, so the six `providersListDowngradeV8ToV*`
+ * bridges below carry `ProviderCliStateV80` rows while the eight
+ * `providersListDowngradeV9ToV*` bridges carry live ones, and this filter
+ * reads nothing either shape disagrees about - only `profiles[].enabled`,
+ * which `isProfileEnabled` already treats as optional. A second, V80-typed
+ * copy would be one more thing to keep in step for no gain.
+ */
+function enabledProviderProfilesOnly<
+  TProfile extends { readonly enabled?: boolean },
+  TProvider extends { readonly profiles: readonly TProfile[] },
+>(providers: readonly TProvider[]): TProvider[] {
   return providers.map((provider) => ({
     ...provider,
     profiles: provider.profiles.filter(isProfileEnabled),
@@ -2452,6 +2563,203 @@ export const providersListDowngradeV8ToV1 = defineDowngradePath<
           return downgraded === null ? [] : [downgraded];
         },
       ),
+    }),
+  }),
+});
+
+// ── D21/M12: eight downgrade bridges off `providers.list@9.0` ──────────────
+//
+// Every bridge strips `authType:"apiKey"` rows FIRST via
+// `oauthProviderProfilesOnly`, before any reparse - the frozen row shapes
+// below (v8.0 down to v1.0) all embed `providerProfileAuthTypeSchema` /
+// `providerProfileAuthTypeSchemaV90`... only 9.0 accepts `apiKey`, so an
+// unstripped apiKey row would fail that row's own parse and the array-level
+// `.catch([])` on `profiles` would silently wipe the WHOLE provider's profile
+// list for an already-shipped client (critique M12) - not just the one row
+// that doesn't fit.
+export const providersListDowngradeV9ToV8 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV80
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 8, minor: 0 },
+  // Re-parsed through the frozen `providersListRequestSchemaV80` target: its
+  // native arm is `nativeListQuerySchemaV80`, which does not model
+  // `profileId`, so the reparse drops it - a v8.0 caller never asked to scope
+  // a native query to a managed profile.
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaV80.parse(request),
+  }),
+  // W2-T12b: `response.native` (a live skill/plugin/MCP result) is reparsed
+  // through the frozen `providersListResponseSchemaV80`, whose `native` field
+  // is `nativeListResultSchemaV80` - that reparse is what drops a skill row's
+  // `ownership` / `writable` (v9.0-only) for a v8.0 caller, the same way an
+  // unrecognized key on any other frozen leaf here is dropped, not an
+  // explicit field-by-field strip.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV80.parse({
+      ...response,
+      providers: downgradeProviderCliStateListToV80(
+        oauthProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV7 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV70
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 7, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaV70.parse(request),
+  }),
+  // W2-T12b: same stripping mechanism as the v9->v8 bridge above, via
+  // `providersListResponseSchemaV70`'s `native: nativeListResultSchemaV80`.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV70.parse({
+      ...response,
+      providers: downgradeProviderCliStateListToV70(
+        oauthProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV6 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV60
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV60.parse({
+      providers: downgradeProviderCliStateListToV60(
+        enabledProviderProfilesOnly(
+          oauthProviderProfilesOnly(response.providers),
+        ),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV5 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV50
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV50.parse({
+      providers: downgradeProviderCliStateListToV50(
+        enabledProviderProfilesOnly(
+          oauthProviderProfilesOnly(response.providers),
+        ),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV4 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV40
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(
+        enabledProviderProfilesOnly(
+          oauthProviderProfilesOnly(response.providers),
+        ),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV3 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV30
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(
+        enabledProviderProfilesOnly(
+          oauthProviderProfilesOnly(response.providers),
+        ),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV2 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV20
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(
+        enabledProviderProfilesOnly(
+          oauthProviderProfilesOnly(response.providers),
+        ),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV1 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV10
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: enabledProviderProfilesOnly(
+        oauthProviderProfilesOnly(response.providers),
+      ).flatMap((provider) => {
+        const downgraded = downgradeProviderCliStateToV10(provider);
+        return downgraded === null ? [] : [downgraded];
+      }),
     }),
   }),
 });
@@ -2860,6 +3168,65 @@ export const providersStartLoginUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
+/**
+ * D21/D22: `mode`/`userCode`. An additive minor - both new fields default to
+ * a value that reproduces today's exact behaviour (`mode: "browser"`,
+ * `userCode: null`), the same reason v1.1 shipped as a minor rather than a
+ * major. `providers.startLogin` is on `RELEASED_FLOOR_METHOD_NAMES`; an
+ * additive minor is the only growth a floor method may take.
+ */
+export const providersStartLoginV12 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: providersStartLoginRequestSchemaV12,
+  responseSchema: providersStartLoginResponseSchemaV12,
+});
+
+export const providersStartLoginUpgradeV11ToV12 = defineUpgradePath<
+  typeof providersStartLoginV11,
+  typeof providersStartLoginV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => ({
+    ...request,
+    mode: "browser",
+  }),
+  upgradeResponse: (response) => ({
+    ...response,
+    userCode: null,
+  }),
+});
+
+/**
+ * D32/W2-T10b: `startFrom` - "Start from" seeding for a freshly created
+ * profile. Additive minor, same floor-method growth as `mode` at v1.2, and
+ * bound by the same rule: the fill must be what the old peer already meant.
+ * A released v1.1/v1.2 client's "Add profile -> sign in" seeded NOTHING, so
+ * the fill is `{ kind: "empty" }`. D25's "Default account" is the dialog's
+ * default and the GUI sends it explicitly; it is not the meaning of an absent
+ * field. The response is untouched (byte-identical to v1.2's).
+ */
+export const providersStartLoginV13 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: providersStartLoginRequestSchemaV13,
+  responseSchema: providersStartLoginResponseSchemaV12,
+});
+
+export const providersStartLoginUpgradeV12ToV13 = defineUpgradePath<
+  typeof providersStartLoginV12,
+  typeof providersStartLoginV13
+>({
+  from: { major: 1, minor: 2 },
+  to: { major: 1, minor: 3 },
+  upgradeRequest: (request) => ({
+    ...request,
+    startFrom: { kind: "empty" },
+  }),
+  upgradeResponse: (response) => response,
+});
+
 export const providersAwaitLoginV10 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -3047,10 +3414,15 @@ export const providersCancelLoginUpgradeV10ToV11 = defineUpgradePath<
  * unreachable on such a host by construction, and `E_HOST_UNSUPPORTED` is a
  * backstop rather than the primary guard.
  */
+// Bound to the hand-frozen `V10` request copies (W2-T3): `providers.mcpAuth`
+// / `awaitMcpAuth` / `cancelMcpAuth` / `nativeMutate` all grow `profileId` on
+// a new `@2.0` below, and `@1.0` of each already shipped in
+// `host-v1.3.0-rc.*` as an optional capability - a real peer shape a v2->v1
+// downgrade must reproduce exactly, not the live request that just grew.
 export const providersMcpAuthV10 = defineRpcContract({
   method: "providers.mcpAuth",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: providersMcpAuthRequestSchema,
+  requestSchema: providersMcpAuthRequestSchemaV10,
   responseSchema: providersMcpAuthResponseSchema,
 });
 
@@ -3058,7 +3430,7 @@ export const providersMcpAuthV10 = defineRpcContract({
 export const providersAwaitMcpAuthV10 = defineRpcContract({
   method: "providers.awaitMcpAuth",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: providersAwaitMcpAuthRequestSchema,
+  requestSchema: providersAwaitMcpAuthRequestSchemaV10,
   responseSchema: providersAwaitMcpAuthResponseSchema,
 });
 
@@ -3066,16 +3438,277 @@ export const providersAwaitMcpAuthV10 = defineRpcContract({
 export const providersCancelMcpAuthV10 = defineRpcContract({
   method: "providers.cancelMcpAuth",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersCancelMcpAuthRequestSchemaV10,
+  responseSchema: providersCancelMcpAuthResponseSchema,
+});
+
+/**
+ * MCP/plugins/skills mutations. The RESPONSE is frozen too, unlike the mcpAuth
+ * trio's: its `result` reaches `providerSkillSchema`, which W2-T12b grew with
+ * `ownership` / `writable`, and this line already shipped in
+ * `host-v1.3.0-rc.*`. See `providersNativeMutateResponseSchemaV10`.
+ */
+export const providersNativeMutateV10 = defineRpcContract({
+  method: "providers.nativeMutate",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersNativeMutateRequestSchemaV10,
+  responseSchema: providersNativeMutateResponseSchemaV10,
+});
+
+/**
+ * D21/D17: `providers.mcpAuth` / `awaitMcpAuth` / `cancelMcpAuth` /
+ * `nativeMutate` all grow `profileId: string | null` on a new `@2.0` - the
+ * SAME optional-capability channel their `@1.0` rides (`degrade: unsupported`,
+ * none on `RELEASED_FLOOR_METHOD_NAMES`), so an old host still refuses these
+ * per-call rather than failing the handshake. The `2 -> 1` downgrade FAILS
+ * CLOSED on a non-null `profileId` (`DOWNGRADE_UNSUPPORTED`) rather than
+ * rewriting it to the default account - silently writing the wrong account's
+ * config is the exact defect this whole refactor exists to remove.
+ */
+export const providersMcpAuthV20 = defineRpcContract({
+  method: "providers.mcpAuth",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersMcpAuthRequestSchema,
+  responseSchema: providersMcpAuthResponseSchema,
+});
+
+export const providersMcpAuthUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersMcpAuthV10,
+  typeof providersMcpAuthV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // An old client only ever meant the default account.
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const providersMcpAuthDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersMcpAuthV20,
+  typeof providersMcpAuthV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    if (profileId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in providers.mcpAuth@1.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
+});
+
+export const providersAwaitMcpAuthV20 = defineRpcContract({
+  method: "providers.awaitMcpAuth",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersAwaitMcpAuthRequestSchema,
+  responseSchema: providersAwaitMcpAuthResponseSchema,
+});
+
+export const providersAwaitMcpAuthUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersAwaitMcpAuthV10,
+  typeof providersAwaitMcpAuthV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const providersAwaitMcpAuthDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersAwaitMcpAuthV20,
+  typeof providersAwaitMcpAuthV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    if (profileId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in providers.awaitMcpAuth@1.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
+});
+
+export const providersCancelMcpAuthV20 = defineRpcContract({
+  method: "providers.cancelMcpAuth",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersCancelMcpAuthRequestSchema,
   responseSchema: providersCancelMcpAuthResponseSchema,
 });
 
-/** MCP/plugins/skills mutations. */
-export const providersNativeMutateV10 = defineRpcContract({
+export const providersCancelMcpAuthUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersCancelMcpAuthV10,
+  typeof providersCancelMcpAuthV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const providersCancelMcpAuthDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersCancelMcpAuthV20,
+  typeof providersCancelMcpAuthV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    if (profileId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in providers.cancelMcpAuth@1.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
+});
+
+export const providersNativeMutateV20 = defineRpcContract({
   method: "providers.nativeMutate",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersNativeMutateRequestSchema,
   responseSchema: providersNativeMutateResponseSchema,
+});
+
+export const providersNativeMutateUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersNativeMutateV10,
+  typeof providersNativeMutateV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  // Not identity: `@1.0` binds the frozen result whose skill rows predate
+  // `ownership` / `writable`, and the live `@2.0` result requires both. Same
+  // cast-no-reparse hazard as `providersListUpgradeV80ToV90`'s `native` fill,
+  // and the same honest reading of what a released host meant.
+  upgradeResponse: (response) => ({
+    result: upgradeNativeMutationResultFromV10(response.result),
+  }),
+});
+
+export const providersNativeMutateDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersNativeMutateV20,
+  typeof providersNativeMutateV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    if (profileId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in providers.nativeMutate@1.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  // W2-T12b: the reparse through the frozen `@1.0` response is what strips a
+  // skills result's `ownership` / `writable` for a released peer, exactly as
+  // `providersListDowngradeV9ToV8` strips them via
+  // `providersListResponseSchemaV80` - not an explicit field-by-field strip.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersNativeMutateResponseSchemaV10.parse(response),
+  }),
+});
+
+/**
+ * D21: eight brand-new profile-config methods, all `@1.0`, all registered
+ * below with `degrade: { kind: "unsupported" }` and none on
+ * `RELEASED_FLOOR_METHOD_NAMES` — a host that predates the multi-profile
+ * refactor refuses these calls per-call with upgrade guidance rather than
+ * failing the handshake, the same optional-capability channel `mcpAuth` /
+ * `nativeMutate` ride above. New capability belongs on new methods, never
+ * folded onto a released carrier (see the comment above `providersMcpAuthV10`).
+ */
+export const providersGetProfileConfigV10 = defineRpcContract({
+  method: "providers.getProfileConfig",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersGetProfileConfigRequestSchema,
+  responseSchema: providersGetProfileConfigResponseSchema,
+});
+
+export const providersSetProfileConfigV10 = defineRpcContract({
+  method: "providers.setProfileConfig",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetProfileConfigRequestSchema,
+  responseSchema: providersSetProfileConfigResponseSchema,
+});
+
+export const providersSetProfileOwnershipV10 = defineRpcContract({
+  method: "providers.setProfileOwnership",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetProfileOwnershipRequestSchema,
+  responseSchema: providersSetProfileOwnershipResponseSchema,
+});
+
+export const providersCreateApiKeyProfileV10 = defineRpcContract({
+  method: "providers.createApiKeyProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersCreateApiKeyProfileRequestSchema,
+  responseSchema: providersCreateApiKeyProfileResponseSchema,
+});
+
+export const providersTestProfileConnectionV10 = defineRpcContract({
+  method: "providers.testProfileConnection",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersTestProfileConnectionRequestSchema,
+  responseSchema: providersTestProfileConnectionResponseSchema,
+});
+
+/** Preview and apply (below) bind the SAME request shape (plan §7). */
+export const providersPreviewCopySettingsV10 = defineRpcContract({
+  method: "providers.previewCopySettings",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersCopySettingsRequestSchema,
+  responseSchema: providersPreviewCopySettingsResponseSchema,
+});
+
+export const providersApplyCopySettingsV10 = defineRpcContract({
+  method: "providers.applyCopySettings",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersCopySettingsRequestSchema,
+  responseSchema: providersApplyCopySettingsResponseSchema,
+});
+
+/**
+ * D24 (amended, critique B5): the only method in this block that carries a
+ * credential. Serving it is gated on `ctx.transportVantage === "local-ws"`
+ * at the resolver (W5-T3); this contract makes no such distinction on its
+ * own.
+ */
+export const providersResolveLaunchEnvV10 = defineRpcContract({
+  method: "providers.resolveLaunchEnv",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersResolveLaunchEnvRequestSchema,
+  responseSchema: providersResolveLaunchEnvResponseSchema,
 });
 
 // ── Per-pack version-manager methods + the on-demand discovery refresh ─────
@@ -3288,6 +3921,95 @@ export const providersStartTerminalLoginDowngradeV20ToV10 = defineDowngradePath<
     return { ok: true, value: { ...rest, epicId: scope.epicId } };
   },
   downgradeResponse: (response) => ({ ok: true, value: response }),
+});
+
+/**
+ * D21/D22: `profileId` (re-sign-in an existing managed profile) +
+ * `createProfile` (mint one and spawn the sign-in terminal against it) - see
+ * `providersStartTerminalLoginRequestSchemaV30`'s own comment for why this is
+ * a MAJOR rather than an additive minor.
+ */
+export const providersStartTerminalLoginV30 = defineRpcContract({
+  method: "providers.startTerminalLogin",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersStartTerminalLoginRequestSchemaV30,
+  responseSchema: providersStartTerminalLoginResponseSchemaV30,
+});
+
+export const providersStartTerminalLoginUpgradeV20ToV30 = defineUpgradePath<
+  typeof providersStartTerminalLoginV20,
+  typeof providersStartTerminalLoginV30
+>({
+  from: providersStartTerminalLoginV20.schemaVersion,
+  to: providersStartTerminalLoginV30.schemaVersion,
+  // An old client only ever meant the default account and never minted a
+  // profile.
+  upgradeRequest: (request) => ({
+    ...request,
+    profileId: null,
+    createProfile: null,
+  }),
+  upgradeResponse: (response) => ({
+    ...response,
+    profileId: null,
+  }),
+});
+
+export const providersStartTerminalLoginDowngradeV30ToV20 = defineDowngradePath<
+  typeof providersStartTerminalLoginV30,
+  typeof providersStartTerminalLoginV20
+>({
+  from: providersStartTerminalLoginV30.schemaVersion,
+  to: providersStartTerminalLoginV20.schemaVersion,
+  downgradeRequest: (request) => {
+    const { profileId, createProfile, ...rest } = request;
+    if (profileId !== null || createProfile !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in providers.startTerminalLogin@2.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  downgradeResponse: (response) => {
+    const { profileId, ...rest } = response;
+    return { ok: true, value: rest };
+  },
+});
+
+export const providersStartTerminalLoginDowngradeV30ToV10 = defineDowngradePath<
+  typeof providersStartTerminalLoginV30,
+  typeof providersStartTerminalLoginV10
+>({
+  from: providersStartTerminalLoginV30.schemaVersion,
+  to: providersStartTerminalLoginV10.schemaVersion,
+  downgradeRequest: (request) => {
+    const { profileId, createProfile, ...v20Shaped } = request;
+    if (profileId !== null || createProfile !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in providers.startTerminalLogin@1.0",
+        },
+      };
+    }
+    // Delegates to the existing 2.0 -> 1.0 bridge for the independent-scope
+    // refusal - that gate does not change just because a third major opened
+    // above it.
+    return providersStartTerminalLoginDowngradeV20ToV10.downgradeRequest(
+      v20Shaped,
+    );
+  },
+  downgradeResponse: (response) => {
+    const { profileId, ...rest } = response;
+    return { ok: true, value: rest };
+  },
 });
 
 /**
@@ -4560,6 +5282,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    // D21/D27: a MAJOR, not a minor - `hostUsageSummaryRequestSchemaV20`'s
+    // own comment names the exact validator error a minor produces.
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostUsageSummaryV20,
+          upgradeFromPreviousVersion: hostUsageSummaryUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: hostUsageSummaryDowngradeV20ToV10 },
     },
   },
   "lifecycle.claimShutdown": {
@@ -7232,7 +7966,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: terminalListV20,
@@ -7250,8 +7984,18 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: terminalListV23,
           upgradeFromPreviousVersion: terminalListUpgradeV22ToV23,
         },
+        4: {
+          contract: terminalListV24,
+          upgradeFromPreviousVersion: terminalListUpgradeV23ToV24,
+        },
       },
-      downgradePathsFromLatest: { 1: terminalListDowngradeV23ToV10 },
+      // The framework requires a major's downgrade bridge to start at
+      // `latestMinor` exactly, so growing to `@2.4` (M14) moved the bridge's
+      // registered starting point even though its logic did not change -
+      // `terminalListDowngradeV24ToV10` strips `spawnConfigRevision`/
+      // `restartRequired` alongside `lifecycleOwner`, then delegates to the
+      // same v2.2 bridge as before.
+      downgradePathsFromLatest: { 1: terminalListDowngradeV24ToV10 },
     },
   },
   // Brand-new v1.0 method on the same `degrade: unsupported` channel as
@@ -7766,18 +8510,27 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
     },
     5: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentListProviderProfilesV50,
           upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV40ToV50,
         },
+        1: {
+          contract: agentListProviderProfilesV51,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV50ToV51,
+        },
       },
+      // Rebound to 5.1 (W2-T3): the framework requires each bridge's `from`
+      // to equal `latestMinor` exactly, so 5.0 -> 5.1 moved the starting
+      // point of every one of these even though the logic (reparse through
+      // the frozen response, which drops `authType` on its own the same way
+      // it already drops `enabled`) is unchanged.
       downgradePathsFromLatest: {
-        1: agentListProviderProfilesDowngradeV50ToV10,
-        2: agentListProviderProfilesDowngradeV50ToV20,
-        3: agentListProviderProfilesDowngradeV50ToV30,
-        4: agentListProviderProfilesDowngradeV50ToV40,
+        1: agentListProviderProfilesDowngradeV51ToV10,
+        2: agentListProviderProfilesDowngradeV51ToV20,
+        3: agentListProviderProfilesDowngradeV51ToV30,
+        4: agentListProviderProfilesDowngradeV51ToV40,
       },
     },
   },
@@ -8132,6 +8885,25 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         7: providersListDowngradeV8ToV7,
       },
     },
+    9: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV90,
+          upgradeFromPreviousVersion: providersListUpgradeV80ToV90,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV9ToV1,
+        2: providersListDowngradeV9ToV2,
+        3: providersListDowngradeV9ToV3,
+        4: providersListDowngradeV9ToV4,
+        5: providersListDowngradeV9ToV5,
+        6: providersListDowngradeV9ToV6,
+        7: providersListDowngradeV9ToV7,
+        8: providersListDowngradeV9ToV8,
+      },
+    },
   },
 
   "providers.setSelection": {
@@ -8232,7 +9004,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
   "providers.startLogin": {
     1: {
-      latestMinor: 1,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersStartLoginV10,
@@ -8241,6 +9013,14 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         1: {
           contract: providersStartLoginV11,
           upgradeFromPreviousVersion: providersStartLoginUpgradeV10ToV11,
+        },
+        2: {
+          contract: providersStartLoginV12,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV11ToV12,
+        },
+        3: {
+          contract: providersStartLoginV13,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -8315,6 +9095,16 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersMcpAuthV20,
+          upgradeFromPreviousVersion: providersMcpAuthUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersMcpAuthDowngradeV20ToV10 },
+    },
   },
   "providers.awaitMcpAuth": {
     degrade: { kind: "unsupported" },
@@ -8327,6 +9117,16 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersAwaitMcpAuthV20,
+          upgradeFromPreviousVersion: providersAwaitMcpAuthUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersAwaitMcpAuthDowngradeV20ToV10 },
     },
   },
   "providers.cancelMcpAuth": {
@@ -8341,6 +9141,16 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersCancelMcpAuthV20,
+          upgradeFromPreviousVersion: providersCancelMcpAuthUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersCancelMcpAuthDowngradeV20ToV10 },
+    },
   },
   "providers.nativeMutate": {
     degrade: { kind: "unsupported" },
@@ -8349,6 +9159,122 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersNativeMutateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersNativeMutateV20,
+          upgradeFromPreviousVersion: providersNativeMutateUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersNativeMutateDowngradeV20ToV10 },
+    },
+  },
+  // D21: eight brand-new profile-config methods, all `@1.0`,
+  // `degrade: unsupported`, none on `RELEASED_FLOOR_METHOD_NAMES`.
+  "providers.getProfileConfig": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersGetProfileConfigV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.setProfileConfig": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetProfileConfigV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.setProfileOwnership": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetProfileOwnershipV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.createApiKeyProfile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersCreateApiKeyProfileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.testProfileConnection": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersTestProfileConnectionV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.previewCopySettings": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersPreviewCopySettingsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.applyCopySettings": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersApplyCopySettingsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.resolveLaunchEnv": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersResolveLaunchEnvV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -8528,6 +9454,20 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {
         1: providersStartTerminalLoginDowngradeV20ToV10,
+      },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersStartTerminalLoginV30,
+          upgradeFromPreviousVersion:
+            providersStartTerminalLoginUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersStartTerminalLoginDowngradeV30ToV10,
+        2: providersStartTerminalLoginDowngradeV30ToV20,
       },
     },
   },
@@ -9019,7 +9959,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -9041,6 +9981,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         6: {
           contract: terminalSubscribeV16,
+        },
+        7: {
+          contract: terminalSubscribeV17,
         },
       },
     },

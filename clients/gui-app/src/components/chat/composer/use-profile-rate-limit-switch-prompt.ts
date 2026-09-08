@@ -21,6 +21,18 @@ import { providerCliIdForHarness } from "@/lib/provider-ordering";
 
 export type { ProfileRateLimitSeverity };
 
+/**
+ * D27: the ONE spelling of "this row authenticates with an API key", shared
+ * by the destination projection below and by the banner's read-only menu
+ * (which has no destination to read it off). An old host build's row carries
+ * no `authType` at runtime despite the type; strict `===` against the one
+ * literal that means API-key degrades any such row to `false` (today's
+ * ordering) rather than throwing or guessing.
+ */
+export function profileIsApiKey(profile: ProviderProfile): boolean {
+  return profile.authType === "apiKey";
+}
+
 export interface ProfileRateLimitDestination {
   readonly profile: ProviderProfile;
   /** Normalized for composer-selection semantics: `null` is the ambient
@@ -30,6 +42,9 @@ export interface ProfileRateLimitDestination {
    * authenticated profile with unknown usage remains selectable, but is never
    * promoted to `primaryTarget` until a rate-limit read proves it is better. */
   readonly selectable: boolean;
+  /** {@link profileIsApiKey} for this row (D27) - the banner badges from
+   *  here rather than re-deriving it. */
+  readonly isApiKey: boolean;
 }
 
 interface HiddenProfileRateLimitPrompt {
@@ -49,8 +64,9 @@ interface VisibleProfileRateLimitPrompt {
   readonly limitedFamilies: ReadonlyArray<string>;
   readonly current: ProviderProfile;
   readonly profiles: ReadonlyArray<ProviderProfile>;
-  /** Every other provider profile in the host's stable order. Rows that
-   * are unavailable for switching stay here so the menu can explain why. */
+  /** Every other provider profile, non-limited OAuth first then API-key
+   * (D27), each group in the host's wire order. Rows that are unavailable
+   * for switching stay here so the menu can explain why. */
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
   /** First proven-better destination in provider order. Unknown-usage
    * profiles may be selectable from the menu, but never become this confident
@@ -193,17 +209,24 @@ function destinationsForLimitedProfile(
   selectedModel: ModelOption | null,
   currentSeverity: ProfileRateLimitSeverity,
 ): ReadonlyArray<ProfileRateLimitDestination> {
-  return profiles
-    .filter((profile) => profile.profileId !== current.profileId)
-    .map((profile) => ({
-      profile,
-      profileId: profileCommitId(profile),
-      selectable: selectableDestination(
-        profile,
-        selectedModel,
-        currentSeverity,
-      ),
-    }));
+  const others = profiles.filter(
+    (profile) => profile.profileId !== current.profileId,
+  );
+  // D27: non-limited OAuth profiles first, then API-key profiles, each group
+  // keeping wire order - a stable partition (two filters), not a comparator
+  // that could reorder within a group. `recommendedDestination` /
+  // `findProbeTarget` both take the first match in this order, so the
+  // reordering alone is what prefers a healthy OAuth destination.
+  const ordered = [
+    ...others.filter((profile) => profile.authType !== "apiKey"),
+    ...others.filter((profile) => profileIsApiKey(profile)),
+  ];
+  return ordered.map((profile) => ({
+    profile,
+    profileId: profileCommitId(profile),
+    isApiKey: profileIsApiKey(profile),
+    selectable: selectableDestination(profile, selectedModel, currentSeverity),
+  }));
 }
 
 /**

@@ -1,10 +1,12 @@
 import { useMemo, type ReactNode } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import { AddProviderProfileDialog } from "@/components/settings/panels/add-provider-profile-dialog";
+import { AddProfileDialog } from "@/components/settings/panels/add-profile-dialog";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 
 export function ProviderProfileAddFlowHost(): ReactNode {
   const harnessId = useProviderProfileAddFlowStore((state) => state.harnessId);
@@ -43,6 +45,13 @@ function ProviderProfileAddFlowSession({
 }): ReactNode {
   const close = useProviderProfileAddFlowStore((state) => state.close);
   const client = useHostClientForHostId(hostId);
+  const effectiveHostId = useEffectiveHostId();
+  // `hostId` is the captured scope - `null` means "app-wide default", which
+  // resolves to whatever host is effective right now (same rule
+  // `useHostClientForHostId` uses for its own `null` branch).
+  const resolvedHostId = hostId ?? effectiveHostId;
+  const isSelectedHostLocal =
+    useHostDirectoryEntry(resolvedHostId)?.kind === "local";
   const providersQuery = useProvidersListForClient(client, {
     enabled: true,
     subscribed: true,
@@ -59,10 +68,12 @@ function ProviderProfileAddFlowSession({
   if (state === null) return null;
 
   return (
-    <AddProviderProfileDialog
+    <AddProfileDialog
       key={state.providerId}
       state={state}
       client={client}
+      hostId={resolvedHostId}
+      isSelectedHostLocal={isSelectedHostLocal}
       open
       onOpenChange={(open) => {
         if (!open) close();

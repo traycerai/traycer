@@ -20,6 +20,7 @@ import type {
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 // The header rate-limit surfaces read per-harness profile memory scoped to
 // the window's EFFECTIVE host (`useEffectiveHostId()`), which is separate
@@ -64,7 +65,7 @@ function profile(
   profileId: string,
   kind: ProviderProfile["kind"],
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -87,7 +88,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 const CODEX_PROFILES = [

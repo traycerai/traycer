@@ -1,4 +1,8 @@
-import { PROVIDER_PROFILE_ACCENT_COLORS } from "@traycer/protocol/host/provider-schemas";
+import {
+  PROVIDER_PROFILE_ACCENT_COLORS,
+  type ProviderProfile,
+  type ProviderProfileAccentColor,
+} from "@traycer/protocol/host/provider-schemas";
 
 /**
  * Deterministic accent palette for provider profile badges - the same
@@ -42,4 +46,19 @@ export function resolveProfileAccentColor(
   const index =
     hashProfileIdToColorIndex(profileId) % PROFILE_ACCENT_PALETTE.length;
   return PROFILE_ACCENT_PALETTE[index] ?? PROFILE_ACCENT_PALETTE[0];
+}
+
+/**
+ * The accent color a NEW profile should start on: the first palette entry no
+ * existing profile of that provider already uses, or the palette's first
+ * entry once every color is taken. Picked once, at the add dialog's mount.
+ */
+export function nextAvailableAccentColor(
+  profiles: readonly ProviderProfile[],
+): ProviderProfileAccentColor {
+  const used = new Set(profiles.map((profile) => profile.accentColor));
+  return (
+    PROVIDER_PROFILE_ACCENT_COLORS.find((color) => !used.has(color)) ??
+    PROVIDER_PROFILE_ACCENT_COLORS[0]
+  );
 }

@@ -114,6 +114,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { authoritativeOrFallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useProviderReauthGate } from "../use-provider-reauth-gate";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry = {
@@ -153,7 +154,7 @@ function profile(
   kind: "ambient" | "managed",
   label: string,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -172,7 +173,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function providerState(

@@ -85,6 +85,11 @@ export const agentProviderProfileSummarySchema = z.object({
   rateLimitStatus: providerProfileRateLimitStatusSchema,
   usageUpdatedAt: z.number().nullable(),
   isEffectiveLastUsed: z.boolean(),
+  // D06/D27 (W2-T3, `agent.listProviderProfiles@5.1`): an agent picking a
+  // profile must know it is API-key auth (no plan rate limits apply).
+  // Deliberately no endpoint, no model, no identity - the narrow-projection
+  // rule in this schema's own doc comment still holds.
+  authType: z.enum(["oauth", "apiKey"]),
 });
 export type AgentProviderProfileSummary = z.infer<
   typeof agentProviderProfileSummarySchema
@@ -482,11 +487,19 @@ export const agentListProviderProfilesUpgradeV40ToV50 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentListProviderProfilesDowngradeV50ToV40 = defineDowngradePath<
-  typeof agentListProviderProfilesV50,
+// Rebound to major 5's new latest minor (`agentListProviderProfilesV51`,
+// W2-T3): the framework requires a `downgradePathsFromLatest` entry's `from`
+// to equal `latestMinor` exactly, so growing 5.0 -> 5.1 moves every one of
+// this major's downgrade bridges even though the logic is unchanged - the
+// frozen `agentListProviderProfilesResponseSchemaV4` still reparses a v5.1
+// response fine (`authType` is simply a key it doesn't model and drops).
+// Renamed rather than left as `V50To*` per this repo's rule: rename only if
+// you also update the target, which this does.
+export const agentListProviderProfilesDowngradeV51ToV40 = defineDowngradePath<
+  typeof agentListProviderProfilesV51,
   typeof agentListProviderProfilesV40
 >({
-  from: { major: 5, minor: 0 },
+  from: { major: 5, minor: 1 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -513,11 +526,11 @@ export const agentListProviderProfilesDowngradeV50ToV40 = defineDowngradePath<
   },
 });
 
-export const agentListProviderProfilesDowngradeV50ToV30 = defineDowngradePath<
-  typeof agentListProviderProfilesV50,
+export const agentListProviderProfilesDowngradeV51ToV30 = defineDowngradePath<
+  typeof agentListProviderProfilesV51,
   typeof agentListProviderProfilesV30
 >({
-  from: { major: 5, minor: 0 },
+  from: { major: 5, minor: 1 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -539,11 +552,11 @@ export const agentListProviderProfilesDowngradeV50ToV30 = defineDowngradePath<
   },
 });
 
-export const agentListProviderProfilesDowngradeV50ToV20 = defineDowngradePath<
-  typeof agentListProviderProfilesV50,
+export const agentListProviderProfilesDowngradeV51ToV20 = defineDowngradePath<
+  typeof agentListProviderProfilesV51,
   typeof agentListProviderProfilesV20
 >({
-  from: { major: 5, minor: 0 },
+  from: { major: 5, minor: 1 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -565,11 +578,11 @@ export const agentListProviderProfilesDowngradeV50ToV20 = defineDowngradePath<
   },
 });
 
-export const agentListProviderProfilesDowngradeV50ToV10 = defineDowngradePath<
-  typeof agentListProviderProfilesV50,
+export const agentListProviderProfilesDowngradeV51ToV10 = defineDowngradePath<
+  typeof agentListProviderProfilesV51,
   typeof agentListProviderProfilesV10
 >({
-  from: { major: 5, minor: 0 },
+  from: { major: 5, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -589,6 +602,38 @@ export const agentListProviderProfilesDowngradeV50ToV10 = defineDowngradePath<
     }
     return { ok: true, value: parsed.data };
   },
+});
+
+/**
+ * D06/D27 (critique H8): `authType` on the live `agentProviderProfileSummarySchema`
+ * (above) is a `5.1` addition only - it does not widen the frozen v1.0-v5.0
+ * rows, all of which bind `agentProviderProfileSummarySchemaV50` by identity.
+ * Binds the live `agentListProviderProfilesResponseSchema` directly: nothing
+ * below 5.1 can express `authType`, so this is the only line that needs to.
+ */
+export const agentListProviderProfilesV51 = defineRpcContract({
+  method: "agent.listProviderProfiles",
+  schemaVersion: { major: 5, minor: 1 } as const,
+  requestSchema: agentListProviderProfilesRequestSchema,
+  responseSchema: agentListProviderProfilesResponseSchema,
+});
+
+export const agentListProviderProfilesUpgradeV50ToV51 = defineUpgradePath<
+  typeof agentListProviderProfilesV50,
+  typeof agentListProviderProfilesV51
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 5, minor: 1 },
+  upgradeRequest: (request) => request,
+  // A v5.0 host predates API-key profiles entirely, so every row it can
+  // report is an oauth login.
+  upgradeResponse: (response) => ({
+    ...response,
+    profiles: response.profiles.map((profile) => ({
+      ...profile,
+      authType: "oauth" as const,
+    })),
+  }),
 });
 
 // ─── `agent.getProviderProfileRateLimits@1.0` ─────────────────────────────

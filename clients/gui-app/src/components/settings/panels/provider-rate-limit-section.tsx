@@ -18,6 +18,36 @@ import {
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
 
+/** D27: the exact sentence for an `authType: "apiKey"` profile's gauge area -
+ *  API-key auth carries no host-tracked plan limits, so this states that
+ *  plainly instead of a disabled or empty gauge. Never fires a rate-limit
+ *  query: the caller reads this arm from the profile's `authType` and never
+ *  mounts `ProviderRateLimitForProvider` for it, and
+ *  `isRateLimitProfileFetchEligible` (`lib/rate-limit-providers.ts`) is the
+ *  one place that decides eligibility, so `ProviderProfilesRefreshButton`
+ *  and this card can never disagree about whether a fetch is due. */
+export const API_KEY_USAGE_NOTICE_TEXT =
+  "Plan limits not applicable to API-key auth.";
+
+export function ApiKeyUsageNotice(): ReactNode {
+  return (
+    <div className="mb-3 flex flex-col gap-1 rounded-lg border border-border/60 p-3">
+      <div className="text-ui-sm font-medium text-foreground">Usage limits</div>
+      <p className="text-ui-sm text-muted-foreground">
+        {API_KEY_USAGE_NOTICE_TEXT}
+      </p>
+    </div>
+  );
+}
+
+/** D27: what a profile's usage totals (the tokens/cost table - W5-T2) do and
+ *  do not cover, disclosed once beneath wherever that totals area renders.
+ *  Terminal-agent capture exists only for these three CLIs today; the other
+ *  providers' terminal turns are invisible to usage-analytics, so the
+ *  sentence says so rather than implying complete coverage. */
+export const USAGE_COVERAGE_SENTENCE =
+  "Totals cover Traycer chats on every provider, and terminal agents on Claude Code, Codex and OpenCode.";
+
 export function ProviderRateLimitForProvider({
   providerId,
   profileId,

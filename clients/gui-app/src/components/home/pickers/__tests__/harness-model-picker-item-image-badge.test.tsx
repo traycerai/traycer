@@ -39,6 +39,7 @@ function row(modelOption: ModelOption): HarnessModelRow {
     providerGroupLabel: null,
     capacityLabel: null,
     deprecationNotice: modelOption.deprecationNotice ?? null,
+    pinned: null,
     model: modelOption,
     searchLabel: modelOption.label,
     searchSlug: modelOption.slug,
@@ -60,6 +61,8 @@ function renderItem(modelOption: ModelOption) {
       onHover={vi.fn()}
       onActive={vi.fn()}
       onSelect={vi.fn()}
+      customRowOpen={false}
+      onCloseCustomRow={vi.fn()}
     />,
   );
 }

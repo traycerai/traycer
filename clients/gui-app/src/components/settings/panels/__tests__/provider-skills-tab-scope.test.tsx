@@ -191,6 +191,8 @@ const FIND_SKILLS: ProviderSkill = {
   description: "Helps users discover and install agent skills.",
   path: "/Users/dev/.agents/skills/find-skills",
   source: "shared",
+  ownership: "managed",
+  writable: true,
 };
 
 function skillsState(): ProviderCliState {
@@ -290,7 +292,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
   });
 
   it("lists with global scope and null workspaceRoot by default", () => {
-    render(<ProviderSkillsTab state={skillsState()} />);
+    render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     const globalCall = skillMocks.listCalls.find(
       (c) => c.scope === "global" && c.enabled,
@@ -304,7 +312,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
   });
 
   it("labels the scope picker Skills location (not MCP or Plugins)", () => {
-    render(<ProviderSkillsTab state={skillsState()} />);
+    render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     expect(scopeTrigger().getAttribute("aria-label")).toMatch(
       /^Skills location:/,
@@ -318,7 +332,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
   });
 
   it("switches to project scope and stamps workspaceRoot on list", () => {
-    render(<ProviderSkillsTab state={skillsState()} />);
+    render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     chooseScopeOption(/app/);
 
@@ -333,7 +353,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
   });
 
   it("carries the selected project scope on remove mutate", () => {
-    render(<ProviderSkillsTab state={skillsState()} />);
+    render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     chooseScopeOption(/app/);
     fireEvent.click(screen.getByRole("button", { name: /Open find-skills/ }));
@@ -345,6 +371,7 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
         providerId: "codex",
         scope: "project",
         workspaceRoot: "/Users/dev/app",
+        profileId: null,
         mutation: {
           action: "remove",
           name: FIND_SKILLS.name,
@@ -373,7 +400,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     skillMocks.removeScopes = ["project"];
     skillMocks.skills = [];
 
-    render(<ProviderSkillsTab state={skillsState()} />);
+    render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     expect(screen.getByText("Select a workspace")).toBeDefined();
     expect(
@@ -390,7 +423,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     skillMocks.createScopes = ["project"];
     skillMocks.importScopes = [];
     skillMocks.skills = [FIND_SKILLS];
-    render(<ProviderSkillsTab state={skillsState()} />);
+    render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     expect(screen.queryByRole("button", { name: /Add skill/ })).toBeNull();
 
@@ -402,7 +441,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     skillMocks.createScopes = ["project"];
     skillMocks.importScopes = ["project"];
     skillMocks.skills = [FIND_SKILLS];
-    render(<ProviderSkillsTab state={skillsState()} />);
+    render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     expect(screen.queryByRole("button", { name: /Add skill/ })).toBeNull();
     expect(screen.queryByText("Available to")).toBeNull();
@@ -429,7 +474,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     // visibility:hidden subtrees collapse to "".
     skillMocks.createScopes = ["global"];
     skillMocks.skills = [FIND_SKILLS];
-    render(<ProviderSkillsTab state={skillsState()} />);
+    render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     const location = scopeTrigger();
     expect(location.getAttribute("aria-label")).toMatch(/^Skills location:/);

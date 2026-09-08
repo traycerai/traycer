@@ -7,6 +7,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { CloneProfileRecovery } from "../clone-profile-recovery";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
@@ -21,7 +22,7 @@ function managedProfile(
   label: string,
   enabled: boolean,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled,
     kind: "managed",
@@ -40,7 +41,7 @@ function managedProfile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function buildClient(): HostClient<HostRpcRegistry> {

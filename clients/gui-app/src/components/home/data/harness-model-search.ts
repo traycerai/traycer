@@ -15,6 +15,13 @@ import {
 export interface HarnessModelSource {
   readonly harness: HarnessOption;
   readonly models: ReadonlyArray<ModelOption>;
+  /**
+   * The active/committed profile's `defaultModel` for this harness (D09) -
+   * the id `buildHarnessModelRows` pins to the top of the row list, even when
+   * `models` does not contain it. `null` when that profile carries none
+   * (including every harness with no profile concept at all).
+   */
+  readonly defaultModelId: string | null;
 }
 
 export interface HarnessModelRow {
@@ -53,6 +60,14 @@ export interface HarnessModelRow {
    * `GuiAgentModelOption`).
    */
   readonly deprecationNotice: string | null;
+  /**
+   * D09's two pinned rows, ahead of the catalog: `"default-model"` is the
+   * active profile's `defaultModel` id (shown even when `models` has no
+   * matching entry), `"custom"` is the free-form entry prompt. `null` for
+   * every ordinary catalog row. Pinned rows carry `providerGroupId: null` so
+   * they never join a provider group and never get a group header.
+   */
+  readonly pinned: "default-model" | "custom" | null;
   readonly model: ModelOption;
   readonly searchLabel: string;
   readonly searchSlug: string;
@@ -86,6 +101,7 @@ const MODEL_ROW_FUSE_OPTIONS: IFuseOptions<HarnessModelRow> = {
 export function buildHarnessModelRows(
   harness: HarnessOption,
   models: ReadonlyArray<ModelOption>,
+  defaultModelId: string | null,
 ): ReadonlyArray<HarnessModelRow> {
   // When the host declares per-model groups (OpenCode by provider, OpenRouter by
   // vendor, Hugging Face by org), order by group so contiguous runs line up
@@ -101,15 +117,129 @@ export function buildHarnessModelRows(
         modelMetadataString(model.metadata.openCodeProviderId).length > 0,
     );
   const orderedModels = isGrouped ? sortByProviderGroup(models) : models;
-  return orderedModels.map((model) => modelRow(harness, model));
+  return [
+    ...pinnedModelRows(harness, defaultModelId),
+    ...orderedModels.map((model) => modelRow(harness, model)),
+  ];
 }
 
 export function buildAllHarnessModelRows(
   sources: ReadonlyArray<HarnessModelSource>,
 ): ReadonlyArray<HarnessModelRow> {
   return sources.flatMap((source) =>
-    buildHarnessModelRows(source.harness, source.models),
+    buildHarnessModelRows(source.harness, source.models, source.defaultModelId),
   );
+}
+
+/**
+ * D09: the pinned `Custom…` row is a PROMPT, not a model - its `value` is the
+ * empty string, so committing it blanks the composer's model. Both gestures
+ * that reach the row (click, and Enter through
+ * `handleHarnessModelPickerKeyDown`) funnel through the picker's `selectRow`,
+ * which asks this and opens the free-form field instead. The COMMIT out of
+ * that field carries the typed slug and is deliberately NOT this row.
+ */
+export function isCustomModelPromptRow(row: HarnessModelRow): boolean {
+  return row.pinned === "custom" && row.value.length === 0;
+}
+
+const CUSTOM_MODEL_ROW_LABEL = "Custom…";
+// Secondary text (rendered in the row's `capacityLabel` slot) marking the
+// pinned default-model row - reuses the picker item's existing capacity-badge
+// rendering rather than inventing a second secondary-text slot.
+const DEFAULT_MODEL_ROW_CAPACITY_LABEL = "Profile default";
+
+/**
+ * A minimal `ModelOption` for a pinned row whose id the live catalog may not
+ * carry (D06: an arbitrary `--model` id is legitimate, not an error state).
+ * Every capability/metadata field is empty - a pinned row never claims
+ * capacities, deprecation, or grouping it cannot back.
+ */
+function pinnedModelOption(harnessId: ProviderId, slug: string): ModelOption {
+  return {
+    harnessId,
+    slug,
+    label: slug,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    metadata: {},
+  };
+}
+
+interface PinnedRowInput {
+  readonly harness: HarnessOption;
+  readonly pinned: "default-model" | "custom";
+  readonly slug: string;
+  readonly label: string;
+  readonly capacityLabel: string | null;
+}
+
+function pinnedRow(input: PinnedRowInput): HarnessModelRow {
+  const { harness, pinned, slug, label, capacityLabel } = input;
+  return {
+    id: `pinned:${pinned}:${rowId(harness.id, slug)}`,
+    value: slug,
+    harnessId: harness.id,
+    harnessLabel: harness.label,
+    label,
+    browseLabel: label,
+    // Never grouped (`harness-model-picker-list.tsx`'s `providerGroupHeader`
+    // emits no header for a `null` group), and never re-ranked into a
+    // provider section (`sectionModelRowsByProviderRank` keys an ungrouped
+    // row by its own row id) - both keep pinned rows ahead of the catalog.
+    providerGroupId: null,
+    providerGroupLabel: null,
+    capacityLabel,
+    deprecationNotice: null,
+    pinned,
+    model: pinnedModelOption(harness.id, slug),
+    searchLabel: label,
+    searchSlug: slug,
+    searchProviderLabel: harness.label,
+    searchProviderId: harness.id,
+    searchOpenCodeProviderLabel: "",
+    searchOpenCodeProviderId: "",
+  };
+}
+
+/**
+ * The two pinned rows ahead of the catalog (D09): the active profile's
+ * `defaultModel` (when it has one) labeled with the raw id, then `Custom…`.
+ * The default-model row is emitted even when `models` has no matching entry
+ * - D06's live probe established an unrecognized id is legitimate, not an
+ * error state.
+ */
+function pinnedModelRows(
+  harness: HarnessOption,
+  defaultModelId: string | null,
+): ReadonlyArray<HarnessModelRow> {
+  const rows: HarnessModelRow[] = [];
+  if (defaultModelId !== null) {
+    rows.push(
+      pinnedRow({
+        harness,
+        pinned: "default-model",
+        slug: defaultModelId,
+        label: defaultModelId,
+        capacityLabel: DEFAULT_MODEL_ROW_CAPACITY_LABEL,
+      }),
+    );
+  }
+  rows.push(
+    pinnedRow({
+      harness,
+      pinned: "custom",
+      slug: "",
+      label: CUSTOM_MODEL_ROW_LABEL,
+      capacityLabel: null,
+    }),
+  );
+  return rows;
 }
 
 export function createModelRowSearchIndex(
@@ -125,7 +255,13 @@ export function filterModelRows(
 ): ReadonlyArray<HarnessModelRow> {
   const trimmed = query.trim();
   if (trimmed.length === 0) return rows;
-  return searchIndex.search(trimmed).map((result) => result.item);
+  // `Custom…` has no id/label to match against and stays browse-only; the
+  // pinned default-model row IS kept when the query matches its (real) id -
+  // it indexes like any other row.
+  return searchIndex
+    .search(trimmed)
+    .map((result) => result.item)
+    .filter((row) => row.pinned !== "custom");
 }
 
 /**
@@ -177,8 +313,18 @@ export function selectedModelRowId(
     (row) => row.harnessId === selection.harnessId,
   );
   // Empty slug is the transient "unresolved / catalog loading" marker - point
-  // the highlight at the first (preferred) model for this provider.
-  if (selection.modelSlug.length === 0) return providerRows.at(0)?.id ?? "";
+  // the highlight at the first (preferred) model for this provider: the
+  // pinned default-model row when one is pinned, else the first catalog row.
+  // Never `Custom…` (D09) - it is always pinned first with nothing typed yet,
+  // and would otherwise steal this fallback from every provider that has no
+  // `defaultModel` on its active profile.
+  if (selection.modelSlug.length === 0) {
+    return (
+      providerRows.find((row) => row.pinned !== "custom")?.id ??
+      providerRows.at(0)?.id ??
+      ""
+    );
+  }
   // Read-only (which row is highlighted), so an ambiguous alias may resolve to
   // the first tied row. Resolving through the shared helper is what keeps a
   // canonical id persisted before the catalog decorated its row from showing
@@ -224,6 +370,7 @@ function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
     providerGroupLabel,
     capacityLabel: modelCapacityLabel(model),
     deprecationNotice: model.deprecationNotice ?? null,
+    pinned: null,
     model,
     searchLabel: model.label,
     searchSlug: model.slug,

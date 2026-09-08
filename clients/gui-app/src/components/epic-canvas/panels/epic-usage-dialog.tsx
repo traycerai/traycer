@@ -98,6 +98,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
       buildUsageSummaryRequest({
         windowDays,
         epicId,
+        profileId: null,
       }),
     [epicId, windowDays],
   );

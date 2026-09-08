@@ -92,6 +92,7 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
 });
 
 import { ProfileDropdown } from "../profile-dropdown";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const NOW = Date.now();
 
@@ -100,7 +101,7 @@ function profile(
   kind: ProviderProfile["kind"],
   label: string,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -119,7 +120,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 const AMBIENT = profile("ambient", "ambient", "Terminal account");
@@ -262,7 +263,9 @@ describe("ProfileDropdown picker usage opt-in", () => {
 
   it("keeps Settings/default rows identity-only with no bars or sidecar", async () => {
     renderDropdown(null, vi.fn());
-    await screen.findByRole("menuitem", { name: "Terminal account, Terminal" });
+    await screen.findByRole("menuitem", {
+      name: "Default account, Default account",
+    });
     expect(screen.queryByTestId("profile-usage-bar-null")).toBeNull();
     expect(screen.queryByRole("complementary")).toBeNull();
   });
@@ -338,13 +341,13 @@ describe("ProfileDropdown picker usage opt-in", () => {
     } satisfies ProfileDropdownUsagePresentation;
     renderDropdown(usagePresentation, onSelect);
     const ambient = await screen.findByRole("menuitem", {
-      name: "Terminal account, Terminal, Signed in, Not selected, Limited",
+      name: "Default account, Default account, Signed in, Not selected, Limited",
     });
 
     fireEvent.pointerMove(ambient);
     expect(
       await screen.findByRole("complementary", {
-        name: "Usage details for Terminal account",
+        name: "Usage details for Default account",
       }),
     ).toBeDefined();
     expect(onSelect).not.toHaveBeenCalled();
@@ -383,11 +386,11 @@ describe("ProfileDropdown picker usage opt-in", () => {
     expect(onSelect).not.toHaveBeenCalled();
 
     const ambient = screen.getByRole("menuitem", {
-      name: "Terminal account, Terminal, Signed in, Not selected, Limited",
+      name: "Default account, Default account, Signed in, Not selected, Limited",
     });
     fireEvent.pointerMove(ambient);
     const refreshButton = await screen.findByRole("button", {
-      name: "Refresh usage for Terminal account",
+      name: "Refresh usage for Default account",
     });
     fireEvent.pointerDown(refreshButton);
     fireEvent.click(refreshButton);
@@ -395,7 +398,7 @@ describe("ProfileDropdown picker usage opt-in", () => {
     expect(onSelect).not.toHaveBeenCalled();
     expect(
       screen.getByRole("complementary", {
-        name: "Usage details for Terminal account",
+        name: "Usage details for Default account",
       }),
     ).toBeDefined();
   });
@@ -424,7 +427,7 @@ describe("ProfileDropdown picker usage opt-in", () => {
     renderDropdown(usagePresentation, vi.fn());
 
     const ambient = await screen.findByRole("menuitem", {
-      name: /Terminal account/,
+      name: /Default account/,
     });
     const work = screen.getByRole("menuitem", { name: /Work profile/ });
     expect(ambient.getAttribute("aria-keyshortcuts")).toBeNull();

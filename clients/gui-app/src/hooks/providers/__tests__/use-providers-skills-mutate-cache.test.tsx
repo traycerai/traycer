@@ -54,6 +54,8 @@ const EXISTING: ProviderSkill = {
   description: "Discover skills.",
   path: "/Users/dev/.agents/skills/find-skills",
   source: "shared",
+  ownership: "managed",
+  writable: true,
 };
 
 const CREATED: ProviderSkill = {
@@ -61,6 +63,8 @@ const CREATED: ProviderSkill = {
   description: "Reviews a PR.",
   path: "/Users/dev/.agents/skills/review-pr",
   source: "shared",
+  ownership: "managed",
+  writable: true,
 };
 
 function createFixture(handlers: {
@@ -219,6 +223,7 @@ describe("useProvidersSkillsMutate cache", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           enabled: true,
         }),
       { wrapper: fixture.Wrapper },
@@ -237,6 +242,7 @@ describe("useProvidersSkillsMutate cache", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         mutation: {
           action: "inspect",
           source: "owner/repo",
@@ -254,6 +260,7 @@ describe("useProvidersSkillsMutate cache", () => {
       providerId: "codex",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     });
     expect(fixture.queryClient.getQueryData(listKey)).toEqual({
       skills: [EXISTING],
@@ -264,6 +271,7 @@ describe("useProvidersSkillsMutate cache", () => {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         mutation: {
           action: "create",
           name: "review-pr",
@@ -307,6 +315,7 @@ describe("useProvidersSkillsMutate cache", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           enabled: true,
         }),
       { wrapper: fixture.Wrapper },
@@ -319,6 +328,7 @@ describe("useProvidersSkillsMutate cache", () => {
       providerId: "codex",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     });
     expect(fixture.queryClient.getQueryData(listKey)).toEqual({
       skills: [EXISTING],
@@ -336,6 +346,7 @@ describe("useProvidersSkillsMutate cache", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           mutation: {
             action: "import",
             source: "owner/repo",
@@ -384,6 +395,7 @@ describe("useProvidersSkillsMutate cache", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           enabled: true,
         }),
       { wrapper: fixture.Wrapper },
@@ -396,6 +408,7 @@ describe("useProvidersSkillsMutate cache", () => {
       providerId: "codex",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     });
 
     const invalidateSpy = vi.spyOn(fixture.queryClient, "invalidateQueries");
@@ -410,6 +423,7 @@ describe("useProvidersSkillsMutate cache", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           mutation: {
             action: "inspect",
             source: "owner/repo",
@@ -448,6 +462,7 @@ describe("useProvidersSkillsMutate cache", () => {
     const scope = {
       scope: "global" as const,
       workspaceRoot: null,
+      profileId: null,
     };
     const initiatingKey = providersNativeQueryKeys.skillsList(fixture.hostId, {
       providerId: "codex",
@@ -523,6 +538,7 @@ describe("useProvidersSkillsMutate cache", () => {
     const scope = {
       scope: "global" as const,
       workspaceRoot: null,
+      profileId: null,
     };
     const initiatingKey = providersNativeQueryKeys.skillsList(fixture.hostId, {
       providerId: "codex",
@@ -599,6 +615,7 @@ describe("useProvidersSkillsMutate cache", () => {
           providerId: "codex",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
           enabled: true,
         }),
       { wrapper: fixture.Wrapper },
@@ -610,6 +627,7 @@ describe("useProvidersSkillsMutate cache", () => {
       providerId: "codex",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     });
     const invalidateSpy = vi.spyOn(fixture.queryClient, "invalidateQueries");
     const mutateRendered = renderHook(() => useProvidersSkillsMutate(), {
@@ -625,6 +643,7 @@ describe("useProvidersSkillsMutate cache", () => {
             providerId: "codex",
             scope: "global",
             workspaceRoot: null,
+            profileId: null,
             mutation,
             suppressToast: true,
           });

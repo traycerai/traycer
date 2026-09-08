@@ -121,6 +121,8 @@ function pruneAuthAwaiting(
 interface ResumeOauthPollingInputs {
   readonly pendingAuthEntries: Readonly<Record<string, McpPendingAuthEntry>>;
   readonly providerId: ProviderId;
+  /** D17; `null` = the Default account. */
+  readonly profileId: string | null;
   readonly effectiveScope: ProviderNativeScope;
   readonly listWorkspaceRoot: string | null;
   readonly hostId: string | null;
@@ -133,6 +135,7 @@ function resumeOauthPollingInputsEqual(
   return (
     a.pendingAuthEntries === b.pendingAuthEntries &&
     a.providerId === b.providerId &&
+    a.profileId === b.profileId &&
     a.effectiveScope === b.effectiveScope &&
     a.listWorkspaceRoot === b.listWorkspaceRoot &&
     a.hostId === b.hostId
@@ -169,6 +172,7 @@ function useResumeOauthPolling(
   for (const entry of Object.values(inputs.pendingAuthEntries)) {
     if (
       entry.key.providerId === inputs.providerId &&
+      entry.key.profileId === inputs.profileId &&
       entry.key.scope === inputs.effectiveScope &&
       entry.key.workspaceRoot === inputs.listWorkspaceRoot &&
       (inputs.hostId === null || entry.hostId === inputs.hostId)
@@ -241,8 +245,16 @@ export function ProviderMcpTab(props: {
    * the explanation can never disagree with what it explains.
    */
   readonly cliBinaryResolved: boolean;
+  /** D17; the switcher's current selection. `null` = the Default account. */
+  readonly profileId: string | null;
 }): ReactNode {
-  const { providerId, capabilities, providerLabel, cliBinaryResolved } = props;
+  const {
+    providerId,
+    capabilities,
+    providerLabel,
+    cliBinaryResolved,
+    profileId,
+  } = props;
   const scopeState = useProviderNativeScope(capabilities.actionScopes.list);
   const {
     hostId,
@@ -286,6 +298,7 @@ export function ProviderMcpTab(props: {
     providerId,
     scope: "project",
     workspaceRoot,
+    profileId,
     enabled:
       multiScope && effectiveScope === "global" && workspaceRoot !== null,
     pollWhilePending: false,
@@ -297,6 +310,7 @@ export function ProviderMcpTab(props: {
     providerId,
     scope: effectiveScope,
     workspaceRoot: listWorkspaceRoot,
+    profileId,
     enabled: listEnabled,
     pollWhilePending: authAwaitingNames.size > 0,
   });
@@ -352,6 +366,7 @@ export function ProviderMcpTab(props: {
       const key = entry.key;
       if (
         key.providerId !== providerId ||
+        key.profileId !== profileId ||
         key.scope !== effectiveScope ||
         key.workspaceRoot !== listWorkspaceRoot
       ) {
@@ -366,6 +381,7 @@ export function ProviderMcpTab(props: {
     pendingAuthEntries,
     pendingAuthRemove,
     providerId,
+    profileId,
     effectiveScope,
     listWorkspaceRoot,
   ]);
@@ -429,14 +445,16 @@ export function ProviderMcpTab(props: {
       providerId,
       scope: effectiveScope,
       workspaceRoot: listWorkspaceRoot,
+      profileId,
     }),
-    [providerId, effectiveScope, listWorkspaceRoot],
+    [providerId, effectiveScope, listWorkspaceRoot, profileId],
   );
 
   useResumeOauthPolling(
     {
       pendingAuthEntries,
       providerId,
+      profileId,
       effectiveScope,
       listWorkspaceRoot,
       hostId,
@@ -569,6 +587,7 @@ export function ProviderMcpTab(props: {
             const result = data.result;
             const authKey = {
               providerId: scopeTuple.providerId,
+              profileId: scopeTuple.profileId,
               scope: scopeTuple.scope,
               workspaceRoot: scopeTuple.workspaceRoot,
               serverName,

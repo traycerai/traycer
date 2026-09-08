@@ -12,13 +12,14 @@ import {
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  terminalListDowngradeV23ToV10,
+  terminalListDowngradeV24ToV10,
   terminalListUpgradeV22ToV23,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   listTerminalsResponseSchema,
   listTerminalsResponseSchemaV22,
   listTerminalsResponseSchemaV23,
+  listTerminalsResponseSchemaV24,
   type CanonicalTerminalSessionInfoWithCurrentCwd,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 
@@ -93,15 +94,29 @@ describe("terminal.list@2.3 lifecycleOwner", () => {
 
   it("strips lifecycleOwner when downgrading to v1.0", () => {
     const base = session();
-    const response = listTerminalsResponseSchemaV23.parse({
-      sessions: [{ ...base, lifecycleOwner: "manager" }],
+    // The registered v2 -> v1 bridge now starts at v2.4 (`terminal.list@2.4`,
+    // W2-T3): major 2's `latestMinor` moved, so this must be a v2.4-shaped
+    // response - the two new fields are irrelevant to what this test asserts
+    // (lifecycleOwner/currentCwd stripping) but are required to reach the
+    // registered contract honestly.
+    const response = listTerminalsResponseSchemaV24.parse({
+      sessions: [
+        {
+          ...base,
+          lifecycleOwner: "manager",
+          spawnConfigRevision: null,
+          restartRequired: false,
+        },
+      ],
       homeCwd: "/Users/dev",
     });
-    const direct = terminalListDowngradeV23ToV10.downgradeResponse(response);
+    const direct = terminalListDowngradeV24ToV10.downgradeResponse(response);
     expect(direct.ok).toBe(true);
     if (!direct.ok) return;
     expect(direct.value.sessions[0]).not.toHaveProperty("lifecycleOwner");
     expect(direct.value.sessions[0]).not.toHaveProperty("currentCwd");
+    expect(direct.value.sessions[0]).not.toHaveProperty("spawnConfigRevision");
+    expect(direct.value.sessions[0]).not.toHaveProperty("restartRequired");
     expect(() => listTerminalsResponseSchema.parse(direct.value)).not.toThrow();
 
     const acrossMajors = downgradeResponseAcrossMajors(

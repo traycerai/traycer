@@ -11,6 +11,7 @@ import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 /**
  * T7 (accent continuity): the tombstone footer stops rendering the initials
@@ -31,7 +32,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 
 function claudeStateWithoutProfile(): ProviderCliState {
-  const ambient: ProviderProfile = {
+  const ambient: ProviderProfile = providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -50,7 +51,7 @@ function claudeStateWithoutProfile(): ProviderCliState {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
   return {
     providerId: "claude-code",
     enabled: true,

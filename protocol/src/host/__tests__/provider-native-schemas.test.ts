@@ -22,6 +22,7 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70Preimage,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -68,6 +69,11 @@ import {
   providersStartLoginUpgradeV10ToV11,
   providersCancelLoginUpgradeV10ToV11,
   providersAwaitLoginUpgradeV20ToV21,
+  providersMcpAuthDowngradeV20ToV10,
+  providersAwaitMcpAuthDowngradeV20ToV10,
+  providersCancelMcpAuthDowngradeV20ToV10,
+  providersNativeMutateDowngradeV20ToV10,
+  providersNativeMutateUpgradeV10ToV20,
 } from "@traycer/protocol/host/registry";
 import {
   nativeAuthActionSchema,
@@ -80,6 +86,7 @@ import {
   providerNativeCapabilitiesSchema,
   providerNativeErrorCodeSchema,
   providerNativeScopeSchema,
+  nativeMutationResultSchemaV10,
 } from "@traycer/protocol/host/provider-native-schemas";
 import {
   providerIdSchema,
@@ -350,6 +357,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
           providerId: "claude-code",
           scope: "global",
           workspaceRoot: null,
+          profileId: null,
         },
       }),
     );
@@ -362,6 +370,10 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
   // The adjacent hop, and the one most likely to rot: v6.0 is a RELEASED line
   // (`cli-v1.1.9`) that never carried either field, so it is the first client
   // a leak would actually reach. The far downgrades below cover v3/v2/v1.
+  //
+  // The fixture is re-parsed through `providersListResponseSchemaV80` before
+  // the bridge: these are the v8.0-SOURCE bridges, and W1-T9 froze that line,
+  // so their input is a v8.0 peer's response rather than the live one.
   it("downgrades v7.0 → v6.0 by stripping nativeCapabilities and native", () => {
     const v70 = providersListResponseSchema.parse({
       providers: [
@@ -373,7 +385,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       native: { ok: true, kind: "mcp", servers: [] },
     });
     const result = providersListDowngradeV8ToV6.downgradeResponse(
-      providersListResponseSchema.parse(v70),
+      providersListResponseSchemaV80.parse(v70),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -410,7 +422,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       ],
     });
     const result = providersListDowngradeV8ToV3.downgradeResponse(
-      providersListResponseSchema.parse(v31),
+      providersListResponseSchemaV80.parse(v31),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -435,7 +447,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       ],
     });
     const result = providersListDowngradeV8ToV2.downgradeResponse(
-      providersListResponseSchema.parse(v31),
+      providersListResponseSchemaV80.parse(v31),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -470,7 +482,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       providers: [latest],
     });
     const listResult = providersListDowngradeV8ToV1.downgradeResponse(
-      providersListResponseSchema.parse(list),
+      providersListResponseSchemaV80.parse(list),
     );
     expect(listResult.ok).toBe(true);
     if (!listResult.ok) return;
@@ -538,6 +550,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       providerId: "claude-code",
       scope: "global",
       workspaceRoot: null,
+      profileId: null,
     });
     expect(query.kind).toBe("mcp");
     expect(
@@ -743,6 +756,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     expect(
       providersMcpAuthRequestSchema.parse({
         providerId: "droid",
+        profileId: null,
         action: {
           action: "login",
           scope: "global",
@@ -762,6 +776,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     expect(
       providersAwaitMcpAuthRequestSchema.parse({
         providerId: "droid",
+        profileId: null,
         context: { scope: "global", workspaceRoot: null, serverName: "linear" },
       }).context.serverName,
     ).toBe("linear");
@@ -772,6 +787,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     expect(
       providersCancelMcpAuthRequestSchema.parse({
         providerId: "droid",
+        profileId: null,
         context: { scope: "global", workspaceRoot: null, serverName: "linear" },
       }).context.serverName,
     ).toBe("linear");
@@ -784,6 +800,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     expect(
       providersNativeMutateRequestSchema.parse({
         providerId: "claude-code",
+        profileId: null,
         mutation: {
           kind: "mcp",
           scope: "global",
@@ -873,6 +890,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       nativeListQuerySchema.safeParse({
         kind: "mcp",
         providerId: "claude-code",
+        profileId: null,
         ...validGlobal,
       }).success,
     ).toBe(true);
@@ -880,6 +898,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       nativeListQuerySchema.safeParse({
         kind: "mcpDiscover",
         providerId: "claude-code",
+        profileId: null,
         ...validProject,
         serverName: "s",
         forceRefresh: false,
@@ -1243,5 +1262,219 @@ describe("registry method-name fold", () => {
       expect(names).toContain(method);
     }
     expect(releasedMethodNames).toHaveLength(113);
+  });
+});
+
+// ── D21: `providers.nativeMutate`/`mcpAuth`/`awaitMcpAuth`/`cancelMcpAuth`
+// `@2.0` (W2-T3) ─────────────────────────────────────────────────────────
+//
+// Each `2 -> 1` downgrade FAILS CLOSED on a non-null `profileId` rather than
+// rewriting it to the default account - silently writing the wrong account's
+// config is the exact defect this refactor exists to remove.
+describe("providers.nativeMutate/mcpAuth trio @2.0 profileId (D21/D17)", () => {
+  it("nativeMutate@2.0 -> 1.0 fails closed on a non-null profileId, strips a null one", () => {
+    const mutation = {
+      kind: "mcp" as const,
+      scope: "global" as const,
+      workspaceRoot: null,
+      mutation: { action: "remove" as const, name: "playwright" },
+    };
+    const refused = providersNativeMutateDowngradeV20ToV10.downgradeRequest({
+      providerId: "claude-code",
+      profileId: "p1",
+      mutation,
+    });
+    expect(refused).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "DOWNGRADE_UNSUPPORTED" }),
+    });
+
+    const accepted = providersNativeMutateDowngradeV20ToV10.downgradeRequest({
+      providerId: "claude-code",
+      profileId: null,
+      mutation,
+    });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.value).not.toHaveProperty("profileId");
+    expect(accepted.value).toEqual({ providerId: "claude-code", mutation });
+  });
+
+  it("mcpAuth@2.0 -> 1.0 fails closed on a non-null profileId, strips a null one", () => {
+    const action = {
+      action: "login" as const,
+      scope: "global" as const,
+      workspaceRoot: null,
+      serverName: "linear",
+    };
+    const refused = providersMcpAuthDowngradeV20ToV10.downgradeRequest({
+      providerId: "droid",
+      profileId: "p1",
+      action,
+    });
+    expect(refused).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "DOWNGRADE_UNSUPPORTED" }),
+    });
+
+    const accepted = providersMcpAuthDowngradeV20ToV10.downgradeRequest({
+      providerId: "droid",
+      profileId: null,
+      action,
+    });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.value).not.toHaveProperty("profileId");
+  });
+
+  it("awaitMcpAuth@2.0 -> 1.0 fails closed on a non-null profileId, strips a null one", () => {
+    const context = {
+      scope: "global" as const,
+      workspaceRoot: null,
+      serverName: "linear",
+    };
+    const refused = providersAwaitMcpAuthDowngradeV20ToV10.downgradeRequest({
+      providerId: "droid",
+      profileId: "p1",
+      context,
+    });
+    expect(refused).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "DOWNGRADE_UNSUPPORTED" }),
+    });
+
+    const accepted = providersAwaitMcpAuthDowngradeV20ToV10.downgradeRequest({
+      providerId: "droid",
+      profileId: null,
+      context,
+    });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.value).not.toHaveProperty("profileId");
+  });
+
+  it("cancelMcpAuth@2.0 -> 1.0 fails closed on a non-null profileId, strips a null one", () => {
+    const context = {
+      scope: "global" as const,
+      workspaceRoot: null,
+      serverName: "linear",
+    };
+    const refused = providersCancelMcpAuthDowngradeV20ToV10.downgradeRequest({
+      providerId: "droid",
+      profileId: "p1",
+      context,
+    });
+    expect(refused).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "DOWNGRADE_UNSUPPORTED" }),
+    });
+
+    const accepted = providersCancelMcpAuthDowngradeV20ToV10.downgradeRequest({
+      providerId: "droid",
+      profileId: null,
+      context,
+    });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.value).not.toHaveProperty("profileId");
+  });
+});
+
+// ── W2 fix pass (P2): `providers.nativeMutate@1.0`'s RESPONSE is frozen ────
+//
+// `@1.0` shipped in `host-v1.3.0-rc.*` bound to the then-live
+// `nativeMutationResultSchema`, whose skills arm carried four fields plus the
+// optional `origin`/`conflict`. W2-T12b grew `providerSkillSchema` with two
+// REQUIRED fields, which grew that released response with it - the exact
+// class of break `providers.list@7.0`/`@8.0` were frozen to prevent, applied
+// to one of the two lines that reach the skill row and not the other.
+describe("providers.nativeMutate@1.0 response is frozen at the rc shape", () => {
+  const V20_SKILLS_RESULT = {
+    ok: true as const,
+    kind: "skills" as const,
+    skills: [
+      {
+        name: "find-skills",
+        description: null,
+        path: "/Users/dev/.agents/skills/find-skills",
+        source: "shared" as const,
+        ownership: "external" as const,
+        writable: false,
+      },
+    ],
+  };
+
+  it("the 2.0 -> 1.0 response downgrade strips ownership and writable", () => {
+    const downgraded = providersNativeMutateDowngradeV20ToV10.downgradeResponse(
+      { result: V20_SKILLS_RESULT },
+    );
+    expect(downgraded.ok).toBe(true);
+    if (!downgraded.ok) return;
+    const result = downgraded.value.result;
+    if (result.ok !== true || result.kind !== "skills") {
+      throw new Error("expected a successful skills mutation result");
+    }
+    expect(result.skills[0]).not.toHaveProperty("ownership");
+    expect(result.skills[0]).not.toHaveProperty("writable");
+    expect(result.skills[0].name).toBe("find-skills");
+  });
+
+  it("the frozen 1.0 result rejects nothing the rc shape accepted and models neither new field", () => {
+    const parsed = nativeMutationResultSchemaV10.parse({
+      ok: true,
+      kind: "skills",
+      skills: [
+        {
+          name: "find-skills",
+          description: null,
+          path: "/Users/dev/.claude/skills/find-skills",
+          source: "shared",
+          origin: "Imported from acme",
+          conflict: true,
+        },
+      ],
+    });
+    if (parsed.ok !== true || parsed.kind !== "skills") {
+      throw new Error("expected a successful skills mutation result");
+    }
+    expect(parsed.skills[0].origin).toBe("Imported from acme");
+    expect(parsed.skills[0]).not.toHaveProperty("ownership");
+  });
+
+  it("the 1.0 -> 2.0 response upgrade fills managed/writable rather than passing through", () => {
+    const upgraded = providersNativeMutateUpgradeV10ToV20.upgradeResponse({
+      result: {
+        ok: true,
+        kind: "skills",
+        skills: [
+          {
+            name: "find-skills",
+            description: null,
+            path: "/Users/dev/.claude/skills/find-skills",
+            source: "shared",
+          },
+        ],
+      },
+    });
+    const result = upgraded.result;
+    if (result.ok !== true || result.kind !== "skills") {
+      throw new Error("expected a successful skills mutation result");
+    }
+    expect(result.skills[0].ownership).toBe("managed");
+    expect(result.skills[0].writable).toBe(true);
+  });
+
+  it("leaves a non-skills mutation result alone in both directions", () => {
+    const mcpResult = { ok: true as const, kind: "mcp" as const, servers: [] };
+    const down = providersNativeMutateDowngradeV20ToV10.downgradeResponse({
+      result: mcpResult,
+    });
+    expect(down.ok).toBe(true);
+    if (down.ok) expect(down.value.result).toEqual(mcpResult);
+    expect(
+      providersNativeMutateUpgradeV10ToV20.upgradeResponse({
+        result: mcpResult,
+      }).result,
+    ).toEqual(mcpResult);
   });
 });

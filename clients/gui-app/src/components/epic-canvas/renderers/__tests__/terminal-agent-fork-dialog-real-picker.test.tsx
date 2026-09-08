@@ -370,6 +370,7 @@ import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalAgentForkDialog } from "../terminal-agent-fork-dialog";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const CAPABILITY_LOCK_REASON =
   "Update Traycer host to continue this session under another profile.";
@@ -452,7 +453,7 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
     expect(titleInputValue()).toBe("Fork - Source terminal");
 
     const admitted = screen.getByRole("menuitem", {
-      name: /Terminal account/,
+      name: /Default account/,
     });
     if (!(admitted instanceof HTMLButtonElement)) {
       throw new Error("expected ambient menuitem button");
@@ -502,7 +503,7 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
     const sourceRow = await waitFor(() => {
       const row = screen.getByRole("menuitem", {
         name: new RegExp(
-          `Terminal account.*${escapeRegExp(SOURCE_NOT_READY_REASON)}`,
+          `Default account.*${escapeRegExp(SOURCE_NOT_READY_REASON)}`,
         ),
       });
       if (!(row instanceof HTMLButtonElement)) {
@@ -568,7 +569,7 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
     expect(titleInputValue()).toBe("Fork - Source terminal");
 
     const sourceRow = screen.getByRole("menuitem", {
-      name: /Terminal account/,
+      name: /Default account/,
     });
     if (!(sourceRow instanceof HTMLButtonElement)) {
       throw new Error("expected ambient menuitem button");
@@ -655,7 +656,7 @@ function emptyWorkspaceSeed(): ForkWorkspaceSeed {
 }
 
 function ambientProfile(label: string): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -674,11 +675,11 @@ function ambientProfile(label: string): ProviderProfile {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function managedProfile(profileId: string, label: string): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind: "managed",
@@ -697,7 +698,7 @@ function managedProfile(profileId: string, label: string): ProviderProfile {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function seedClaudeProviders(profiles: ReadonlyArray<ProviderProfile>): void {

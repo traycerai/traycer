@@ -60,6 +60,7 @@ function render(args: {
         providerId: "codex",
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
         pluginId: "github@m",
         version: args.version,
         hasDarkIcon: args.hasDarkIcon,

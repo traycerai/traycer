@@ -9,6 +9,7 @@ import {
   backgroundRateLimitMembershipKey,
   selectBackgroundRateLimitTargets,
 } from "@/lib/rate-limits/background-rate-limit-targets";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const NOW = 1_700_000_000_000;
 
@@ -24,7 +25,7 @@ function profile(input: {
   readonly authenticated?: boolean;
   readonly enabled?: boolean;
 }): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: input.profileId,
     enabled: input.enabled ?? true,
     kind: input.kind,
@@ -48,7 +49,7 @@ function profile(input: {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function provider(input: {

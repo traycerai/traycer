@@ -24,6 +24,7 @@ export type SkillsMutateVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly mutation: ProvidersSkillsMutateAction;
   /**
    * When true, the hook skips the global toast so the caller can render the
@@ -41,6 +42,7 @@ interface SkillsMutateContext {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
     readonly workspaceRoot: string | null;
+    readonly profileId: string | null;
   };
 }
 
@@ -62,6 +64,7 @@ export function useProvidersSkillsMutate(): UseMutationResult<
     mutationFn: async (variables) => {
       const response = await client.request("providers.nativeMutate", {
         providerId: variables.providerId,
+        profileId: variables.profileId,
         mutation: {
           kind: "skills",
           scope: variables.scope,
@@ -77,6 +80,7 @@ export function useProvidersSkillsMutate(): UseMutationResult<
         providerId: variables.providerId,
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
+        profileId: variables.profileId,
       },
     }),
     onSuccess: (data, variables, ctx) => {

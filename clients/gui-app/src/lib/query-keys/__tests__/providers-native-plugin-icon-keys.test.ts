@@ -11,6 +11,7 @@ const SCOPE: NativeListScopeParams = {
   providerId: "codex",
   scope: "global",
   workspaceRoot: null,
+  profileId: null,
 };
 
 function iconKey(args: {

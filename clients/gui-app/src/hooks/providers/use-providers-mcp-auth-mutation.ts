@@ -26,6 +26,7 @@ export type McpAuthVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly auth: {
     readonly action: NativeAuthAction["action"];
     readonly serverName: string;
@@ -39,6 +40,7 @@ interface McpAuthContext {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
     readonly workspaceRoot: string | null;
+    readonly profileId: string | null;
   };
 }
 
@@ -91,6 +93,7 @@ export function useProvidersMcpAuth(): UseMutationResult<
     mutationFn: async (variables) => {
       const response = await client.request("providers.mcpAuth", {
         providerId: variables.providerId,
+        profileId: variables.profileId,
         action: toMcpAuthAction(variables),
       });
       return mapMcpAuthResponse({ response });
@@ -101,6 +104,7 @@ export function useProvidersMcpAuth(): UseMutationResult<
         providerId: variables.providerId,
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
+        profileId: variables.profileId,
       },
     }),
     onSuccess: (_data, _variables, ctx) => {

@@ -237,6 +237,44 @@ export type HostUsageSummaryRequestV10 = z.infer<
 >;
 
 /**
+ * D21/D27: per-profile totals. Absent or `null` = every profile, today's
+ * exact behaviour - only ever a NARROWING, same reasoning as `hostId` above.
+ *
+ * A NEW MAJOR, not a minor (discrepancy from the ticket text, which called
+ * for `@1.1`): `hostUsageSummaryRequestSchemaV10` is `.strict()`, and the
+ * registry's own minor-additivity validator (`versioned-rpc.ts`,
+ * `findAdditivityViolation`) refuses ANY field addition on a minor whose
+ * PREVIOUS minor is `.strict()` - a strict schema cannot silently strip an
+ * unknown key the way a plain object does, so the same-major "reparse
+ * through the older schema" projection a minor skew relies on would throw,
+ * not degrade. `host-v1.3.0-rc.3` ships `@1.0` exactly as `.strict()`, so
+ * this is provably not fixable by hand-copying a differently-shaped `@1.1` -
+ * the validator throws at `defineFloorAwareVersionedRpcRegistry(...)` time
+ * regardless (confirmed by running the registry). A major gets the explicit
+ * downgrade bridge a minor cannot express: `hostUsageSummaryDowngradeV20ToV10`
+ * strips `profileId` (never refuses - the field only ever narrows a READ, so
+ * an old host returning every profile's totals is an honest degradation, not
+ * a silently-wrong target the way a write would be).
+ *
+ * Hand-copied (every `V10` field, plus `profileId`), not `.extend()`ed - same
+ * discipline as every other frozen shape in this file.
+ */
+export const hostUsageSummaryRequestSchemaV20 = z
+  .object({
+    timezone: z.string().min(1).max(100),
+    windowDays: z.number().int().positive(),
+    epicId: z.string().min(1).max(191).nullable(),
+    chatId: z.string().min(1).max(191).nullable().optional(),
+    window: z.enum(["epic"]).optional(),
+    hostId: z.string().min(1).max(36).nullable().optional(),
+    profileId: z.string().min(1).max(191).nullable().optional(),
+  })
+  .strict();
+export type HostUsageSummaryRequestV20 = z.infer<
+  typeof hostUsageSummaryRequestSchemaV20
+>;
+
+/**
  * `servedBy` names which bounded reader answered the request - see the
  * replication-and-read-path artifact's "one implementation, two bounded
  * readers". Never a client-side choice: the host resolves the plane from

@@ -4,9 +4,11 @@ import {
   COMPOSER_HARNESS_MEMORY_CAP,
   migrateComposerHarnessMemoryPersistedState,
   migrateComposerHarnessMemoryPersistedStateV3,
+  migrateComposerHarnessMemoryPersistedStateV4,
   selectLastProfileByHarness,
   useComposerHarnessMemoryStore,
 } from "@/stores/composer/composer-harness-memory-store";
+import { seedResolvedHarnessSwitch } from "@/stores/composer/commit-selection";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { composerHarnessMemoryKey } from "@/lib/persist";
 import {
@@ -62,7 +64,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
@@ -138,7 +140,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "unknown-harness"),
+        .resolveHarnessSwitch(HOST_A, "unknown-harness", null),
     ).toEqual({
       modelSlug: "",
       reasoningEffort: null,
@@ -154,7 +156,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
@@ -170,7 +172,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", null),
     ).toEqual({
       modelSlug: "",
       reasoningEffort: null,
@@ -192,7 +194,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", null),
     ).toEqual({
       modelSlug: "opus-4.1",
       reasoningEffort: "low",
@@ -217,7 +219,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
@@ -260,7 +262,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: null,
@@ -352,7 +354,7 @@ describe("composer harness memory store", () => {
     ).toEqual({});
   });
 
-  it("keeps one last-model memory for a provider across profile changes", () => {
+  it("keeps independent model memory per profile on the same harness (D09), and restores each on switching back", () => {
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
       ...CLAUDE_SETTINGS,
       model: "sonnet-4.5",
@@ -364,15 +366,31 @@ describe("composer harness memory store", () => {
       profileId: "personal",
     });
 
+    // Two distinct (harness, profile) keys - neither write clobbered the
+    // other's remembered model.
     expect(
-      useComposerHarnessMemoryStore.getState().byHost[HOST_A]
-        .lastModelByHarness,
-    ).toEqual({ claude: "opus-4.1" });
+      Object.keys(
+        useComposerHarnessMemoryStore.getState().byHost[HOST_A]
+          .lastModelByHarness,
+      ),
+    ).toHaveLength(2);
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", "work"),
+    ).toMatchObject({ modelSlug: "sonnet-4.5" });
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch(HOST_A, "claude", "personal"),
     ).toMatchObject({ modelSlug: "opus-4.1" });
+    // Switching back restores "work"'s own model, unaffected by "personal"
+    // having been recorded in between.
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch(HOST_A, "claude", "work"),
+    ).toMatchObject({ modelSlug: "sonnet-4.5" });
   });
 
   it("keeps one model effort/tier record across profile changes", () => {
@@ -426,7 +444,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
@@ -466,7 +484,7 @@ describe("composer harness memory store", () => {
     const memory = useComposerHarnessMemoryStore.getState();
     expect(memory.resolveLastProfile(HOST_A, "claude")).toBe("work");
     expect(memory.legacy.lastModelByHarness).toEqual({ claude: "sonnet-4.5" });
-    expect(memory.resolveHarnessSwitch(HOST_A, "claude")).toEqual({
+    expect(memory.resolveHarnessSwitch(HOST_A, "claude", null)).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
       serviceTier: "flex",
@@ -509,7 +527,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch(HOST_A, "claude"),
+        .resolveHarnessSwitch(HOST_A, "claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
@@ -579,11 +597,125 @@ describe("composer harness memory store", () => {
       expect(state.legacy.lastModelByHarness).toEqual({
         claude: "sonnet-4.5",
       });
-      expect(state.resolveHarnessSwitch(HOST_A, "claude")).toEqual({
+      expect(state.resolveHarnessSwitch(HOST_A, "claude", null)).toEqual({
         modelSlug: "sonnet-4.5",
         reasoningEffort: "high",
         serviceTier: "flex",
       });
+    });
+  });
+
+  describe("v4 model-memory re-key migration", () => {
+    it("migrateComposerHarnessMemoryPersistedStateV4 re-keys a V3 bucket using that bucket's lastProfileByHarness, and leaves the legacy tier alone", () => {
+      const legacy = {
+        lastProfileByHarness: { claude: "legacy-profile" },
+        lastModelByHarness: { claude: "legacy-model" },
+        effortByHarnessModel: {
+          "claude legacy-model": {
+            reasoningEffort: "low",
+            serviceTier: null,
+            updatedAt: 1,
+          },
+        },
+      };
+      const hostBucket = {
+        lastProfileByHarness: { claude: "work" },
+        lastModelByHarness: { claude: "sonnet-4.5" },
+        effortByHarnessModel: {
+          "claude sonnet-4.5": {
+            reasoningEffort: "high",
+            serviceTier: "flex",
+            updatedAt: 2,
+          },
+        },
+      };
+
+      const migrated = migrateComposerHarnessMemoryPersistedStateV4({
+        byHost: { [HOST_A]: hostBucket },
+        legacy,
+      });
+
+      // Re-keyed from bare `claude` to the `(harnessId, profileId)` tuple,
+      // attributed to this bucket's own remembered profile ("work").
+      expect(migrated.byHost[HOST_A].lastModelByHarness).toEqual({
+        '["claude","work"]': "sonnet-4.5",
+      });
+      // `lastProfileByHarness` and `effortByHarnessModel` pass through
+      // untouched - only `lastModelByHarness` is re-keyed.
+      expect(migrated.byHost[HOST_A].lastProfileByHarness).toEqual(
+        hostBucket.lastProfileByHarness,
+      );
+      expect(migrated.byHost[HOST_A].effortByHarnessModel).toEqual(
+        hostBucket.effortByHarnessModel,
+      );
+      // The legacy tier predates per-host `lastProfileByHarness` entirely, so
+      // V4 leaves it exactly as given - still flat by harnessId.
+      expect(migrated.legacy).toEqual(legacy);
+    });
+
+    it("attributes a remembered model to the null (ambient) profile when the bucket has no lastProfileByHarness entry for that harness", () => {
+      const migrated = migrateComposerHarnessMemoryPersistedStateV4({
+        byHost: {
+          [HOST_A]: {
+            lastProfileByHarness: {},
+            lastModelByHarness: { claude: "sonnet-4.5" },
+            effortByHarnessModel: {},
+          },
+        },
+        legacy: {
+          lastProfileByHarness: {},
+          lastModelByHarness: {},
+          effortByHarnessModel: {},
+        },
+      });
+
+      expect(migrated.byHost[HOST_A].lastModelByHarness).toEqual({
+        '["claude",null]': "sonnet-4.5",
+      });
+    });
+
+    it("collapses pre-v3 input the same way v3 did, with nothing to re-key", () => {
+      const migrated = migrateComposerHarnessMemoryPersistedStateV4({
+        lastModelByHarness: { claude: "sonnet-4.5" },
+        effortByHarnessModel: {},
+      });
+
+      expect(migrated.byHost).toEqual({});
+      expect(migrated.legacy.lastModelByHarness).toEqual({
+        claude: "sonnet-4.5",
+      });
+    });
+  });
+
+  describe("D09 default-model seeding (the reader, not the store)", () => {
+    it("a (harness, profile) pair with no record resolves to the supplied defaultModel, and to the prior fallback when that is null", () => {
+      const resolved = useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch(HOST_A, "claude", "work");
+      expect(resolved.modelSlug).toBe("");
+
+      expect(seedResolvedHarnessSwitch(resolved, "opus-4.1")).toEqual({
+        ...resolved,
+        modelSlug: "opus-4.1",
+      });
+      // The prior fallback (the store's own "" sentinel) survives a null
+      // defaultModel unchanged.
+      expect(seedResolvedHarnessSwitch(resolved, null)).toEqual(resolved);
+    });
+
+    it("never overrides an already-remembered model with defaultModel", () => {
+      useComposerHarnessMemoryStore.getState().record(HOST_A, {
+        ...CLAUDE_SETTINGS,
+        model: "sonnet-4.5",
+        profileId: "work",
+      });
+      const resolved = useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch(HOST_A, "claude", "work");
+
+      expect(seedResolvedHarnessSwitch(resolved, "opus-4.1").modelSlug).toBe(
+        "sonnet-4.5",
+      );
     });
   });
 
@@ -608,7 +740,7 @@ describe("composer harness memory store", () => {
       expect(
         useComposerHarnessMemoryStore
           .getState()
-          .resolveHarnessSwitch(HOST_A, "claude"),
+          .resolveHarnessSwitch(HOST_A, "claude", null),
       ).toEqual({
         modelSlug: "sonnet-4.5",
         reasoningEffort: "high",
@@ -618,7 +750,7 @@ describe("composer harness memory store", () => {
       expect(
         useComposerHarnessMemoryStore
           .getState()
-          .resolveHarnessSwitch(HOST_B, "claude"),
+          .resolveHarnessSwitch(HOST_B, "claude", null),
       ).toEqual({
         modelSlug: "legacy-model",
         reasoningEffort: "medium",
@@ -672,7 +804,7 @@ describe("composer harness memory store", () => {
       expect(
         useComposerHarnessMemoryStore
           .getState()
-          .resolveHarnessSwitch(null, "claude"),
+          .resolveHarnessSwitch(null, "claude", null),
       ).toEqual({
         modelSlug: "",
         reasoningEffort: null,
@@ -708,7 +840,7 @@ describe("composer harness memory store", () => {
       expect(
         useComposerHarnessMemoryStore
           .getState()
-          .resolveHarnessSwitch(HOST_A, "claude"),
+          .resolveHarnessSwitch(HOST_A, "claude", null),
       ).toEqual({
         modelSlug: "sonnet-4.5",
         reasoningEffort: "high",
@@ -719,7 +851,7 @@ describe("composer harness memory store", () => {
       expect(
         useComposerHarnessMemoryStore
           .getState()
-          .resolveHarnessSwitch(HOST_B, "claude"),
+          .resolveHarnessSwitch(HOST_B, "claude", null),
       ).toEqual({
         modelSlug: "legacy-model",
         reasoningEffort: "low",

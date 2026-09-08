@@ -10,6 +10,7 @@ import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 /**
  * F4 (durability audit), tombstone-display surface: a user message's
@@ -36,7 +37,7 @@ const VERY_LONG_LABEL = "B".repeat(2000);
 const HTML_LOOKING_LABEL = '<img src=x onerror="alert(1)">';
 
 function claudeStateWithoutProfile(): ProviderCliState {
-  const ambient: ProviderProfile = {
+  const ambient: ProviderProfile = providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -55,7 +56,7 @@ function claudeStateWithoutProfile(): ProviderCliState {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
   return {
     providerId: "claude-code",
     enabled: true,

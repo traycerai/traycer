@@ -1,8 +1,5 @@
 import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
-import type {
-  ProviderCliState,
-  ProviderId,
-} from "@traycer/protocol/host/provider-schemas";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 
 /**
  * A tab the detail pane can render. Every wire tab, plus `account` — which is
@@ -63,7 +60,6 @@ export const PROVIDER_TAB_ORDER: readonly ProviderTabKey[] = [
  * per-provider rule against an id instead of a fact.
  */
 export interface ProviderTabInputs {
-  readonly apiKeySupported: boolean;
   /** `nativeCapabilities.supportedTabs` as advertised by the host. */
   readonly advertised: readonly ProviderSettingsTab[];
 }
@@ -87,10 +83,8 @@ export interface ProviderTabInputs {
  *   every provider has a binary name to search for, and the candidates section
  *   renders a real empty state when nothing is found rather than nothing at
  *   all.
- * - `account` is client-derived and shows exactly when the provider takes an
- *   API key — the key field is the only way to authenticate those providers,
- *   so its visibility must not depend on a host advertisement that (for amp)
- *   legitimately omits every account-ish tab.
+ * - `account` is client-derived and always shown (D05: every provider exposes
+ *   a Default account row, so the Account tab is always the first tab).
  * - `usage` is taken at the host's word. It already gates that tab on being
  *   able to populate it (managed profiles, the Traycer subscription card, or
  *   rate limits), which is the same question this side would have to re-derive.
@@ -100,62 +94,29 @@ export function supportedTabsFor(
 ): readonly ProviderTabKey[] {
   const advertised = new Set<ProviderTabKey>(input.advertised);
   return PROVIDER_TAB_ORDER.filter((tab) => {
-    if (tab === "account") return input.apiKeySupported;
+    if (tab === "account") return true;
     return advertised.has(tab);
   });
 }
 
 export function providerTabInputs(state: ProviderCliState): ProviderTabInputs {
   return {
-    apiKeySupported: state.apiKey.supported,
     advertised: state.nativeCapabilities.supportedTabs,
   };
 }
 
 /**
- * Whether this provider has MANAGED PROFILES at all.
+ * The tab's label. Presentation only - the tab ID (`labels`' keys) is the
+ * wire enum and is untouched by this lookup.
  *
- * A deliberate mirror of the host's `providerSupportsManagedProfiles`
- * (`traycer-host/src/domain/providers/provider-profile-support.ts`), which is
- * itself an id check - there is no capability on the wire to read instead,
- * because the host answers this question before it builds one. For a provider
- * outside this set `profiles` is empty BY RULE rather than by chance
- * (`resolveProfileWireEntries` returns `[]` without consulting the registry),
- * so the array cannot stand in for the rule: an unseeded claude-code is empty
- * too, and a label that reads the count would announce the wrong tab until the
- * first profile appears and then change under the user.
- *
- * Adding a profile-capable provider means updating BOTH sides. The cost of
- * missing it is a tab that under-promises until someone notices, not a broken
- * surface - which is why the label mirrors the rule rather than inventing a
- * second source of truth for it.
- */
-function providerSupportsManagedProfiles(providerId: ProviderId): boolean {
-  return (
-    providerId === "claude-code" ||
-    providerId === "codex" ||
-    providerId === "grok"
-  );
-}
-
-/**
- * The tab's label for THIS provider.
- *
- * Only `usage` varies. The tab holds managed profiles and usage limits, and for
- * every provider but two it holds only the second - so a fixed
- * "Profiles & Limits" promised a section that is not there, on ~10 of 12
- * providers. The short form is the panel's own words for what remains: the
- * section inside is headed "Usage limits".
- *
- * The tab ID is untouched - it is the wire enum, and this is presentation.
+ * Used to vary `usage`'s label by provider (profiles existed on only three of
+ * them); the profile switcher (D25) now owns profile display everywhere, so
+ * every provider's `usage` tab holds the same thing and the label no longer
+ * varies.
  */
 export function providerTabLabel(
   tab: ProviderTabKey,
   labels: Readonly<Record<ProviderTabKey, string>>,
-  providerId: ProviderId,
 ): string {
-  if (tab !== "usage" || providerSupportsManagedProfiles(providerId)) {
-    return labels[tab];
-  }
-  return "Usage limits";
+  return labels[tab];
 }

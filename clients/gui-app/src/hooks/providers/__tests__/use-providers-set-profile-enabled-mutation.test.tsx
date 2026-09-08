@@ -20,6 +20,7 @@ import {
   useProviderProfileEnablementPending,
   useProvidersSetProfileEnabledForClient,
 } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const HOST_A: HostDirectoryEntry = {
   hostId: "host-A",
@@ -43,7 +44,7 @@ function findTestHost(hostId: string): HostDirectoryEntry | null {
 }
 
 function profile(enabled: boolean): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "work",
     kind: "managed",
     authType: "oauth",
@@ -66,7 +67,7 @@ function profile(enabled: boolean): ProviderProfile {
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
-  };
+  });
 }
 
 function providerState(enabled: boolean): ProviderCliState {

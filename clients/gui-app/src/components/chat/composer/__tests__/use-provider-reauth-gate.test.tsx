@@ -37,6 +37,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { useProviderReauthGate } from "../use-provider-reauth-gate";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const AUTHED: ProviderAuth = {
   status: "authenticated",
@@ -105,7 +106,7 @@ function profile(
   label: string,
   authStatus: ProviderAuth["status"],
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -119,7 +120,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function claudeStateWithProfiles(

@@ -52,6 +52,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 import { useProfileUsageComparison } from "@/hooks/rate-limits/use-profile-usage-comparison";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 function profile(
   profileId: string,
@@ -59,7 +60,7 @@ function profile(
   label: string,
   overrides: Partial<ProviderProfile>,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     kind,
     authType: "oauth",
@@ -79,7 +80,7 @@ function profile(
     accentColor: null,
     ...overrides,
     enabled: overrides.enabled ?? true,
-  };
+  });
 }
 
 type RateLimitUsageHandler = (

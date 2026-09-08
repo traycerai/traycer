@@ -17,6 +17,7 @@ export function useProvidersMcpList(args: {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly enabled: boolean;
   readonly pollWhilePending: boolean;
 }): UseQueryResult<McpListData, HostRpcError> {
@@ -25,6 +26,7 @@ export function useProvidersMcpList(args: {
     providerId: args.providerId,
     scope: args.scope,
     workspaceRoot: args.workspaceRoot,
+    profileId: args.profileId,
   };
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,

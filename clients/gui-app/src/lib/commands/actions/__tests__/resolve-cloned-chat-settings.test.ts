@@ -13,6 +13,7 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { resolveClonedChatSettings } from "../resolve-cloned-chat-settings";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const BASE_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -39,7 +40,7 @@ function profile(
       : account;
   const enabled =
     typeof account === "object" && account !== null ? account.enabled : true;
-  return {
+  return providerProfileFixture({
     profileId,
     enabled,
     kind,
@@ -59,7 +60,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function claudeState(profiles: ProviderProfile[]): ProviderCliState {

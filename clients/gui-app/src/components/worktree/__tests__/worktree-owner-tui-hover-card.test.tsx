@@ -14,6 +14,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 interface TuiAgentFixture {
   readonly harnessId: "claude";
@@ -126,7 +127,7 @@ function profile(
   kind: "ambient" | "managed",
   label: string,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -145,7 +146,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 const TWO_PROFILES = [

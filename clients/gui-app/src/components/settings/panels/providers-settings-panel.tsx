@@ -11,6 +11,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { Button } from "@/components/ui/button";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -57,27 +58,36 @@ import {
 } from "@/lib/provider-ordering";
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
-import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
+import {
+  ApiKeyUsageNotice,
+  ProviderRateLimitForProvider,
+  USAGE_COVERAGE_SENTENCE,
+} from "./provider-rate-limit-section";
 import { ProviderMcpTab } from "./provider-mcp-tab";
 import { ProviderModelProvidersTab } from "./provider-model-providers-tab";
 import { ProviderPluginsTab } from "./provider-plugins-tab";
 import { ProviderSkillsTab } from "./provider-skills-tab";
-import { resolveRateLimitFetchEligibility } from "@/lib/rate-limit-providers";
 import {
-  AddProviderProfileDialog,
-  type FailedProviderProfileAttempt,
-} from "./add-provider-profile-dialog";
-import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
+  isRateLimitProfileFetchEligible,
+  resolveRateLimitFetchEligibility,
+} from "@/lib/rate-limit-providers";
+import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
+import { AddProfileDialog } from "./add-profile-dialog";
+import { ProfileSwitcher } from "./profile-switcher";
+import { ProfileEditDialog } from "./provider-profile-edit-dialog";
+import { CopySettingsPage } from "./copy-settings-page";
+import { useCopySettingsSupported } from "@/hooks/providers/use-copy-settings-supported";
+import { profileCommitId } from "@/components/providers/provider-profile-model";
 import {
-  defaultSelectedProfileId,
-  profileCommitId,
-} from "@/components/providers/provider-profile-model";
+  resolveSelectedProfileId,
+  useProvidersProfileSelectionStore,
+} from "@/stores/settings/providers-profile-selection-store";
 import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
 import {
   providerCanStartProfileOauth,
   providerSignInUnavailableHint,
 } from "@/components/providers/provider-signin-availability";
-import { ProviderApiKeySection } from "./provider-api-key-section";
+import { ProfileAccountTab } from "./profile-account-tab";
 import { ProviderRailControls } from "./provider-rail-controls";
 import {
   DEFAULT_PROVIDER_RAIL_VIEW,
@@ -109,13 +119,13 @@ type ProvidersListQuery = UseQueryResult<
 // `nativeCapabilities` object. An id this side renames that an older client
 // cannot parse fails the enum and drops that ENTIRE object, silently taking
 // MCP/Plugins/Skills with it. So every rename lands here, on the label, and
-// never on the id - `general` shows as "CLI & Args" and `usage` as
-// "Profiles & Limits". "General" said nothing about what the tab holds; each
-// label now names its own content.
+// never on the id - `general` shows as "CLI & Args" and `usage` as "Usage".
+// "General" said nothing about what the tab holds; each label now names its
+// own content.
 const PROVIDER_TAB_LABELS: Record<ProviderTabKey, string> = {
   general: "CLI & Args",
   account: "Account",
-  usage: "Profiles & Limits",
+  usage: "Usage",
   env: "Env",
   mcp: "MCP",
   plugins: "Plugins",
@@ -153,9 +163,8 @@ function initialActiveTab(
   // client-only `account` tab even though it is absent from the wire enum -
   // the match below is against the resolved tab list, not the schema. When no
   // focusTab is set (including the "Add API key" CTA that only sets
-  // `focusHarnessId`), `tabs[0]` is the first supported tab — account when the
-  // provider takes a key, usage when it has profiles/limits, otherwise the
-  // next supported tab in display order.
+  // `focusHarnessId`), `tabs[0]` is the first supported tab - `account` for
+  // every provider now (D05: every provider has a Default account row).
   const focusTab = useProvidersFocusStore.getState().focusTab;
   if (focusTab !== null) {
     const match = tabs.find((tab) => tab === focusTab);
@@ -175,17 +184,47 @@ function resolveTabForProvider(
   return tabs[0] ?? "general";
 }
 
-function initialSelectedProfileId(
+/**
+ * The row a deep link armed, or `null` when nothing is armed or the armed id
+ * names no present row.
+ *
+ * The focus store carries a WIRE profile id - the ambient row's is the
+ * literal `"ambient"` sentinel - while every piece of this component's state
+ * is a COMMIT id (`null` for the Default account; `profileCommitId`). Resolve
+ * to the row once, here, and let both consumers derive their commit id from
+ * it: comparing a normalized `selectedProfileId` against the raw wire id is
+ * how the Default account's re-sign-in deep link came to be unreachable
+ * (`null !== "ambient"`, always).
+ */
+function focusedProfileRow(
   profiles: readonly ProviderProfile[],
   focusProfileId: string | null,
+): ProviderProfile | null {
+  if (focusProfileId === null) return null;
+  return (
+    profiles.find((profile) => profile.profileId === focusProfileId) ?? null
+  );
+}
+
+// The profile the switcher opens on: the focus store's armed row when one is
+// present (a deep link, e.g. a re-auth banner, always wins), otherwise the
+// persisted `(hostId, providerId)` selection - D25's "Selection remembered
+// GUI-locally … invalid → Default account", read through
+// `resolveSelectedProfileId`.
+function initialSelectedProfileId(
+  profiles: readonly ProviderProfile[],
+  focusedRow: ProviderProfile | null,
+  hostId: string | null,
+  providerId: ProviderId,
 ): string | null {
-  if (focusProfileId !== null) {
-    const focused = profiles.find(
-      (profile) => profile.profileId === focusProfileId,
-    );
-    if (focused !== undefined) return profileCommitId(focused);
-  }
-  return defaultSelectedProfileId(profiles);
+  if (focusedRow !== null) return profileCommitId(focusedRow);
+  const remembered =
+    hostId === null
+      ? undefined
+      : useProvidersProfileSelectionStore.getState().selectedByHost[hostId]?.[
+          providerId
+        ];
+  return resolveSelectedProfileId(remembered, profiles);
 }
 
 // NOTE: the per-tab "has content" dot that used to render here is gone on
@@ -679,7 +718,7 @@ function ProvidersRailLayout({
   // first provider lands the deep link on the wrong tab. The "Add API key" CTA
   // sets `focusHarnessId` with no `focusTab`; with a first provider defaulting
   // to `usage`, a focused provider that also supports `usage` would keep
-  // "Profiles & Limits" instead of opening its own first tab, "Account" — the
+  // "Usage" instead of opening its own first tab, "Account" — the
   // one field the CTA exists to reach. When the deep link is not consumed (no
   // focus, or a different host) `initialFocus.harnessId` is already null, so
   // this stays the rail's first provider.
@@ -970,6 +1009,91 @@ function ProviderEnablementControl(props: {
   );
 }
 
+/**
+ * A sign-in attempt that failed while adding a profile (D25's Add profile,
+ * `AddProviderProfileDialog`'s `onFailedAttempt`): the dialog closes on
+ * failure, and this is the surviving notice - Retry re-opens it, Dismiss
+ * clears it. Kept at the `ProviderDetail` level (rather than folded into
+ * `ProfileSwitcher`, whose contract this ticket keeps to D25's exact
+ * layout) since it is a transient outcome of the add flow, not part of the
+ * switcher's persistent profile context.
+ */
+function AddProfileFailedNotice(props: {
+  readonly failedAttempt: FailedProviderProfileAttempt | null;
+  readonly onRetry: () => void;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  if (props.failedAttempt === null) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
+      <span className="min-w-0">
+        Sign-in did not finish for{" "}
+        {PROVIDER_DISPLAY_NAMES[props.failedAttempt.providerId]}.
+      </span>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button type="button" size="sm" variant="ghost" onClick={props.onRetry}>
+          Retry
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={props.onDismiss}
+        >
+          Dismiss
+        </Button>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Provider sign-in failed",
+            message: "Sign-in did not finish for a provider profile.",
+            code: null,
+            source: "Provider sign-in",
+          })}
+          presentation="icon"
+          className={undefined}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Whether the profile editor opens straight into its re-auth arm: the deep
+ * link asked for sign-in, it named a row that exists, that row is the one the
+ * switcher is showing, and this provider can be signed into at all. Anything
+ * short of all four opens the ordinary Manage arm.
+ *
+ * The comparison is against the row's COMMIT id, never its raw wire id -
+ * comparing a normalized `selectedProfileId` against `"ambient"` is how the
+ * Default account's re-sign-in deep link came to be unreachable.
+ */
+function shouldStartProfileEditorInReauth(input: {
+  readonly initialSignIn: boolean;
+  readonly focusedRow: ProviderProfile | null;
+  readonly selectedProfileId: string | null;
+  readonly canAddProfile: boolean;
+}): boolean {
+  if (!input.initialSignIn || !input.canAddProfile) return false;
+  if (input.focusedRow === null) return false;
+  return input.selectedProfileId === profileCommitId(input.focusedRow);
+}
+
+/** The row the profile-scoped surfaces are showing: the selected commit id's
+ *  row, or the first row when that selection names nothing (a removed
+ *  profile), or `null` for a provider with no rows at all. */
+function selectedProfileRow(
+  profiles: readonly ProviderProfile[],
+  selectedProfileId: string | null,
+): ProviderProfile | null {
+  return (
+    profiles.find(
+      (profile) => profileCommitId(profile) === selectedProfileId,
+    ) ??
+    profiles.at(0) ??
+    null
+  );
+}
+
 function ProviderDetail({
   state,
   providers,
@@ -1020,9 +1144,24 @@ function ProviderDetail({
   // keys `<ProviderDetail>` by `active.providerId`, remounting this component
   // (and this `useState`'s lazy initializer) whenever the active provider
   // changes.
+  // Normalized once at the boundary - see `focusedProfileRow`. Both the
+  // initial selection and the re-auth deep link below read commit ids from
+  // this row, never the raw wire id.
+  const focusedRow = focusedProfileRow(state.profiles, initialProfileId);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
-    () => initialSelectedProfileId(state.profiles, initialProfileId),
+    () =>
+      initialSelectedProfileId(state.profiles, focusedRow, hostId, providerId),
   );
+  // Writes both the render-local selection (so the switcher/tabs update this
+  // frame) and the persisted `(hostId, providerId)` memory (D25) - the two
+  // never drift because every caller that changes the selection goes through
+  // this, never `setSelectedProfileId` directly.
+  const setSelectedProfileIdPersisted = (profileId: string | null): void => {
+    setSelectedProfileId(profileId);
+    useProvidersProfileSelectionStore
+      .getState()
+      .setSelected(hostId, providerId, profileId);
+  };
   const setEnabled = useProvidersSetEnabled();
   const setProfileEnabled = useProvidersSetProfileEnabledForClient(
     hostClient,
@@ -1065,42 +1204,54 @@ function ProviderDetail({
   // choosing anything, which is why this gate used to read the sticky mode
   // instead of the effective flag.
   const detailPaneInert = !state.enabled;
+  // D22: admission asks "can this be signed into by SOME mode", answered by
+  // the universally-available `device` mode - a remote host is no longer
+  // refused here, since the add-profile dialog's own toggle (browser default
+  // only when local) is what actually resolves which mode runs.
   const canAddProfile = providerCanStartProfileOauth(
     state,
+    "device",
     isSelectedHostLocal,
   );
-  const shouldStartInReauth =
-    initialSignIn &&
-    initialProfileId !== null &&
-    selectedProfileId === initialProfileId &&
-    canAddProfile;
+  // D25/W2-T10 point 4: the switcher's Add-profile gate is `canAddProfile`
+  // alone - no separate `|| !isSelectedHostLocal` conjunct. `canAddProfile`
+  // already resolves locality internally (`providerSignInUnavailableHint`);
+  // layering a second locality check on top is exactly the drift W2-T10
+  // removes everywhere else.
+  const addProfileDisabled = !canAddProfile;
+  const addProfileDisabledReason = addProfileDisabled
+    ? providerSignInUnavailableHint(state, "device", isSelectedHostLocal)
+    : null;
+  const shouldStartInReauth = shouldStartProfileEditorInReauth({
+    initialSignIn,
+    focusedRow,
+    selectedProfileId,
+    canAddProfile,
+  });
+  const [editProfileOpen, setEditProfileOpen] = useState(shouldStartInReauth);
+  const [editSessionId, setEditSessionId] = useState(0);
+  const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
+    shouldStartInReauth ? "sign-in" : "manage",
+  );
+  const openProfileEditor = (): void => {
+    setEditIntent("manage");
+    setEditSessionId((current) => current + 1);
+    setEditProfileOpen(true);
+  };
+  const selectedProfile = selectedProfileRow(state.profiles, selectedProfileId);
+  // Wave-2 methods (D21): an older host handshakes without one or both of
+  // `providers.previewCopySettings` / `providers.applyCopySettings`, which
+  // hides Copy settings… entirely (see `ProfileSwitcher`'s
+  // `onOpenCopySettings` doc comment - this is the page it opens).
+  // `useCopySettingsSupported` is also `CopySettingsPage`'s own render
+  // guard, so the switcher entry and the page it opens never disagree.
+  const supportsCopySettings = useCopySettingsSupported(hostId);
+  const [copySettingsOpen, setCopySettingsOpen] = useState(false);
+  const openCopySettings = (): void => setCopySettingsOpen(true);
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
   ).length;
   const tabs = resolveSupportedTabs(providerTabInputs(state));
-  // Bundled once here (rather than threaded as eight separate props) since
-  // only the "usage" ("Profiles & Limits") tab body needs the profile-
-  // management surface - the other tabs never see it.
-  const profileTab: ProviderProfileTabProps = {
-    hostId,
-    isSelectedHostLocal,
-    canAddProfile,
-    startInReauth: shouldStartInReauth,
-    failedAttempt: failedProfileAttempt,
-    onAddProfile: () => setAddProfileOpen(true),
-    onDismissFailedAttempt: () => setFailedProfileAttempt(null),
-    selectedProfileId,
-    onSelectedProfileIdChange: setSelectedProfileId,
-    profileEnablementAvailable,
-    profileStatusRefreshAvailable,
-    profileEnablementPending,
-    onSetProfileEnabled: (profileId, enabled) =>
-      setProfileEnabled.mutate({
-        providerId,
-        profileId: profileId ?? "ambient",
-        enabled,
-      }),
-  };
 
   return (
     // Three rows: provider header, section rail, section body. From `md` up
@@ -1158,27 +1309,71 @@ function ProviderDetail({
         />
       </div>
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail. The
-            API-key card used to sit here, above the bar, so a provider's only
-            real setting appeared outside the tabs that were supposed to hold
-            its settings; it is now the whole body of the `account` tab. That
-            matters more now that the rail is PINNED: anything parked here would
-            occupy fixed height at the top of the pane forever, not just until
-            you scrolled past it. */}
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => {
-            const next = tabs.find((tab) => tab === value);
-            if (next === undefined) return;
-            onActiveTabChange(next);
-          }}
-          // `gap-0`, with the rail-to-body spacing moved INSIDE the scroll box
-          // as `pt-4`. With a gap here the scroll box would start 4 units below
-          // the rail's rule, so content vanished in mid-air above itself; owned
-          // by the body, the clip edge and the rule are the same line.
-          className="flex flex-1 flex-col gap-0 md:min-h-0"
-        >
-          {/* Two presentations of ONE selection, off the same `tabs` list and
+        {/* The profile switcher (D25) is the one thing that renders between
+            the provider header and the tab rail: one persistent profile
+            context - label, status, the selector - that every tab below is
+            scoped to. It used to be nothing here (the API-key card lived
+            inside the tab body instead); profile selection is now
+            panel-level state that outlives any one tab, so it belongs above
+            the rail rather than inside a pane that unmounts when another tab
+            is active. */}
+        <ProfileSwitcher
+          state={state}
+          activeProfileId={selectedProfileId}
+          onSelectProfile={setSelectedProfileIdPersisted}
+          onAddProfile={() => setAddProfileOpen(true)}
+          addProfileDisabled={addProfileDisabled}
+          addProfileDisabledReason={addProfileDisabledReason}
+          onManageProfile={selectedProfile !== null ? openProfileEditor : null}
+          onOpenCopySettings={
+            supportsCopySettings && selectedProfile !== null
+              ? openCopySettings
+              : null
+          }
+          profileEnablementAvailable={profileEnablementAvailable}
+          profileEnablementPending={profileEnablementPending}
+          onSetProfileEnabled={(profileId, enabled) =>
+            setProfileEnabled.mutate({
+              providerId,
+              profileId: profileId ?? "ambient",
+              enabled,
+            })
+          }
+          profileStatusRefreshAvailable={profileStatusRefreshAvailable}
+        />
+        <AddProfileFailedNotice
+          failedAttempt={failedProfileAttempt}
+          onRetry={() => setAddProfileOpen(true)}
+          onDismiss={() => setFailedProfileAttempt(null)}
+        />
+        {copySettingsOpen && selectedProfile !== null ? (
+          // D13/W2-T11: the copy-settings flow replaces the tab rail (and
+          // its body) in place, rather than opening as its own route - the
+          // panel is already the addressed surface
+          // (host, provider, profile, tab), and a route would need its own
+          // host-scope re-provision for no benefit.
+          <CopySettingsPage
+            state={state}
+            client={hostClient}
+            hostId={hostId}
+            initialSourceProfileId={selectedProfileId}
+            onClose={() => setCopySettingsOpen(false)}
+          />
+        ) : (
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => {
+              const next = tabs.find((tab) => tab === value);
+              if (next === undefined) return;
+              onActiveTabChange(next);
+            }}
+            // `gap-0`, with the rail-to-body spacing moved INSIDE the scroll box
+            // as `pt-4`. With a gap here the scroll box would start 4 units below
+            // the rail's rule, so content vanished in mid-air above itself; owned
+            // by the body, the clip edge and the rule are the same line.
+            className="flex flex-1 flex-col gap-0 md:min-h-0"
+          >
+            {/* Two presentations of ONE selection, off the same `tabs` list and
               the same labels. The pointer-width rail is the line bar; below
               `md` it is a dropdown, because the bar's `flex-wrap` is what a
               phone gets - two ragged rows of the pane's fourth chrome row.
@@ -1189,17 +1384,15 @@ function ProviderDetail({
               the same prop this component's `onValueChange` above calls. Either
               way `Tabs` stays controlled from one place, so the bodies below
               and the one-mounted-pane invariant are untouched by the swap. */}
-          {isMobile ? (
-            <ProviderSectionSelect
-              tabs={tabs}
-              activeTab={activeTab}
-              onSelect={onActiveTabChange}
-              labelFor={(tab) =>
-                providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)
-              }
-            />
-          ) : (
-            /* Line (underline) tabs, not the filled default. Seven unrelated
+            {isMobile ? (
+              <ProviderSectionSelect
+                tabs={tabs}
+                activeTab={activeTab}
+                onSelect={onActiveTabChange}
+                labelFor={(tab) => providerTabLabel(tab, PROVIDER_TAB_LABELS)}
+              />
+            ) : (
+              /* Line (underline) tabs, not the filled default. Seven unrelated
                panes is NAVIGATION, and a filled track reads as a segmented
                control - which is for re-presenting one dataset, and tops out
                around four options. The old bar also cancelled the primitive's
@@ -1208,19 +1401,19 @@ function ProviderDetail({
                on the right as dead space. Full width is kept here for the
                BORDER (a rail spanning the pane), while the track itself is
                transparent, so there is nothing left to look empty. */
-            <TabsList
-              variant="line"
-              className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
-            >
-              {tabs.map((tab) => (
-                <TabsTrigger key={tab} value={tab} className="flex-none px-3">
-                  {providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          )}
+              <TabsList
+                variant="line"
+                className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+              >
+                {tabs.map((tab) => (
+                  <TabsTrigger key={tab} value={tab} className="flex-none px-3">
+                    {providerTabLabel(tab, PROVIDER_TAB_LABELS)}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            )}
 
-          {/* From `md` up, the scroll owner. Radix keeps every pane's div in
+            {/* From `md` up, the scroll owner. Radix keeps every pane's div in
               the DOM but hides all except the active one and mounts only its
               body, so there is exactly one live scroll box at a time and
               switching sections starts it at the top - which is what you want
@@ -1236,95 +1429,131 @@ function ProviderDetail({
               so the body simply grows and the surface carries it. The rail
               scrolls away with the content instead of staying pinned, which is
               the cost of that, and the reason the rail is one row tall. */}
-          {tabs.map((tab) => (
-            <TabsContent
-              key={tab}
-              value={tab}
-              // Radix names a pane after the TRIGGER that selects it
-              // (`aria-labelledby={triggerId}`), which on a phone names an
-              // element that does not exist - the dropdown replaces the whole
-              // `TabsList`, triggers included. So the phone arm labels the pane
-              // by its section instead, and drops the reference that would
-              // otherwise dangle. Caller props spread AFTER Radix's own in
-              // `Tabs.Content`, so both keys land.
-              //
-              // Spread CONDITIONALLY, because on the desktop arm the trigger is
-              // real and Radix's wiring is the better one.
-              {...(isMobile
-                ? {
-                    "aria-labelledby": undefined,
-                    "aria-label": providerTabLabel(
-                      tab,
-                      PROVIDER_TAB_LABELS,
-                      state.providerId,
-                    ),
-                  }
-                : {})}
-              className={cn(
-                "-mx-5 mt-0 px-5 pt-4 pb-5 transition-opacity duration-150 md:min-h-0 md:overflow-y-auto",
-                detailPaneInert &&
-                  tab !== "usage" &&
-                  "pointer-events-none opacity-50",
-              )}
-              {...(detailPaneInert && tab !== "usage" ? { inert: true } : {})}
-            >
-              <ProviderTabBody
-                tab={tab}
-                state={state}
-                providers={providers}
-                hostId={hostId}
-                detailPaneInert={detailPaneInert}
-                profileTab={profileTab}
-                apiKeyDraft={apiKeyDraft}
-                onApiKeyDraftChange={setApiKeyDraft}
-                onActiveTabChange={onActiveTabChange}
-              />
-            </TabsContent>
-          ))}
-        </Tabs>
+            {tabs.map((tab) => (
+              <TabsContent
+                key={tab}
+                value={tab}
+                // Radix names a pane after the TRIGGER that selects it
+                // (`aria-labelledby={triggerId}`), which on a phone names an
+                // element that does not exist - the dropdown replaces the whole
+                // `TabsList`, triggers included. So the phone arm labels the pane
+                // by its section instead, and drops the reference that would
+                // otherwise dangle. Caller props spread AFTER Radix's own in
+                // `Tabs.Content`, so both keys land.
+                //
+                // Spread CONDITIONALLY, because on the desktop arm the trigger is
+                // real and Radix's wiring is the better one.
+                {...(isMobile
+                  ? {
+                      "aria-labelledby": undefined,
+                      "aria-label": providerTabLabel(tab, PROVIDER_TAB_LABELS),
+                    }
+                  : {})}
+                className={cn(
+                  "-mx-5 mt-0 px-5 pt-4 pb-5 transition-opacity duration-150 md:min-h-0 md:overflow-y-auto",
+                  detailPaneInert &&
+                    tab !== "usage" &&
+                    tab !== "account" &&
+                    "pointer-events-none opacity-50",
+                )}
+                {...(detailPaneInert && tab !== "usage" && tab !== "account"
+                  ? { inert: true }
+                  : {})}
+              >
+                <ProviderTabBody
+                  tab={tab}
+                  state={state}
+                  providers={providers}
+                  hostId={hostId}
+                  isSelectedHostLocal={isSelectedHostLocal}
+                  detailPaneInert={detailPaneInert}
+                  profileId={selectedProfileId}
+                  apiKeyDraft={apiKeyDraft}
+                  onApiKeyDraftChange={setApiKeyDraft}
+                  onActiveTabChange={onActiveTabChange}
+                />
+              </TabsContent>
+            ))}
+          </Tabs>
+        )}
       </div>
       {addProfileOpen ? (
-        <AddProviderProfileDialog
+        <AddProfileDialog
           key={state.providerId}
           state={state}
           client={hostClient}
+          hostId={hostId}
+          isSelectedHostLocal={isSelectedHostLocal}
           open
           onOpenChange={setAddProfileOpen}
           onFailedAttempt={setFailedProfileAttempt}
-          onProfileCreated={setSelectedProfileId}
+          onProfileCreated={setSelectedProfileIdPersisted}
+        />
+      ) : null}
+      {editProfileOpen && selectedProfile !== null ? (
+        <ProfileEditDialog
+          key={`${hostId}:${state.providerId}:${selectedProfile.profileId}:${editSessionId}`}
+          state={state}
+          profile={selectedProfile}
+          profiles={state.profiles}
+          hostId={hostId}
+          isSelectedHostLocal={isSelectedHostLocal}
+          canOauth={canAddProfile}
+          startInReauth={editIntent === "sign-in"}
+          open={editProfileOpen}
+          onOpenChange={setEditProfileOpen}
+          remainingProfilesAfterRemoval={state.profiles.filter(
+            (candidate) => candidate.profileId !== selectedProfile.profileId,
+          )}
+          onSelectedProfileIdChange={setSelectedProfileIdPersisted}
+          profileEnablementAvailable={profileEnablementAvailable}
+          profileEnablementPending={profileEnablementPending}
+          onSetProfileEnabled={(profileId, enabled) =>
+            setProfileEnabled.mutate({
+              providerId,
+              profileId: profileId ?? "ambient",
+              enabled,
+            })
+          }
         />
       ) : null}
     </div>
   );
 }
 
-// Profile-management surface handed to the "usage" ("Profiles & Limits") tab
-// body - the only tab that renders `ProviderProfileScopedSection` (add/rename/
-// remove/recolor, switch active profile). Profiles and limits stay on ONE tab
-// because the section already owns the SELECTED PROFILE's limits; splitting
-// those two meant a provider's limits were reported in two places at once. The
-// API key is a different question (how the provider authenticates at all) and
-// moved to its own `account` tab. Bundled into one object rather than eight
-// individual props on `ProviderTabBody`, since the other tabs
-// (general/account/env/mcp/plugins/skills) are provider-level and never touch
-// it.
-interface ProviderProfileTabProps {
-  readonly hostId: string | null;
-  readonly isSelectedHostLocal: boolean;
-  readonly canAddProfile: boolean;
-  readonly startInReauth: boolean;
-  readonly failedAttempt: FailedProviderProfileAttempt | null;
-  readonly onAddProfile: () => void;
-  readonly onDismissFailedAttempt: () => void;
-  readonly selectedProfileId: string | null;
-  readonly onSelectedProfileIdChange: (profileId: string | null) => void;
-  readonly profileEnablementAvailable: boolean;
-  readonly profileStatusRefreshAvailable: boolean;
-  readonly profileEnablementPending: (profileId: string | null) => boolean;
-  readonly onSetProfileEnabled: (
-    profileId: string | null,
-    enabled: boolean,
-  ) => void;
+// The selected profile's rate-limit read, for the "usage" tab's unscoped
+// gauge below. Mirrors the (now-deleted) `ProviderProfileScopedSection`'s own
+// per-profile fetch-eligibility check so the gauge asks the same question the
+// switcher's refresh button does.
+function selectedProfileUsageInputs(
+  state: ProviderCliState,
+  profileId: string | null,
+): {
+  readonly usageUpdatedAt: number | null;
+  readonly fetchEligible: boolean;
+  /** D27: `null` (a defensive empty-`profiles` read from a pre-D05 host)
+   *  behaves like `"oauth"` - only `providers.list@9.0`'s `authType` can ever
+   *  say "apiKey", so an old row has nothing else to be. */
+  readonly authType: ProviderProfile["authType"] | null;
+} {
+  const profile = state.profiles.find(
+    (candidate) => profileCommitId(candidate) === profileId,
+  );
+  if (profile === undefined) {
+    return {
+      usageUpdatedAt: null,
+      fetchEligible: resolveRateLimitFetchEligibility(state).ambient,
+      authType: null,
+    };
+  }
+  return {
+    usageUpdatedAt: profile.usageUpdatedAt,
+    fetchEligible: isRateLimitProfileFetchEligible(
+      resolveRateLimitFetchEligibility(state),
+      profile,
+    ),
+    authType: profile.authType,
+  };
 }
 
 function ProviderTabBody({
@@ -1332,8 +1561,9 @@ function ProviderTabBody({
   state,
   providers,
   hostId,
+  isSelectedHostLocal,
   detailPaneInert,
-  profileTab,
+  profileId,
   apiKeyDraft,
   onApiKeyDraftChange,
   onActiveTabChange,
@@ -1342,8 +1572,14 @@ function ProviderTabBody({
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
   readonly hostId: string | null;
+  /** W2-T10: the account tab's oauth arm needs this to resolve the default
+   *  sign-in mode (`resolveDefaultSignInMode`). */
+  readonly isSelectedHostLocal: boolean;
   readonly detailPaneInert: boolean;
-  readonly profileTab: ProviderProfileTabProps;
+  /** The switcher's current selection (D25) - threaded to every tab body so
+   *  W2-T12 can scope MCP/Plugins/Skills queries to it without touching this
+   *  signature again. */
+  readonly profileId: string | null;
   readonly apiKeyDraft: string;
   readonly onApiKeyDraftChange: (draft: string) => void;
   readonly onActiveTabChange: (tab: ProviderTabKey) => void;
@@ -1356,17 +1592,21 @@ function ProviderTabBody({
             state={state}
             providers={providers}
             hostId={hostId}
+            profileId={profileId}
           />
           <TerminalAgentArgsSection
-            key={state.terminalAgentArgs}
             state={state}
+            hostId={hostId}
+            profileId={profileId}
           />
         </div>
       );
     case "env":
       return (
         <ProviderEnvOverridesSection
+          hostId={hostId}
           providerId={state.providerId}
+          profileId={profileId}
           overrides={state.envOverrides}
           envOverrideScope={state.nativeCapabilities.envOverrideScope}
         />
@@ -1382,49 +1622,43 @@ function ProviderTabBody({
     // sitting outside the tab bar entirely.
     case "account":
       return (
-        <ProviderApiKeySection
+        <ProfileAccountTab
           state={state}
-          draft={apiKeyDraft}
-          onDraftChange={onApiKeyDraftChange}
+          hostId={hostId}
+          profileId={profileId}
+          isSelectedHostLocal={isSelectedHostLocal}
+          apiKeyDraft={apiKeyDraft}
+          onApiKeyDraftChange={onApiKeyDraftChange}
         />
       );
-    case "usage":
+    case "usage": {
+      const usageInputs = selectedProfileUsageInputs(state, profileId);
       return (
-        <div className="flex flex-col gap-3">
-          <ProviderProfileScopedSection
-            state={state}
-            {...profileTab}
-            signInUnavailableHint={providerSignInUnavailableHint(
-              state,
-              profileTab.isSelectedHostLocal,
-            )}
-          />
-          <div
-            className={cn(
-              "flex flex-col gap-3 transition-opacity duration-150",
-              detailPaneInert && "pointer-events-none opacity-50",
-            )}
-            {...(detailPaneInert ? { inert: true } : {})}
-          >
-            <TraycerSubscriptionForProvider providerId={state.providerId} />
-            {/* The unscoped card is the ZERO-profile shape, which is what
-                `ProviderProfileScopedSection` documents it as. With profiles on
-                this same tab its per-profile limits are already rendered above,
-                scoped to the selected profile - mounting this too would show two
-                near-identical limits blocks and leave the ambient one looking
-                authoritative when the selected profile is what actually runs. */}
-            {state.profiles.length === 0 ? (
-              <ProviderRateLimitForProvider
-                providerId={state.providerId}
-                profileId={null}
-                usageUpdatedAt={null}
-                fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
-                onOpenModelProviders={() => onActiveTabChange("modelProviders")}
-              />
-            ) : null}
-          </div>
+        <div
+          className={cn(
+            "flex flex-col gap-3 transition-opacity duration-150",
+            detailPaneInert && "pointer-events-none opacity-50",
+          )}
+          {...(detailPaneInert ? { inert: true } : {})}
+        >
+          <TraycerSubscriptionForProvider providerId={state.providerId} />
+          {usageInputs.authType === "apiKey" ? (
+            <ApiKeyUsageNotice />
+          ) : (
+            <ProviderRateLimitForProvider
+              providerId={state.providerId}
+              profileId={profileId}
+              usageUpdatedAt={usageInputs.usageUpdatedAt}
+              fetchEligible={usageInputs.fetchEligible}
+              onOpenModelProviders={() => onActiveTabChange("modelProviders")}
+            />
+          )}
+          <p className="text-ui-xs text-muted-foreground">
+            {USAGE_COVERAGE_SENTENCE}
+          </p>
         </div>
       );
+    }
     case "mcp": {
       const mcp = state.nativeCapabilities.mcp;
       if (mcp === null) {
@@ -1445,6 +1679,7 @@ function ProviderTabBody({
           // that cannot report this never accuses a provider of a missing
           // binary it knows nothing about.
           cliBinaryResolved={state.cliBinaryResolved ?? true}
+          profileId={profileId}
         />
       );
     }
@@ -1477,9 +1712,21 @@ function ProviderTabBody({
       );
     }
     case "plugins":
-      return <ProviderPluginsTab state={state} />;
+      return (
+        <ProviderPluginsTab
+          state={state}
+          profileId={profileId}
+          hostId={hostId}
+        />
+      );
     case "skills":
-      return <ProviderSkillsTab state={state} />;
+      return (
+        <ProviderSkillsTab
+          state={state}
+          profileId={profileId}
+          hostId={hostId}
+        />
+      );
   }
 }
 

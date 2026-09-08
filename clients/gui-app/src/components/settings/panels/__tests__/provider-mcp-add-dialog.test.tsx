@@ -137,6 +137,7 @@ function renderDialog(args: {
         providerId: args.providerId,
         scope: "global",
         workspaceRoot: null,
+        profileId: null,
       }}
       onAdded={null}
     />,

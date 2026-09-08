@@ -54,6 +54,7 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   providerSupportsTerminalLogin,
   providerTerminalLoginPackBlock,
+  resolveDefaultSignInMode,
 } from "@/components/providers/provider-signin-availability";
 import {
   providerPackPreparingLabel,
@@ -62,6 +63,7 @@ import {
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
 import { providerTerminalGuidance } from "@/lib/providers/provider-setup-guidance";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { DEFAULT_ACCOUNT_DISPLAY_LABEL } from "@/components/providers/provider-profile-model";
 
 function noop(): void {}
 
@@ -156,7 +158,7 @@ function ProfileUnavailableBanner({
       <span className="text-foreground/90">{message}</span>
       <div className="flex flex-wrap items-center gap-3">
         <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
-          Continue on Terminal account
+          Continue on {DEFAULT_ACCOUNT_DISPLAY_LABEL}
         </Button>
         <Button size="sm" variant="ghost" onClick={openProviderSettings}>
           {reason === "profile_unauthenticated"
@@ -233,10 +235,7 @@ function BannerRefreshButton() {
 // which works on any host. Both are reconnect affordances - distinct from a
 // *rejected* credential, which never reaches here (it surfaces as a generic error
 // row; API-key-only providers like Cursor have no capability and no banner).
-function deriveLoginOptions(
-  state: ProviderCliState | null,
-  isLocalHost: boolean,
-): {
+function deriveLoginOptions(state: ProviderCliState | null): {
   readonly envVars: ReadonlyArray<string>;
   readonly canOauth: boolean;
   readonly canTerminalLogin: boolean;
@@ -269,11 +268,13 @@ function deriveLoginOptions(
   // piped stdio, which for an interactive-TUI CLI (e.g. droid) opens no
   // browser and hangs the banner on "Waiting for browser sign-in…". (The
   // terminal row above has no such constraint - a TUI is what it is for.)
+  //
+  // D22: no `isLocalHost` conjunct - the device mode needs no loopback, so a
+  // remote host is no longer refused here. `isLocalHost` still decides the
+  // sign-in flow's DEFAULT mode, but that happens where the flow actually
+  // starts (`OAuthReauthForm`), not in this admission check.
   const canOauth =
-    !canTerminalLogin &&
-    isLocalHost &&
-    oauthArgs !== null &&
-    oauthArgs.length > 0;
+    !canTerminalLogin && oauthArgs !== null && oauthArgs.length > 0;
   return {
     envVars,
     canOauth,
@@ -442,7 +443,7 @@ function ReauthBannerInner({
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
   const { envVars, canOauth, canTerminalLogin, terminalLoginPackBlock } =
-    deriveLoginOptions(state, isLocalHost);
+    deriveLoginOptions(state);
   const terminalRow = deriveTerminalLoginRow({
     canTerminalLogin,
     terminalLoginPackBlock,
@@ -487,6 +488,7 @@ function ReauthBannerInner({
           providerId={providerId}
           providerLabel={providerLabel}
           loginCapability={state?.loginCapability ?? null}
+          isLocalHost={isLocalHost}
         />
       ) : null}
       {terminalRow.kind === "button" ? (
@@ -589,10 +591,15 @@ function OAuthReauthForm({
   providerId,
   providerLabel,
   loginCapability,
+  isLocalHost,
 }: {
   readonly providerId: ProviderId;
   readonly providerLabel: string;
   readonly loginCapability: ProviderLoginCapability | null;
+  /** D22: this banner's own default-mode read (`browser` on the local host
+   *  that owns the loopback, `device` elsewhere) - threaded into the shared
+   *  login flow so this surface gets the toggle "for free". */
+  readonly isLocalHost: boolean;
 }) {
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useProvidersAwaitLogin();
@@ -607,6 +614,11 @@ function OAuthReauthForm({
     // a Traycer-managed profile.
     existingProfileId: null,
     loginCapability,
+    signInMode: resolveDefaultSignInMode(isLocalHost),
+    // D32: the ambient reconnect is a reauth, not a create - the host
+    // ignores `startFrom` off that path, so this is the "nothing to seed"
+    // spelling, never read.
+    startFrom: { kind: "empty" },
     startLogin,
     awaitLogin,
     cancelLogin,

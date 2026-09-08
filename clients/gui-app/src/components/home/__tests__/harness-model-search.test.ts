@@ -7,6 +7,7 @@ import {
   flattenModelRowSections,
   sectionModelRowsByProviderRank,
   selectedModelRowId,
+  type HarnessModelRow,
 } from "@/components/home/data/harness-model-search";
 import {
   findModelLabel,
@@ -98,12 +99,30 @@ function model(overrides: Partial<ModelOption>): ModelOption {
   };
 }
 
+// This suite covers ordinary catalog rows; D09's pinned rows (default-model
+// + Custom…) get their own dedicated coverage in
+// `components/home/pickers/__tests__/harness-model-picker-default-model.test.tsx`.
+// Every `buildHarnessModelRows`/`buildAllHarnessModelRows` call below passes
+// `defaultModelId: null` and filters pinned rows back out so none of these
+// pre-existing assertions have to account for them.
+function catalogOnly(
+  rows: ReadonlyArray<HarnessModelRow>,
+): ReadonlyArray<HarnessModelRow> {
+  return rows.filter((row) => row.pinned === null);
+}
+
 describe("harness model search", () => {
   it("yields one concrete row per model with the preferred model first", () => {
-    const rows = buildHarnessModelRows(CODEX_HARNESS, [
-      model({ slug: "gpt-5.5", label: "GPT-5.5" }),
-      model({ slug: "gpt-5.3-codex", label: "GPT-5.3 Codex" }),
-    ]);
+    const rows = catalogOnly(
+      buildHarnessModelRows(
+        CODEX_HARNESS,
+        [
+          model({ slug: "gpt-5.5", label: "GPT-5.5" }),
+          model({ slug: "gpt-5.3-codex", label: "GPT-5.3 Codex" }),
+        ],
+        null,
+      ),
+    );
 
     expect(rows.map((row) => row.label)).toEqual(["GPT-5.5", "GPT-5.3 Codex"]);
     expect(rows[0]).toMatchObject({
@@ -117,7 +136,9 @@ describe("harness model search", () => {
       model({ slug: "gpt-5.5", label: "GPT-5.5" }),
       model({ slug: "gpt-5.3-codex", label: "GPT-5.3 Codex" }),
     ];
-    const rows = buildHarnessModelRows(CODEX_HARNESS, models);
+    const rows = catalogOnly(
+      buildHarnessModelRows(CODEX_HARNESS, models, null),
+    );
     const emptySelection: HarnessModelSelection = {
       harnessId: "codex",
       modelSlug: "",
@@ -137,14 +158,20 @@ describe("harness model search", () => {
   });
 
   it("highlights a row when the persisted slug only matches resolvedModel", () => {
-    const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
-      model({
-        harnessId: "claude",
-        slug: "claude-fable-5[1m]",
-        label: "Fable 5 (1M)",
-        metadata: { resolvedModel: "claude-fable-5" },
-      }),
-    ]);
+    const rows = catalogOnly(
+      buildHarnessModelRows(
+        CLAUDE_HARNESS,
+        [
+          model({
+            harnessId: "claude",
+            slug: "claude-fable-5[1m]",
+            label: "Fable 5 (1M)",
+            metadata: { resolvedModel: "claude-fable-5" },
+          }),
+        ],
+        null,
+      ),
+    );
 
     expect(
       selectedModelRowId(
@@ -159,25 +186,29 @@ describe("harness model search", () => {
   });
 
   it("preserves provider and model order for empty queries", () => {
-    const rows = buildAllHarnessModelRows([
-      {
-        harness: CODEX_HARNESS,
-        models: [
-          model({ slug: "gpt-5.5", label: "GPT-5.5" }),
-          model({ slug: "gpt-5.4", label: "GPT-5.4" }),
-        ],
-      },
-      {
-        harness: CLAUDE_HARNESS,
-        models: [
-          model({
-            harnessId: "claude",
-            slug: "claude-sonnet-4-6",
-            label: "Claude Sonnet 4.6",
-          }),
-        ],
-      },
-    ]);
+    const rows = catalogOnly(
+      buildAllHarnessModelRows([
+        {
+          harness: CODEX_HARNESS,
+          models: [
+            model({ slug: "gpt-5.5", label: "GPT-5.5" }),
+            model({ slug: "gpt-5.4", label: "GPT-5.4" }),
+          ],
+          defaultModelId: null,
+        },
+        {
+          harness: CLAUDE_HARNESS,
+          models: [
+            model({
+              harnessId: "claude",
+              slug: "claude-sonnet-4-6",
+              label: "Claude Sonnet 4.6",
+            }),
+          ],
+          defaultModelId: null,
+        },
+      ]),
+    );
     const searchIndex = createModelRowSearchIndex(rows);
 
     expect(
@@ -200,6 +231,7 @@ describe("harness model search", () => {
           model({ slug: "gpt-5.5", label: "GPT-5.5" }),
           model({ slug: "gpt-4.1", label: "GPT-4.1" }),
         ],
+        defaultModelId: null,
       },
       {
         harness: CLAUDE_HARNESS,
@@ -215,10 +247,13 @@ describe("harness model search", () => {
             label: "Claude Sonnet 4.6",
           }),
         ],
+        defaultModelId: null,
       },
     ]);
     const searchIndex = createModelRowSearchIndex(rows);
 
+    // Query mode already excludes the pinned `Custom…` row on its own
+    // (`filterModelRows`), so this needs no `catalogOnly` filtering.
     expect(
       filterModelRows(rows, searchIndex, "sonet").map((row) => row.label),
     ).toEqual(["Claude Sonnet 4.6"]);
@@ -232,6 +267,7 @@ describe("harness model search", () => {
           model({ slug: "gpt-4.1", label: "GPT-4.1" }),
           model({ slug: "gpt-5.5", label: "GPT-5.5" }),
         ],
+        defaultModelId: null,
       },
       {
         harness: CLAUDE_HARNESS,
@@ -242,6 +278,7 @@ describe("harness model search", () => {
             label: "Claude Opus 4.7",
           }),
         ],
+        defaultModelId: null,
       },
     ]);
     const providerRows = rows.filter((row) => row.harnessId === "codex");
@@ -255,26 +292,30 @@ describe("harness model search", () => {
   });
 
   it("matches OpenCode rows by internal provider id and model slug", () => {
-    const rows = buildHarnessModelRows(OPENCODE_HARNESS, [
-      model({
-        harnessId: "opencode",
-        slug: "github-copilot:gpt-5.5",
-        label: "GitHub Copilot: GPT-5.5",
-        metadata: {
-          openCodeProviderId: "github-copilot",
-          openCodeProviderLabel: "GitHub Copilot",
-        },
-      }),
-      model({
-        harnessId: "opencode",
-        slug: "anthropic:claude-sonnet-4-5",
-        label: "Anthropic: Claude Sonnet 4.5",
-        metadata: {
-          openCodeProviderId: "anthropic",
-          openCodeProviderLabel: "Anthropic",
-        },
-      }),
-    ]);
+    const rows = buildHarnessModelRows(
+      OPENCODE_HARNESS,
+      [
+        model({
+          harnessId: "opencode",
+          slug: "github-copilot:gpt-5.5",
+          label: "GitHub Copilot: GPT-5.5",
+          metadata: {
+            openCodeProviderId: "github-copilot",
+            openCodeProviderLabel: "GitHub Copilot",
+          },
+        }),
+        model({
+          harnessId: "opencode",
+          slug: "anthropic:claude-sonnet-4-5",
+          label: "Anthropic: Claude Sonnet 4.5",
+          metadata: {
+            openCodeProviderId: "anthropic",
+            openCodeProviderLabel: "Anthropic",
+          },
+        }),
+      ],
+      null,
+    );
     const searchIndex = createModelRowSearchIndex(rows);
 
     expect(
@@ -324,7 +365,9 @@ describe("harness model search", () => {
         },
       }),
     ];
-    const rows = buildHarnessModelRows(OPENCODE_HARNESS, models);
+    const rows = catalogOnly(
+      buildHarnessModelRows(OPENCODE_HARNESS, models, null),
+    );
 
     // Concrete rows sort by provider label (Anthropic < OpenCode Zen <
     // Perplexity), then model name (Sonar < Sonar Pro). browseLabel drops the
@@ -351,35 +394,41 @@ describe("harness model search", () => {
   });
 
   it("makes provider-section ranking explicit for grouped search results", () => {
-    const rows = buildHarnessModelRows(OPENCODE_HARNESS, [
-      model({
-        harnessId: "opencode",
-        slug: "anthropic:claude-sonnet",
-        label: "Anthropic: Claude Sonnet",
-        metadata: {
-          openCodeProviderId: "anthropic",
-          openCodeProviderLabel: "Anthropic",
-        },
-      }),
-      model({
-        harnessId: "opencode",
-        slug: "perplexity:sonar",
-        label: "Perplexity: Sonar",
-        metadata: {
-          openCodeProviderId: "perplexity",
-          openCodeProviderLabel: "Perplexity",
-        },
-      }),
-      model({
-        harnessId: "opencode",
-        slug: "anthropic:claude-opus",
-        label: "Anthropic: Claude Opus",
-        metadata: {
-          openCodeProviderId: "anthropic",
-          openCodeProviderLabel: "Anthropic",
-        },
-      }),
-    ]);
+    const rows = catalogOnly(
+      buildHarnessModelRows(
+        OPENCODE_HARNESS,
+        [
+          model({
+            harnessId: "opencode",
+            slug: "anthropic:claude-sonnet",
+            label: "Anthropic: Claude Sonnet",
+            metadata: {
+              openCodeProviderId: "anthropic",
+              openCodeProviderLabel: "Anthropic",
+            },
+          }),
+          model({
+            harnessId: "opencode",
+            slug: "perplexity:sonar",
+            label: "Perplexity: Sonar",
+            metadata: {
+              openCodeProviderId: "perplexity",
+              openCodeProviderLabel: "Perplexity",
+            },
+          }),
+          model({
+            harnessId: "opencode",
+            slug: "anthropic:claude-opus",
+            label: "Anthropic: Claude Opus",
+            metadata: {
+              openCodeProviderId: "anthropic",
+              openCodeProviderLabel: "Anthropic",
+            },
+          }),
+        ],
+        null,
+      ),
+    );
     const rankedRows = [rows[2], rows[0], rows[1]];
     const sections = sectionModelRowsByProviderRank(rankedRows);
 
@@ -438,7 +487,9 @@ describe("harness model search", () => {
         },
       }),
     ];
-    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, models);
+    const rows = catalogOnly(
+      buildHarnessModelRows(OPENROUTER_HARNESS, models, null),
+    );
 
     // Harness-agnostic grouping off the host-declared metadata, by vendor label.
     // browseLabel drops the vendor prefix the name carries: ": " for normal names
@@ -502,7 +553,9 @@ describe("harness model search", () => {
         },
       }),
     ];
-    const rows = buildHarnessModelRows(KILOCODE_HARNESS, models);
+    const rows = catalogOnly(
+      buildHarnessModelRows(KILOCODE_HARNESS, models, null),
+    );
 
     // Grouped off the host-declared provider; browseLabel drops the
     // "<Provider>/" prefix Kilo's names carry (the "/" separator).
@@ -526,23 +579,29 @@ describe("harness model search", () => {
   });
 
   it("keeps host order when only some models carry group metadata (partial rollout)", () => {
-    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, [
-      model({
-        harnessId: "openrouter",
-        slug: "openrouter:z-ai/glm-4.6",
-        label: "Z.ai: GLM 4.6",
-        metadata: {
-          openCodeProviderId: "z-ai",
-          openCodeProviderLabel: "Z.ai",
-        },
-      }),
-      model({
-        harnessId: "openrouter",
-        slug: "openrouter:unannotated",
-        label: "Unannotated",
-        metadata: {},
-      }),
-    ]);
+    const rows = catalogOnly(
+      buildHarnessModelRows(
+        OPENROUTER_HARNESS,
+        [
+          model({
+            harnessId: "openrouter",
+            slug: "openrouter:z-ai/glm-4.6",
+            label: "Z.ai: GLM 4.6",
+            metadata: {
+              openCodeProviderId: "z-ai",
+              openCodeProviderLabel: "Z.ai",
+            },
+          }),
+          model({
+            harnessId: "openrouter",
+            slug: "openrouter:unannotated",
+            label: "Unannotated",
+            metadata: {},
+          }),
+        ],
+        null,
+      ),
+    );
 
     // Mixed annotated/unannotated: not reordered (sorting by group would float
     // the empty-group model to the top), so the host-preferred order is kept.
@@ -553,34 +612,46 @@ describe("harness model search", () => {
   });
 
   it("adds capacity metadata on model rows", () => {
-    const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
-      model({
-        harnessId: "claude",
-        slug: "claude-sonnet-4-6",
-        label: "Claude Sonnet 4.6",
-        contextWindow: 200_000,
-        maxOutputTokens: 64_000,
-      }),
-    ]);
+    const rows = catalogOnly(
+      buildHarnessModelRows(
+        CLAUDE_HARNESS,
+        [
+          model({
+            harnessId: "claude",
+            slug: "claude-sonnet-4-6",
+            label: "Claude Sonnet 4.6",
+            contextWindow: 200_000,
+            maxOutputTokens: 64_000,
+          }),
+        ],
+        null,
+      ),
+    );
 
     expect(rows[0]?.capacityLabel).toBe("200k ctx · 64k out");
     expect(rows[0]?.harnessLabel).toBe("Claude");
   });
 
   it("carries a model's deprecation notice onto its row, and null when absent", () => {
-    const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
-      model({
-        harnessId: "claude",
-        slug: "claude-sonnet-4-6",
-        label: "Claude Sonnet 4.6",
-        deprecationNotice: "Switch to Claude Sonnet 5.",
-      }),
-      model({
-        harnessId: "claude",
-        slug: "claude-sonnet-5",
-        label: "Claude Sonnet 5",
-      }),
-    ]);
+    const rows = catalogOnly(
+      buildHarnessModelRows(
+        CLAUDE_HARNESS,
+        [
+          model({
+            harnessId: "claude",
+            slug: "claude-sonnet-4-6",
+            label: "Claude Sonnet 4.6",
+            deprecationNotice: "Switch to Claude Sonnet 5.",
+          }),
+          model({
+            harnessId: "claude",
+            slug: "claude-sonnet-5",
+            label: "Claude Sonnet 5",
+          }),
+        ],
+        null,
+      ),
+    );
 
     expect(rows[0]?.deprecationNotice).toBe("Switch to Claude Sonnet 5.");
     expect(rows[1]?.deprecationNotice).toBeNull();

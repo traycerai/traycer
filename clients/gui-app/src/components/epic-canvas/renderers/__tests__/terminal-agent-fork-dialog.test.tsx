@@ -204,6 +204,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { TerminalAgentForkDialog } from "../terminal-agent-fork-dialog";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 describe("<TerminalAgentForkDialog />", () => {
   afterEach(() => {
@@ -1134,7 +1135,7 @@ function workspaceSeedForFolder(
 }
 
 function ambientProfile(label: string): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId: "ambient",
     enabled: true,
     kind: "ambient",
@@ -1153,11 +1154,11 @@ function ambientProfile(label: string): ProviderProfile {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function managedProfile(profileId: string, label: string): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind: "managed",
@@ -1176,7 +1177,7 @@ function managedProfile(profileId: string, label: string): ProviderProfile {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function seedClaudeProviders(profiles: ReadonlyArray<ProviderProfile>): void {

@@ -678,6 +678,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
+import { resolveDefaultSignInMode } from "@/components/providers/provider-signin-availability";
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
@@ -1164,7 +1166,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "codex",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -1183,8 +1185,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -1203,7 +1205,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -1515,7 +1517,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -1534,8 +1536,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -1554,7 +1556,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -1576,7 +1578,7 @@ describe("<HarnessModelPicker />", () => {
     // disabled.
     expect(
       screen.getByRole("button", {
-        name: "Claude profile: Terminal account, Terminal",
+        name: "Claude profile: Default account, Default account",
       }),
     ).not.toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
@@ -2338,7 +2340,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -2357,7 +2359,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -2380,7 +2382,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -2399,8 +2401,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -2419,7 +2421,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -2442,10 +2444,10 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
     // Switching to Claude reveals its dropdown, defaulting to the ambient
-    // ("Terminal account") profile.
+    // (the ambient row, rendered "Default account" - D26) profile.
     expect(
       screen.getByRole("button", {
-        name: "Claude profile: Terminal account, Terminal",
+        name: "Claude profile: Default account, Default account",
       }),
     ).not.toBeNull();
     await waitFor(() => {
@@ -2457,7 +2459,7 @@ describe("<HarnessModelPicker />", () => {
     });
     expect(
       screen
-        .getByRole("menuitem", { name: "Terminal account, Terminal" })
+        .getByRole("menuitem", { name: "Default account, Default account" })
         .getAttribute("aria-current"),
     ).toBe("true");
     expect(
@@ -2475,7 +2477,9 @@ describe("<HarnessModelPicker />", () => {
     // run/session-level profileId (and the composer's memory keying) use for
     // ambient - not the wire array's literal "ambient" sentinel.
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+      screen.getByRole("menuitem", {
+        name: "Default account, Default account",
+      }),
     );
     expect(selections.at(-1)?.harnessId).toBe("claude");
     expect(selections.at(-1)?.profileId).toBeNull();
@@ -2550,7 +2554,7 @@ describe("<HarnessModelPicker />", () => {
   it("reflects provider profile rename and recolor in the trigger and dropdown", async () => {
     const initialColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
-    const ambientProfile = {
+    const ambientProfile = providerProfileFixture({
       profileId: "ambient",
       enabled: true,
       kind: "ambient" as const,
@@ -2569,7 +2573,7 @@ describe("<HarnessModelPicker />", () => {
       duplicateOfProfileId: null,
       accentColor: null,
       ambientDriftNotice: null,
-    };
+    });
     const workProfile = {
       ...ambientProfile,
       profileId: "work-profile",
@@ -2636,7 +2640,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -2655,8 +2659,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -2675,7 +2679,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -2767,7 +2771,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -2786,8 +2790,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -2806,7 +2810,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -3151,7 +3155,7 @@ describe("<HarnessModelPicker />", () => {
         // mechanism (or a host that hasn't reported one yet).
         loginCapability: null,
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -3170,8 +3174,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -3190,7 +3194,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -3205,18 +3209,23 @@ describe("<HarnessModelPicker />", () => {
     }
     expect(row.disabled).toBe(true);
     expect(tooltipTextNear(row)).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "This provider does not support browser sign-in.",
     );
     fireEvent.click(row);
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBeNull();
   });
 
-  it("disables the create-new-profile row when the target host is not local (S8)", async () => {
+  // D22 inverse of the case this replaces. Locality is no longer an
+  // admission conjunct: the device mode needs no loopback, so a REMOTE host
+  // whose provider advertises `oauthArgs` may create a profile. Locality now
+  // only decides the flow's DEFAULT sign-in mode
+  // (`resolveDefaultSignInMode(false) === "device"`).
+  it("enables the create-new-profile row on a remote host when the provider advertises oauth (S8/D22)", async () => {
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -3235,8 +3244,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -3255,13 +3264,24 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
     // "remote-host" is absent from the module-level directory mock (which
-    // only registers "local"), so `isHostLocal` resolves false - mirrors a
-    // tab bound to a non-local host.
+    // only registers "local") - mirrors a tab bound to a non-local host.
+    queryMock.providerStatesByClient.set("remote-host", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+        },
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ]);
     renderPicker({ createProfileHostId: "remote-host" });
 
     await openPicker();
@@ -3271,7 +3291,8 @@ describe("<HarnessModelPicker />", () => {
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
-    expect(row.disabled).toBe(true);
+    expect(row.disabled).toBe(false);
+    expect(resolveDefaultSignInMode(false)).toBe("device");
   });
 
   // Both profiles below are on the DEFAULT host's provider state so the
@@ -3280,7 +3301,7 @@ describe("<HarnessModelPicker />", () => {
   // capability data feeding the create-profile gate differs per host.
   function claudeProfilesForDropdown(): ProviderCliState["profiles"] {
     return [
-      {
+      providerProfileFixture({
         profileId: "ambient",
         enabled: true,
         kind: "ambient",
@@ -3299,8 +3320,8 @@ describe("<HarnessModelPicker />", () => {
         duplicateOfProfileId: null,
         accentColor: null,
         ambientDriftNotice: null,
-      },
-      {
+      }),
+      providerProfileFixture({
         profileId: "work-profile",
         enabled: true,
         kind: "managed",
@@ -3319,7 +3340,7 @@ describe("<HarnessModelPicker />", () => {
         duplicateOfProfileId: null,
         accentColor: null,
         ambientDriftNotice: null,
-      },
+      }),
     ];
   }
 
@@ -3400,16 +3421,22 @@ describe("<HarnessModelPicker />", () => {
     }
     expect(row.disabled).toBe(true);
     expect(tooltipTextNear(row)).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "This provider does not support browser sign-in.",
     );
   });
 
-  it("preserves the configured model and reasoning on a profile dropdown commit", async () => {
+  // D09 (G10): model memory is per `(harness, profile)`, so a profile-only
+  // switch INSIDE one harness moves the composer to the destination profile's
+  // own remembered model/effort. The pre-D09 rule this replaces preserved the
+  // source profile's model, which pointed one profile's catalog at another
+  // profile's endpoint. Driven through the PICKER, not the store: the store
+  // was already right and the UI path was not.
+  it("switches the composer to the destination profile's remembered model on a profile dropdown commit (D09)", async () => {
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -3428,8 +3455,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -3448,12 +3475,11 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
-    // The provider memory contains a different model and effort. A profile-only
-    // switch must preserve the current composer configuration.
+    // `work-profile` last ran opus at high effort on this harness.
     useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
       harnessId: "claude",
       model: "claude-opus-4-7",
@@ -3477,11 +3503,11 @@ describe("<HarnessModelPicker />", () => {
 
     expect(selections.at(-1)).toEqual({
       harnessId: "claude",
-      modelSlug: "claude-sonnet-4-6",
+      modelSlug: "claude-opus-4-7",
       profileId: "work-profile",
     });
-    expect(store.getState().reasoning).toBe("low");
-    expect(reasoningChanges).toEqual([]);
+    expect(store.getState().reasoning).toBe("high");
+    expect(reasoningChanges).toEqual(["high"]);
   });
 
   it("commits a profile switch via the ⌘⇧ leader digit", async () => {
@@ -3489,7 +3515,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -3508,8 +3534,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -3528,7 +3554,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -3552,7 +3578,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -3571,8 +3597,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -3591,7 +3617,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -3622,7 +3648,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -3641,8 +3667,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -3661,7 +3687,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];
@@ -3684,7 +3710,7 @@ describe("<HarnessModelPicker />", () => {
       providerCliStateWithProfiles({
         providerId: "claude-code",
         profiles: [
-          {
+          providerProfileFixture({
             profileId: "ambient",
             enabled: true,
             kind: "ambient",
@@ -3703,8 +3729,8 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
-          {
+          }),
+          providerProfileFixture({
             profileId: "work-profile",
             enabled: true,
             kind: "managed",
@@ -3723,7 +3749,7 @@ describe("<HarnessModelPicker />", () => {
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
-          },
+          }),
         ],
       }),
     ];

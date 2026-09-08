@@ -86,6 +86,7 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 
 import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const PROFILE_SELECTION = {
   activeChatSettings: null,
@@ -332,7 +333,7 @@ describe("useHeaderRateLimitBars", () => {
   });
 
   it("resolves fetch eligibility from the selected managed target instead of the signed-out ambient target", () => {
-    const ambient: ProviderProfile = {
+    const ambient: ProviderProfile = providerProfileFixture({
       profileId: "ambient",
       enabled: true,
       kind: "ambient",
@@ -351,7 +352,7 @@ describe("useHeaderRateLimitBars", () => {
       duplicateOfProfileId: null,
       accentColor: null,
       ambientDriftNotice: null,
-    };
+    });
     const managed: ProviderProfile = {
       ...ambient,
       profileId: "codex-work",

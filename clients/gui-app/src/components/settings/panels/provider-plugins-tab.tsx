@@ -19,7 +19,9 @@ import { useProvidersPluginIcon } from "@/hooks/providers/use-providers-plugin-i
 import { useProvidersPluginsList } from "@/hooks/providers/use-providers-plugins-list-query";
 import { useProvidersPluginsMutate } from "@/hooks/providers/use-providers-plugins-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { cn } from "@/lib/utils";
+import { CategoryOwnershipToggle } from "./category-ownership-toggle";
 import { ProviderEntryIcon } from "./provider-entry-icon";
 import {
   filterProviderPlugins,
@@ -55,8 +57,13 @@ const SESSION_TOOLS_NOTICE =
 
 export function ProviderPluginsTab({
   state,
+  profileId,
+  hostId,
 }: {
   readonly state: ProviderCliState;
+  /** D17; the switcher's current selection. `null` = the Default account. */
+  readonly profileId: string | null;
+  readonly hostId: string | null;
 }): ReactNode {
   const caps = state.nativeCapabilities.plugins;
   if (caps === null) {
@@ -70,7 +77,18 @@ export function ProviderPluginsTab({
     );
   }
 
-  return <ProviderPluginsTabBody providerId={state.providerId} caps={caps} />;
+  const selectedProfile = state.profiles.find(
+    (profile) => profileCommitId(profile) === profileId,
+  );
+  return (
+    <ProviderPluginsTabBody
+      providerId={state.providerId}
+      caps={caps}
+      profileId={profileId}
+      hostId={hostId}
+      ownership={selectedProfile?.config?.plugins ?? null}
+    />
+  );
 }
 
 function pluginCapabilityFlags(
@@ -189,9 +207,15 @@ function PluginsScopeToolbar(props: {
 function ProviderPluginsTabBody({
   providerId,
   caps,
+  profileId,
+  hostId,
+  ownership,
 }: {
   readonly providerId: ProviderId;
   readonly caps: ProviderPluginsCapabilities;
+  readonly profileId: string | null;
+  readonly hostId: string | null;
+  readonly ownership: "linked" | "own" | null;
 }): ReactNode {
   const scopeState = useProviderNativeScope(caps.actionScopes.list);
   const {
@@ -214,6 +238,7 @@ function ProviderPluginsTabBody({
     providerId,
     scope: effectiveScope,
     workspaceRoot: listWorkspaceRoot,
+    profileId,
     enabled: listEnabled,
   });
   const mutate = useProvidersPluginsMutate();
@@ -276,6 +301,7 @@ function ProviderPluginsTabBody({
           providerId,
           scope: effectiveScope,
           workspaceRoot: listWorkspaceRoot,
+          profileId,
           mutation,
           // This surface renders the failure inline via `setLocalError` below,
           // so the hook's global toast would double-report the same error.
@@ -296,11 +322,28 @@ function ProviderPluginsTabBody({
         },
       );
     },
-    [effectiveScope, listWorkspaceRoot, markPending, mutate, providerId],
+    [
+      effectiveScope,
+      listWorkspaceRoot,
+      markPending,
+      mutate,
+      profileId,
+      providerId,
+    ],
   );
 
   return (
     <div className="flex flex-col gap-3">
+      {effectiveScope === "global" ? (
+        <CategoryOwnershipToggle
+          hostId={hostId}
+          providerId={providerId}
+          profileId={profileId}
+          category="plugins"
+          ownership={ownership}
+          entryCount={plugins.length}
+        />
+      ) : null}
       {/*
        * `sessionNotice` is now the whole gate: `sessionNoticeFor` returns null
        * unless the contract sets `traycerSessionToolsNotice`, so the separate
@@ -353,6 +396,7 @@ function ProviderPluginsTabBody({
         providerId={providerId}
         scope={effectiveScope}
         workspaceRoot={listWorkspaceRoot}
+        profileId={profileId}
         projectNeedsWorkspace={projectNeedsWorkspace}
         workspacesLoading={workspacesLoading}
         listLoading={listQuery.isLoading || listQuery.isPending}
@@ -460,6 +504,7 @@ function PluginsListBody({
   providerId,
   scope,
   workspaceRoot,
+  profileId,
   projectNeedsWorkspace,
   workspacesLoading,
   listLoading,
@@ -479,6 +524,7 @@ function PluginsListBody({
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly projectNeedsWorkspace: boolean;
   readonly workspacesLoading: boolean;
   readonly listLoading: boolean;
@@ -564,6 +610,7 @@ function PluginsListBody({
           providerId={providerId}
           scope={scope}
           workspaceRoot={workspaceRoot}
+          profileId={profileId}
           plugin={plugin}
           caps={caps}
           effectiveScope={effectiveScope}
@@ -589,6 +636,7 @@ function PluginRow({
   providerId,
   scope,
   workspaceRoot,
+  profileId,
   plugin,
   caps,
   effectiveScope,
@@ -601,6 +649,7 @@ function PluginRow({
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly plugin: ProviderPlugin;
   readonly caps: ProviderPluginsCapabilities;
   readonly effectiveScope: ProviderNativeScope;
@@ -622,6 +671,7 @@ function PluginRow({
     providerId,
     scope,
     workspaceRoot,
+    profileId,
     pluginId: plugin.id,
     // Cache identity, not a request field: an upgrade installed outside the
     // app arrives on this list, and without it here the icon query - which is

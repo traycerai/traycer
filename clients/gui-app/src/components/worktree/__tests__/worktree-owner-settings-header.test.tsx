@@ -4,6 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorktreeOwnerSettingsHeader } from "@/components/worktree/worktree-owner-settings-header";
 import type { PermissionMode } from "@/components/home/data/landing-options";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const chatSettings = vi.hoisted(() => ({
   current: null as ChatRunSettings | null,
@@ -189,7 +190,7 @@ function profile(
   kind: "ambient" | "managed",
   label: string,
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -208,7 +209,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 function renderChatHeader(args: {
@@ -486,7 +487,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
     });
 
     expect(
-      screen.getByRole("img", { name: "Claude Code, Terminal account" }),
+      screen.getByRole("img", { name: "Claude Code, Default account" }),
     ).toBeTruthy();
   });
 

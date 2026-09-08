@@ -102,6 +102,7 @@ import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
+import { DEFAULT_ACCOUNT_DISPLAY_LABEL } from "@/components/providers/provider-profile-model";
 
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
@@ -558,7 +559,9 @@ function profileLabelFromSessionAnchor(
   if (sessionAnchor.labelSnapshot !== null) {
     return sessionAnchor.labelSnapshot;
   }
-  return sessionAnchor.profileId === null ? "Terminal account" : "profile";
+  return sessionAnchor.profileId === null
+    ? DEFAULT_ACCOUNT_DISPLAY_LABEL
+    : "profile";
 }
 
 /**

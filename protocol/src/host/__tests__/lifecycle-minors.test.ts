@@ -201,8 +201,11 @@ describe("WORKTREE_BUSY typed holders", () => {
 });
 
 describe("terminal.subscribe@1.6 viewer intent", () => {
-  it("is registered as latest minor 6", () => {
-    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+  // `@1.7` (W2-T3, `spawnConfigRevision`/`restartRequired`) opened above this
+  // minor, so `latestMinor` moved to 7 - `@1.6` itself is still registered,
+  // unchanged, at version key 6.
+  it("is registered at minor 6, no longer the latest", () => {
+    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
     expect(
       hostStreamRpcRegistry["terminal.subscribe"][1].versions[6].contract
         .schemaVersion,

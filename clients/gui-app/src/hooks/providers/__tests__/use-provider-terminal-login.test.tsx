@@ -161,6 +161,11 @@ describe("useProviderTerminalLogin", () => {
         scope: { kind: "epic", epicId: EPIC_ID },
         cols: 80,
         rows: 24,
+        // `startTerminalLogin@3.0` (D21): this surface has no profile picker,
+        // so it re-authenticates the Default account - today's behavior,
+        // stated on the wire instead of implied by an absent field.
+        profileId: null,
+        createProfile: null,
       },
     );
 

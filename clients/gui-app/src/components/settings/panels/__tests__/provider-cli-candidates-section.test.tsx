@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { ProfileCliSelection } from "@traycer/protocol/host/provider-profile-config-schemas";
 import type {
   ProviderAdvisory,
   ProviderCliCandidate,
@@ -38,6 +39,10 @@ type CapturedVersionManagerProps = {
  */
 type SectionMocks = {
   setSelectionMutate: Mock;
+  setProfileCliSelectionMutate: Mock;
+  profileConfigData:
+    | { readonly config: { readonly cliSelection: ProfileCliSelection | null } }
+    | undefined;
   addCustomPathMutate: Mock;
   removeCustomPathMutate: Mock;
   ensurePackMutate: Mock;
@@ -57,6 +62,8 @@ const openLink = vi.hoisted(() => vi.fn());
 
 const mocks = vi.hoisted((): SectionMocks => ({
   setSelectionMutate: vi.fn(),
+  setProfileCliSelectionMutate: vi.fn(),
+  profileConfigData: undefined,
   addCustomPathMutate: vi.fn(),
   removeCustomPathMutate: vi.fn(),
   ensurePackMutate: vi.fn(),
@@ -128,6 +135,28 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
   useProvidersSetSelection: () => ({
     mutate: mocks.setSelectionMutate,
+    isPending: false,
+  }),
+}));
+
+// D02/G11: the profile-scoped half of this section. Kept as mocks (rather
+// than a QueryClient in the tree) so the table cases stay about rendering,
+// while the two direction cases below assert which writer each selection
+// reaches - the whole point of the tab becoming profile-scoped.
+vi.mock("@/hooks/providers/use-providers-set-profile-cli-mutation", () => ({
+  useProvidersSetProfileCliSelection: () => ({
+    mutate: mocks.setProfileCliSelectionMutate,
+    isPending: false,
+  }),
+  useProvidersSetProfileTerminalAgentArgs: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-profile-config-query", () => ({
+  useProvidersProfileConfig: () => ({
+    data: mocks.profileConfigData,
     isPending: false,
   }),
 }));
@@ -280,12 +309,22 @@ function renderSectionWith(
   providers: readonly ProviderCliState[],
   hostId: string | null,
 ): void {
+  renderSectionForProfile(state, providers, hostId, null);
+}
+
+function renderSectionForProfile(
+  state: ProviderCliState,
+  providers: readonly ProviderCliState[],
+  hostId: string | null,
+  profileId: string | null,
+): void {
   render(
     <TooltipProvider>
       <ProviderCliCandidatesSection
         state={state}
         providers={providers}
         hostId={hostId}
+        profileId={profileId}
       />
     </TooltipProvider>,
   );
@@ -295,7 +334,54 @@ afterEach(() => {
   cleanup();
   mocks.hostSupportsMethod = false;
   mocks.lastVersionManagerProps = null;
+  mocks.profileConfigData = undefined;
   vi.clearAllMocks();
+});
+
+// D02/G11: CLI selection is ALWAYS profile-owned. Before this, picking a
+// binary while a managed profile was selected in the switcher wrote the
+// Default account's `provider-overrides.json` row - the tab said one thing
+// and the write went somewhere else. One case per direction.
+describe("ProviderCliCandidatesSection: which row a selection writes", () => {
+  const STATE = providerState({
+    selected: { kind: "bundled" },
+    candidates: [
+      bundledCandidate({ available: true, version: "1.0.0" }),
+      pathCandidate({}),
+    ],
+  });
+
+  it("writes the profile's own config for a managed profile, never the Default account's row", () => {
+    mocks.useHostSupportsMethod.mockReturnValue(true);
+    mocks.profileConfigData = { config: { cliSelection: null } };
+    renderSectionForProfile(STATE, [STATE], TEST_HOST_ID, "managed-1");
+
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Select /usr/local/bin/claude" }),
+    );
+
+    expect(mocks.setProfileCliSelectionMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: "managed-1",
+      selection: { kind: "path" },
+    });
+    expect(mocks.setSelectionMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps writing providers.setSelection for the Default account", () => {
+    mocks.useHostSupportsMethod.mockReturnValue(true);
+    renderSectionForProfile(STATE, [STATE], TEST_HOST_ID, null);
+
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Select /usr/local/bin/claude" }),
+    );
+
+    expect(mocks.setSelectionMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      selection: { kind: "path" },
+    });
+    expect(mocks.setProfileCliSelectionMutate).not.toHaveBeenCalled();
+  });
 });
 
 describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)", () => {

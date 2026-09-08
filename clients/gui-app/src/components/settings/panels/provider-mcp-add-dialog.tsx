@@ -236,6 +236,7 @@ export function ProviderMcpAddDialog(props: {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
     readonly workspaceRoot: string | null;
+    readonly profileId: string | null;
   };
   readonly onAdded:
     | ((args: { name: string; requiresAuth: boolean }) => void)

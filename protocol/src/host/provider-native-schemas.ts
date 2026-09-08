@@ -833,6 +833,24 @@ export type ProviderSkillSourceBadge = z.infer<
   typeof providerSkillSourceBadgeSchema
 >;
 
+/**
+ * D28/D17: whether a skill row's root is owned by the resolved profile config
+ * root (`"managed"`) or is a shared root that is never per-profile and never
+ * rerooted (`"external"`, e.g. `~/.agents/skills`). Mirrors the host's
+ * `SkillRootSpec.ownership` (`skills-helpers.ts`).
+ *
+ * NOT D02's category ownership. `profileCategoryOwnershipSchema`
+ * (`provider-schemas.ts`) is `linked | own` and describes whether a PROFILE's
+ * Skills/Plugins category is shared with the default account; this one is
+ * `managed | external` and describes where a single ROW's root came from.
+ * Both ride the same `providers.list@9.0` response under the name
+ * `ownership`, and neither is assignable to the other.
+ */
+export const providerSkillOwnershipSchema = z.enum(["managed", "external"]);
+export type ProviderSkillOwnership = z.infer<
+  typeof providerSkillOwnershipSchema
+>;
+
 export const providerSkillSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
@@ -848,6 +866,19 @@ export const providerSkillSchema = z.object({
    * Omitted means this is not a conflict row.
    */
   conflict: z.boolean().optional(),
+  /**
+   * D28/D17 (W2-T12b): `"managed"` when this row lives under the resolved
+   * profile config root and participates in profile-aware writes normally;
+   * `"external"` when it comes from a root that is never per-profile and
+   * never rerooted onto a managed profile - today only `~/.agents/skills`
+   * (and its workspace twin) and Grok's Claude/Cursor compatibility roots
+   * (host: `SkillRootSpec.ownership`,
+   * `native-config/contract-registry/skills-helpers.ts`). Mirrors the host
+   * contract field by name.
+   */
+  ownership: providerSkillOwnershipSchema,
+  /** Mirrors `ownership === "managed"` - never independently true/false. */
+  writable: z.boolean(),
 });
 export type ProviderSkill = z.infer<typeof providerSkillSchema>;
 
@@ -864,6 +895,28 @@ export const providerSkillSchemaV70Preimage = z.object({
 export type ProviderSkillV70Preimage = z.infer<
   typeof providerSkillSchemaV70Preimage
 >;
+
+/**
+ * Frozen skill row as it stood at the `providers.list@8.0` cut
+ * (`host-v1.3.0-rc.*`, verified byte-for-byte against that tag) - a hand copy,
+ * not `.omit()` from the live {@link providerSkillSchema}, for the same
+ * reason {@link providerSkillSchemaV70Preimage} isn't: an `.omit()` inherits
+ * whatever the live schema grows next. `providers.list@9.0` (W2-T12b) grows
+ * the live row with `ownership` / `writable`; the released `@7.0` and `@8.0`
+ * lines both bind their native result by identity to the then-live
+ * `nativeListResultSchema` (see {@link nativeListResultSchemaV80}'s own
+ * comment), so this frozen row is what keeps that growth off both of them.
+ * Do NOT widen this schema.
+ */
+export const providerSkillSchemaV80 = z.object({
+  name: z.string(),
+  description: z.string().nullable(),
+  path: z.string(),
+  source: providerSkillSourceBadgeSchema,
+  origin: z.string().nullable().optional(),
+  conflict: z.boolean().optional(),
+});
+export type ProviderSkillV80 = z.infer<typeof providerSkillSchemaV80>;
 
 export const providerSkillInspectCandidateSchema = z.object({
   name: z.string().min(1),
@@ -1059,18 +1112,23 @@ export const nativeListQuerySchema = z
       providerId: providerIdSchema,
       scope: providerNativeScopeSchema,
       workspaceRoot: z.string().nullable(),
+      // D17/D21 (`providers.list@9.0`): `null` = the default account. Project
+      // scope ignores it - only relevant to the profile-owned root.
+      profileId: z.string().nullable(),
     }),
     z.object({
       kind: z.literal("plugins"),
       providerId: providerIdSchema,
       scope: providerNativeScopeSchema,
       workspaceRoot: z.string().nullable(),
+      profileId: z.string().nullable(),
     }),
     z.object({
       kind: z.literal("skills"),
       providerId: providerIdSchema,
       scope: providerNativeScopeSchema,
       workspaceRoot: z.string().nullable(),
+      profileId: z.string().nullable(),
     }),
     z.object({
       kind: z.literal("mcpDiscover"),
@@ -1082,6 +1140,7 @@ export const nativeListQuerySchema = z
        * When true, bypass the discovery cache and re-probe / re-query native.
        */
       forceRefresh: z.boolean(),
+      profileId: z.string().nullable(),
     }),
     /**
      * One plugin's artwork, addressed BY ID rather than by a path taken from
@@ -1098,6 +1157,7 @@ export const nativeListQuerySchema = z
       workspaceRoot: z.string().nullable(),
       pluginId: z.string().min(1),
       theme: providerPluginIconThemeSchema,
+      profileId: z.string().nullable(),
     }),
   ])
   .superRefine(refineProviderNativeScope);
@@ -1230,6 +1290,56 @@ export type NativeListResultV70Preimage = z.infer<
   typeof nativeListResultSchemaV70Preimage
 >;
 
+/**
+ * Frozen list result as it stood at the `providers.list@8.0` cut (W2-T12b).
+ * `providers.list@9.0` grows the live skill row with `ownership` / `writable`
+ * (D28/D17); the RELEASED `providersListResponseSchemaV70` and
+ * `providersListResponseSchemaV80` (`host-v1.2.0-rc.*` / `host-v1.3.0-rc.*`)
+ * both bind their `native` field to this shape - previously the live
+ * {@link nativeListResultSchema} itself, which their own comments say was a
+ * "deliberate stop" only good until the live shape grew again. It just did,
+ * so both lines now repoint here instead of widening. Other arms stay
+ * pointed at the live object schemas they already used - those have not
+ * grown. One frozen copy serves both v7.0 and v8.0 (same discipline as
+ * {@link nativeListQuerySchemaV80} on the request side, which already backs
+ * both released lines): the skill row did not change between those two cuts,
+ * so there is nothing for a second, v7.0-only copy to protect that this one
+ * doesn't already. Do NOT widen this schema.
+ */
+const nativeListSuccessResultSchemaV80 = z.discriminatedUnion("kind", [
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("mcp"),
+    servers: z.array(providerMcpServerSchema),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("plugins"),
+    plugins: z.array(providerPluginSchema),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("skills"),
+    skills: z.array(providerSkillSchemaV80),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("mcpDiscover"),
+    server: providerMcpServerSchema,
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("pluginIcon"),
+    icon: providerPluginIconSchema,
+  }),
+]);
+
+export const nativeListResultSchemaV80 = z.union([
+  nativeListSuccessResultSchemaV80,
+  providerNativeErrorResultSchema,
+]);
+export type NativeListResultV80 = z.infer<typeof nativeListResultSchemaV80>;
+
 // ── Carrier payloads: mutate (providers.setEnabled@2.1) ────────────────────
 
 /**
@@ -1302,6 +1412,104 @@ export const nativeMutationResultSchema = z.union([
   providerNativeErrorResultSchema,
 ]);
 export type NativeMutationResult = z.infer<typeof nativeMutationResultSchema>;
+
+/**
+ * Frozen `providers.nativeMutate@1.0` result - a hand copy of the union as it
+ * shipped in `host-v1.3.0-rc.*` (verified byte-for-byte against
+ * `host-v1.3.0-rc.3:protocol/src/host/provider-native-schemas.ts:1226-1252`),
+ * with only the skills arm repointed at {@link providerSkillSchemaV80}. Same
+ * discipline, and the same reason, as {@link nativeListResultSchemaV80} on
+ * the list side: `providers.nativeMutate@1.0` is a real released peer shape,
+ * so growing the live {@link providerSkillSchema} with `ownership` /
+ * `writable` (W2-T12b) must not grow it. A hand copy rather than an `.omit()`
+ * off the live union, so the NEXT growth of the live skill row does not leak
+ * through here either. Do NOT widen this schema.
+ */
+const nativeMutationSuccessResultSchemaV10 = z.discriminatedUnion("kind", [
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("mcp"),
+    servers: z.array(providerMcpServerSchema),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("plugins"),
+    plugins: z.array(providerPluginSchema),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("skills"),
+    skills: z.array(providerSkillSchemaV80),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("skillsInspect"),
+    ...providersSkillsInspectResultSchema.shape,
+  }),
+]);
+
+export const nativeMutationResultSchemaV10 = z.union([
+  nativeMutationSuccessResultSchemaV10,
+  providerNativeErrorResultSchema,
+]);
+export type NativeMutationResultV10 = z.infer<
+  typeof nativeMutationResultSchemaV10
+>;
+
+/**
+ * D28/D17 (W2-T12b): the honest fill when a released peer's skill rows are
+ * lifted onto a `@9.0`/`@2.0` shape that requires `ownership` / `writable`.
+ *
+ * A host that predates those fields had no external-root concept at all -
+ * `~/.agents/skills`, Grok's Claude/Cursor compatibility roots and the
+ * workspace twins all became distinguishable only with the profile config
+ * root that arrives alongside them. Every root such a host enumerated was one
+ * it managed itself and wrote to normally, so `managed` / `writable: true` is
+ * that host's own view of every row it served, not a placeholder. Anything
+ * else would invent a provenance the peer never reported.
+ */
+function skillRowsFromReleasedPeer(
+  skills: readonly ProviderSkillV80[],
+): ProviderSkill[] {
+  return skills.map((skill): ProviderSkill => ({
+    ...skill,
+    ownership: "managed",
+    writable: true,
+  }));
+}
+
+/**
+ * Lifts a frozen `providers.list@8.0` native result onto the live
+ * `@9.0` shape. Only the skills arm differs between the two; every other arm
+ * points at the same live leaf schema in both and passes through untouched.
+ * See {@link skillRowsFromReleasedPeer} for why the fill is what it is.
+ *
+ * `upgradeResponseToVersion` chains upgrade callbacks BY CAST with no
+ * re-parse, so this fill is the only thing standing between a v8.0 host's
+ * skills list and a 9.0 client reading `writable: undefined` behind a type
+ * that says `boolean`.
+ */
+export function upgradeNativeListResultFromV80(
+  native: NativeListResultV80 | null,
+): NativeListResult | null {
+  if (native === null) return null;
+  if (native.ok === false) return native;
+  if (native.kind !== "skills") return native;
+  return { ...native, skills: skillRowsFromReleasedPeer(native.skills) };
+}
+
+/**
+ * Lifts a frozen `providers.nativeMutate@1.0` result onto the live `@2.0`
+ * shape - the mutate-side twin of {@link upgradeNativeListResultFromV80},
+ * same single differing arm and same fill.
+ */
+export function upgradeNativeMutationResultFromV10(
+  result: NativeMutationResultV10,
+): NativeMutationResult {
+  if (result.ok === false) return result;
+  if (result.kind !== "skills") return result;
+  return { ...result, skills: skillRowsFromReleasedPeer(result.skills) };
+}
 
 // ── Carrier payloads: MCP auth (startLogin / awaitLogin / cancelLogin) ─────
 

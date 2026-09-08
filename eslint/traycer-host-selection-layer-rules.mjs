@@ -215,6 +215,15 @@ export const hostSelectionReadAllowlist = [
   // chat/ directory: the exemption is the read, not the surface.
   "src/components/chat/chat-fork-dialog.tsx",
 
+  // Multi-profile add-profile flow (W2): mounted ONCE at the app root, so it
+  // sits outside every `<TabHostProvider>` and has no tab/session host to
+  // read. The picker that opens it captures its own host scope into the
+  // store, and `null` there means "the landing composer, which is not bound
+  // to any tab" - the app-wide effective host is that scope, not a fallback.
+  // A single file, not `src/components/providers/**`: the exemption is this
+  // one root-mounted host, not the provider surfaces it renders.
+  "src/components/providers/provider-profile-add-flow-host.tsx",
+
   // Tests mock / arrange these hooks; the production surface is what D12 polices.
   "**/__tests__/**/*.{ts,tsx}",
   "**/*.{test,spec}.{ts,tsx}",

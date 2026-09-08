@@ -5,6 +5,7 @@ import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/schem
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { useTombstonedProfileLabel } from "../use-tombstoned-profile-label";
 import { TombstonedProfileProvider } from "../tombstoned-profile-provider";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 const THIS_HOST = "host-1";
 const OTHER_HOST = "host-2";
@@ -64,27 +65,29 @@ function claudeState(profileIds: readonly string[]): ProviderCliState {
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
-    profiles: profileIds.map((profileId) => ({
-      profileId,
-      enabled: true,
-      kind:
-        profileId === "ambient" ? ("ambient" as const) : ("managed" as const),
-      authType: "oauth" as const,
-      label: profileId,
-      auth: {
-        status: "authenticated" as const,
-        badgeText: null,
-        label: null,
-        detail: null,
-      },
-      identity: null,
-      usageUpdatedAt: null,
-      rateLimitStatus: "unknown" as const,
-      rateLimitLimitedScopes: null,
-      duplicateOfProfileId: null,
-      accentColor: null,
-      ambientDriftNotice: null,
-    })),
+    profiles: profileIds.map((profileId) =>
+      providerProfileFixture({
+        profileId,
+        enabled: true,
+        kind:
+          profileId === "ambient" ? ("ambient" as const) : ("managed" as const),
+        authType: "oauth" as const,
+        label: profileId,
+        auth: {
+          status: "authenticated" as const,
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+        identity: null,
+        usageUpdatedAt: null,
+        rateLimitStatus: "unknown" as const,
+        rateLimitLimitedScopes: null,
+        duplicateOfProfileId: null,
+        accentColor: null,
+        ambientDriftNotice: null,
+      }),
+    ),
   };
 }
 

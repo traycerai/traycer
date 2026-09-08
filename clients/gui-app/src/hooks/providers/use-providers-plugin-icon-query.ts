@@ -41,6 +41,7 @@ export function useProvidersPluginIcon(args: {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
+  readonly profileId: string | null;
   readonly pluginId: string;
   /**
    * The installed version from the list row. Cache identity only - it is not
@@ -77,6 +78,7 @@ export function useProvidersPluginIcon(args: {
       providerId: args.providerId,
       scope: args.scope,
       workspaceRoot: args.workspaceRoot,
+      profileId: args.profileId,
       pluginId: args.pluginId,
       theme,
     }),

@@ -424,11 +424,17 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
     });
     // The frozen capability descriptor predates `modelProviders`, so that key
     // is the ONE difference the frozen parse may introduce - everything else
-    // must round-trip untouched.
+    // must round-trip untouched. `endpoint`/`config` are `providers.list@9.0`
+    // additions (W2-T2): the v7.0 preimage profile shape has never modelled
+    // them, the same reason `enabled` (a v8.0 addition) is excluded here too.
     const { modelProviders: _modelProviders, ...liveCapabilities } =
       viaLive.providers[0].nativeCapabilities;
-    const { enabled: _enabled, ...liveProfile } =
-      viaLive.providers[0].profiles[0];
+    const {
+      enabled: _enabled,
+      endpoint: _endpoint,
+      config: _config,
+      ...liveProfile
+    } = viaLive.providers[0].profiles[0];
     expect(viaFrozen).toEqual({
       ...viaLive,
       providers: [
@@ -451,7 +457,13 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
     expect(viaFrozen.native).toEqual(NATIVE_RESULT_SAMPLE);
   });
 
-  it("the request round-trips identically through the canonical and frozen v7.0/v8.0 schemas", () => {
+  // `providers.list@9.0` (W2-T2) grows every native arm with `profileId`, so
+  // this no longer round-trips identically: the frozen v7.0/v8.0 copies keep
+  // the five arms exactly as they shipped (no `profileId`), and a caller who
+  // sends a `profileId` on the LIVE request gets it silently stripped by the
+  // v7.0/v8.0 reparse - the honest behaviour for a peer that never negotiated
+  // per-profile native scoping.
+  it("the frozen v7.0/v8.0 requests no longer round-trip identically: their native arm has no profileId, the live one does", () => {
     const raw = {
       forceAuthRefresh: true,
       native: {
@@ -459,36 +471,36 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
         providerId: "claude-code" as const,
         scope: "global" as const,
         workspaceRoot: null,
+        profileId: null,
       },
     };
-    expect(providersListRequestSchemaV70.parse(raw)).toEqual(
-      providersListRequestSchema.parse(raw),
-    );
-    expect(providersListRequestSchemaV80.parse(raw)).toEqual(
-      providersListRequestSchema.parse(raw),
-    );
+    const viaLive = providersListRequestSchema.parse(raw);
+    const viaV70 = providersListRequestSchemaV70.parse(raw);
+    const viaV80 = providersListRequestSchemaV80.parse(raw);
+    expect(viaLive.native).toMatchObject({ profileId: null });
+    expect(viaV70.native).not.toHaveProperty("profileId");
+    expect(viaV80.native).not.toHaveProperty("profileId");
+    expect(viaV70).not.toEqual(viaLive);
+    expect(viaV80).not.toEqual(viaLive);
   });
 
   // The round-trip above drives ONE sample value, which an added optional field
   // would slip straight past. This compares the schemas themselves, and it is
-  // what proves the hand copies are faithful - not that they track the live
-  // request going forward (neither `providersListV70` nor `providersListV80`
-  // binds the live schema any more, see the "both name their own freeze" test
-  // above), but that freezing them NOW, before `providers.list@9.0` grows
-  // `native` with `profileId`, changed nothing about what a v7.0/v8.0 peer
-  // already serializes. Red here means "the hand copy has drifted from what it
-  // was supposed to freeze" - the live schema growing after this point is
-  // expected to turn this red, and that is the freeze doing its job, not a
-  // regression to fix by regenerating.
-  it("the frozen v7.0 and v8.0 requests are still exactly the live request", () => {
+  // what proves the hand copies no longer track the live request forward
+  // (neither `providersListV70` nor `providersListV80` binds the live schema
+  // any more, see the "both name their own freeze" test above):
+  // `providers.list@9.0` grew `native` with `profileId` (W2-T2), and the
+  // frozen v7.0/v8.0 copies did not move with it - that divergence is the
+  // freeze doing its job, not a regression to fix by regenerating.
+  it("the frozen v7.0 and v8.0 requests no longer match the live request", () => {
     expect(
       z.toJSONSchema(providersListRequestSchemaV70, { unrepresentable: "any" }),
-    ).toEqual(
+    ).not.toEqual(
       z.toJSONSchema(providersListRequestSchema, { unrepresentable: "any" }),
     );
     expect(
       z.toJSONSchema(providersListRequestSchemaV80, { unrepresentable: "any" }),
-    ).toEqual(
+    ).not.toEqual(
       z.toJSONSchema(providersListRequestSchema, { unrepresentable: "any" }),
     );
   });
@@ -504,7 +516,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     (target) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        9,
         target,
         providersListResponseSchema.parse({
           providers: [state],
@@ -541,7 +553,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        9,
         target,
         providersListResponseSchema.parse({
           providers: [huggingfaceState],

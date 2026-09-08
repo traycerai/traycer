@@ -17,8 +17,8 @@ const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
 };
 
 describe("resolveCreateProfileGate", () => {
-  it("allows creating a profile on a local host with browser sign-in", () => {
-    const gate = resolveCreateProfileGate(true, OAUTH_CAP);
+  it("allows creating a profile for a provider with browser sign-in", () => {
+    const gate = resolveCreateProfileGate(OAUTH_CAP);
     expect(gate.disabled).toBe(false);
     expect(gate.reason).toBeUndefined();
   });
@@ -27,7 +27,7 @@ describe("resolveCreateProfileGate", () => {
   // a terminal-login provider is disabled here (the picker only drives
   // browser OAuth), with copy that names the terminal, not "browser sign-in".
   it("disables profile creation for a terminal-login provider without saying 'browser sign-in'", () => {
-    const gate = resolveCreateProfileGate(true, TERMINAL_LOGIN_CAP);
+    const gate = resolveCreateProfileGate(TERMINAL_LOGIN_CAP);
     expect(gate.disabled).toBe(true);
     expect(gate.reason).not.toContain("browser sign-in");
     expect(gate.reason).toContain("terminal");
@@ -40,19 +40,15 @@ describe("resolveCreateProfileGate", () => {
   // against a null/absent capability") in the source claims but the suite
   // never exercised.
   it("falls through to the generic reason for a null loginCapability", () => {
-    const gate = resolveCreateProfileGate(true, null);
+    const gate = resolveCreateProfileGate(null);
     expect(gate.disabled).toBe(true);
-    expect(gate.reason).toBe(
-      "Add profiles from a local host with browser sign-in available.",
-    );
+    expect(gate.reason).toBe("This provider does not support browser sign-in.");
   });
 
   it("falls through to the generic reason for an undefined loginCapability", () => {
-    const gate = resolveCreateProfileGate(true, undefined);
+    const gate = resolveCreateProfileGate(undefined);
     expect(gate.disabled).toBe(true);
-    expect(gate.reason).toBe(
-      "Add profiles from a local host with browser sign-in available.",
-    );
+    expect(gate.reason).toBe("This provider does not support browser sign-in.");
   });
 
   // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
@@ -65,7 +61,7 @@ describe("resolveCreateProfileGate", () => {
   it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
     "uses the terminal reason for a terminal-login provider with no oauthArgs (%o)",
     ({ oauthArgs }) => {
-      const gate = resolveCreateProfileGate(true, {
+      const gate = resolveCreateProfileGate({
         oauthArgs,
         token: null,
         codePaste: null,

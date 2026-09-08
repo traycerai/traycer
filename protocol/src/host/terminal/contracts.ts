@@ -21,6 +21,7 @@ import {
   listTerminalsResponseSchemaV21,
   listTerminalsResponseSchemaV22,
   listTerminalsResponseSchemaV23,
+  listTerminalsResponseSchemaV24,
   readTerminalOutputRequestSchema,
   readTerminalOutputResponseSchema,
   renameTerminalRequestSchema,
@@ -36,6 +37,7 @@ import {
   terminalSubscribeV14,
   terminalSubscribeV15,
   terminalSubscribeV16,
+  terminalSubscribeV17,
 } from "@traycer/protocol/host/terminal/subscribe";
 
 // Terminal sessions live entirely in the host's memory; these contracts
@@ -229,6 +231,15 @@ export const terminalListV23 = defineRpcContract({
   responseSchema: listTerminalsResponseSchemaV23,
 });
 
+// Additive `spawnConfigRevision`/`restartRequired` on each response session
+// (D19/D21, critique M14); request is unchanged from `@2.0`..`@2.3`.
+export const terminalListV24 = defineRpcContract({
+  method: "terminal.list",
+  schemaVersion: { major: 2, minor: 4 } as const,
+  requestSchema: listTerminalsRequestSchemaV20,
+  responseSchema: listTerminalsResponseSchemaV24,
+});
+
 export const terminalListUpgradeV10ToV20 = defineUpgradePath<
   typeof terminalListV10,
   typeof terminalListV20
@@ -294,6 +305,27 @@ export const terminalListUpgradeV22ToV23 = defineUpgradePath<
     sessions: response.sessions.map((session) => ({
       ...session,
       lifecycleOwner: "registry" as const,
+    })),
+    homeCwd: response.homeCwd,
+  }),
+});
+
+// A v2.3 host has no profile-bound spawn config to report. Fill
+// `spawnConfigRevision: null, restartRequired: false` - "old host never had
+// this feature", the same reading every upgrade in this file gives an
+// old-host fill.
+export const terminalListUpgradeV23ToV24 = defineUpgradePath<
+  typeof terminalListV23,
+  typeof terminalListV24
+>({
+  from: terminalListV23.schemaVersion,
+  to: terminalListV24.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    sessions: response.sessions.map((session) => ({
+      ...session,
+      spawnConfigRevision: null,
+      restartRequired: false,
     })),
     homeCwd: response.homeCwd,
   }),
@@ -384,11 +416,19 @@ export const terminalListDowngradeV22ToV10 = defineDowngradePath<
 
 // Major 2's latest bridge to v1.0. Strip `lifecycleOwner` then reuse the
 // v2.2 currentCwd projection so old peers still see launch `cwd`.
-export const terminalListDowngradeV23ToV10 = defineDowngradePath<
-  typeof terminalListV23,
+// Rebound to major 2's new latest minor (`terminalListV24`, W2-T3): the
+// framework requires `downgradePathsFromLatest`'s registered `from` to equal
+// the major's `latestMinor` exactly, so growing `@2.3` to `@2.4` moves this
+// bridge's starting point even though its logic (strip everything a v1.0
+// peer never modelled, then delegate to the v2.2 bridge) is unchanged -
+// `spawnConfigRevision`/`restartRequired` join `lifecycleOwner` on the strip
+// list. Renamed rather than left as `V23ToV10` per this repo's rule: rename
+// only if you also update the target, which this does.
+export const terminalListDowngradeV24ToV10 = defineDowngradePath<
+  typeof terminalListV24,
   typeof terminalListV10
 >({
-  from: terminalListV23.schemaVersion,
+  from: terminalListV24.schemaVersion,
   to: terminalListV10.schemaVersion,
   downgradeRequest: (request) => {
     const epicId = downgradeTerminalScopeForV10(request.scope);
@@ -398,7 +438,12 @@ export const terminalListDowngradeV23ToV10 = defineDowngradePath<
   downgradeResponse: (response) =>
     terminalListDowngradeV22ToV10.downgradeResponse({
       sessions: response.sessions.map((session) => {
-        const { lifecycleOwner: _lifecycleOwner, ...rest } = session;
+        const {
+          lifecycleOwner: _lifecycleOwner,
+          spawnConfigRevision: _spawnConfigRevision,
+          restartRequired: _restartRequired,
+          ...rest
+        } = session;
         return rest;
       }),
       homeCwd: response.homeCwd,
@@ -430,4 +475,5 @@ export {
   terminalSubscribeV14,
   terminalSubscribeV15,
   terminalSubscribeV16,
+  terminalSubscribeV17,
 };

@@ -205,7 +205,9 @@ function skillsState(): ProviderCliState {
 }
 
 function renderTab(): void {
-  render(<ProviderSkillsTab state={skillsState()} />);
+  render(
+    <ProviderSkillsTab state={skillsState()} profileId={null} hostId={null} />,
+  );
 }
 
 /**
@@ -260,6 +262,8 @@ const FIND_SKILLS: ProviderSkill = {
   description: "Helps users discover and install agent skills.",
   path: "/Users/dev/.agents/skills/find-skills",
   source: "shared",
+  ownership: "managed",
+  writable: true,
 };
 
 describe("<ProviderSkillsTab /> skill detail", () => {
@@ -313,6 +317,8 @@ describe("<ProviderSkillsTab /> skill detail", () => {
         description: "Write release notes from a changeset.",
         path: "/Users/dev/.traycer/managed-skills/release-notes",
         source: "managed",
+        ownership: "managed",
+        writable: true,
       },
     ];
     renderTab();
@@ -397,7 +403,13 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       isError: false,
       error: null,
     };
-    const view = render(<ProviderSkillsTab state={skillsState()} />);
+    const view = render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
@@ -416,7 +428,13 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       isError: false,
       error: null,
     };
-    view.rerender(<ProviderSkillsTab state={skillsState()} />);
+    view.rerender(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
 
     expect(screen.getByRole("dialog")).toBe(shell);
     expect(screen.queryByText("Loading skill")).toBeNull();
@@ -429,7 +447,13 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     // `<img>` and nothing else, the element check is the meaningful one - and
     // "fs" (what the deleted monogram would have drawn for "find-skills")
     // guards against a text-based tile coming back in its place.
-    const { container } = render(<ProviderSkillsTab state={skillsState()} />);
+    const { container } = render(
+      <ProviderSkillsTab
+        state={skillsState()}
+        profileId={null}
+        hostId={null}
+      />,
+    );
     expect(screen.queryByText("fs")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
 
@@ -585,6 +609,27 @@ describe("<ProviderSkillsTab /> skill detail", () => {
 
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
     expect(screen.getByRole("dialog").textContent).toContain("Built-in skills");
+  });
+
+  // D28/D17 (W2-T12b): an external root (`ownership: "external"`,
+  // `writable: false`) stays inspectable - the row still opens - but offers
+  // no edit/remove affordance, and the list shows its path so the source is
+  // legible without opening the row.
+  it("renders an external root's skill read-only, with its path visible in the list", () => {
+    skillMocks.removeScopes = ["global"];
+    skillMocks.editScopes = ["global"];
+    skillMocks.skills = [
+      { ...FIND_SKILLS, ownership: "external", writable: false },
+    ];
+    renderTab();
+
+    expect(screen.getByText(FIND_SKILLS.path)).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
+
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByRole("dialog").textContent).toMatch(/external/i);
   });
 
   it("closes both dialogs once the removal succeeds", () => {

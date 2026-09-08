@@ -158,11 +158,18 @@ export function resolveRateLimitFetchEligibility(
  * Whether a profile can perform its own usage read under the provider's
  * settled availability state. Managed profiles deliberately do not inherit
  * terminal/ambient sign-out: they authenticate independently.
+ *
+ * D27: an `authType: "apiKey"` profile has no host-tracked plan limits at
+ * all, so it is never fetch-eligible regardless of credential state - the
+ * ONE place that decides this, so the Usage tab's card and
+ * `ProviderProfilesRefreshButton` (which both read this same function) can
+ * never disagree about whether a fetch is due.
  */
 export function isRateLimitProfileFetchEligible(
   eligibility: RateLimitFetchEligibility,
   profile: ProviderProfile,
 ): boolean {
+  if (profile.authType === "apiKey") return false;
   return (
     profile.enabled &&
     (profile.kind === "ambient"

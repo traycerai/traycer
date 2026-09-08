@@ -27,6 +27,7 @@ import {
   type ProfileDropdownUsageEntry,
   type ProfileDropdownUsagePresentation,
 } from "@/components/providers/profile-dropdown-usage";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -42,6 +43,7 @@ import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usa
 import { cn } from "@/lib/utils";
 import {
   initialPreviewProfileId,
+  profileIsApiKey,
   type ProfileRateLimitDestination,
   type ProfileRateLimitSeverity,
 } from "./use-profile-rate-limit-switch-prompt";
@@ -86,6 +88,10 @@ interface ProfileMenuRow {
   readonly destination: ProfileRateLimitDestination | null;
   readonly selectable: boolean;
   readonly isPrimaryTarget: boolean;
+  /** D27's API-key badge. Carried on the ROW, not read off `destination`: a
+   *  read-only menu has no destinations at all and the badge is purely
+   *  informational - it must keep labeling API-key rows even then. */
+  readonly isApiKey: boolean;
 }
 
 const MENU_NAVIGATION_KEYS = new Set([
@@ -125,6 +131,7 @@ function profileMenuRows(
       destination: null,
       selectable: false,
       isPrimaryTarget: false,
+      isApiKey: profileIsApiKey(profile),
     }));
   }
   return destinations.map((destination) => ({
@@ -134,6 +141,7 @@ function profileMenuRows(
     isPrimaryTarget:
       primaryTarget !== null &&
       destination.profile.profileId === primaryTarget.profile.profileId,
+    isApiKey: destination.isApiKey,
   }));
 }
 
@@ -157,6 +165,7 @@ function profileMenuAccessibleLabel(input: {
   readonly selectable: boolean;
   readonly isPrimaryTarget: boolean;
   readonly readOnly: boolean;
+  readonly isApiKey: boolean;
 }): string {
   let availability = "Read only";
   if (!input.readOnly) {
@@ -165,7 +174,11 @@ function profileMenuAccessibleLabel(input: {
       : "Unavailable to switch";
   }
   const mainAction = input.isPrimaryTarget ? ", Main action target" : "";
-  return `${profileDisplayLabel(input.profile)}, ${input.status ?? "Usage available"}, ${availability}${mainAction}`;
+  // This label REPLACES the row's text content for assistive tech, so every
+  // visible badge has to appear in it or it is invisible to a screen reader -
+  // the same reason `defaultAccountBadgeSuffix` exists one file over.
+  const apiKey = input.isApiKey ? ", API key" : "";
+  return `${profileDisplayLabel(input.profile)}${apiKey}, ${input.status ?? "Usage available"}, ${availability}${mainAction}`;
 }
 
 function isRefreshShortcut(event: KeyboardEvent): boolean {
@@ -606,6 +619,7 @@ function ProfileRateLimitMenuRow({
         selectable: row.selectable,
         isPrimaryTarget: row.isPrimaryTarget,
         readOnly,
+        isApiKey: row.isApiKey,
       })}
       aria-disabled={!row.selectable}
       aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
@@ -631,6 +645,7 @@ function ProfileRateLimitMenuRow({
       <span className="min-w-0 flex-1 truncate">
         {profileDisplayLabel(row.profile)}
       </span>
+      {row.isApiKey ? <Badge variant="secondary">API key</Badge> : null}
       {usageEntry !== undefined ? (
         <ProfileUsageCompactMeter entry={usageEntry} />
       ) : null}

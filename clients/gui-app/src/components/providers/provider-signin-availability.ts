@@ -8,6 +8,26 @@ import {
 import { providerDisplayName } from "@/lib/provider-ordering";
 
 /**
+ * D22: the sign-in mode a caller is attempting. `browser` is the loopback/
+ * paste flow (needs a local host); `device` is the code-based flow (needs
+ * none). One source of truth, reused by `useProviderProfileLoginFlow` and the
+ * add-profile / reauth surfaces so the wire request's `mode` and every
+ * admission check name the same two values.
+ */
+export type ProviderSignInMode = "browser" | "device";
+
+/** D22 default: `browser` on the local host that owns the loopback, `device`
+ *  everywhere else. Callers that only need "can sign-in happen at all"
+ *  (an admission gate with no live toggle) should prefer `"device"` directly
+ *  instead of this resolver - see `providerSignInUnavailableHint`'s doc
+ *  comment for why. */
+export function resolveDefaultSignInMode(
+  isSelectedHostLocal: boolean,
+): ProviderSignInMode {
+  return isSelectedHostLocal ? "browser" : "device";
+}
+
+/**
  * Whether this provider can actually be signed in from a real terminal, rather
  * than through a headless browser-OAuth child.
  *
@@ -87,9 +107,12 @@ export function providerTerminalLoginPackBlock(
  */
 export function providerCanStartProfileOauth(
   state: ProviderCliState,
+  mode: ProviderSignInMode,
   isSelectedHostLocal: boolean,
 ): boolean {
-  return providerSignInUnavailableHint(state, isSelectedHostLocal) === null;
+  return (
+    providerSignInUnavailableHint(state, mode, isSelectedHostLocal) === null
+  );
 }
 
 /**
@@ -102,12 +125,26 @@ export function providerCanStartProfileOauth(
  * exists to kill: a user reads a precondition they already satisfy and has
  * nowhere to go.
  *
- * Derived from the same three facts the boolean is, and the boolean is now
- * derived from THIS - so the affordance and its explanation cannot disagree
- * about whether sign-in is possible, which is how the stale sentence survived.
+ * Derived from the same facts the boolean is, and the boolean is now derived
+ * from THIS - so the affordance and its explanation cannot disagree about
+ * whether sign-in is possible, which is how the stale sentence survived.
+ *
+ * D22: the loopback requirement is now GATED on `mode` rather than applying to
+ * every attempt. `device` needs no loopback on any host, so it is available
+ * regardless of `isSelectedHostLocal` - that is the whole point of the mode
+ * toggle, and it is why the three admission call sites named on
+ * {@link providerCanStartProfileOauth}'s own callers (the switcher's Add
+ * profile gate, onboarding's sign-in row) pass `"device"`: they ask "can this
+ * be signed into by SOME mode", which device always answers permissively when
+ * the provider itself supports OAuth. `browser` still needs a local host - the
+ * caller resolving the toggle's default (`resolveDefaultSignInMode`) never
+ * hands this function `mode: "browser"` for a remote host, but the check
+ * stays independent of that convention (fail closed on a mismatched pair
+ * rather than trusting the caller silently resolved it right).
  */
 export function providerSignInUnavailableHint(
   state: ProviderCliState,
+  mode: ProviderSignInMode,
   isSelectedHostLocal: boolean,
 ): string | null {
   if (providerSupportsTerminalLogin(state.loginCapability)) {
@@ -135,7 +172,7 @@ export function providerSignInUnavailableHint(
     }
     return `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`;
   }
-  if (!isSelectedHostLocal) {
+  if (mode === "browser" && !isSelectedHostLocal) {
     return "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.";
   }
   const packPreparing = providerPackPreparingForProvider(state);

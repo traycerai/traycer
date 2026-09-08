@@ -1593,6 +1593,37 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS,
     poll: null,
   },
+  // D21: eight brand-new profile-config methods (`traycer/protocol`'s
+  // `provider-profile-config-schemas.ts`). Reads are `latest` (a superseded
+  // read carries no information the newer one lacks); writes are `fifo`
+  // because each mutates persisted profile config or spawns a child process,
+  // so two rapid actions must both land, in order, not be coalesced into
+  // one - the same reasoning as `providers.setApiKey` /
+  // `providers.startTerminalLogin` above.
+  "providers.getProfileConfig": { ...LATEST_SCHEDULING, poll: null },
+  "providers.setProfileConfig": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.setProfileOwnership": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.createApiKeyProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.testProfileConnection": { ...LATEST_SCHEDULING, poll: null },
+  "providers.previewCopySettings": { ...LATEST_SCHEDULING, poll: null },
+  "providers.applyCopySettings": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.resolveLaunchEnv": { ...LATEST_SCHEDULING, poll: null },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },
   // Pure holder read for teardown disclosures - fetched at gesture time by
   // the delete/rebind confirm flows, never on a cadence.

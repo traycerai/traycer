@@ -14,6 +14,7 @@ import {
   profileDisplayLabel,
   profileEnablementTooltipText,
   profileEligibilityToggleDisabledReason,
+  signedInMessage,
 } from "@/components/providers/provider-profile-model";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,9 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
-import { redactEmail } from "@/lib/providers/redact-email";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import { providerSignInUnavailableHint } from "@/components/providers/provider-signin-availability";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { ProviderProfileReauthPanel } from "./provider-profile-reauth-panel";
 
 type ProviderId = ProviderCliState["providerId"];
@@ -86,12 +89,6 @@ function profileEditDialogCopy(
   };
 }
 
-function signedInMessage(profile: ProviderProfile): string {
-  const email = profile.identity?.email ?? null;
-  if (email !== null) return `Signed in as ${redactEmail(email)}`;
-  return `Signed in to ${profileDisplayLabel(profile)}`;
-}
-
 function ProfileEligibilityEditor(props: {
   readonly profile: ProviderProfile;
   readonly available: boolean;
@@ -137,6 +134,22 @@ function ProfileEligibilityEditor(props: {
   );
 }
 
+/**
+ * The shell label for a profile's copyable launch command. Written so it
+ * degrades to "cmd" for whatever the wire's `shell` enum does not YET name
+ * (posix/powershell today) rather than comparing against the literal "cmd" -
+ * D31's `.cmd` wrapper is a host-only addition to that enum (W5-T3), so this
+ * display never needs a matching GUI change once it ships. The parameter is
+ * `string`, not today's two-member union, for exactly that reason: against
+ * the union the fallback is unreachable by construction and the "posix" test
+ * is a literal-vs-literal comparison.
+ */
+function launchCommandShellLabel(shell: string): string {
+  if (shell === "powershell") return "PowerShell";
+  if (shell === "posix") return "sh";
+  return "cmd";
+}
+
 function ProfileLaunchCommandBlock(props: {
   readonly providerId: ProviderId;
   readonly launchCommand: ProviderProfile["launchCommand"];
@@ -158,7 +171,7 @@ function ProfileLaunchCommandBlock(props: {
       </div>
       <div className="flex min-w-0 items-center gap-2 rounded-md border border-border/60 bg-foreground/5 px-2 py-1.5">
         <span className="shrink-0 font-mono text-code-xs text-muted-foreground">
-          {launchCommand.shell === "powershell" ? "PowerShell" : "sh"}
+          {launchCommandShellLabel(launchCommand.shell)}
         </span>
         <code
           aria-label={`${providerLabel} profile launch command`}
@@ -177,10 +190,34 @@ function ProfileLaunchCommandBlock(props: {
   );
 }
 
-function ProfileEditAccountSection(props: {
+/**
+ * Why "Switch account" needs a resolved host, stated where the gesture is.
+ *
+ * The gesture does not sign anyone in itself: it arms the focus store's
+ * `startSignIn` intent with this dialog's `hostId` and closes Manage. The
+ * panel's one-frame `deepLinkPending` hold keys on `focusHostId !== null`,
+ * remounts the rail and re-reads `startSignIn` - so a `null` host arms an
+ * intent nothing consumes and the button silently does nothing.
+ * `ProviderDetail`'s `hostId` is `scope.hostId` (`host?.hostId ?? null`), so
+ * "no resolved scoped host" is a reachable state, not a defensive one.
+ */
+function switchAccountHostHint(hostId: string | null): string | null {
+  return hostId === null
+    ? "Select a host in Settings before switching this profile's account."
+    : null;
+}
+
+/**
+ * The Account-section body shared by the Manage dialog's "Account" step and
+ * (W2-T10) the Account tab's oauth arm - so both surfaces render the exact
+ * same sign-in / switch-account panel rather than two copies drifting apart.
+ */
+export function ProfileEditAccountSection(props: {
   readonly providerId: ProviderId;
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
+  readonly hostId: string | null;
+  readonly isSelectedHostLocal: boolean;
   readonly switchingAccount: boolean;
   readonly startInReauth: boolean;
   readonly canOauth: boolean;
@@ -196,6 +233,8 @@ function ProfileEditAccountSection(props: {
       <ProviderProfileReauthPanel
         state={props.state}
         profile={props.profile}
+        hostId={props.hostId}
+        isSelectedHostLocal={props.isSelectedHostLocal}
         onSameAccountReconnected={
           props.startInReauth ? props.onFinishSignIn : null
         }
@@ -209,6 +248,20 @@ function ProfileEditAccountSection(props: {
     );
   }
 
+  // D22: the mode-aware hint - `providerSignInUnavailableHint` is the single
+  // derivation `canOauth` itself already reduces to (see that function's own
+  // doc comment on the stale-sentence failure this replaces). `"device"`
+  // matches every other admission call site's resolution (the switcher's
+  // Add-profile gate, `OAuthProfileAccountArm`): the question is "can this be
+  // signed into by SOME mode", not whether THIS host can run the browser flow.
+  const switchAccountUnavailableHint = props.canOauth
+    ? switchAccountHostHint(props.hostId)
+    : providerSignInUnavailableHint(
+        props.state,
+        "device",
+        props.isSelectedHostLocal,
+      );
+
   return (
     <>
       <ProfileLaunchCommandBlock
@@ -216,11 +269,7 @@ function ProfileEditAccountSection(props: {
         launchCommand={props.profile.launchCommand}
       />
       <TooltipWrapper
-        label={
-          props.canOauth
-            ? null
-            : "Switch account requires a local host with browser sign-in available."
-        }
+        label={switchAccountUnavailableHint}
         side="top"
         sideOffset={6}
         align={undefined}
@@ -230,7 +279,12 @@ function ProfileEditAccountSection(props: {
             type="button"
             aria-label="Switch account"
             className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!props.canOauth || props.savePending || props.invalid}
+            disabled={
+              !props.canOauth ||
+              props.hostId === null ||
+              props.savePending ||
+              props.invalid
+            }
             onClick={props.onStartSwitchingAccount}
           >
             <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
@@ -256,6 +310,8 @@ export function ProfileEditDialog(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly profiles: readonly ProviderProfile[];
+  readonly hostId: string | null;
+  readonly isSelectedHostLocal: boolean;
   readonly canOauth: boolean;
   readonly startInReauth: boolean;
   readonly open: boolean;
@@ -360,9 +416,37 @@ export function ProfileEditDialog(props: {
     closeAfterSignIn();
     toast.success(signedInMessage(signedIn));
   };
+  // Do NOT close Manage here. The panel mounts this dialog conditionally
+  // (`editProfileOpen && selectedProfile !== null`), so closing it unmounts
+  // the component that owns `confirmRemoveOpen` AND the confirm it is about
+  // to render, in the same commit - the gesture then does nothing at all.
+  // The confirm is a modal above Manage; Manage closes on a SUCCESSFUL
+  // removal instead (below), where there is no longer a profile to manage.
   const requestRemove = (): void => {
-    props.onOpenChange(false);
     setConfirmRemoveOpen(true);
+  };
+  // W2-T10 lifted the sign-in/switch-account panel onto the Account tab, so
+  // clicking "Switch account" here must not mount `ProviderProfileReauthPanel`
+  // a SECOND time inside this dialog - it arms the same `startSignIn` focus-
+  // store intent every other deep link into a profile's sign-in uses
+  // (`provider-reauth-banner.tsx`, `harness-model-picker.tsx`) and closes
+  // Manage, so the Account tab's own oauth arm is the one place that panel
+  // ever renders.
+  //
+  // The CONSUMER of this intent is the panel's `deepLinkPending` remount,
+  // which keys on `focusHostId !== null` - see `switchAccountHostHint`. A
+  // `null` host would arm an intent nothing reads, so the gesture is refused
+  // rather than performed and lost; the button is disabled with that hint.
+  const startSwitchAccountOnAccountTab = (): void => {
+    const focusHostId = props.hostId;
+    if (focusHostId === null) return;
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: providerIdToGuiHarnessId(providerId),
+      hostId: focusHostId,
+      profileId: props.profile.profileId,
+      startSignIn: true,
+    });
+    props.onOpenChange(false);
   };
 
   return (
@@ -416,12 +500,14 @@ export function ProfileEditDialog(props: {
               providerId={providerId}
               state={props.state}
               profile={props.profile}
+              hostId={props.hostId}
+              isSelectedHostLocal={props.isSelectedHostLocal}
               switchingAccount={switchingAccount}
               startInReauth={props.startInReauth}
               canOauth={props.canOauth}
               savePending={savePending}
               invalid={invalid}
-              onStartSwitchingAccount={() => setSwitchingAccount(true)}
+              onStartSwitchingAccount={startSwitchAccountOnAccountTab}
               onCancelSwitchingAccount={() => setSwitchingAccount(false)}
               onCloseAfterSignIn={closeAfterSignIn}
               onFinishSignIn={finishSignIn}
@@ -507,6 +593,7 @@ export function ProfileEditDialog(props: {
             {
               onSuccess: () => {
                 setConfirmRemoveOpen(false);
+                props.onOpenChange(false);
                 const nextProfile = props.remainingProfilesAfterRemoval.at(0);
                 props.onSelectedProfileIdChange(
                   nextProfile === undefined

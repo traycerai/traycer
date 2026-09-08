@@ -14,7 +14,7 @@ import {
 } from "@traycer/protocol/host/index";
 import type {
   CanonicalTerminalSessionInfo,
-  CanonicalTerminalSessionInfoWithLifecycleOwner,
+  CanonicalTerminalSessionInfoWithSpawnConfig,
   TerminalScope,
   TerminalSessionKind,
 } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -107,11 +107,13 @@ function canonicalSession(
 function listedSession(
   sessionId: string,
   kind: TerminalSessionKind,
-): CanonicalTerminalSessionInfoWithLifecycleOwner {
+): CanonicalTerminalSessionInfoWithSpawnConfig {
   return {
     ...canonicalSession(sessionId, kind),
     currentCwd: "/repo",
     lifecycleOwner: "registry",
+    spawnConfigRevision: null,
+    restartRequired: false,
   };
 }
 

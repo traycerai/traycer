@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { resolveSeededProfileId } from "../resolve-seeded-profile-id";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 
 /**
  * Ticket 07 (protocol-schema-contract-compat review's Major finding): a
@@ -13,7 +14,7 @@ function profile(
   profileId: string,
   kind: "ambient" | "managed",
 ): ProviderProfile {
-  return {
+  return providerProfileFixture({
     profileId,
     enabled: true,
     kind,
@@ -32,7 +33,7 @@ function profile(
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
-  };
+  });
 }
 
 describe("resolveSeededProfileId", () => {
