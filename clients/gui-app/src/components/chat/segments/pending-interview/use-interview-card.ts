@@ -161,6 +161,19 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   useEffect(() => {
     latestIsBusyRef.current = isBusy;
   }, [isBusy]);
+  // The same staleness one level up, and why `isBusy` alone is not enough:
+  // that timer's `submitDrafts` also closed over its render's QUESTIONS,
+  // through `hasUnanswerableQuestion` and through `answersFromDrafts`'s
+  // per-question free-text test. A repeated `interview.requested` for this
+  // block updates questions IN PLACE (the card is keyed by chat and block, so
+  // it does not remount), so a free-text channel withdrawn during the
+  // highlight window would still be submitted from - the guard evaluated
+  // against a shape that no longer applies. Every other fire-time input is
+  // already re-derived from the canonical row; this holds the submit itself to
+  // the same rule.
+  const latestSubmitDraftsRef = useRef<
+    ((answerDrafts: ReadonlyArray<DraftAnswer>) => void) | null
+  >(null);
 
   const drafts = useMemo(
     () => draftsFromStoredAnswers(storedDraft?.answers, questions),
@@ -354,6 +367,12 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     onSubmit(blockId, answers);
   };
 
+  // No dependency array on purpose: `submitDrafts` is rebuilt every render, and
+  // the point of the ref is to hold the CURRENT one.
+  useEffect(() => {
+    latestSubmitDraftsRef.current = submitDrafts;
+  });
+
   const submit = () => {
     submitDrafts(drafts);
   };
@@ -444,8 +463,13 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         return;
       }
       // Submit / page-advance against the LATEST canonical answers, never the
-      // captured snapshot.
-      if (isLast) submitDrafts(latest.drafts);
+      // captured snapshot - and through the LATEST `submitDrafts`, so its
+      // question-derived guards are the current ones too. The `??` is for the
+      // type: the effect that fills the ref runs on mount, long before a click
+      // could arm this timer. `navigate` needs no such treatment - it moves
+      // pages and reads no question.
+      const submitLatest = latestSubmitDraftsRef.current ?? submitDrafts;
+      if (isLast) submitLatest(latest.drafts);
       else navigate(1, latest.drafts);
     }, ADVANCE_DELAY_MS);
   };

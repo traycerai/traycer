@@ -1465,6 +1465,73 @@ describe("PendingInterviewCard keyboard navigation", () => {
     }
   });
 
+  it("does not submit when the free-text channel is withdrawn before the timer fires", () => {
+    // The questions-side sibling of the busy-flip arm above, and the reason
+    // `latestIsBusyRef` alone was not enough: the timer's `submitDrafts` also
+    // captured its render's QUESTIONS, through `hasUnanswerableQuestion`.
+    //
+    // A repeated `interview.requested` for this block rewrites questions IN
+    // PLACE - the card is keyed by chat and block, so it re-renders rather than
+    // remounting - and here it withdraws free text from a question that has no
+    // options. That pair is unanswerable, the live render disables Submit, and
+    // the already-armed timer must not push the answer through behind it.
+    //
+    // FALSIFICATION: call the captured `submitDrafts` instead of the ref's and
+    // this reddens; the busy-flip arm above stays green either way, which is
+    // why it needed its own arm.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const freeText = singleSelect("q1", "Anything else?", []);
+      const last = singleSelect("q2", "Which library?", ["Alpha", "Beta"]);
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [freeText, last],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      // Land on the last page and arm the advance timer with a real choice.
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [withoutCustomAnswer(freeText), last],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      // And the card agrees with the timer: the same guard drives the button,
+      // so a green assertion above cannot be the card having submitted and
+      // moved on.
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Submit" })
+          .disabled,
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not stale-submit when a duplicate view navigates off the last question during the timer", () => {
     vi.useFakeTimers();
     try {

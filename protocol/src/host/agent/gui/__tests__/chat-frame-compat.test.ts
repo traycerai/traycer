@@ -14,6 +14,7 @@ import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content
 import {
   INTERVIEW_SETTLEMENT_METADATA_KEY,
   normalizeV16BrowserPayloadsInFrame,
+  normalizeV16InterviewDeltaFrame,
   normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   projectChatServerFrameForVersion,
@@ -602,6 +603,38 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
     expect(answers[0].values).toEqual(["date-fns"]);
   });
 
+  it("neutralizes a smuggled `allowsCustomAnswer` on a snapshot question to null", () => {
+    // The questions-side member of the same class as the settlement fields
+    // above, and the one the block-level freeze does NOT cover: `chat.messages`
+    // is structural on this path, so nothing validated it and nothing stripped
+    // it. `null` is "unstated" - the behaviour this line already had - whereas
+    // neutralizing to `false` would let the smuggled byte withdraw the free
+    // text channel, which is the harm rather than the fix.
+    //
+    // FALSIFICATION: remove `neutralizeQuestionCustomAnswer` from the pass and
+    // the `false` reaches the renderer while every sibling above still passes.
+    const block = legacyInterviewBlock("iv-custom");
+    const seeded = block.questions;
+    if (!Array.isArray(seeded)) throw new Error("expected questions array");
+    const base = asRecord(seeded[0], "question");
+    block.questions = [
+      { ...base, questionId: "q1", allowsCustomAnswer: false },
+      { ...base, questionId: "q2", allowsCustomAnswer: true },
+    ];
+
+    normalizeV16MessagesInShallowSnapshot([
+      assistantMessage("assistant-1", [block]),
+    ]);
+
+    const normalized = block.questions;
+    if (!Array.isArray(normalized)) throw new Error("expected questions array");
+    expect(asRecord(normalized[0], "q1").allowsCustomAnswer).toBeNull();
+    expect(asRecord(normalized[1], "q2").allowsCustomAnswer).toBeNull();
+    // The question itself is content, not provenance - untouched.
+    expect(asRecord(normalized[0], "q1").question).toBe("Which library?");
+    expect(asRecord(normalized[0], "q1").options).toEqual(base.options);
+  });
+
   it("overwrites malformed enhanced values rather than filling around them", () => {
     // The shallow path never validated these, so a number/string/array in a
     // settlement field is not "present truth" - it is hostile or buggy input
@@ -672,6 +705,128 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
  * matter: those frames get no frozen parse, so `normalizeV16BrowserPayloadsInFrame`
  * is what neutralizes them, pinned in `chat-stream-client.test.ts`.
  */
+describe("normalizeV16InterviewDeltaFrame", () => {
+  function requestedDelta(
+    allowsCustomAnswer: unknown,
+  ): Record<string, unknown> {
+    return {
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      event: {
+        type: "interview.requested",
+        blockId: "iv-1",
+        timestamp: 10,
+        toolName: "AskUserQuestion",
+        questions: [
+          {
+            questionId: "q-1",
+            question: "Which library?",
+            header: "Library",
+            options: [{ label: "date-fns", description: null, preview: null }],
+            multiSelect: false,
+            allowsCustomAnswer,
+          },
+        ],
+      },
+    };
+  }
+
+  function questionOf(frame: Record<string, unknown>): Record<string, unknown> {
+    const event = asRecord(frame.event, "event");
+    const questions = event.questions;
+    if (!Array.isArray(questions)) throw new Error("expected questions array");
+    return asRecord(questions[0], "question");
+  }
+
+  it("neutralizes a smuggled `allowsCustomAnswer` to null, never to false", () => {
+    // The third receive door. `blockDelta` gets no frozen parse and is not
+    // covered by either pass beside it, so a mislabeled or hostile "1.6" peer's
+    // `allowsCustomAnswer` arrives VALIDATED by the live union.
+    //
+    // `null`, not `false`, is the whole point: `null` is "unstated", which
+    // renders exactly as this line behaved before the field existed.
+    // Neutralizing to `false` would let the smuggled byte WIN - it would
+    // withdraw the free-text channel, which IS the harm.
+    //
+    // FALSIFICATION: drop the `normalizeV16InterviewDeltaFrame` call from
+    // `chat-stream-client` and `false` survives to the renderer.
+    const frame = requestedDelta(false);
+    normalizeV16InterviewDeltaFrame(frame);
+    expect(questionOf(frame).allowsCustomAnswer).toBeNull();
+
+    // A smuggled `true` is equally off-line and equally neutralized: the pass
+    // restores the line's own behaviour, it does not pick the friendlier value.
+    const permissive = requestedDelta(true);
+    normalizeV16InterviewDeltaFrame(permissive);
+    expect(questionOf(permissive).allowsCustomAnswer).toBeNull();
+
+    // Only the off-line key moves.
+    expect(questionOf(frame).question).toBe("Which library?");
+    expect(questionOf(frame).options).toEqual([
+      { label: "date-fns", description: null, preview: null },
+    ]);
+  });
+
+  it("neutralizes answer selection on the SIBLING carrier of the same frame kind", () => {
+    // Questions ride `interview.requested`, answers ride `interview.resolved` -
+    // two event types on one frame kind. A pass written for either alone leaves
+    // the other open, which is exactly the defect the outbound projector's
+    // `blockDelta` case was fixed for; this is its inbound mirror.
+    //
+    // FALSIFICATION: delete the `interview.resolved` arm and this reddens while
+    // the questions test above stays green.
+    const frame: Record<string, unknown> = {
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      event: {
+        type: "interview.resolved",
+        blockId: "iv-1",
+        timestamp: 10,
+        answers: [{ ...ENHANCED_ANSWER }],
+      },
+    };
+
+    normalizeV16InterviewDeltaFrame(frame);
+
+    const answers = recordAnswers(asRecord(frame.event, "event").answers);
+    expect(answers[0].selection).toBeNull();
+    // The answer the provider actually receives is untouched.
+    expect(answers[0].values).toEqual(["date-fns"]);
+  });
+
+  it("leaves every other frame kind, event type and malformed shape alone", () => {
+    // Callers hand it each parsed frame unconditionally, so anything it does
+    // not own must come back referentially identical rather than rebuilt.
+    const textDelta = {
+      kind: "blockDelta",
+      event: { type: "text.delta", blockId: "b-1", text: "hi" },
+    };
+    const before = textDelta.event;
+    normalizeV16InterviewDeltaFrame(textDelta);
+    expect(textDelta.event).toBe(before);
+
+    const otherKind = { kind: "queueChanged", queue: { items: [] } };
+    expect(() => {
+      normalizeV16InterviewDeltaFrame(otherKind);
+    }).not.toThrow();
+
+    // A non-array `questions` is a shape the live union would have rejected;
+    // the pass must not throw on the way past it.
+    const malformed = requestedDelta(false);
+    asRecord(malformed.event, "event").questions = "nope";
+    expect(() => {
+      normalizeV16InterviewDeltaFrame(malformed);
+    }).not.toThrow();
+    expect(() => {
+      normalizeV16InterviewDeltaFrame(null);
+    }).not.toThrow();
+  });
+});
+
 describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
   function v16QueuePromptItem(
     message: Record<string, unknown>,

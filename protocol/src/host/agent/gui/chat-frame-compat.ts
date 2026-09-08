@@ -153,6 +153,23 @@ function neutralizeAnswerSelection(answers: unknown): void {
 }
 
 /**
+ * The questions-side counterpart of `neutralizeAnswerSelection`.
+ *
+ * `null`, not `false`: on the live schema `null` is "unstated", which every
+ * renderer treats exactly as it did before the field existed. Neutralizing to
+ * `false` would WITHDRAW the free-text channel rather than restore the line's
+ * own behaviour - turning a smuggled field into a working suppression, which
+ * is the harm this pass exists to prevent.
+ */
+function neutralizeQuestionCustomAnswer(questions: unknown): void {
+  if (!Array.isArray(questions)) return;
+  for (const question of questions) {
+    if (!isRecord(question)) continue;
+    question.allowsCustomAnswer = null;
+  }
+}
+
+/**
  * Normalize live-only message fields on a snapshot that took the `1.6`
  * SHALLOW path.
  *
@@ -160,10 +177,10 @@ function neutralizeAnswerSelection(answers: unknown): void {
  * `chat.messages` / `chat.events` structural, because a deep zod parse over a
  * full-chat history is seconds of render-thread CPU per snapshot. That skips
  * the compatibility defaults living inside those arrays - which for a `1.6`
- * peer is the interview settlement fields and the two browser arrays on a
- * user-authored message. Consumers are typed as if they are present, so
- * without this pass they read `undefined` where the type promises a value
- * (`block.draftAnswers.map` throws).
+ * peer is the interview settlement fields, `allowsCustomAnswer` on each
+ * question, and the two browser arrays on a user-authored message. Consumers
+ * are typed as if they are present, so without this pass they read `undefined`
+ * where the type promises a value (`block.draftAnswers.map` throws).
  *
  * This OVERWRITES rather than fills. A legal `1.6` frame cannot carry any of
  * these fields - the frozen `1.6` schemas have no such keys - so a value found
@@ -212,6 +229,7 @@ export function normalizeV16MessagesInShallowSnapshot(
       block.draftAnswers = [];
       block.diagnostics = [];
       block.settlementExtensions = {};
+      neutralizeQuestionCustomAnswer(block.questions);
       neutralizeAnswerSelection(block.answers);
     }
   }
@@ -252,6 +270,43 @@ export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
     if (!isRecord(item) || item.kind !== "prompt") continue;
     normalizeUserAuthoredPayload(item.message);
   }
+}
+
+/**
+ * Neutralize the `1.7`-only interview fields on a `blockDelta` that arrived on
+ * a pre-`1.7` line.
+ *
+ * The third receive door, and the one the two passes above do not reach.
+ * `messageAccepted` and `queueChanged` carry USER-authored payloads; an
+ * interview block belongs to an assistant message, so no interview field can
+ * arrive through them. Snapshots are covered by the pass above. Interview
+ * deltas take neither route: they are parsed with the LIVE union whatever line
+ * was negotiated, so a mislabeled, stale or hostile "`1.6`" peer's `1.7`
+ * interview fields arrive VALIDATED - the same smuggling
+ * `normalizeV16BrowserPayloadsInFrame` refuses for browser payloads, through
+ * the door beside it.
+ *
+ * BOTH carriers, deliberately. Questions travel on `interview.requested` and
+ * answers on `interview.resolved` - two event types on one frame kind - so a
+ * pass written for either one alone silently leaves the other open. That is the
+ * exact defect the outbound projector's `blockDelta` case was fixed for, and
+ * this is its inbound mirror.
+ *
+ * Same OVERWRITE reading as the passes above: a legal pre-`1.7` frame cannot
+ * carry these fields, so on this line they are absent whatever bytes arrived.
+ * Mutates in place and ignores every other frame kind, so a caller can hand it
+ * each parsed frame unconditionally.
+ */
+export function normalizeV16InterviewDeltaFrame(frame: unknown): void {
+  if (!isRecord(frame) || frame.kind !== "blockDelta") return;
+  const event = frame.event;
+  if (!isRecord(event)) return;
+  if (event.type === "interview.requested") {
+    neutralizeQuestionCustomAnswer(event.questions);
+    return;
+  }
+  if (event.type !== "interview.resolved") return;
+  neutralizeAnswerSelection(event.answers);
 }
 
 // ─── Outbound SERVER-frame projection (`1.4`–`1.6`) ────────────────────────

@@ -11,6 +11,7 @@ import {
 import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
   normalizeV16BrowserPayloadsInFrame,
+  normalizeV16InterviewDeltaFrame,
   normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   supportsInterviewSettlementActions,
@@ -643,6 +644,10 @@ export class ChatStreamClient {
       // refuses, through the door beside it. Snapshots return above and are
       // neutralized by their frozen parse; every other kind is untouched.
       normalizeV16BrowserPayloadsInFrame(frame);
+      // Interview deltas are the third door: `blockDelta` carries the `1.7`
+      // interview fields (questions on `interview.requested`, answer selection
+      // on `interview.resolved`) and takes neither of the two routes above.
+      normalizeV16InterviewDeltaFrame(frame);
     }
     switch (frame.kind) {
       case "snapshot": {
