@@ -4,8 +4,16 @@ import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CliInvocation } from "./cli-binary";
 import type { ServiceLabel } from "./label";
-import { createLinuxController } from "./platforms/linux";
-import { createMacosController } from "./platforms/macos";
+import { serviceLabelFor } from "./label";
+import type { Environment } from "../runner/environment";
+import {
+  createLinuxController,
+  linuxServiceMayRespawn,
+} from "./platforms/linux";
+import {
+  createMacosController,
+  macosServiceMayRespawn,
+} from "./platforms/macos";
 import { createWindowsController, epochMicrosNow } from "./platforms/windows";
 import { assertNotInsideHostUnit } from "../host/cgroup-relocation";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
@@ -604,4 +612,27 @@ export function createServiceController(): ServiceController {
     details: { platform },
     exitCode: 1,
   });
+}
+
+/**
+ * Whether the platform's service manager could start a host for this
+ * environment on its own - the question the store-format floor's post-stop
+ * quiescence check asks once no host process can be found. Lives behind this
+ * facade, like every other platform actuator, so the floor never reaches into
+ * `platforms/` directly.
+ *
+ * Windows is deliberately absent rather than forgotten: its registration is a
+ * Scheduled Task whose `/Run` IS the recovery launch, with no crash-restart
+ * policy configured (no `RestartCount`/`RestartInterval`), so nothing there
+ * brings a dead host back on its own.
+ */
+export async function serviceManagerMayRespawn(
+  environment: Environment,
+): Promise<boolean> {
+  const label = serviceLabelFor(environment);
+  if (process.platform === "darwin")
+    return await macosServiceMayRespawn(label, null);
+  if (process.platform === "linux")
+    return await linuxServiceMayRespawn(label, null);
+  return false;
 }

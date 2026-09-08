@@ -53,10 +53,8 @@ import {
   readHostPidMetadataEvidence,
 } from "./pid-metadata";
 import type { ChatStoreSurveyRoots } from "./chat-store-survey-roots";
-import { serviceLabelFor } from "../service";
+import { serviceManagerMayRespawn } from "../service";
 import { isStopIntentFresh, readStopIntent } from "./stop-intent";
-import { linuxServiceMayRespawn } from "../service/platforms/linux";
-import { macosServiceMayRespawn } from "../service/platforms/macos";
 import type { ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 
@@ -199,26 +197,6 @@ async function deliberateStopInFlight(
   const intent = await readStopIntent(environment);
   if (intent === null) return false;
   return isStopIntentFresh(intent, Date.now());
-}
-
-/**
- * The per-platform half, kept out of the caller so neither reads as a nested
- * conditional.
- *
- * Windows is deliberately absent rather than forgotten: its registration is a
- * Scheduled Task whose `/Run` IS the recovery launch, with no crash-restart
- * policy configured (no `RestartCount`/`RestartInterval`), so nothing there
- * brings a dead host back on its own.
- */
-async function serviceManagerMayRespawn(
-  environment: Environment,
-): Promise<boolean> {
-  const label = serviceLabelFor(environment);
-  if (process.platform === "darwin")
-    return await macosServiceMayRespawn(label, null);
-  if (process.platform === "linux")
-    return await linuxServiceMayRespawn(label, null);
-  return false;
 }
 
 /** The gap, as a sentence fragment for the refusal. */
