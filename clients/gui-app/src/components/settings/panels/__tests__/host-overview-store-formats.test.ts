@@ -28,6 +28,39 @@ function offer(overrides: Partial<HostStoreFormatOffer>): HostStoreFormatOffer {
 }
 
 describe("hostStoreFormatRestriction", () => {
+  it("never restricts the running version's own row - a catalog row is judged by its version, not by its published formats", () => {
+    // The applicability call passes `null` as the declaration on purpose: a
+    // catalog row is a signed registry artifact whose version is its
+    // identity. Passing the published formats instead would make the running
+    // version's own row read as a downgrade - withheld on a pre-floor peer,
+    // "Checking chat stores…" while the survey is pending. Both twins here.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: RUNNING_VERSION,
+          publishedFormats: { chatDb: 9 },
+          installSupportsStoreFloor: false,
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: RUNNING_VERSION,
+          publishedFormats: { chatDb: 9 },
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: null,
+              epicCount: 0,
+              survey: "pending",
+            },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("leaves pre-1.4 peers unrestricted because null means no report", () => {
     expect(
       hostStoreFormatRestriction(offer({ storeFormats: null })),

@@ -250,6 +250,37 @@ describe("store floor format helpers", () => {
       { chatDb: 9 },
       { applies: true },
     ],
+    // Codex: the identical-string shortcut is identity for a REGISTRY
+    // artifact, whose bytes that version uniquely names - it is not identity
+    // for `host install --from` a repackaged tree, which can claim any
+    // version in its `version.json` while declaring OLDER `storeFormats`.
+    // The shortcut now requires `targetDeclaredFormats === null`; the
+    // undeclared identical-string row above stays the registry reinstall.
+    [
+      "identical string, WITH an older declaration - the finding: no longer skipped",
+      "1.3.0",
+      "1.3.0",
+      { chatDb: 8 },
+      { applies: true },
+    ],
+    [
+      "identical string, WITH a matching declaration - applies too; the format comparison decides",
+      "1.3.0",
+      "1.3.0",
+      { chatDb: 9 },
+      { applies: true },
+    ],
+    // The documented KNOWN LIMIT, pinned so a change to it is deliberate: a
+    // strictly newer string stands aside on precedence alone even when the
+    // target declares an OLDER format. Guarding it would send every ordinary
+    // upgrade through applicability - see the docblock for the cost.
+    [
+      "strictly newer string, WITH an older declaration - the known limit: still skipped",
+      "1.4.0",
+      "1.3.0",
+      { chatDb: 8 },
+      { applies: false, reason: "target-not-older" },
+    ],
   ] as const)(
     "applicability (build-metadata / precedence): %s",
     (_label, target, installed, formats, expected) => {

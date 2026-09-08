@@ -51,9 +51,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
+  recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -216,6 +218,32 @@ function statusWithCoarseProgress(
 // `busySessionCount` off this SAME `host.status` reply, and reusing
 // `statusWith`'s fixed version would mismatch the fixture's own installed
 // record and manufacture a spurious activation debt.
+/**
+ * Negotiate the two minors the store-format floor reads - `host.update.install`
+ * at 3 (loss consent and the typed refusal) and `host.status` at 4 (the
+ * `storeFormats` report) - on top of the method names every other test in
+ * this suite records. Without the manifest the framework projects
+ * `storeFormats` away and the page withholds every downgrade as
+ * `floor-unsupported`.
+ */
+function recordFloorCapableHostMethods(
+  hostId: string,
+  methods: readonly string[],
+): void {
+  recordNegotiatedHostMethods(hostId, methods);
+  const manifest: Record<string, ManifestMethodEntry> = {};
+  for (const method of methods) {
+    manifest[method] = { major: 1, minor: floorCapableMinorFor(method) };
+  }
+  recordNegotiatedHostManifest(hostId, manifest);
+}
+
+function floorCapableMinorFor(method: string): number {
+  if (method === "host.update.install") return 3;
+  if (method === "host.status") return 4;
+  return 0;
+}
+
 function statusWithBusy(
   hostVersion: string,
   operation: HostStatusUpdateOperation,
@@ -945,6 +973,85 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
 
     await waitFor(() => {
       expect(installCalls).toEqual([{ version: "1.3.0-rc.3", force: true }]);
+    });
+  });
+
+  it("a staged DOWNGRADE below the store floor keeps Force update…, names the loss as its own paragraph in the dialog, and dispatches force with store-loss consent", async () => {
+    // The stage is 1.2.0 (format 8, from the fixed table) over a running
+    // 1.3.0-rc.2 whose survey found a format-9 store: the row would show
+    // Install anyway, so the staged wait's Force must carry the same
+    // consent - a downgrade authorized that way and then parked on a busy
+    // host had no other way to finish from this page. The loss sentence is
+    // rendered as the dialog's `detail`, not folded into the busy blurb,
+    // because a newline inside the description collapses.
+    const installCalls: Array<{
+      version: string;
+      force: boolean;
+      acceptStoreFormatLoss: boolean;
+    }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.2.0"),
+      ),
+      overrideHandlers: {
+        "host.status": () => ({
+          ...statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: 9,
+              epicCount: 1,
+              survey: "complete" as const,
+            },
+          },
+        }),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: clearStagedManifest("1.2.0"),
+        }),
+        "host.update.install": (req) => {
+          installCalls.push({
+            version: req.version,
+            force: req.force,
+            acceptStoreFormatLoss: req.acceptStoreFormatLoss,
+          });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordFloorCapableHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-force-update"),
+    );
+    const busyDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    expect(busyDialog.dataset.purpose).toBe("update");
+    // The consent text, as its own paragraph, naming what becomes
+    // unavailable; the busy sentence stays the description above it.
+    const detail = screen.getByTestId("host-busy-force-defer-detail");
+    expect(detail.textContent).toContain("1.2.0");
+    expect(detail.textContent).toMatch(/chat/i);
+    expect(busyDialog.textContent).toContain(
+      "v1.2.0 is downloaded and waiting",
+    );
+
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+    await waitFor(() => {
+      expect(installCalls).toEqual([
+        { version: "1.2.0", force: true, acceptStoreFormatLoss: true },
+      ]);
     });
   });
 

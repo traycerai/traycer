@@ -207,8 +207,9 @@ export type StoreFloorApplicability =
  *
  * Only a move to an OLDER build can leave data unreadable, so the floor is
  * skipped entirely - no table lookup, no disk walk - for exactly two moves:
- * the target version string is IDENTICAL to the installed one, or it is
- * STRICTLY newer by SemVer precedence.
+ * the target version string is IDENTICAL to the installed one AND the target
+ * declares no formats of its own, or the target is STRICTLY newer by SemVer
+ * precedence.
  *
  * Equal precedence with a different string is not one of them. SemVer ignores
  * build metadata, so `2.0.0+old` over `2.0.0+new` compares equal while being a
@@ -262,7 +263,34 @@ export function storeFloorApplicability(
   // Do not "tighten" this by adding an `isReleasedHostVersion(targetVersion)`
   // test: it would be unreachable, and it would suggest the guarantee lives
   // here rather than in the guard that actually provides it.
-  if (targetVersion === installedVersion) {
+  // ...and only when the target has NOT declared its own formats. A string is
+  // identity for a registry artifact, whose bytes that version uniquely names.
+  // It is not identity for an archive that carries its own `version.json`:
+  // `host install --from` a repackaged tree can claim any version while
+  // declaring older formats, and everything else in this module treats that
+  // declaration as authoritative. Taking the shortcut there would skip the
+  // floor on the strength of a string the archive chose for itself. With a
+  // declaration present the comparison below - or the survey - decides, and a
+  // genuine same-build reinstall clears from formats alone, without walking
+  // any disk, whenever the installed side can be placed (its own sidecar, or
+  // the table). It cannot always be: a repair reinstall over an install whose
+  // `version.json` is unreadable, at a version above the table's ceiling,
+  // walks the disk here and can be refused on one unreadable store - loudly,
+  // with `--accept-store-format-loss` as the way past. That is the floor's
+  // bias everywhere (an unreadable store refuses), taken on purpose over the
+  // silent loss the shortcut would allow.
+  //
+  // KNOWN LIMIT: the strictly-newer arm below does NOT take the same guard.
+  // A repackaged archive can claim a newer version than the installed one
+  // while declaring older formats, and precedence alone waves it through.
+  // Guarding it would send every ordinary upgrade through applicability - and
+  // where the installed side is known to neither its sidecar nor the table (a
+  // host installed by a CLI that predates the sidecar, at a version above the
+  // table's ceiling), that is a disk walk on the common path whose
+  // `indeterminate` verdict REFUSES an upgrade over one unreadable store.
+  // That cost is not worth the local-archive hole it closes; the hole is
+  // reachable only by `host install --from` an unsigned tree.
+  if (targetDeclaredFormats === null && targetVersion === installedVersion) {
     return { applies: false, reason: "target-not-older" };
   }
   const relation = compareHostVersions(targetVersion, installedVersion);

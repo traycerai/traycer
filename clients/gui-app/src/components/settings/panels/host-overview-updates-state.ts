@@ -514,14 +514,18 @@ export function useHostOverviewUpdates(input: {
       stagedEntryOfferable,
       input.stagedVersion,
     ),
+    stagedStoreFormatConfirmation: storeFloor.stagedStoreFormatConfirmation(
+      input.stagedVersion,
+    ),
     activate: bound.activate,
     continueAttempt: bound.continueAttempt,
     // The staged-wait force: the SAME dispatch as a row's Install, with
-    // `force: true`, so the accepted latch, the invalidations and the
-    // outcome toasts are the ones every other install on this page gets.
+    // `force: true` and whatever loss consent its confirmation collected, so
+    // the accepted latch, the invalidations, the outcome toasts and the
+    // store-floor gate are the ones every other install on this page gets.
     // The confirmation that precedes it is the panel's (the ellipsis on
     // "Force update…" is a promise); this is only the dispatch.
-    installForce: (version, onSettled) => {
+    installForce: (version, acceptStoreFormatLoss, onSettled) => {
       // Re-read the exact version named by the confirmation. A catalog poll
       // can withdraw it or project a refusal after the offer was opened.
       const refusal = describeForceUpdateRefusal({
@@ -541,7 +545,7 @@ export function useHostOverviewUpdates(input: {
         onSettled();
         return;
       }
-      install(version, true, false, onSettled);
+      install(version, true, acceptStoreFormatLoss, onSettled);
     },
     summary: {
       hostName,
@@ -637,6 +641,10 @@ interface HostInstallStoreFloor {
     offerable: boolean,
     version: string | null,
   ) => boolean;
+  /** The staged version's Install-anyway confirmation, or `null`. */
+  readonly stagedStoreFormatConfirmation: (
+    version: string | null,
+  ) => string | null;
   readonly showNotice: (rows: readonly HostVersionRow[]) => boolean;
   readonly prepareInstall: (
     version: string,
@@ -713,9 +721,32 @@ function useHostInstallStoreFloor(input: {
       }
       return version;
     },
-    stagedEntryOfferable: (offerable, version) =>
-      offerable &&
-      (version === null || restrictionForVersion(version) === null),
+    // A staged version's Force update is offered under the same rule as a
+    // row's Install: an unrestricted target, or one whose restriction carries
+    // a confirmation - "Install anyway" for a blocked, unknown or failed
+    // survey. The dialog that precedes the force then names that loss beside
+    // the sessions it ends, and dispatches with the consent the person gave
+    // there (`installForce`). Withheld, exactly as the row is, for a
+    // restriction with no confirmation: a pending survey, or a peer that
+    // cannot honour consent.
+    //
+    // This is the RECORD-derived staged wait - the park `legacyPark`
+    // projects with no attempt id, which `installForce` resumes through
+    // `host.update.install {force}`, the one dispatch that carries
+    // `acceptStoreFormatLoss`. A park that is a bound ATTEMPT resumes through
+    // `host.update.continue`, whose request carries no consent on the wire
+    // and whose dialog names no loss; a downgrade parked that way still
+    // finishes through a fresh Install anyway once the host is idle. Carrying
+    // consent on `continue` is a protocol change, recorded as a follow-up.
+    stagedEntryOfferable: (offerable, version) => {
+      if (!offerable || version === null) return false;
+      const restriction = restrictionForVersion(version);
+      return restriction === null || restriction.confirmation !== null;
+    },
+    stagedStoreFormatConfirmation: (version) =>
+      version === null
+        ? null
+        : (restrictionForVersion(version)?.confirmation ?? null),
     // The notice explains the Install-anyway affordance, so it follows the
     // rows that actually carry one rather than re-deriving the two conditions
     // that used to imply it. A failed survey no longer implies one by itself:
@@ -988,11 +1019,27 @@ export interface HostOverviewUpdatesState {
   readonly cliFloorForVersion: (version: string | null) => CliFloor | null;
   readonly stagedEntryOfferable: boolean;
   /**
-   * `host.update.install {version, force: true}` — the staged-wait force.
-   * `onSettled` runs once the request answers or fails, so the confirmation
-   * that dispatched it can close on the answer rather than on a guess.
+   * The store-format loss the staged version's Force update has to name and
+   * collect consent for - the same confirmation its picker row would show
+   * behind Install anyway - or `null` when the stage carries no such
+   * restriction. Read at offer time by the panel, so the dialog describes the
+   * loss the person is consenting to.
    */
-  readonly installForce: (version: string, onSettled: () => void) => void;
+  readonly stagedStoreFormatConfirmation: string | null;
+  /**
+   * `host.update.install {version, force: true}` — the staged-wait force.
+   * `acceptStoreFormatLoss` is the consent the confirmation collected when it
+   * named a store-format loss (`stagedStoreFormatConfirmation`); the dispatch
+   * gate re-reads the row's evidence and still refuses a peer that cannot
+   * honour it. `onSettled` runs once the request answers or fails, so the
+   * confirmation that dispatched it can close on the answer rather than on a
+   * guess.
+   */
+  readonly installForce: (
+    version: string,
+    acceptStoreFormatLoss: boolean,
+    onSettled: () => void,
+  ) => void;
   /**
    * `host.update.activate {attemptId, force}` — restart into an attempt's
    * already-placed bytes. `null` when this host does not advertise the method,

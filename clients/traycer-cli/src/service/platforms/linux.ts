@@ -783,6 +783,9 @@ async function probeUnitSettled(
 export async function linuxServiceMayRespawn(
   label: ServiceLabel,
   runner: ProcessRunner | null,
+  // Bounds the `systemctl` call; the caller's settle loop sizes it from its
+  // remaining budget.
+  timeoutMs: number,
 ): Promise<boolean> {
   const run = runner ?? runCommand;
   let result: RunResult;
@@ -790,7 +793,7 @@ export async function linuxServiceMayRespawn(
     result = await run("systemctl", ["--user", "is-active", unitName(label)], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs,
       tolerateNonZeroExit: true,
     });
   } catch (cause) {

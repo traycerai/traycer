@@ -2687,7 +2687,11 @@ describe("Overview updates — CLI floor remedy", () => {
       // pin. Bypassing describeForceUpdateRefusal would reach installForce's
       // mutation and redden the no-mutation/failure assertions below.
       act(() => {
-        rendered.result.current.installForce(scenario.version, onSettled);
+        rendered.result.current.installForce(
+          scenario.version,
+          false,
+          onSettled,
+        );
         returned = true;
       });
       expect(onSettled).toHaveBeenCalledTimes(1);
@@ -2804,7 +2808,7 @@ describe("Overview updates — CLI floor remedy", () => {
     // yanked entry, so no change to it can authorize this release. Dropping
     // the `entry.yanked` refusal is what reddens the no-mutation pin.
     act(() => {
-      yankedRendered.result.current.installForce("1.3.0", onSettled);
+      yankedRendered.result.current.installForce("1.3.0", false, onSettled);
       returned = true;
     });
     expect(onSettled).toHaveBeenCalledTimes(1);
@@ -2954,6 +2958,133 @@ describe("Overview updates — CLI floor remedy", () => {
 // stage and then refuse the version anyway, so offering it could only ever
 // destroy the stage for nothing.
 describe("Overview updates — stagedEntryOfferable", () => {
+  it("a staged downgrade below the store floor stays offerable behind its Install-anyway confirmation, and installForce carries that consent with force", async () => {
+    // A downgrade authorized with Install anyway that then parked on a busy
+    // host used to lose its way forward: the stage's Force update was
+    // withheld for any restriction, and the picker is disabled while the
+    // host is busy, so the one dispatch the host supports for this state -
+    // `{force: true, acceptStoreFormatLoss: true}` - could not be sent from
+    // this page until every session drained.
+    const installRequests: Array<{
+      readonly version: string;
+      readonly force: boolean;
+      readonly acceptStoreFormatLoss: boolean;
+    }> = [];
+    const manifestBase = multiVersionManifest(["1.2.0"]);
+    const manifest: HostAvailableManifest = {
+      ...manifestBase,
+      versions: manifestBase.versions.map((entry) => ({
+        ...entry,
+        storeFormats: { chatDb: 8 },
+      })),
+    };
+    const storeFormats: HostStatusStoreFormats = {
+      chatDb: {
+        current: 9,
+        onDiskMax: 9,
+        epicCount: 1,
+        survey: "complete",
+      },
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.1",
+      storeFormats,
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+        "host.update.install": (request) => {
+          installRequests.push(request);
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.1",
+      stagedVersion: "1.2.0",
+      storeFormats,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+
+    // The row and the stage read the same restriction: blocked, with the
+    // confirmation the row would show behind Install anyway.
+    const rowConfirmation =
+      rendered.result.current.picker.rows[0]?.storeFormatConfirmation ?? null;
+    expect(rowConfirmation).not.toBeNull();
+    expect(rendered.result.current.stagedEntryOfferable).toBe(true);
+    expect(rendered.result.current.stagedStoreFormatConfirmation).toBe(
+      rowConfirmation,
+    );
+
+    const onSettled = vi.fn();
+    act(() => {
+      rendered.result.current.installForce("1.2.0", true, onSettled);
+    });
+    await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
+    expect(installRequests).toEqual([
+      { version: "1.2.0", force: true, acceptStoreFormatLoss: true },
+    ]);
+    rendered.unmount();
+  });
+
+  it("a staged downgrade is withheld while the first survey is pending - the restriction carries no confirmation to consent to", async () => {
+    const manifestBase = multiVersionManifest(["1.2.0"]);
+    const manifest: HostAvailableManifest = {
+      ...manifestBase,
+      versions: manifestBase.versions.map((entry) => ({
+        ...entry,
+        storeFormats: { chatDb: 8 },
+      })),
+    };
+    const storeFormats: HostStatusStoreFormats = {
+      chatDb: {
+        current: 9,
+        onDiskMax: null,
+        epicCount: 0,
+        survey: "pending",
+      },
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.1",
+      storeFormats,
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.1",
+      stagedVersion: "1.2.0",
+      storeFormats,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+
+    expect(rendered.result.current.stagedEntryOfferable).toBe(false);
+    expect(rendered.result.current.stagedStoreFormatConfirmation).toBeNull();
+    rendered.unmount();
+  });
+
   it("a yanked staged entry is not offerable, and installForce refuses with the withdrawal text without dispatching", async () => {
     const base = multiVersionManifest(["1.3.0"]);
     const yankedEntry = { ...base.versions[0], yanked: true };
@@ -2999,7 +3130,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
       expect(returned).toBe(false);
     });
     act(() => {
-      rendered.result.current.installForce("1.3.0", onSettled);
+      rendered.result.current.installForce("1.3.0", false, onSettled);
       returned = true;
     });
     expect(onSettled).toHaveBeenCalledTimes(1);
@@ -3070,7 +3201,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
     // Falsification: add an `assetUnavailableReason` refusal back to
     // `describeForceUpdateRefusal` and `installCalls` below stays empty.
     act(() => {
-      rendered.result.current.installForce("1.3.0", () => {});
+      rendered.result.current.installForce("1.3.0", false, () => {});
     });
     await waitFor(() => {
       expect(installCalls).toEqual([{ version: "1.3.0", force: true }]);
@@ -3184,7 +3315,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
       expect(returned).toBe(false);
     });
     act(() => {
-      rendered.result.current.installForce("1.3.0", onSettled);
+      rendered.result.current.installForce("1.3.0", false, onSettled);
       returned = true;
     });
     expect(onSettled).toHaveBeenCalledTimes(1);
@@ -3259,7 +3390,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
       );
 
       act(() => {
-        rendered.result.current.installForce("1.3.0", () => {});
+        rendered.result.current.installForce("1.3.0", false, () => {});
       });
       await waitFor(() =>
         expect(rendered.result.current.summary.failureDescription).toContain(

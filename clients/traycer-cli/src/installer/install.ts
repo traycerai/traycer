@@ -819,16 +819,15 @@ async function assertFloorAfterStopOrRestore(
   logger: ILogger,
 ): Promise<void> {
   try {
-    // INSIDE the try, not before it. By the time this runs `beforeSwap` may
-    // have stopped the host, and the probe shells out to the service manager -
-    // a spawn failure, a timeout, or a revoked mutation capability all throw.
-    // Outside the try that throw skipped the restore and left the machine
-    // hostless for a reason that has nothing to do with the floor.
-    const quiescence = await observeSwapQuiescence(
-      opts.environment,
-      operands.surveyRoots,
-      logger,
-    );
+    // The probe is handed in LAZY and runs INSIDE this try. Lazy because the
+    // check asks it only once applicability and formats have failed to settle
+    // the move: with the host already stopped, a `launchctl print` that waits
+    // out its timeout - or the bounded wait for the service manager to settle
+    // - is host downtime an upgrade must not pay. Inside the try because the
+    // probe shells out to the service manager - a spawn failure, a timeout, or
+    // a revoked mutation capability all throw - and a throw outside it skipped
+    // the restore and left the machine hostless for a reason that has nothing
+    // to do with the floor.
     await assertStoreFormatFloorAfterStop({
       environment: opts.environment,
       surveyRoots: operands.surveyRoots,
@@ -845,7 +844,8 @@ async function assertFloorAfterStopOrRestore(
         opts.storeFormatFloor,
         storeFormatFloorTargetVersion(opts.runtimeVersion, opts.version),
       ),
-      quiescence,
+      observeQuiescence: () =>
+        observeSwapQuiescence(opts.environment, operands.surveyRoots, logger),
       acceptStoreFormatLoss: opts.storeFormatFloor.acceptStoreFormatLoss,
       site: opts.storeFormatFloor.site,
       logger,

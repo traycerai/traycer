@@ -1450,6 +1450,9 @@ function classifyLaunchdPrintOutput(printOutput: string): LaunchdOwnership {
 export async function macosServiceMayRespawn(
   label: ServiceLabel,
   runner: ProcessRunner | null,
+  // Per `launchctl print`; two labels are read, so one probe can spend twice
+  // this. The caller's settle loop sizes it from its remaining budget.
+  timeoutMs: number,
 ): Promise<boolean> {
   const run = runner ?? runCommand;
   const targets = [
@@ -1457,7 +1460,7 @@ export async function macosServiceMayRespawn(
     `${guiDomain()}/${smAppServiceAgentLabelId(label)}`,
   ];
   for (const target of targets) {
-    if (await launchdJobMayRespawn(target, run)) return true;
+    if (await launchdJobMayRespawn(target, run, timeoutMs)) return true;
   }
   return false;
 }
@@ -1485,13 +1488,20 @@ export async function macosServiceMayRespawn(
 async function launchdJobMayRespawn(
   serviceTarget: string,
   run: ProcessRunner,
+  timeoutMs: number,
 ): Promise<boolean> {
   const result = await run("launchctl", ["print", serviceTarget], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs,
     tolerateNonZeroExit: true,
   });
+  // A NEGATIVE code is this runner saying it never got an answer:
+  // `tolerateNonZeroExit` resolves a spawn failure or a timeout as `-1`
+  // (`process-runner.ts` maps a non-numeric `err.code` to it), and reading
+  // that as "not loaded" would clear the swap on a probe that never ran.
+  // launchctl's own "could not find service" is a positive exit code.
+  if (result.exitCode < 0) return true;
   // Not loaded. Nothing holds a definition, so nothing can start it.
   if (result.exitCode !== 0) return false;
   const fields = parseLaunchctlPrintFields(

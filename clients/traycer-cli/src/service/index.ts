@@ -625,14 +625,19 @@ export function createServiceController(): ServiceController {
  * Scheduled Task whose `/Run` IS the recovery launch, with no crash-restart
  * policy configured (no `RestartCount`/`RestartInterval`), so nothing there
  * brings a dead host back on its own.
+ *
+ * `timeoutMs` bounds each subprocess the probe spawns. The floor asks this in
+ * a bounded settle loop, and a probe allowed to outlive that loop's remaining
+ * budget would stretch the wait past the bound it promises.
  */
 export async function serviceManagerMayRespawn(
   environment: Environment,
+  timeoutMs: number,
 ): Promise<boolean> {
   const label = serviceLabelFor(environment);
   if (process.platform === "darwin")
-    return await macosServiceMayRespawn(label, null);
+    return await macosServiceMayRespawn(label, null, timeoutMs);
   if (process.platform === "linux")
-    return await linuxServiceMayRespawn(label, null);
+    return await linuxServiceMayRespawn(label, null, timeoutMs);
   return false;
 }

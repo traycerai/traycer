@@ -45,8 +45,20 @@
  * `pid.json` too), so the lifecycle never stopped them either. That is the
  * epic's headline shape - a 1.2.0 host crash-looping on v9 data while an
  * install lands underneath it - and it is the one case where every earlier
- * signal says "quiet". A deliberate stop is not affected: neither manager
- * respawns a clean exit.
+ * signal says "quiet".
+ *
+ * A deliberate stop is not refused by this, but it is WAITED OUT rather than
+ * exempted. The supervisor outlives its child by the whole post-mortem, so
+ * for a few seconds after a clean stop the manager still shows a live job -
+ * indistinguishable, from here, from a supervisor between children. Neither
+ * manager respawns a clean exit, so the deliberate stop SETTLES on its own:
+ * the job pid goes away and the last exit reads clean. The check polls for
+ * that, bounded, and refuses only a manager that never settles. An earlier
+ * shape waved a live supervisor through on the strength of this install's
+ * own stop plus its stop-intent marker; that could not tell the supervisor
+ * that owned the stopped host from a second one (a dual CLI + Desktop
+ * registration whose other child was still booting, unpublished), and the
+ * exemption cleared both.
  */
 import {
   publishedHostProcessGone,
@@ -54,7 +66,6 @@ import {
 } from "./pid-metadata";
 import type { ChatStoreSurveyRoots } from "./chat-store-survey-roots";
 import { serviceManagerMayRespawn } from "../service";
-import { isStopIntentFresh, readStopIntent } from "./stop-intent";
 import type { ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 
@@ -92,8 +103,12 @@ export type SwapQuiescenceGap =
    * precisely the epic's headline shape: a 1.2.0 host crash-looping on v9
    * data while an install lands underneath it.
    *
-   * A DELIBERATE stop is not this. Neither manager respawns a clean exit, so
-   * "I stopped my host, then downgraded" still clears.
+   * A DELIBERATE stop is not this, and it is not exempted from it either: it
+   * is waited out. Neither manager respawns a clean exit, so the supervisor
+   * winding down from the stop this install just performed settles within
+   * its post-mortem, and only a job that is still loaded with a live pid or
+   * an unclean last exit once {@link SERVICE_SETTLE_TIMEOUT_MS} has passed
+   * answers this way.
    */
   | "service-may-respawn";
 
@@ -111,6 +126,10 @@ const QUIESCED: SwapQuiescence = { established: true };
  * route performed it - which is what keeps the GUI's "Install anyway" path on
  * Desktop-managed macOS working, since that route really does wait for the pid
  * to exit before returning.
+ *
+ * Can take up to {@link SERVICE_SETTLE_TIMEOUT_MS} when the service manager
+ * still holds a live job after the stop - which is why the caller asks it
+ * LAZILY, only for a move that applicability and formats could not settle.
  */
 export async function observeSwapQuiescence(
   environment: Environment,
@@ -147,10 +166,24 @@ export async function observeSwapQuiescence(
     );
     return { established: false, reason: "unseen-writers" };
   }
+  const processGap = await publishedHostProcessState(environment, logger);
+  if (processGap !== null) return processGap;
+  return await quiescenceOnceServiceSettles(environment, logger);
+}
+
+/**
+ * The pid-record half of the question: `null` when no published host process
+ * stands in the way (no record, or a record whose process is provably gone),
+ * else the gap that does. Asked twice - before the service manager is
+ * consulted, and again after a wait for it to settle, since a host can
+ * publish while this process is waiting.
+ */
+async function publishedHostProcessState(
+  environment: Environment,
+  logger: ILogger,
+): Promise<SwapQuiescence | null> {
   const evidence = await readHostPidMetadataEvidence(environment);
-  if (evidence.kind === "absent") {
-    return await quiescenceUnlessServiceMayRespawn(environment, logger);
-  }
+  if (evidence.kind === "absent") return null;
   if (evidence.kind === "unreadable") {
     logger.warn(
       "Host pid metadata could not be read, so the swap cannot be shown to be quiescent",
@@ -161,67 +194,97 @@ export async function observeSwapQuiescence(
   if (!publishedHostProcessGone(evidence.metadata)) {
     return { established: false, reason: "writer-still-running" };
   }
-  return await quiescenceUnlessServiceMayRespawn(environment, logger);
+  return null;
 }
+
+/**
+ * How long the service manager is given to settle after the stop before its
+ * live job is read as one that may respawn.
+ *
+ * Sized against the supervisor's own post-mortem, which is what keeps a
+ * launchd job "running" after a clean stop: the stderr end wait, the tee
+ * flush and, on a fatal signal, the crash-report scan - each bounded at a few
+ * seconds in `host/crash-diagnostics.ts`, well inside this. A supervisor
+ * BETWEEN children (the crash loop this check exists for) never settles: it
+ * sits in its relaunch backoff with a live pid, or launchd holds the job with
+ * an unclean last exit through its throttle window. A second supervisor whose
+ * child is still booting does not settle either. Both spend the whole window
+ * and are refused. The window is host downtime, paid only by a move that
+ * neither applicability nor formats could settle.
+ *
+ * The budget is MONOTONIC and covers everything: it starts before the first
+ * probe, every probe's subprocess timeout is capped by what remains, and so
+ * is every sleep. A wall clock corrected during the wait therefore neither
+ * cuts it short nor stretches it, and a `launchctl` that hangs to its own
+ * timeout cannot push the wait past the bound - it runs out of budget and
+ * answers "unproven", which refuses.
+ */
+export const SERVICE_SETTLE_TIMEOUT_MS = 15_000;
+const SERVICE_SETTLE_POLL_MS = 500;
+/** The most any single `launchctl print` / `systemctl` call may take. */
+const SERVICE_PROBE_TIMEOUT_MS = 10_000;
 
 /**
  * No process is running - but "running" is not the same question as "cannot
  * start". Asked LAST, only once the pid evidence would otherwise clear, so the
- * ordinary machine pays one extra probe and only on a downgrade.
+ * ordinary machine pays a probe and only on a downgrade.
+ *
+ * The manager is polled until it no longer holds a job that could start a
+ * host, or the window runs out. The ordinary running-host downgrade takes the
+ * first road: `beforeSwap` stops the host child, the clean stop purges
+ * `pid.json`, and `stopService` returns while launchd still considers the job
+ * running - the supervisor outlives its child by the whole post-mortem
+ * (`relaunchServiceAfterRestart`'s own rationale) - and a few polls later the
+ * job has no pid and a clean last exit, which neither manager respawns.
+ *
+ * Deliberately NOT an exemption keyed on this install's own stop. The manager
+ * answers for every loaded label at once (the CLI's and Desktop's), and a
+ * stop of the published host says nothing about a second supervisor whose
+ * child is still booting, unpublished: that one keeps its live pid, never
+ * settles here, and is refused - which an exemption for "the stop we just
+ * performed" would have waved through along with the supervisor it meant.
+ *
+ * Once the manager has settled after a wait, the pid record is read again: a
+ * host started outside any manager during the window would have published by
+ * now, and the first read predates it.
  */
-async function quiescenceUnlessServiceMayRespawn(
+async function quiescenceOnceServiceSettles(
   environment: Environment,
   logger: ILogger,
 ): Promise<SwapQuiescence> {
-  if (!(await serviceManagerMayRespawn(environment))) return QUIESCED;
-  // A live supervisor with a DELIBERATE stop on record is winding down, not
-  // between children. This is the ordinary running-host downgrade and it must
-  // clear: `beforeSwap` stops the host child, the clean stop purges
-  // `pid.json`, and `stopService` returns while launchd still considers the
-  // job running - the supervisor outlives its child by the whole post-mortem
-  // (`relaunchServiceAfterRestart`'s own rationale). Without this the headline
-  // Settings > Update-now downgrade would be refused by its own stop.
-  //
-  // The marker read is the SAME file the supervisor reads at SIGTERM to tell a
-  // deliberate stop from a crash, so this cannot drift from what the
-  // supervisor will actually do - it is that decision's input, not a second
-  // guess at it. It survives a successful stop (`retireIntentIfHostSurvived`
-  // clears it only when the host SURVIVED) and expires on its own, so a stop
-  // that died halfway through stops vouching for anything.
-  if (await deliberateStopInFlight(environment)) {
-    logger.debug(
-      "Host store-format floor: a supervisor is live but a deliberate stop is on record, so it is winding down",
-      { environment },
+  const startedAt = performance.now();
+  const remainingMs = (): number =>
+    SERVICE_SETTLE_TIMEOUT_MS - (performance.now() - startedAt);
+  const probe = (): Promise<boolean> =>
+    serviceManagerMayRespawn(
+      environment,
+      Math.max(1, Math.min(SERVICE_PROBE_TIMEOUT_MS, Math.ceil(remainingMs()))),
     );
-    return QUIESCED;
-  }
-  logger.info(
-    "Host store-format floor cannot establish quiescence: no host is running, but the service manager is set to restart one",
-    { environment },
+  let mayRespawn = await probe();
+  if (!mayRespawn) return QUIESCED;
+  logger.debug(
+    "Host store-format floor: the service manager still holds a host job after the stop; waiting for it to settle",
+    { environment, timeoutMs: SERVICE_SETTLE_TIMEOUT_MS },
   );
-  return { established: false, reason: "service-may-respawn" };
-}
-
-/**
- * Whether a deliberate stop is in flight for this environment.
- *
- * `readStopIntent` + `isStopIntentFresh` are the CLI's existing readers for
- * the record the stop path writes BEFORE anything is killed. A stale record
- * deliberately does not count: past its expiry the supervisor itself resumes
- * normal crash recovery, so it would be vouching for a stop nobody is running.
- */
-async function deliberateStopInFlight(
-  environment: Environment,
-): Promise<boolean> {
-  const intent = await readStopIntent(environment);
-  if (intent === null) return false;
-  // ONLY `stop`. A fresh `restart` intent means the opposite of what this
-  // function is asked: the supervisor has been told a new host IS expected, so
-  // a writer is on its way rather than winding down. `uninstall` is excluded
-  // for the weaker reason that it is not this flow at all, and a stop we
-  // cannot name is not a stop we should vouch for.
-  if (intent.reason !== "stop") return false;
-  return isStopIntentFresh(intent, Date.now());
+  while (mayRespawn) {
+    const remaining = remainingMs();
+    if (remaining <= 0) {
+      logger.info(
+        "Host store-format floor cannot establish quiescence: no host is running, but the service manager still holds a host job that can start one",
+        {
+          environment,
+          waitedMs: Math.round(performance.now() - startedAt),
+        },
+      );
+      return { established: false, reason: "service-may-respawn" };
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(SERVICE_SETTLE_POLL_MS, remaining));
+    });
+    mayRespawn = await probe();
+  }
+  const processGap = await publishedHostProcessState(environment, logger);
+  return processGap ?? QUIESCED;
 }
 
 /** The gap, as a sentence fragment for the refusal. */
@@ -230,7 +293,7 @@ export function describeQuiescenceGap(reason: SwapQuiescenceGap): string {
     return "the host that writes them is still running, so it can stamp a store after this check and before the swap";
   }
   if (reason === "service-may-respawn") {
-    return "no host is running, but the service manager is set to restart one after its recent crash, so it can stamp a store before the swap lands";
+    return "no host is running, but the service manager still held a host job that can start one after waiting for it to settle - a recent crash, or a host that was still starting when the stop ran - so it can stamp a store before the swap lands; retry once it has settled";
   }
   if (reason === "unseen-writers") {
     return "this CLI cannot account for every host data root on this machine - only one of them publishes a process record here - so another host could still be writing them";

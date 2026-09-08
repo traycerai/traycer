@@ -663,7 +663,10 @@ export function publishedStoreFormatsForTarget(
  * where a downgrade would land under a running 1.3 host.
  *
  * It costs the ordinary update nothing: applicability answers from two version
- * strings, so an upgrade returns before the quiescence probe or any disk walk.
+ * strings and a same-format move from two format numbers, and the quiescence
+ * probe is taken through `observeQuiescence` only past both - so an upgrade
+ * returns before the probe or any disk walk, with the host already stopped and
+ * every second here host downtime.
  */
 export async function assertStoreFormatFloorAfterStop(args: {
   readonly environment: Environment;
@@ -676,7 +679,15 @@ export async function assertStoreFormatFloorAfterStop(args: {
   readonly installedStoreFormats: HostStoreFormats | null;
   /** See `publishedStoreFormatsForTarget` - the same value the tail check used. */
   readonly publishedStoreFormats: HostStoreFormats | null;
-  readonly quiescence: SwapQuiescence;
+  /**
+   * The quiescence probe, LAZY: asked only once applicability and formats
+   * have failed to settle the move. On macOS it can spend up to two
+   * sequential 10-second `launchctl print` waits, on Linux one `systemctl`
+   * wait - host downtime, since it runs after the stop - and an upgrade or a
+   * same-format rollback must not pay it for an answer this function never
+   * reads.
+   */
+  readonly observeQuiescence: () => Promise<SwapQuiescence>;
   readonly acceptStoreFormatLoss: boolean;
   readonly site: StoreFormatFloorSite;
   readonly logger: ILogger;
@@ -728,14 +739,28 @@ export async function assertStoreFormatFloorAfterStop(args: {
     );
     return;
   }
-  if (!args.quiescence.established) {
-    const refusal = quiescenceRefusal(args, args.quiescence.reason);
+  // Only now. Everything above answered from two version strings and two
+  // format numbers; this is the first step that leaves the process.
+  const quiescence = await args.observeQuiescence();
+  if (!quiescence.established) {
+    const refusal = quiescenceRefusal(
+      args,
+      quiescence.reason,
+      // What the formats failed to settle is not always "older": a target
+      // whose declaration is known over an installed build the table cannot
+      // place (a release above its ceiling with no readable sidecar) is
+      // INCOMPARABLE, and the refusal must not assert an ordering it never
+      // established - a same-version repair reinstall reaches this arm.
+      target.kind === "known" && installed?.kind === "known"
+        ? "it reads an older chat store format"
+        : "its chat store format cannot be compared with the installed build's",
+    );
     const fields = {
       environment: args.environment,
       site: args.site,
       targetVersion: args.targetVersion,
       installedVersion: args.installedVersion,
-      quiescenceGap: args.quiescence.reason,
+      quiescenceGap: quiescence.reason,
     };
     if (args.acceptStoreFormatLoss) {
       args.logger.warn(
@@ -777,10 +802,11 @@ function quiescenceRefusal(
     readonly site: StoreFormatFloorSite;
   },
   reason: SwapQuiescenceGap,
+  formatsVerdict: string,
 ): CliError {
   return cliError({
     code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
-    message: `${args.site}: refusing to install host ${args.targetVersion} over ${describeInstalled(args.installedVersion)} - it reads an older chat store format, and ${describeQuiescenceGap(reason)}. Nothing has been replaced. Stop the host and retry, or rerun with --accept-store-format-loss to install it anyway and lose access to any chats it cannot open.`,
+    message: `${args.site}: refusing to install host ${args.targetVersion} over ${describeInstalled(args.installedVersion)} - ${formatsVerdict}, and ${describeQuiescenceGap(reason)}. Nothing has been replaced. Stop the host and retry, or rerun with --accept-store-format-loss to install it anyway and lose access to any chats it cannot open.`,
     details: {
       environment: args.environment,
       site: args.site,

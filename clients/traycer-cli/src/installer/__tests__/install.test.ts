@@ -861,9 +861,13 @@ describe("commitInstallFromSource", () => {
       // here never fails).
       expect(thrown).toBe(probeFailure);
       expect(mocks.observeSwapQuiescenceMock).toHaveBeenCalledTimes(1);
-      // `assertStoreFormatFloorAfterStop` never even ran - the probe threw
-      // before it could be reached.
-      expect(mocks.assertStoreFormatFloorAfterStopMock).not.toHaveBeenCalled();
+      // The probe is asked from INSIDE `assertStoreFormatFloorAfterStop`
+      // (lazily, once formats fail to settle the move), so the check ran and
+      // the probe's own rejection is what escaped it - not a refusal it
+      // synthesized.
+      expect(mocks.assertStoreFormatFloorAfterStopMock).toHaveBeenCalledTimes(
+        1,
+      );
       expect(restartAfterAbortedSwap).toHaveBeenCalledTimes(1);
     });
 

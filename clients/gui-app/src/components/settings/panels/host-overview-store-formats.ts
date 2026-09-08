@@ -49,10 +49,22 @@ export function hostStoreFormatRestriction(
 ): HostStoreFormatRestriction | null {
   // Read BEFORE the `storeFormats === null` return below, because whether the
   // floor APPLIES does not depend on what the host reported about its stores.
+  //
+  // `null` for the declaration, deliberately. That argument is an ARCHIVE's
+  // own `version.json` - what lets `host install --from` a repackaged tree be
+  // judged by its formats rather than by a version string it chose for
+  // itself, so a declaring target that matches the running version string
+  // evaluates instead of standing aside. A catalog row is not that: it is a
+  // signed registry artifact whose version IS its identity, and the manifest's
+  // published formats describe it rather than override it. Passing them here
+  // would make the running version's own row read as a downgrade - withheld
+  // on a pre-floor peer, "Checking chat stores…" while a survey is pending.
+  // The published formats still resolve the target's format below, where they
+  // belong.
   const downgrade = storeFloorApplicability(
     input.version,
     input.runningVersion,
-    input.publishedFormats,
+    null,
   ).applies;
   // A peer that cannot be told about store-format loss must not be offered a
   // downgrade at all - not even behind Install anyway, because there is no

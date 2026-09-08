@@ -33,7 +33,20 @@ import { useEffect, useState } from "react";
  */
 export function useDeadlineReached(atMs: number | null): boolean {
   const [observedAt, setObservedAt] = useState(() => Date.now());
-  const reached = atMs !== null && observedAt >= atMs;
+  // The instant whose timer FIRED, kept apart from the clock sample. The
+  // timer is monotonic and the deadline is wall-clock: when the clock is
+  // corrected backwards after the timer is armed (a bad clock fixed after
+  // resume), the timer still fires once the interval has elapsed, but the
+  // sample it takes can sit below `atMs`. Reading only the sample would leave
+  // the answer `false` with the effect's inputs unchanged - so no re-arm, and
+  // an acknowledged-but-silent wait would spin past its bound for as long as
+  // the correction was large. The firing is itself the evidence that this
+  // instant's interval elapsed, so it answers for exactly this instant. It is
+  // NOT folded into the sample, because a later deadline anchored on the
+  // corrected clock must not inherit it: that wait starts `false` and arms its
+  // own timer, as any other does.
+  const [firedFor, setFiredFor] = useState<number | null>(null);
+  const reached = atMs !== null && (observedAt >= atMs || firedFor === atMs);
 
   useEffect(() => {
     // Nothing to wait for, or the sample already covers it - and in the second
@@ -42,6 +55,7 @@ export function useDeadlineReached(atMs: number | null): boolean {
     const timer = window.setTimeout(
       () => {
         setObservedAt(Date.now());
+        setFiredFor(atMs);
       },
       // Clamped because the deadline can be behind an ADVANCED sample: the
       // stored sample is only as fresh as the last firing, so a deadline that

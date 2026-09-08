@@ -1012,7 +1012,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
-        quiescence: NOT_ESTABLISHED,
+        observeQuiescence: async () => NOT_ESTABLISHED,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -1036,6 +1036,42 @@ describe("assertStoreFormatFloorAfterStop", () => {
     expect(err.message).not.toContain("epic-would-fail-if-walked");
   });
 
+  it("a quiescence refusal over an installed build the table cannot place says the formats are INCOMPARABLE, not that the target reads an older one", async () => {
+    // A same-version repair reinstall: the staged tree declares its format,
+    // the installed tree's sidecar is unreadable and 1.3.0 sits above the
+    // table's ceiling, so the installed side is unknown and formats cannot
+    // settle the move. The refusal must not assert an ordering it never
+    // established - the two builds are, by their strings, the same.
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.3.0",
+        declaredStoreFormats: { chatDb: 9 },
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0",
+        installedStoreFormats: null,
+        observeQuiescence: async () => NOT_ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    expect(err.message).toContain(
+      "its chat store format cannot be compared with the installed build's",
+    );
+    expect(err.message).not.toContain("reads an older chat store format");
+  });
+
   it("--accept-store-format-loss bypasses the quiescence refusal, and the warn carries the same message", async () => {
     await writeGarbageChatDb("epic-would-fail-if-walked");
     const logger = fakeLogger();
@@ -1049,7 +1085,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
-        quiescence: NOT_ESTABLISHED,
+        observeQuiescence: async () => NOT_ESTABLISHED,
         acceptStoreFormatLoss: true,
         site: "host install",
         logger,
@@ -1079,7 +1115,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
-        quiescence: ESTABLISHED,
+        observeQuiescence: async () => ESTABLISHED,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -1105,7 +1141,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
-        quiescence: ESTABLISHED,
+        observeQuiescence: async () => ESTABLISHED,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -1129,9 +1165,11 @@ describe("assertStoreFormatFloorAfterStop", () => {
     // spans more than one survey root, so quiescence there is never
     // `established` - demanding it BEFORE the formats short-circuit refused
     // this move and claimed the target read an OLDER format with both sides
-    // at 9. Passing an unestablished quiescence here makes the test fail
-    // loudly if the ordering regresses - that is the whole point, not an
-    // incidental fixture choice.
+    // at 9. An unestablished quiescence here makes the test fail loudly if
+    // the ordering regresses - that is the whole point, not an incidental
+    // fixture choice - and the probe is a spy so the test also pins that it
+    // was never ASKED: it is host downtime, taken lazily and only past the
+    // formats.
     const logger = fakeLogger();
     const multiRootSurvey = {
       roots: [
@@ -1140,6 +1178,10 @@ describe("assertStoreFormatFloorAfterStop", () => {
       ],
       enumerationFailed: false,
     };
+    const observeQuiescence = vi.fn(async (): Promise<SwapQuiescence> => ({
+      established: false,
+      reason: "unseen-writers",
+    }));
 
     await expect(
       assertStoreFormatFloorAfterStop({
@@ -1150,12 +1192,13 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "0.0.0-dev",
         installedStoreFormats: { chatDb: 9 },
-        quiescence: { established: false, reason: "unseen-writers" },
+        observeQuiescence,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
       }),
     ).resolves.toBeUndefined();
+    expect(observeQuiescence).not.toHaveBeenCalled();
 
     const clearedCall = logger.calls.find(
       (call) =>
@@ -1185,7 +1228,10 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
-        quiescence: { established: false, reason: "unseen-writers" },
+        observeQuiescence: async () => ({
+          established: false,
+          reason: "unseen-writers",
+        }),
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -1210,9 +1256,14 @@ describe("assertStoreFormatFloorAfterStop", () => {
     // ordinary upgrade on a machine with a running host would start
     // refusing. Quiescence is NOT established here, and the call must still
     // resolve, because applicability is checked first and an upgrade
-    // returns before the quiescence arm is ever reached.
+    // returns before the quiescence arm is ever reached - and, since the
+    // probe is up to two 10-second `launchctl print` waits with the host
+    // already stopped, before the probe is ever ASKED.
     await writeGarbageChatDb("epic-would-fail-if-walked");
     const logger = fakeLogger();
+    const observeQuiescence = vi.fn(
+      async (): Promise<SwapQuiescence> => NOT_ESTABLISHED,
+    );
 
     await expect(
       assertStoreFormatFloorAfterStop({
@@ -1223,12 +1274,13 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
-        quiescence: NOT_ESTABLISHED,
+        observeQuiescence,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
       }),
     ).resolves.toBeUndefined();
+    expect(observeQuiescence).not.toHaveBeenCalled();
   });
 });
 

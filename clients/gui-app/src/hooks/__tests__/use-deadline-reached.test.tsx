@@ -52,6 +52,54 @@ describe("useDeadlineReached", () => {
     expect(result.current).toBe(true);
   });
 
+  it("still reaches the deadline when the wall clock is corrected backwards after the timer is armed", () => {
+    // The timer is monotonic; the deadline is wall-clock. A clock corrected
+    // backwards after arming (a bad clock fixed after resume) lets the timer
+    // fire while `Date.now()` still reads below `atMs`. A sample-only answer
+    // stayed false there with nothing left to re-arm it, and a silent wait
+    // spun past its bound for as long as the correction was large.
+    const now = Date.now();
+    const atMs = now + 5_000;
+    const { result } = renderHook(() => useDeadlineReached(atMs));
+    expect(result.current).toBe(false);
+
+    act(() => {
+      // Ten minutes backwards, then the full interval elapses on the timer.
+      vi.setSystemTime(now - 600_000);
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(result.current).toBe(true);
+  });
+
+  it("a deadline reached by its timer under a rewound clock does not pre-answer the next wait anchored on that clock", () => {
+    const now = Date.now();
+    const { result, rerender } = renderHook(
+      ({ atMs }: { readonly atMs: number | null }) => useDeadlineReached(atMs),
+      { initialProps: { atMs: now + 5_000 } },
+    );
+    act(() => {
+      vi.setSystemTime(now - 600_000);
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(result.current).toBe(true);
+
+    // The next wait is recorded against the corrected clock and falls well
+    // before the instant the timer answered for. It is a different wait and
+    // must run its own interval.
+    const nextAtMs = Date.now() + 5_000;
+    rerender({ atMs: nextAtMs });
+    expect(result.current).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(4_999);
+    });
+    expect(result.current).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current).toBe(true);
+  });
+
   it("answers false immediately when atMs changes to a new future instant - never a stale true", () => {
     const now = Date.now();
     const { result, rerender } = renderHook(

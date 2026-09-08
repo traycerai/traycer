@@ -2430,13 +2430,21 @@ aria-live="polite"` carrying the equivalent text for
       the way forward, and **Force update…** on a staged wait with a positive
       count, which confirms through `HostBusyForceDeferDialog` and dispatches
       `host.update.install {version: staged, force: true}` through the page's
-      one install mutation. The offer and the dispatch share ONE predicate
-      (`stagedEntryOfferable`, the refusal `describeForceUpdateRefusal`
-      derives for the staged version): the catalog must still list it, not
-      withdrawn, with an asset this page can resolve (a host whose record
-      carries no platform is not offered Force against a multi-platform
-      entry - a deliberate narrowing; the CLI's own `host update --force`
-      still works there) and no CLI floor. A
+      one install mutation. The offer and the dispatch share ONE catalog
+      predicate (`stagedEntryOfferable`, the refusal
+      `describeForceUpdateRefusal` derives for the staged version): the
+      catalog must still list it, not withdrawn, with an asset this page can
+      resolve (a host whose record carries no platform is not offered Force
+      against a multi-platform entry - a deliberate narrowing; the CLI's own
+      `host update --force` still works there) and no CLI floor. The
+      store-format floor adds a second gate on both: a staged DOWNGRADE whose
+      row would show "Install anyway" (a blocked, unknown or failed chat-store
+      survey) is still offered, its dialog carries that row's loss sentence as
+      a separate paragraph (`stagedStoreFormatConfirmation`), and confirming
+      dispatches `acceptStoreFormatLoss: true` as the row's Install anyway
+      would; a stage whose restriction has no confirmation (survey pending, or
+      a peer that cannot honour consent) is withheld, and `prepareInstall`
+      re-reads the row's evidence at dispatch either way. A
       withdrawn stage is neither offered nor dispatched (the CLI would purge
       the parked stage and then refuse the version) and carries no floor
       remedy, since no CLI version installs a yanked release; an asset the
