@@ -1,3 +1,5 @@
+import { resolveDiffThemeName } from "@/lib/git/diff-rendering";
+import { useThemeRevision } from "@/providers/use-theme-revision";
 import type { DiffsThemeNames } from "@pierre/diffs";
 import { WorkerPoolContext } from "@pierre/diffs/react";
 import {
@@ -60,9 +62,11 @@ export function DiffWorkerPoolProvider(
   props: DiffWorkerPoolProviderProps,
 ): ReactNode {
   const poolSize = useMemo(() => computePoolSize(), []);
+  useThemeRevision();
   const themeContext = use(ResolvedThemeContext);
-  const currentTheme: DiffsThemeNames =
-    themeContext?.resolvedTheme === "light" ? "pierre-light" : "pierre-dark";
+  const currentTheme: DiffsThemeNames = resolveDiffThemeName(
+    themeContext?.resolvedTheme ?? "dark",
+  );
   const pool = useSyncExternalStore(
     subscribeDiffWorkerPool,
     getDiffWorkerPool,
@@ -114,17 +118,19 @@ function ThemeSync(): ReactNode {
   // Defensive: in tests that mount without <ThemeProvider> (e.g. app-shell
   // bridge tests), the context is null. Skip the sync; production always has
   // ThemeProvider above this.
+  useThemeRevision();
   const themeContext = use(ResolvedThemeContext);
   const pool = use(WorkerPoolContext);
   const resolvedTheme = themeContext?.resolvedTheme;
+  const themeName = resolveDiffThemeName(resolvedTheme ?? "dark");
 
   useEffect(() => {
     if (resolvedTheme === undefined || pool === undefined) return;
     void pool.setRenderOptions({
-      theme: resolvedTheme === "dark" ? "pierre-dark" : "pierre-light",
+      theme: themeName,
       useTokenTransformer: true,
     });
-  }, [pool, resolvedTheme]);
+  }, [pool, resolvedTheme, themeName]);
 
   return null;
 }

@@ -2,7 +2,7 @@ import type { HighlightOutput, StreamingHighlighter } from "@tailmark/react";
 import type { ReactNode } from "react";
 import type { HighlighterCore } from "shiki/core";
 import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { subscribeResolvedTheme } from "@/lib/theme-applier";
 import {
   getCachedHighlight,
   setCachedHighlight,
@@ -28,9 +28,8 @@ type ReadyListener = () => void;
 class TraycerStreamingHighlighter implements StreamingHighlighter {
   private core: HighlighterCore | null = null;
   private readonly listeners = new Set<ReadyListener>();
-  private unsubDoc: (() => void) | null = null;
-  private unsubPreset: (() => void) | null = null;
-  /** One-time document/preset observers - not cleared on core load failure. */
+  private unsubscribeTheme: (() => void) | null = null;
+  /** One-time palette observer - not cleared on core load failure. */
   private observersAttached = false;
   /**
    * In-flight core load. Cleared on rejection so a later `highlight` /
@@ -48,21 +47,7 @@ class TraycerStreamingHighlighter implements StreamingHighlighter {
     if (this.observersAttached) return;
     this.observersAttached = true;
 
-    if (typeof document !== "undefined") {
-      const observer = new MutationObserver(() => {
-        this.onThemeSurfaceChange();
-      });
-      observer.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["class"],
-      });
-      this.unsubDoc = () => {
-        observer.disconnect();
-      };
-    }
-
-    this.unsubPreset = useSettingsStore.subscribe((state, prev) => {
-      if (state.themePreset === prev.themePreset) return;
+    this.unsubscribeTheme = subscribeResolvedTheme(() => {
       this.onThemeSurfaceChange();
     });
   }
@@ -92,10 +77,8 @@ class TraycerStreamingHighlighter implements StreamingHighlighter {
     this.core = null;
     this.coreLoad = null;
     this.listeners.clear();
-    this.unsubDoc?.();
-    this.unsubPreset?.();
-    this.unsubDoc = null;
-    this.unsubPreset = null;
+    this.unsubscribeTheme?.();
+    this.unsubscribeTheme = null;
     this.observersAttached = false;
   }
 
@@ -167,11 +150,10 @@ class TraycerStreamingHighlighter implements StreamingHighlighter {
     this.listeners.add(onReadyChange);
     return () => {
       this.listeners.delete(onReadyChange);
-      // Keep document/preset subscriptions for the process lifetime: other
-      // CodeBlock instances still need them. Only detach when empty would
-      // thrash observers under list virtualization; leave them on.
-      void this.unsubDoc;
-      void this.unsubPreset;
+      // Keep palette subscription for the process lifetime: other
+      // CodeBlock instances still need it. Only detach when empty would
+      // thrash observers under list virtualization; leave it on.
+      void this.unsubscribeTheme;
     };
   }
 }
