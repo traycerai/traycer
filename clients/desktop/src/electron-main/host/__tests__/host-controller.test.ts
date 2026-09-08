@@ -2672,15 +2672,17 @@ describe("canonical status: installedYanked", () => {
     expect(status.installedYanked).toBe(true);
   });
 
-  it("does not widen the available query for a stable install with nothing staged", async () => {
+  it("does not widen the available query for a stable install with nothing staged, and probes the registry exactly once when the install is unchanged", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "2.0.0",
       runtimeVersion: "2.0.0",
     });
     let requestedArgs: readonly string[] | null = null;
+    let availableCalls = 0;
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
+        availableCalls += 1;
         requestedArgs = args;
         return availableSnapshotFixtureWithYanked("2.0.0", ["2.0.0"], []);
       }
@@ -2691,6 +2693,81 @@ describe("canonical status: installedYanked", () => {
 
     expect(requestedArgs).not.toBeNull();
     expect(requestedArgs).not.toContain("--include-pre-releases");
+    expect(availableCalls).toBe(1);
+  });
+
+  // Cold-review follow-up (Codex P2 on afc39760d): a terminal downgrade can
+  // land BETWEEN the install-record read and the `host available` round-trip.
+  // A listing fetched for the OLD install may omit the new one entirely (a
+  // beta hidden from a stable-only listing), so the reconcile must notice the
+  // change once the listing is back and restart from the top - exactly once.
+  it("re-queries the registry when the installed host changes during the probe, and observes a yank on the new install", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0",
+      runtimeVersion: "2.0.0",
+      installId: "install-held",
+    });
+    let availableCalls = 0;
+    const requestedArgsByCall: (readonly string[])[] = [];
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        availableCalls += 1;
+        requestedArgsByCall.push(args);
+        if (availableCalls === 1) {
+          // The downgrade lands while the first request is in flight - the
+          // hold is rewritten to match, so the retried pass's decision is
+          // exercised for a genuinely held install.
+          writeInstallRecord("production", {
+            version: "1.9.0-beta.1",
+            runtimeVersion: "1.9.0-beta.1",
+            installId: "install-held",
+          });
+          writeHeldVersion("production", "1.9.0-beta.1", "install-held");
+          return availableSnapshotFixtureWithYanked("2.0.0", ["2.0.0"], []);
+        }
+        return availableSnapshotFixtureWithYanked(
+          "2.0.0",
+          ["2.0.0", "1.9.0-beta.1"],
+          ["1.9.0-beta.1"],
+        );
+      }
+      return {};
+    });
+
+    await controller.stageLatest();
+    const status = await controller.getStatus();
+
+    expect(availableCalls).toBe(2);
+    expect(requestedArgsByCall[0]).not.toContain("--include-pre-releases");
+    expect(requestedArgsByCall[1]).toContain("--include-pre-releases");
+    expect(status.installedYanked).toBe(true);
+  });
+
+  it("retries the registry probe at most once even when the install keeps changing", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0",
+      runtimeVersion: "2.0.0",
+    });
+    let availableCalls = 0;
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        availableCalls += 1;
+        // Every pass observes a DIFFERENT install than it queried for, which
+        // would spin forever without the single-retry cap.
+        writeInstallRecord("production", {
+          version: `1.9.0-beta.${availableCalls}`,
+          runtimeVersion: `1.9.0-beta.${availableCalls}`,
+        });
+        return availableSnapshotFixtureWithYanked("2.0.0", ["2.0.0"], []);
+      }
+      return {};
+    });
+
+    await expect(controller.stageLatest()).resolves.toBeUndefined();
+
+    expect(availableCalls).toBe(2);
   });
 });
 

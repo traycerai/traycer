@@ -3197,7 +3197,23 @@ export class HostController {
     await this.reconcileEligibleStage();
   }
 
-  private async reconcileEligibleStage(): Promise<void> {
+  private reconcileEligibleStage(): Promise<void> {
+    return this.reconcileEligibleStageFrom(true);
+  }
+
+  // `retryOnInstallChange`: the install record is an INPUT to the registry
+  // request below (it decides the channel mode and whether the listing is
+  // widened to pre-releases), and the request is a WAN round-trip a terminal
+  // `host update --allow-downgrade` can land inside. A listing fetched for the
+  // OLD install may then omit the new one entirely - a beta is hidden from a
+  // stable-only listing - so `yankedVersionsCache` would silently record a
+  // withdrawn build as viable and the launch gate would park on it without
+  // ever reaching the CLI's authoritative lookup. So the record is re-read
+  // once the listing is back, and a changed version restarts the reconcile
+  // from the top - exactly once, so two back-to-back changes cannot spin it.
+  private async reconcileEligibleStageFrom(
+    retryOnInstallChange: boolean,
+  ): Promise<void> {
     if (await isHostRemovedByUser()) return;
     this.eligibleStage = null;
     let staged = await readDesktopHostStagedRecord(this.layout);
@@ -3254,6 +3270,26 @@ export class HostController {
         };
       }
       return;
+    }
+    // The listing answers for the install it was queried FOR. If that install
+    // changed underneath the request, neither the yank set nor the stage
+    // decision below may be drawn from it - see `retryOnInstallChange`.
+    const installedAfterListing = await readDesktopHostInstallRecord(
+      this.layout,
+    );
+    const installedVersionAfterListing = installedAfterListing?.version ?? null;
+    if (installedVersionAfterListing !== installedVersion) {
+      log.info(
+        "[host-controller] installed host changed during the registry probe",
+        {
+          queriedFor: installedVersion,
+          installedNow: installedVersionAfterListing,
+          retrying: retryOnInstallChange,
+        },
+      );
+      if (retryOnInstallChange) {
+        return this.reconcileEligibleStageFrom(false);
+      }
     }
     this.latestVersionCache = latestVersionFromSnapshot(snapshot);
     // Remembered beside `latestVersionCache` for the same reason: `getStatus`
