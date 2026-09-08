@@ -52,7 +52,17 @@ const state = vi.hoisted(
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: (request: FileAssetRequest | null): FileAssetState => {
-    state.requests.push(request);
+    // Dedupe by VALUE (ticket 27 phase B1): `ImageDiffView` memoizes its byte
+    // SOURCE now and `useFileBytes` derives a fresh `FileAssetRequest` object
+    // from it per render, so raw pushes would count render passes rather than
+    // distinct requests.
+    if (
+      !state.requests.some(
+        (seen) => JSON.stringify(seen) === JSON.stringify(request),
+      )
+    ) {
+      state.requests.push(request);
+    }
     if (state.asset === null) throw new Error("missing asset state");
     return state.asset;
   },
@@ -193,6 +203,7 @@ vi.mock("@/components/epic-canvas/workspace-file/workspace-file-ref", () => ({
 }));
 
 import { BundleFileSection } from "../git-bundle-file-section";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
 function file(args: {
   readonly path: string;
@@ -227,6 +238,10 @@ function node(): GitBundleDiffTileRef {
   return { ...bundle, diff: bundle.diff, view: bundle.view };
 }
 
+// `useFileBytes` mounts its epic-file leg on every render whatever the source
+// kind is, and that leg is a host query - so the one app-wide provider it
+// genuinely needs has to be here (ticket 27 phase B1). The wrapper option
+// (rather than an inline element) is what keeps `rerender` inside it too.
 function renderSection(changedFile: GitChangedFile): RenderResult {
   return render(
     <BundleFileSection
@@ -237,6 +252,7 @@ function renderSection(changedFile: GitChangedFile): RenderResult {
       diffViewerPreferences={PREFERENCES}
       isActive
     />,
+    { wrapper: WithTestQueryClient },
   );
 }
 

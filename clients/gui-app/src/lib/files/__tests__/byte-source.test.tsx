@@ -301,7 +301,7 @@ describe("useFileBytes - epic-file source, settled unavailable states", () => {
         header: null,
         servedFromCache: false,
         message: null,
-        });
+      });
     },
   );
 });

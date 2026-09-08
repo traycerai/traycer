@@ -12,6 +12,7 @@ import type {
   FileAssetRequest,
   FileAssetState,
 } from "@/hooks/assets/use-file-asset";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
 const state = vi.hoisted(() => ({
   requests: [] as Array<FileAssetRequest | null>,
@@ -21,12 +22,18 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: (request: FileAssetRequest | null) => {
-    // Dedupe by reference (round-2 review finding #4: `ImageDiffView` now
-    // fires one legitimate extra render on mount, learning each side's
-    // real initial bounds from `onInit` - the SAME memoized `request`
-    // object is passed to this hook again on that render, not a new fetch)
-    // so tests keep counting distinct requests, not raw render passes.
-    if (!state.requests.includes(request)) {
+    // Dedupe by VALUE, not by reference (ticket 27 phase B1): `ImageDiffView`
+    // memoizes its byte SOURCE now, and `useFileBytes` derives a fresh
+    // `FileAssetRequest` object from it on every render - so a reference
+    // check would count render passes instead of distinct requests. The
+    // reason the dedupe exists is unchanged (round-2 review finding #4:
+    // `ImageDiffView` fires one legitimate extra render on mount, learning
+    // each side's real initial bounds from `onInit`).
+    if (
+      !state.requests.some(
+        (seen) => JSON.stringify(seen) === JSON.stringify(request),
+      )
+    ) {
       state.requests.push(request);
     }
     // Forces THIS call site's own re-render when `reportDecodeFailure` fires
@@ -91,8 +98,16 @@ const DEFAULT_PROPS: ImageDiffViewProps = {
   revisionKey: "revision-1",
 };
 
+// `useFileBytes` mounts its epic-file leg on every render whatever the source
+// kind is, and that leg is a host query - so the one app-wide provider it
+// genuinely needs has to be here (ticket 27 phase B1). Everything else about
+// that leg goes inert on its own outside a `<TabHostProvider>`.
 function renderDiff(overrides: Partial<ImageDiffViewProps>): RenderResult {
-  return render(<ImageDiffView {...DEFAULT_PROPS} {...overrides} />);
+  return render(
+    <WithTestQueryClient>
+      <ImageDiffView {...DEFAULT_PROPS} {...overrides} />
+    </WithTestQueryClient>,
+  );
 }
 
 beforeEach(() => {

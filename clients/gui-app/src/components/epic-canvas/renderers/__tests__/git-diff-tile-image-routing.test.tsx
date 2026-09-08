@@ -69,6 +69,8 @@ const state = vi.hoisted(() => ({
 // here and simply leaves Finder unoffered.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
+  // The byte legs read the TOLERANT form (ticket 27 phase A2).
+  useMaybeHostDirectoryEntry: () => null,
 }));
 
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
@@ -84,6 +86,8 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-A",
+  // The byte legs read the TOLERANT form (ticket 27 phase A2).
+  useMaybeTabHostId: () => "host-A",
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -100,10 +104,29 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: (request: FileAssetRequest | null): FileAssetState => {
-    state.assetRequests.push(request);
+    // Dedupe by VALUE (ticket 27 phase B1): `ImageDiffView` memoizes its byte
+    // SOURCE now and `useFileBytes` derives a fresh `FileAssetRequest` object
+    // from it per render, so raw pushes would count render passes rather than
+    // distinct requests.
+    if (
+      !state.assetRequests.some(
+        (seen) => JSON.stringify(seen) === JSON.stringify(request),
+      )
+    ) {
+      state.assetRequests.push(request);
+    }
     if (state.asset === null) throw new Error("missing image state");
     return state.asset;
   },
+}));
+
+// `useFileBytes` mounts its epic-file leg on every render whatever the source
+// kind is (ticket 27 phase B1), and that leg is a host query. This suite
+// replaces `@tanstack/react-query` wholesale, so the query seam - not a
+// provider - is what has to answer here. `data: undefined` is the leg's own
+// pre-answer state, which it settles as `loading` and this suite never reads.
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: () => ({ data: undefined, error: null }),
 }));
 
 vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({

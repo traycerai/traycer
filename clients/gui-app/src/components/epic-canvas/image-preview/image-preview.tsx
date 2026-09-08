@@ -802,9 +802,7 @@ export function ImagePreview(props: ImagePreviewProps) {
   );
 }
 
-function imagePreviewAspectRatio(
-  meta: FileBytesHeader | null,
-): number | null {
+function imagePreviewAspectRatio(meta: FileBytesHeader | null): number | null {
   if (meta === null || meta.width === null || meta.height === null) return null;
   if (meta.height <= 0) return null;
   return meta.width / meta.height;

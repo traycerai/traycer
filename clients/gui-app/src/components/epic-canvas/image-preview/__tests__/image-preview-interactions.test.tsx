@@ -361,6 +361,7 @@ class ControllableResizeObserver implements ResizeObserver {
 }
 
 import { ImageDiffView, type ImageDiffViewProps } from "../image-diff-view";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { ImagePreview } from "../image-preview";
 
 const META: FileAssetMeta = {
@@ -415,8 +416,14 @@ function renderPreview(compact: boolean): void {
   );
 }
 
+// `useFileBytes` mounts its epic-file leg on every render whatever the source
+// kind is, and that leg is a host query - so the one app-wide provider it
+// genuinely needs has to be here (ticket 27 phase B1). Everything else about
+// that leg goes inert on its own outside a `<TabHostProvider>`.
 function renderDiff(overrides: Partial<ImageDiffViewProps>): void {
-  render(<ImageDiffView {...DIFF_PROPS} {...overrides} />);
+  render(<ImageDiffView {...DIFF_PROPS} {...overrides} />, {
+    wrapper: WithTestQueryClient,
+  });
 }
 
 beforeEach(() => {

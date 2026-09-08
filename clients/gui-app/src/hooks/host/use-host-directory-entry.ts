@@ -92,9 +92,7 @@ function useHostDirectoryEntryIn(
   );
   const getSnapshot = useCallback(() => {
     const next =
-      hostId === null || directory === null
-        ? null
-        : directory.findById(hostId);
+      hostId === null || directory === null ? null : directory.findById(hostId);
     if (hostDirectoryEntryEquals(cacheRef.current, next)) {
       return cacheRef.current;
     }

@@ -307,7 +307,6 @@ function ready(args: ReadyBytes): FileBytesState {
   };
 }
 
-
 /**
  * Host BUILDS that answered `E_HOST_UNSUPPORTED` for `epic.readFile`, keyed on
  * `(hostId, version)` - the same memo the chat attachment fetcher keeps, for
@@ -625,7 +624,9 @@ function assetRequestFor(source: FileByteSource): FileAssetRequest | null {
  * `<TabHostProvider>` above the caller, so a provider-less surface (a chat
  * transcript rendering an attachment) degrades rather than throwing.
  */
-export function useFileBytes(source: FileByteSource | null): UseFileBytesResult {
+export function useFileBytes(
+  source: FileByteSource | null,
+): UseFileBytesResult {
   const asset = useFileAsset(source === null ? null : assetRequestFor(source));
   const attachmentHash =
     source?.kind === "chat-attachment" ? source.hash : null;

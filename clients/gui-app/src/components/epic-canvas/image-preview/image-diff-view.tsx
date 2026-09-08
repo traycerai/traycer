@@ -19,11 +19,11 @@ import {
 } from "@/lib/assets/image-extension-allowlist";
 import { cn } from "@/lib/utils";
 import {
-  useFileAsset,
-  type FileAssetMeta,
-  type FileAssetRequest,
-  type UseFileAssetResult,
-} from "@/hooks/assets/use-file-asset";
+  useFileBytes,
+  type FileBytesHeader,
+  type GitObjectByteSource,
+  type UseFileBytesResult,
+} from "@/lib/files/byte-source";
 import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
 import {
   clampPositionToVisibleBounds,
@@ -120,7 +120,7 @@ function combinedMode(
 }
 
 /** `meta`'s own width/height ratio, or `null` when either dimension is unknown (a dimensionless SVG, or the header hasn't arrived yet). */
-function aspectRatioOf(meta: FileAssetMeta | null): number | null {
+function aspectRatioOf(meta: FileBytesHeader | null): number | null {
   if (meta === null) return null;
   if (meta.width === null || meta.height === null) return null;
   if (meta.width <= 0 || meta.height <= 0) return null;
@@ -141,8 +141,8 @@ function aspectRatioOf(meta: FileAssetMeta | null): number | null {
  * the resulting box.
  */
 function compactAspectRatio(
-  oldMeta: FileAssetMeta | null,
-  newMeta: FileAssetMeta | null,
+  oldMeta: FileBytesHeader | null,
+  newMeta: FileBytesHeader | null,
 ): number | null {
   const oldRatio = aspectRatioOf(oldMeta);
   const newRatio = aspectRatioOf(newMeta);
@@ -182,8 +182,8 @@ interface CompactRootSizing {
  */
 function compactRootSizing(
   compact: boolean,
-  oldMeta: FileAssetMeta | null,
-  newMeta: FileAssetMeta | null,
+  oldMeta: FileBytesHeader | null,
+  newMeta: FileBytesHeader | null,
 ): CompactRootSizing {
   if (!compact) return { className: "h-full", style: undefined };
   const ratio = compactAspectRatio(oldMeta, newMeta);
@@ -292,10 +292,10 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldIsImageSide = oldSideExists && isImageAssetPath(oldEffectivePath);
   const newIsImageSide = newSideExists && isImageAssetPath(newEffectivePath);
 
-  const oldRequest = useMemo<FileAssetRequest | null>(() => {
+  const oldSource = useMemo<GitObjectByteSource | null>(() => {
     if (props.oldStage === null || !oldIsImageSide) return null;
     return {
-      method: "git",
+      kind: "git-object",
       runningDir: props.runningDir,
       filePath: props.filePath,
       previousPath: props.previousPath,
@@ -312,10 +312,10 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     props.revisionKey,
   ]);
 
-  const newRequest = useMemo<FileAssetRequest | null>(() => {
+  const newSource = useMemo<GitObjectByteSource | null>(() => {
     if (props.newStage === null || !newIsImageSide) return null;
     return {
-      method: "git",
+      kind: "git-object",
       runningDir: props.runningDir,
       filePath: props.filePath,
       previousPath: props.previousPath,
@@ -332,8 +332,11 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     props.revisionKey,
   ]);
 
-  const oldAsset = useFileAsset(oldRequest);
-  const newAsset = useFileAsset(newRequest);
+  // Two sources, both mounted unconditionally: a side that does not exist (or
+  // is not an image) passes `null`, which `useFileBytes` settles as `loading`
+  // and never fetches for.
+  const oldBytes = useFileBytes(oldSource);
+  const newBytes = useFileBytes(newSource);
 
   // "The git stage is non-null" (`oldSideExists` above) is NOT "this side
   // currently has a mounted, reporting `ImagePreview`" - a non-image side
@@ -344,8 +347,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // zoom-boundary checks. Mode/bounds aggregation below gates on THIS, not
   // on `oldSideExists`/`newSideExists` (which stay correct for the
   // Added/Deleted empty-state decision - unrelated).
-  const oldActive = oldIsImageSide && oldAsset.status === "ready";
-  const newActive = newIsImageSide && newAsset.status === "ready";
+  const oldActive = oldIsImageSide && oldBytes.status === "ready";
+  const newActive = newIsImageSide && newBytes.status === "ready";
 
   // `report.origin` distinguishes a genuine user GESTURE on THIS side from
   // a PROGRAMMATIC transform `ImagePreview` issued itself - its own
@@ -472,8 +475,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     sideAtMax(newActive, newBounds);
   const rootSizing = compactRootSizing(
     props.compact,
-    oldAsset.meta,
-    newAsset.meta,
+    oldBytes.header,
+    newBytes.header,
   );
 
   return (
@@ -574,7 +577,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
             sideExists={oldSideExists}
             isImageSide={oldIsImageSide}
             effectivePath={oldEffectivePath}
-            asset={oldAsset}
+            bytes={oldBytes}
             emptyLabel="Added"
             compact={props.compact}
             transformRef={oldTransformRef}
@@ -589,7 +592,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
             sideExists={newSideExists}
             isImageSide={newIsImageSide}
             effectivePath={newEffectivePath}
-            asset={newAsset}
+            bytes={newBytes}
             emptyLabel="Deleted"
             compact={props.compact}
             transformRef={newTransformRef}
@@ -697,7 +700,7 @@ function ImageDiffSide(props: {
   /** Whether THIS side's own effective path (pre-landing review, P0: a rename can straddle the allowlist) is an image extension - `false` renders the non-image placeholder, never a fetch. */
   readonly isImageSide: boolean;
   readonly effectivePath: string;
-  readonly asset: UseFileAssetResult;
+  readonly bytes: UseFileBytesResult;
   readonly emptyLabel: "Added" | "Deleted";
   readonly compact: boolean;
   readonly transformRef: RefObject<ReactZoomPanPinchRef | null>;
@@ -706,14 +709,14 @@ function ImageDiffSide(props: {
   readonly onOpenExternally: (() => void) | null;
   readonly openExternallyOpening: boolean;
 }): ReactNode {
-  const asset = props.asset;
+  const bytes = props.bytes;
   // Magic-valid, header-parseable bytes can still fail to DECODE in the
   // browser (pre-landing review, P1) - `<img onError>` has no other signal
   // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
-  // cache entry AND transitions the hook's own state to `fallback`, so this
-  // side renders straight from `asset.status` like every other failure -
+  // cache entry AND transitions the leg's own state to `unavailable`, so this
+  // side renders straight from `bytes.status` like every other failure -
   // no local decode-failed flag to track or reset.
-  const handleDecodeError = asset.reportDecodeFailure;
+  const handleDecodeError = bytes.reportDecodeFailure;
 
   if (!props.sideExists) {
     return <ImageDiffEmptyState label={props.emptyLabel} />;
@@ -740,25 +743,27 @@ function ImageDiffSide(props: {
       />
     );
   }
-  if (asset.status === "fallback") {
+  // Every settled failure of the git leg arrives here as `unavailable`; its
+  // human copy is on `message`, and the size is whatever the stream's header
+  // had already declared before it failed.
+  if (bytes.status === "unavailable" || bytes.status === "unsupported") {
     return (
       <BinaryPlaceholder
         fileName={props.effectivePath}
-        sizeBytes={asset.totalBytes}
-        reason={asset.reason}
+        sizeBytes={bytes.header?.sizeBytes ?? null}
+        reason={bytes.message}
         onOpenExternally={props.onOpenExternally}
         openExternallyOpening={props.openExternallyOpening}
         compact
       />
     );
   }
-  const status: ImagePreviewStatus = asset.status;
   return (
     <ImagePreview
-      status={status}
-      url={asset.url}
-      meta={asset.meta}
-      servedFromCache={asset.servedFromCache}
+      status={imagePreviewStatusOf(bytes)}
+      url={bytes.src}
+      meta={bytes.header}
+      servedFromCache={bytes.servedFromCache}
       fileName={props.effectivePath}
       compact
       gesturesEnabled={!props.compact}
@@ -776,6 +781,17 @@ function ImageDiffSide(props: {
       onDecodeError={handleDecodeError}
     />
   );
+}
+
+/**
+ * The core has one `loading` arm; this viewer distinguishes two, and the
+ * difference is visible - `loading` paints a spinner, `header` an
+ * aspect-ratio skeleton. A `loading` state that already carries a header IS
+ * the asset stream's header phase, so that is what decides.
+ */
+function imagePreviewStatusOf(bytes: UseFileBytesResult): ImagePreviewStatus {
+  if (bytes.status === "ready") return "ready";
+  return bytes.header === null ? "loading" : "header";
 }
 
 function ImageDiffEmptyState(props: {

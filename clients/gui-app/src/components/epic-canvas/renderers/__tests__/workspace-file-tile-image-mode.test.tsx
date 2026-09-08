@@ -74,6 +74,8 @@ const state = vi.hoisted(() => ({
 // here and simply leaves Finder unoffered.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
+  // The byte legs read the TOLERANT form (ticket 27 phase A2).
+  useMaybeHostDirectoryEntry: () => null,
 }));
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
