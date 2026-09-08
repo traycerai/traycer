@@ -65,6 +65,7 @@ import {
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
 import {
   useFileBytes,
+  type FileBytesHeader,
   type FileBytesState,
   type FileBytesUnavailableReason,
 } from "@/lib/files/byte-source";
@@ -363,6 +364,8 @@ function EpicFileBody(props: {
       path={props.path}
       sizeBytes={props.entry.current.byteLength}
       src={bytes.src}
+      header={bytes.header}
+      servedFromCache={bytes.servedFromCache}
       viewer={props.viewer}
     />
   );
@@ -439,6 +442,14 @@ function EpicFileViewer(props: {
   readonly path: string;
   readonly sizeBytes: number;
   readonly src: string;
+  /**
+   * Whatever the byte source knew about the bytes. `null` on the epic-file
+   * plane today - `epic.readFile` answers with an ADDRESS, so dimensions are
+   * not on the wire (D10) - but read from the state rather than hard-coded,
+   * so a leg that later carries one lights this up with no edit here.
+   */
+  readonly header: FileBytesHeader | null;
+  readonly servedFromCache: boolean;
   readonly viewer: FileViewerEntry;
 }): ReactNode {
   const [viewerFailed, setViewerFailed] = useState(false);
@@ -464,11 +475,11 @@ function EpicFileViewer(props: {
       <ImagePreview
         status="ready"
         url={props.src}
-        // No dimensions on the wire, so the viewer renders its constrained
-        // no-dimensions fit rather than computing one from a size it does not
-        // have. `epic.readFile` answers with an address, never a header.
-        meta={null}
-        servedFromCache={false}
+        // `null` on this plane today, and the viewer then renders its
+        // constrained no-dimensions fit rather than computing one from a size
+        // it does not have.
+        meta={props.header}
+        servedFromCache={props.servedFromCache}
         fileName={props.fileName}
         compact
         gesturesEnabled

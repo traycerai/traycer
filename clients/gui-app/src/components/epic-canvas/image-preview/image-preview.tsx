@@ -20,7 +20,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
-import type { FileAssetMeta } from "@/hooks/assets/use-file-asset";
+import type { FileBytesHeader } from "@/lib/files/byte-source";
 import { formatImagePreviewCaption } from "./image-preview-caption";
 import { copyImageToClipboard } from "./image-preview-clipboard";
 import {
@@ -48,7 +48,15 @@ export interface ImagePreviewProps {
   readonly status: ImagePreviewStatus;
   /** Blob URL; non-null only once `status === "ready"`. */
   readonly url: string | null;
-  readonly meta: FileAssetMeta | null;
+  /**
+   * Whatever the byte source already knew about the bytes
+   * ({@link FileBytesHeader}): dimensions drive the initial fit and the
+   * aspect-ratio skeleton, the size drives the caption. `null` - and a
+   * dimension-less header - are both first-class: an epic-file address
+   * carries no header, and this viewer falls back to its constrained
+   * no-dimensions fit and a client-decoded size instead.
+   */
+  readonly meta: FileBytesHeader | null;
   /**
    * Whether `url` resolved from the shared asset cache rather than a fresh
    * stream (`FileAssetState.servedFromCache`, ticket 07 closing E2E item:
@@ -794,7 +802,9 @@ export function ImagePreview(props: ImagePreviewProps) {
   );
 }
 
-function imagePreviewAspectRatio(meta: FileAssetMeta | null): number | null {
+function imagePreviewAspectRatio(
+  meta: FileBytesHeader | null,
+): number | null {
   if (meta === null || meta.width === null || meta.height === null) return null;
   if (meta.height <= 0) return null;
   return meta.width / meta.height;

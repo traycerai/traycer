@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { FileAssetMeta } from "@/hooks/assets/use-file-asset";
+import type { FileBytesHeader } from "@/lib/files/byte-source";
 import { formatByteSize } from "@/lib/format-byte-size";
 import { formatImagePreviewCaption } from "../image-preview-caption";
 
-const META: FileAssetMeta = {
-  mediaType: "image/png",
+const META: FileBytesHeader = {
   sizeBytes: 2048,
   width: 640,
   height: 480,
@@ -34,5 +33,18 @@ describe("image preview captions", () => {
 
   it("omits the caption when metadata is absent", () => {
     expect(formatImagePreviewCaption(null)).toBeNull();
+  });
+
+  // An epic-file entry resolves to an ADDRESS, so its header carries neither
+  // half (D10) - the caption is then nothing at all rather than a stray
+  // separator (ticket 27 phase A3).
+  it("omits the caption when the header knows neither half", () => {
+    expect(
+      formatImagePreviewCaption({
+        width: null,
+        height: null,
+        sizeBytes: null,
+      }),
+    ).toBeNull();
   });
 });
