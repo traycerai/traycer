@@ -98,6 +98,16 @@ function statusSnapshot(authorityEpoch: string): EpicStatusSnapshotFrame {
     // still shut writes for a second, unrelated reason.
     permissionRole: "editor",
     cloudSyncStatus: "connected",
+    // The durability leg, and it has to be STATED. This lane reports
+    // `peerSpeaksDurabilityLegs: true` unconditionally (see
+    // `durabilityLegsOf` in `epic-status-lane-adapter.ts`), so an omitted
+    // `durability` here is not "a peer that predates the datum" - it is the
+    // wire's stated UNKNOWN, and `syncedClaimIsHonest` refuses the green claim
+    // over it. A frame without this key made the pill read `connected`, which
+    // is the correct rendering of that frame and not the state this case is
+    // about: its subject is the transport legs across an authority
+    // replacement, over an epic that really is durable in the cloud.
+    durability: "cloud",
     dirty: false,
     migration: null,
     deletion: { state: "none" },
