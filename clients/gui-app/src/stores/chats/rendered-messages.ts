@@ -2004,14 +2004,19 @@ function turnInitiatedByAutonomousResume(
 
 /**
  * Timestamp of the resume divider (the first non-steer block, when it is an
- * `autonomous_resume`), or `null` for a turn not initiated by one.
+ * `autonomous_resume`), or `null` for a turn not initiated by one. An explicit
+ * in-turn delivery never establishes a new lifecycle window, even if the
+ * provider had not produced any other block when it arrived.
  */
 function autonomousResumeNotifiedAt(
   blocks: ReadonlyArray<ContentBlock>,
 ): number | null {
   for (const block of blocks) {
     if (block.type === "steer") continue;
-    return block.type === "autonomous_resume" ? block.timestamp : null;
+    return block.type === "autonomous_resume" &&
+      block.deliveryPlacement !== "in_turn"
+      ? block.timestamp
+      : null;
   }
   return null;
 }
@@ -2592,12 +2597,10 @@ function resolveResumeDeliveryPlacements(
         deliveryPlacement: hasAssistantWork ? "in_turn" : "turn_start",
       };
     }
-    if (
-      block.type === "text" ||
-      block.type === "reasoning" ||
-      block.type === "tool_call" ||
-      block.type === "command"
-    ) {
+    // Use the renderer's existing block vocabulary and visibility rules.
+    // Steer markers map to null; notifications were handled above and do not
+    // constitute assistant work by themselves.
+    if (!hasAssistantWork && blockToSegment(block) !== null) {
       hasAssistantWork = true;
     }
     return block;
