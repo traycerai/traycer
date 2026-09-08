@@ -119,6 +119,27 @@ export function electronTabBinding(
   return directory.get(nativeTabKey(hostId, sessionId, tabId))?.binding ?? null;
 }
 
+/**
+ * The binding for a tab named by HOST and TAB only.
+ *
+ * `startTabRecording` carries no `sessionId` - deliberately, since a stop is
+ * addressed by `recordingId` alone and the tab may already be gone - so the
+ * recording relay cannot build the composite key the other lookups use. A scan
+ * is right here rather than a second index: the directory holds this window's
+ * live native tabs, which is a handful, and a tab id is host-minted and unique
+ * within its host.
+ */
+export function electronTabBindingByTab(
+  hostId: string,
+  tabId: string,
+): ElectronTabBinding | null {
+  for (const entry of directory.values()) {
+    const binding = entry.binding;
+    if (binding.hostId === hostId && binding.tabId === tabId) return binding;
+  }
+  return null;
+}
+
 function subscribeDirectory(listener: () => void): () => void {
   directoryListeners.add(listener);
   return () => {

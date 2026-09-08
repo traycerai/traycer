@@ -91,6 +91,7 @@ import { zoomPercentToFactor } from "../windows/window-zoom";
 import { registerBrowserViewIpc } from "./browser-view-ipc";
 import type { BrowserSessionsRegistry } from "../browser-sessions/browser-sessions-owner";
 import { registerPipCaptureIpc } from "./pip-capture-ipc";
+import { registerRecordingIpc } from "./recording-ipc";
 import type { BrowserViewManager } from "../browser-view/browser-view-manager";
 import { registerMenuIpc } from "./menu-ipc";
 import { getAppUpdateSnapshot } from "../app/updater";
@@ -577,6 +578,7 @@ export class RunnerIpcBridge {
     this.browserViewManager = browserView.manager;
     this.browserSessions = browserView.sessions;
     registerPipCaptureIpc(this, browserView.manager);
+    registerRecordingIpc(this, browserView.manager);
     registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.

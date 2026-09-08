@@ -37,4 +37,15 @@ export const epicMutationKeys = {
   /** Local only - fetch the bytes and hand them to the shell's save route. */
   saveFile: (epicId: string, path: string) =>
     ["epic.saveFile", epicId, path] as const,
+  /**
+   * The tile chrome's capture verbs, keyed per `(epicId, tabId)`: two browser
+   * tiles on one canvas each have their own button, and one tab's in-flight
+   * capture must not read as pending on the other's.
+   */
+  captureTabScreenshot: (epicId: string, tabId: string) =>
+    ["epic.captureTabScreenshot", epicId, tabId] as const,
+  startTabRecording: (epicId: string, tabId: string) =>
+    ["epic.startTabRecording", epicId, tabId] as const,
+  stopTabRecording: (epicId: string, tabId: string) =>
+    ["epic.stopTabRecording", epicId, tabId] as const,
 };

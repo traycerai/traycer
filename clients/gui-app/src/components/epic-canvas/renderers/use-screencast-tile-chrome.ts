@@ -31,6 +31,18 @@ const SCREENCAST_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   find: false,
   siteInfo: false,
   annotate: false,
+  // On for a headless screencast tab, same as the Electron tile. Neither verb
+  // is a renderer capability: `epic.captureTabScreenshot` and
+  // `epic.startTabRecording` are resolved by the tab's OWNING host, and D15
+  // gives that host a driver for each runtime (Playwright-typed for headless,
+  // a hidden BrowserWindow for Electron) behind one helper document. The
+  // remaining runtime question - "is there a helper this tab can use right
+  // now?" - is answered on the wire as the `unsupported-runtime` refusal
+  // (`startTabRecordingRefusalSchema`), which is copy the toolbar shows, not a
+  // capability the renderer can predict. The rest of this set is `false`
+  // because those controls act on a LOCAL guest that a screencast has none of.
+  capture: true,
+  record: true,
 };
 
 const SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS = {

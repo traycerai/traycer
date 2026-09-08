@@ -176,7 +176,11 @@ describe("useScreencastTileChrome", () => {
     expect(result.current.controller.addressValue).toBe(URL_B);
   });
 
-  it("exposes nav-only chrome capabilities", () => {
+  // Nav-only LOCAL chrome, plus the two capture verbs. Capture and record are
+  // resolved by the tab's owning host (D15), not by this renderer, so a
+  // screencast tile offers them exactly as the Electron tile does; the rest
+  // act on a local guest a screencast has none of.
+  it("exposes nav-only chrome capabilities plus the host-resolved capture verbs", () => {
     const { result } = renderChrome(idleNav(URL_A), INITIAL_URL);
 
     expect(result.current.controller.capabilities).toEqual({
@@ -190,6 +194,8 @@ describe("useScreencastTileChrome", () => {
       find: false,
       siteInfo: false,
       annotate: false,
+      capture: true,
+      record: true,
     });
   });
 

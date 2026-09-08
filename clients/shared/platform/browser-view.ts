@@ -62,6 +62,90 @@ export interface PipCaptureStartInput extends BrowserViewNativeTabCapability {
   readonly quality: number;
 }
 
+/**
+ * Which stream a recording helper's `MediaRecorder` records (D15 amendment).
+ * `display-media` is the hidden helper window answered with the guest's own
+ * frame; `capture-page` is the `capturePage` poll drawn on the helper's canvas.
+ * The desktop picks one per machine; nothing on the wire carries it.
+ */
+export type RecordingCaptureSourceKind = "display-media" | "capture-page";
+
+/**
+ * Open a hidden recording helper for one Electron guest.
+ *
+ * `helperUrl` is the host's own loopback URL with the recording's one-shot
+ * token already in it - a CREDENTIAL that travels renderer -> main and no
+ * further. The renderer neither constructs nor inspects it; it relays the
+ * `startTabRecording` frame's field verbatim.
+ */
+export interface RecordingStartInput extends BrowserViewNativeTabCapability {
+  readonly recordingId: string;
+  readonly helperUrl: string;
+}
+
+/**
+ * Tear a helper down. Addressed by `recordingId` alone, exactly as the
+ * protocol's `stopTabRecording` is: the tab may already be gone, which is one
+ * of the reasons a stop is sent at all.
+ */
+export interface RecordingStopInput {
+  readonly recordingId: string;
+}
+
+/**
+ * What main tells the renderer about a helper it owns. The renderer relays
+ * each one up its `browser.sessions` stream as the matching client frame; it
+ * is not the origin of either fact.
+ *
+ * `reason` is an OPEN string, as on the wire: a diagnostic the host logs,
+ * never a discriminator, so an unknown value costs a less specific log line
+ * rather than a dropped answer.
+ */
+export type RecordingEvent =
+  | { readonly kind: "helperReady"; readonly recordingId: string }
+  | {
+      readonly kind: "ended";
+      readonly recordingId: string;
+      readonly reason: string;
+    };
+
+/**
+ * DEV-ONLY. One run per capture source against an animating page, so the
+ * per-machine default can be flipped by evidence instead of a sandbox guess
+ * (D15 amendment). Each run needs its own host-minted helper URL because each
+ * carries its own `recordingId` and token. Refused outright in a shipped
+ * build; there is no UI for it and there must never be one.
+ */
+export interface RecordingProbeRun {
+  readonly source: RecordingCaptureSourceKind;
+  readonly helperUrl: string;
+}
+
+export interface RecordingProbeInput extends BrowserViewNativeTabCapability {
+  readonly durationMs: number;
+  readonly runs: readonly RecordingProbeRun[];
+}
+
+export interface RecordingProbeRunResult {
+  readonly source: RecordingCaptureSourceKind;
+  readonly helperReady: boolean;
+  readonly endedReason: string | null;
+  /**
+   * Frames main handed the helper, and how many of those differed from the
+   * frame before. Both 0 for `display-media`, whose stream main cannot see.
+   */
+  readonly pushedFrameCount: number;
+  readonly distinctFrameCount: number;
+  /** False when nothing on this machine could observe the recorded picture. */
+  readonly measured: boolean;
+  /** The whole question: did the recorded picture change over the run? */
+  readonly framesAdvanced: boolean;
+}
+
+export interface RecordingProbeResult {
+  readonly runs: readonly RecordingProbeRunResult[];
+}
+
 export type BrowserViewElectronTabControlAction =
   | { readonly kind: "navigate"; readonly url: string }
   | { readonly kind: "reload" }
@@ -836,6 +920,24 @@ export interface BrowserViewBridge {
   controlElectronTab(input: BrowserViewElectronTabControl): Promise<void>;
   startPipCapture(input: PipCaptureStartInput): Promise<void>;
   stopPipCapture(): Promise<void>;
+  /**
+   * Open / tear down the hidden recording helper for one Electron guest
+   * (D15, ticket 20). Text only: the clip's chunks leave the helper by
+   * same-origin `POST` and no recording byte crosses this bridge.
+   */
+  startRecording(input: RecordingStartInput): Promise<void>;
+  stopRecording(input: RecordingStopInput): Promise<void>;
+  /**
+   * The helper facts only main can know. The renderer relays them onto its
+   * `browser.sessions` stream as `recordingHelperReady` / `recordingEnded`.
+   */
+  onRecordingEvent(handler: (event: RecordingEvent) => void): {
+    dispose: () => void;
+  };
+  /** DEV-ONLY; rejects in a shipped build. See {@link RecordingProbeInput}. */
+  probeRecordingCaptureSources(
+    input: RecordingProbeInput,
+  ): Promise<RecordingProbeResult>;
   onPipCaptureFrame(
     handler: (
       frame: BrowserScreencastServerFrame,

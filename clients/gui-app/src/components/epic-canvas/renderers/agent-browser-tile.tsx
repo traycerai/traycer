@@ -15,6 +15,7 @@ import {
   BrowserTileCertificateInterstitial,
   BrowserTileDownloadStrip,
 } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
+import type { BrowserTileCaptureTarget } from "@/components/epic-canvas/renderers/browser-tile-capture-controls";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
 import {
@@ -106,6 +107,21 @@ function agentTileSessionFacts(
  * resolves to the stalled/retry surface (see the stall effect below).
  */
 const NAVIGATION_STALL_TIMEOUT_MS = 30_000;
+
+/**
+ * The capture/record subject for this tile, or `null` when the canvas tab has
+ * no epic behind it - the epic is the authorization subject for every capture
+ * method (D06), so there is nothing to address without one.
+ */
+function agentTileCaptureTarget(
+  epicId: string | null,
+  hostId: string,
+  tabId: string,
+  viewTabId: string,
+): BrowserTileCaptureTarget | null {
+  if (epicId === null) return null;
+  return { epicId, hostId, tabId, viewTabId };
+}
 
 /**
  * Electron tile used for agent-created pages and native session tabs.
@@ -519,6 +535,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       />
       <BrowserTileToolbar
         controller={chromeController}
+        captureTarget={agentTileCaptureTarget(
+          epicId,
+          props.binding.hostId,
+          props.binding.tabId,
+          props.viewTabId,
+        )}
         loading={effectiveStatus === "loading"}
         pictureInPicture={{
           disabled: epicId === null,

@@ -811,4 +811,41 @@ describe("merged notifications feed", () => {
     // Readable and acknowledgeable, but never routed by guesswork.
     expect(row.payload).toBeNull();
   });
+  it("routes a saved browser recording row to the chat that produced it", () => {
+    // D20's save event. The clip itself is reached through the agent's own
+    // markdown link inside that chat (D28 + the transcript's inline player),
+    // which is why the deep link is the chat and not a tile for the file.
+    const row = rowFromHostEntry({
+      id: "browser.recording:recording-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "host.operation.finished",
+      sourceRef: "recording-1",
+      severity: "info",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "browser_recording",
+        operation: "browser.recording",
+        title: "Browser recording",
+        message: "Recording saved",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        recordingId: "recording-1",
+        tabId: "tab-1",
+        phase: "saved",
+        path: "files/recordings/recording-1.mp4",
+      },
+    });
+    expect(row).toMatchObject({
+      title: "recording-1.mp4",
+      body: "Browser recording • Recording saved",
+    });
+    expect(row.payload).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+  });
 });

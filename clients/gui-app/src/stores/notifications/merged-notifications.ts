@@ -1574,24 +1574,8 @@ function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
   switch (known.kind) {
-    case "chat": {
-      // A final, unqualified Done describes the current end-state, so it
-      // always opens at the end of the transcript. Failures and qualified
-      // Done rows retain their occurrence anchor.
-      const includeTranscriptAnchor =
-        known.outcome === "errored" || known.backgroundWorkRunning === true;
-      const scrollToEnd =
-        known.outcome === "completed" && known.backgroundWorkRunning !== true;
-      return {
-        kind: "chat",
-        epicId: known.epicId,
-        chatId: known.chatId ?? undefined,
-        ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
-        messageId: includeTranscriptAnchor ? known.messageId : undefined,
-        eventId: includeTranscriptAnchor ? known.eventId : undefined,
-        ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
-      };
-    }
+    case "chat":
+      return navigationPayloadForChat(known);
     case "agent_stalled":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "workspace_operation_failed":
@@ -1630,6 +1614,15 @@ function navigationPayloadFromKnown(
         sessionId: known.sessionId,
         tabId: known.tabId,
       };
+    // The CHAT, not the clip's tile. The row belongs to an agent run, and the
+    // agent embeds its own saved clip with an ordinary markdown link (D28),
+    // which the transcript already renders as an inline player - so opening
+    // the chat lands on the clip in the context that explains it, and does so
+    // through a payload kind every routing surface already handles. Routing to
+    // an `epic-file` tile instead would need a payload kind of its own, and
+    // would drop the reader at a video with no run around it.
+    case "browser_recording":
+      return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     // No focus hint: the deleted worktree's row is gone, and the list's saved
     // filters are the authoritative view to return to. A row from a NEWER host
     // whose operation payload this build cannot parse never reaches here at
@@ -1638,6 +1631,27 @@ function navigationPayloadFromKnown(
     case "worktree_deletion":
       return navigationPayloadForWorktreeDeletion(known);
   }
+}
+
+function navigationPayloadForChat(
+  known: Extract<HostNotificationKnownPayload, { readonly kind: "chat" }>,
+): NotificationPayload {
+  // A final, unqualified Done describes the current end-state, so it always
+  // opens at the end of the transcript. Failures and qualified Done rows
+  // retain their occurrence anchor.
+  const includeTranscriptAnchor =
+    known.outcome === "errored" || known.backgroundWorkRunning === true;
+  const scrollToEnd =
+    known.outcome === "completed" && known.backgroundWorkRunning !== true;
+  return {
+    kind: "chat",
+    epicId: known.epicId,
+    chatId: known.chatId ?? undefined,
+    ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
+    messageId: includeTranscriptAnchor ? known.messageId : undefined,
+    eventId: includeTranscriptAnchor ? known.eventId : undefined,
+    ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
+  };
 }
 
 function navigationPayloadForWorktreeDeletion(known: {

@@ -455,6 +455,20 @@ export class BrowserViewManager {
     return this.pip.start(entry, input, onFrame);
   }
 
+  /**
+   * The guest behind an exact native capability, or `null`.
+   *
+   * The recording helper lives outside this class (it opens an Electron
+   * `BrowserWindow`, which this module deliberately does not import), so what
+   * it needs from the manager is the one thing only the manager can answer:
+   * which live guest a capability names.
+   */
+  nativeGuestWebContents(
+    input: BrowserViewNativeTabCapability,
+  ): BrowserViewWebContents | null {
+    return this.findExactNativeEntry(input)?.webContents ?? null;
+  }
+
   async capturePage(
     windowId: string,
     input: BrowserViewTileKey,

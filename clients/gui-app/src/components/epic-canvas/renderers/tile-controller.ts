@@ -18,6 +18,16 @@ export interface TileChromeCapabilities {
   readonly find: boolean;
   readonly siteInfo: boolean;
   readonly annotate: boolean;
+  /**
+   * `epic.captureTabScreenshot` / `epic.startTabRecording` against this tab
+   * (D20). Both host resolvers are runtime-agnostic (D15 - one helper
+   * DOCUMENT, two host-side drivers), so these are not a runtime probe: they
+   * say only whether this tile has a real tab on a host to point the verb at.
+   * A runtime that genuinely cannot serve a recording answers the typed
+   * `unsupported-runtime` refusal, which the toolbar renders as copy.
+   */
+  readonly capture: boolean;
+  readonly record: boolean;
 }
 
 export interface TileController {
@@ -85,4 +95,6 @@ export const PRIMARY_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   find: true,
   siteInfo: true,
   annotate: true,
+  capture: true,
+  record: true,
 };

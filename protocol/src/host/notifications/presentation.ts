@@ -161,6 +161,13 @@ export function hostOperationKnownCopy(
     // from the payload arm: `reason` is the body's context, never a title.
     case "browser_human_needed":
       return null;
+    // A SAVED recording is the one phase with a subject of its own - the clip -
+    // so the row is titled by the file rather than by the operation, the way
+    // the task-sweep worktree row below is titled by its task. Every other
+    // phase keeps the host-composed `title`/`message` tier: "Recording started"
+    // names nothing this could improve on.
+    case "browser_recording":
+      return browserRecordingCopy(payload);
     case "worktree_deletion": {
       const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
       if (
@@ -176,6 +183,35 @@ export function hostOperationKnownCopy(
       };
     }
   }
+}
+
+/**
+ * The saved clip's row: its file name as the title, the operation's own copy as
+ * the body.
+ *
+ * The clip is addressed by its MANIFEST KEY, and the last segment of that key
+ * is the only part worth a title - the rest is `files/recordings/`, which is
+ * the same on every row. Deriving it here rather than sending a display name
+ * keeps the row and the file plane naming one thing: a rename moves the entry,
+ * and this reads whatever the key says at render time.
+ */
+function browserRecordingCopy(payload: {
+  readonly phase: string;
+  readonly path?: string;
+  readonly title: string;
+  readonly message: string;
+}): { readonly title: string | null; readonly body: string | null } | null {
+  if (payload.phase !== "saved") return null;
+  const name = nonEmptyTitle(lastPathSegment(payload.path ?? null));
+  if (name === null) return null;
+  return { title: name, body: `${payload.title} • ${payload.message}` };
+}
+
+/** `files/recordings/<id>.mp4` -> `<id>.mp4`; `null` stays `null`. */
+function lastPathSegment(path: string | null): string | null {
+  if (path === null) return null;
+  const segments = path.split("/");
+  return segments[segments.length - 1] ?? null;
 }
 
 function hostOperationGenericTitle(outcome: HostNotificationOutcome): string {
@@ -239,6 +275,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "worktree_deletion":
       return payload.taskTitle ?? null;
     case "browser_human_needed":
+    case "browser_recording":
       return null;
   }
 }
@@ -254,6 +291,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "browser_human_needed":
+    case "browser_recording":
       return null;
   }
 }
@@ -269,6 +307,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "agent_stalled":
     case "worktree_deletion":
     case "browser_human_needed":
+    case "browser_recording":
       return null;
   }
 }
@@ -289,6 +328,7 @@ function knownStoppedReason(
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "browser_human_needed":
+    case "browser_recording":
       return null;
   }
 }
@@ -308,6 +348,7 @@ function knownProviderId(
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "browser_human_needed":
+    case "browser_recording":
       return null;
   }
 }
@@ -339,6 +380,7 @@ function knownBackgroundWorkRunning(
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "browser_human_needed":
+    case "browser_recording":
       return false;
   }
 }

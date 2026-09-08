@@ -241,6 +241,29 @@ function parseTerminalPayload(
   };
 }
 
+/**
+ * A saved browser recording's row, as it rides a native activation envelope.
+ *
+ * Routes to the CHAT the run belongs to, not to a tile for the clip: the agent
+ * embeds its own saved clip with an ordinary markdown link (D28), which the
+ * transcript renders as an inline player, so the chat is where the clip lives
+ * with the run around it. `path` is deliberately not read here - it is the
+ * manifest key the row's COPY is titled by, and a navigation target derived
+ * from it would be a second address for the same thing.
+ */
+function parseBrowserRecordingPayload(
+  value: Record<string, unknown>,
+): ChatNotificationPayload | null {
+  const parsed = parseKnownHostNotificationPayloadForKind(
+    "host.operation.finished",
+    value,
+  );
+  if (parsed === null || parsed.kind !== "browser_recording") {
+    return null;
+  }
+  return { kind: "chat", epicId: parsed.epicId, chatId: parsed.chatId };
+}
+
 function parseBrowserSessionPayload(
   value: Record<string, unknown>,
 ): BrowserSessionNotificationPayload | null {
@@ -359,6 +382,8 @@ export function parseNotificationPayload(
       return parseTerminalPayload(value);
     case "browser_human_needed":
       return parseBrowserSessionPayload(value);
+    case "browser_recording":
+      return parseBrowserRecordingPayload(value);
     case "browserSession":
       return parseNormalizedBrowserSessionPayload(value);
     case "approval":

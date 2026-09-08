@@ -11,6 +11,10 @@ import { browserViewIpcPayload } from "../browser-view-ipc-payload";
  * its own confirmation, and the rest of the union is main's half of the
  * handshake - a renderer that could mint `primaryProfileCaptured` or
  * `storeKeyUnwrapped` would be speaking for the jar it no longer holds.
+ *
+ * The recording answers sit on the allowed side: main owns the helper window
+ * that produces them, they name a `recordingId` the host minted, and they
+ * grant nothing a toolbar press could not already do.
  */
 
 const KEY = {
@@ -52,9 +56,24 @@ const RENDERER_FRAMES: Record<string, Record<string, unknown>> = {
     requestId: "request-1",
     tabId: "tab-1",
   },
+  // The two recording ANSWERS. Not requests: each settles a recording the
+  // HOST started, named by a `recordingId` only the host mints, and neither
+  // carries jar material - which is why they are renderer-sendable where
+  // `forgetLogins` / `clearSite` are not.
+  recordingHelperReady: {
+    kind: "recordingHelperReady",
+    hasBinaryPayload: false,
+    recordingId: "recording-1",
+  },
+  recordingEnded: {
+    kind: "recordingEnded",
+    hasBinaryPayload: false,
+    recordingId: "recording-1",
+    reason: "capture-stream-ended",
+  },
 };
 
-describe("a renderer may only ask for the three tab requests", () => {
+describe("a renderer may only send the tab requests and the recording answers", () => {
   it("accepts exactly the kinds the protocol names as renderer-sendable", () => {
     // The gate IS the protocol's list: a kind added to the union without being
     // added there must stay refused, and one added there must be accepted here

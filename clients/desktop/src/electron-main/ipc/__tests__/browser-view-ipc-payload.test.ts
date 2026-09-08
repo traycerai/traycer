@@ -134,3 +134,49 @@ describe("browserViewIpcPayload.loginImportScan", () => {
     expect(parsed.success).toBe(false);
   });
 });
+
+/**
+ * The helper URL is a CREDENTIAL and an ORIGIN, and main opens it in a window
+ * that runs in the guest's own session and holds a display-capture grant over
+ * that guest. Only the host's own loopback listener may ever be it.
+ */
+describe("browserViewIpcPayload.recordingStart", () => {
+  const tab = {
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    registrationId: "registration-1",
+    recordingId: "recording-1",
+  };
+
+  it("accepts the loopback helper URL the host mints", () => {
+    expect(
+      browserViewIpcPayload.recordingStart.safeParse({
+        ...tab,
+        helperUrl:
+          "http://127.0.0.1:54321/recording/recording-1/helper?mode=record&token=t",
+      }).success,
+    ).toBe(true);
+    expect(
+      browserViewIpcPayload.recordingStart.safeParse({
+        ...tab,
+        helperUrl: "http://localhost:54321/recording/recording-1/helper",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses any origin that is not this machine's loopback listener", () => {
+    for (const helperUrl of [
+      "https://example.test/recording/recording-1/helper",
+      "http://10.0.0.5:54321/recording/recording-1/helper",
+      "http://127.0.0.1.evil.test/recording/recording-1/helper",
+      "file:///tmp/helper.html",
+      "/recording/recording-1/helper",
+    ]) {
+      expect(
+        browserViewIpcPayload.recordingStart.safeParse({ ...tab, helperUrl })
+          .success,
+      ).toBe(false);
+    }
+  });
+});

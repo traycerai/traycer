@@ -23,6 +23,10 @@ import {
   BrowserCookieChangeObserver,
   BROWSER_COOKIE_DELTA_WINDOW_MS,
 } from "./storage/browser-cookie-change-observer";
+import {
+  isRecordingHelperWebContents,
+  resolveRecordingDisplayMediaVideo,
+} from "./recording/recording-helper-registry";
 
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
 export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
@@ -163,6 +167,12 @@ interface BrowserSessionPendingCertificateError extends BrowserSessionCertificat
   readonly certificate: Certificate;
 }
 
+/**
+ * Permissions EVERY guest page gets. Membership is a decision about the whole
+ * web, so `display-capture` is deliberately not here: a recording helper is
+ * admitted to it by REGISTRATION (see {@link isBrowserPermissionAllowed}),
+ * one window at a time, never by growing this set.
+ */
 const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
   "clipboard-sanitized-write",
   "fullscreen",
@@ -171,6 +181,9 @@ const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
   "storage-access",
   "top-level-storage-access",
 ]);
+
+/** The one permission a recording helper window needs and no guest may have. */
+const DISPLAY_CAPTURE_PERMISSION = "display-capture";
 
 const installedPolicySessions = new WeakSet<BrowserViewPolicySession>();
 const browserWebContentsIds = new Set<number>();
@@ -415,8 +428,8 @@ function installBrowserViewSessionPolicy(
   installedPolicySessions.add(target);
 
   target.setPermissionRequestHandler(
-    (_webContents, permission, callback, _details) => {
-      const allowed = isBrowserPermissionAllowed(permission);
+    (webContents, permission, callback, _details) => {
+      const allowed = isBrowserPermissionAllowed(permission, webContents);
       if (!allowed) {
         log.info("[browser-view] permission denied", { permission });
       }
@@ -424,16 +437,32 @@ function installBrowserViewSessionPolicy(
     },
   );
   target.setPermissionCheckHandler(
-    (_webContents, permission, _requestingOrigin, _details) =>
-      isBrowserPermissionAllowed(permission),
+    (webContents, permission, _requestingOrigin, _details) =>
+      isBrowserPermissionAllowed(permission, webContents),
   );
   target.setDevicePermissionHandler(() => false);
   target.setUSBProtectedClassesHandler(() => []);
   target.setBluetoothPairingHandler((_details, callback) => {
     callback({ confirmed: false });
   });
-  target.setDisplayMediaRequestHandler((_request, callback) => {
-    callback({});
+  /**
+   * Screen/tab capture is refused for every page in this jar, with ONE
+   * exception: a hidden recording helper window main opened itself, answered
+   * with the guest it was registered for and nothing else (D15, ticket 20).
+   * The registry decides that - see `recording/recording-helper-registry.ts` -
+   * so the whole boundary is one file rather than a condition spread across
+   * this policy and the window machinery.
+   *
+   * `video` only: a recording has no audio track (D14), so an audio request
+   * is answered by omission whatever the page asked for.
+   */
+  target.setDisplayMediaRequestHandler((request, callback) => {
+    const video = resolveRecordingDisplayMediaVideo(request);
+    if (video === null) {
+      callback({});
+      return;
+    }
+    callback({ video });
   });
   target.webRequest.onBeforeRequest((details, callback) => {
     const webContentsId = details.webContentsId;
@@ -465,7 +494,27 @@ export function gateBrowserViewGuestRequests(
   };
 }
 
-function isBrowserPermissionAllowed(permission: string): boolean {
+/**
+ * The permission answer for one requester.
+ *
+ * `display-capture` is scoped to the requesting WebContents rather than to the
+ * permission name: a guest page that asks for it is refused exactly as before,
+ * and only a live registered recording helper is admitted. The scoping cuts
+ * BOTH ways - the helper is refused every permission an ordinary guest gets,
+ * because it is a one-job document of ours and not a page anyone browses. The
+ * registration is revoked on every terminal path, so neither answer can
+ * outlive its recording.
+ */
+function isBrowserPermissionAllowed(
+  permission: string,
+  webContents: unknown,
+): boolean {
+  // A recording helper is not a guest and gets the guest answer for nothing:
+  // it is a document of ours with one job, so `display-capture` is the only
+  // permission it may hold and the ordinary allow-set is refused to it too.
+  if (isRecordingHelperWebContents(webContents)) {
+    return permission === DISPLAY_CAPTURE_PERMISSION;
+  }
   return BROWSER_ALLOWED_PERMISSIONS.has(permission);
 }
 

@@ -45,6 +45,8 @@ const DISABLED_CAPABILITIES: TileChromeCapabilities = {
   find: false,
   siteInfo: false,
   annotate: false,
+  capture: false,
+  record: false,
 };
 
 function preventNavigate(
@@ -95,6 +97,7 @@ function renderToolbar(
     <TooltipProvider>
       <BrowserTileToolbar
         controller={makeController(capabilities, annotation)}
+        captureTarget={null}
         pictureInPicture={null}
         loading={false}
       />
@@ -179,6 +182,7 @@ describe("<BrowserTileToolbar /> capability gating", () => {
       <TooltipProvider>
         <BrowserTileToolbar
           controller={controller}
+          captureTarget={null}
           pictureInPicture={null}
           loading={false}
         />
@@ -240,6 +244,7 @@ describe("<BrowserTileToolbar /> capability gating", () => {
       <TooltipProvider>
         <BrowserTileToolbar
           controller={makeController(DISABLED_CAPABILITIES, null)}
+          captureTarget={null}
           pictureInPicture={{ disabled: false, convert }}
           loading={false}
         />
@@ -265,6 +270,7 @@ describe("<BrowserTileToolbar /> capability gating", () => {
       <TooltipProvider>
         <BrowserTileToolbar
           controller={controller}
+          captureTarget={null}
           pictureInPicture={null}
           loading={false}
         />
@@ -350,6 +356,7 @@ describe("<BrowserTileToolbar /> clear cookies for this site", () => {
       <TooltipProvider>
         <BrowserTileToolbar
           controller={controller}
+          captureTarget={null}
           pictureInPicture={null}
           loading={false}
         />
@@ -460,6 +467,7 @@ describe("<BrowserTileToolbar /> address first-focus", () => {
       <TooltipProvider>
         <BrowserTileToolbar
           controller={controller}
+          captureTarget={null}
           pictureInPicture={null}
           loading={false}
         />
@@ -504,6 +512,7 @@ describe("<BrowserTileToolbar /> reload loading", () => {
       <TooltipProvider>
         <BrowserTileToolbar
           controller={controller}
+          captureTarget={null}
           pictureInPicture={null}
           loading={false}
         />
@@ -521,6 +530,7 @@ describe("<BrowserTileToolbar /> reload loading", () => {
       <TooltipProvider>
         <BrowserTileToolbar
           controller={controller}
+          captureTarget={null}
           pictureInPicture={null}
           loading
         />
@@ -539,6 +549,7 @@ describe("<BrowserTileToolbar /> reload loading", () => {
       <TooltipProvider>
         <BrowserTileToolbar
           controller={controller}
+          captureTarget={null}
           pictureInPicture={null}
           loading={false}
         />

@@ -117,6 +117,14 @@ vi.mock(
   },
 );
 
+// A pure side-effect binder: it holds this epic's `epic.fileEvents`
+// subscription open and renders nothing. Reaching the real one would pull the
+// host directory in, and this suite mounts no `<HostRuntimeProvider>` - the
+// pane/session/sidebar boundaries under test are unaffected either way.
+vi.mock("@/components/epic-canvas/epic-file-events-binder", () => ({
+  EpicFileEventsBinder: () => null,
+}));
+
 vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
   EpicRouteSessionBody: (props: { readonly tabId: string }) => (
     <div data-testid={`epic-canvas-body-${props.tabId}`} />

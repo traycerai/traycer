@@ -58,6 +58,30 @@ const OFFSCREEN_CSS_TEXT = [
   "display: block",
 ].join(";");
 
+/**
+ * The posture a guest holds for the LIFE of a recording while no tile is
+ * showing it (D15, ticket 20).
+ *
+ * The off-screen retained rect above cannot be used: a guest parked at
+ * `-10000px` fails to start a capture at all - `AbortError: Timeout starting
+ * video source`, isolated to the off-screen COORDINATE, `opacity: 0` alone
+ * starts fine. So a recording guest is presented on-screen at the origin and
+ * made invisible and untouchable instead: zero opacity, no pointer events,
+ * `inert`, and behind the canvas. Restored to whatever the placement says the
+ * moment the recording ends.
+ */
+const RECORDING_PRESENTED_CSS_TEXT = [
+  "position: fixed",
+  "inset-inline-start: 0",
+  "inset-block-start: 0",
+  `width: ${OFFSCREEN_VIEWPORT_WIDTH_PX}px`,
+  `height: ${OFFSCREEN_VIEWPORT_HEIGHT_PX}px`,
+  "opacity: 0",
+  "pointer-events: none",
+  "z-index: -1",
+  "display: block",
+].join(";");
+
 interface PlacementRecord {
   readonly owner: symbol;
   readonly placement: BrowserGuestTilePlacement;
@@ -75,6 +99,13 @@ interface RunningHost {
 
 const guests = new Map<string, GuestRecord>();
 const placements = new Map<string, PlacementRecord>();
+/**
+ * Registrations with a recording running. Beside `placements` rather than in
+ * it: a recording is orthogonal to which tile owns the guest, it survives the
+ * tile being hidden (that is the whole point), and it must not be cleared by
+ * the tile publisher that owns the placement.
+ */
+const recordingRegistrationIds = new Set<string>();
 let running: RunningHost | null = null;
 let onActivate: BrowserGuestActivate | null = null;
 
@@ -111,6 +142,30 @@ export function setBrowserGuestTilePlacement(
   placements.set(placement.registrationId, { owner, placement });
   const guest = guests.get(placement.registrationId);
   if (guest !== undefined) applyGuestPresentation(guest, placement);
+}
+
+/**
+ * Holds (or releases) the recording posture for one guest.
+ *
+ * Called by the `browser.sessions` coordinator around a recording, because
+ * that is the only thing that knows one is running. Idempotent, and safe for a
+ * registration this window has no guest for - a recording is helper-bound and
+ * the guest may be reborn under a new registration, in which case the new one
+ * simply never had the posture.
+ */
+export function setBrowserGuestRecordingPresented(
+  registrationId: string,
+  recording: boolean,
+): void {
+  if (recordingRegistrationIds.has(registrationId) === recording) return;
+  if (recording) recordingRegistrationIds.add(registrationId);
+  else recordingRegistrationIds.delete(registrationId);
+  const guest = guests.get(registrationId);
+  if (guest === undefined) return;
+  applyGuestPresentation(
+    guest,
+    placements.get(registrationId)?.placement ?? null,
+  );
 }
 
 export function clearBrowserGuestTilePlacement(
@@ -168,6 +223,7 @@ function removeGuest(registrationId: string): void {
   const guest = guests.get(registrationId);
   if (guest === undefined) return;
   guests.delete(registrationId);
+  recordingRegistrationIds.delete(registrationId);
   relinquishGuestFocus(guest);
   guest.wrapper.remove();
 }
@@ -241,6 +297,17 @@ function applyGuestPresentation(
     );
     return;
   }
+  // A recording outranks the retained posture, and only the retained one: a
+  // guest a tile is showing is already on-screen and is left exactly as it is.
+  if (recordingRegistrationIds.has(guest.registrationId)) {
+    applyGuestPosture(
+      guest.wrapper,
+      "recording",
+      RECORDING_PRESENTED_CSS_TEXT,
+      null,
+    );
+    return;
+  }
   // Independently composited <webview> can leak under visibility:hidden, and
   // display:none stops it compositing altogether (CDP/PiP frames go blank).
   // Opacity makes one compositor group; the offscreen inset keeps it out of
@@ -281,7 +348,7 @@ function presentedCssText(registrationId: string): string {
 
 function applyGuestPosture(
   wrapper: HTMLElement,
-  state: "presented" | "retained" | "unbound",
+  state: "presented" | "recording" | "retained" | "unbound",
   cssText: string,
   ownership: BrowserGuestTilePlacement | null,
 ): void {

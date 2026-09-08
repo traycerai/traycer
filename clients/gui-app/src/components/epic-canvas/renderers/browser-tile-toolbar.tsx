@@ -17,7 +17,14 @@ import {
   Tablet,
   VenetianMask,
 } from "lucide-react";
-import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import {
+  BrowserTileCaptureControls,
+  type BrowserTileCaptureTarget,
+} from "@/components/epic-canvas/renderers/browser-tile-capture-controls";
+import type {
+  TileChromeCapabilities,
+  TileController,
+} from "@/components/epic-canvas/renderers/tile-controller";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
@@ -106,6 +113,13 @@ const BROWSER_VIEWPORT_PRESETS: ReadonlyArray<{
 export function BrowserTileToolbar(props: {
   readonly controller: TileController;
   readonly pictureInPicture: BrowserPictureInPictureControl | null;
+  /**
+   * What the capture/record buttons act on, or `null` where there is nothing
+   * to act on - a tile whose canvas tab has no epic behind it. The epic is the
+   * authorization subject for every capture method (D06), so a missing one
+   * hides the controls rather than sending an unaddressed request.
+   */
+  readonly captureTarget: BrowserTileCaptureTarget | null;
   readonly loading: boolean;
 }) {
   const controller = props.controller;
@@ -118,8 +132,10 @@ export function BrowserTileToolbar(props: {
     capabilities.viewportPreset ||
     capabilities.devtools ||
     capabilities.siteInfo;
+  const captureTarget = toolbarCaptureTarget(capabilities, props.captureTarget);
   const showTrailing =
     capabilities.annotate ||
+    captureTarget !== null ||
     props.pictureInPicture !== null ||
     controller.profile === "isolated" ||
     showAdvanced;
@@ -139,11 +155,25 @@ export function BrowserTileToolbar(props: {
       {showTrailing ? (
         <BrowserTileToolbarTrailing
           controller={controller}
+          captureTarget={captureTarget}
           pictureInPicture={props.pictureInPicture}
         />
       ) : null}
     </div>
   );
+}
+
+/**
+ * The capture subject once the tile's own chrome has had its say: a target the
+ * caller supplied is still dropped when neither capture verb is offered on
+ * this tier, so `null` means "no capture controls" for both reasons at once.
+ */
+function toolbarCaptureTarget(
+  capabilities: TileChromeCapabilities,
+  target: BrowserTileCaptureTarget | null,
+): BrowserTileCaptureTarget | null {
+  if (target === null) return null;
+  return capabilities.capture || capabilities.record ? target : null;
 }
 
 /**
@@ -330,6 +360,7 @@ function BrowserOpenExternalButton(props: { readonly url: string }) {
 
 function BrowserTileToolbarTrailing(props: {
   readonly controller: TileController;
+  readonly captureTarget: BrowserTileCaptureTarget | null;
   readonly pictureInPicture: BrowserPictureInPictureControl | null;
 }) {
   const controller = props.controller;
@@ -347,6 +378,14 @@ function BrowserTileToolbarTrailing(props: {
       {capabilities.annotate && controller.annotation !== null ? (
         <BrowserAnnotateToggle controller={controller.annotation} />
       ) : null}
+      {props.captureTarget === null ? null : (
+        <BrowserTileCaptureControls
+          target={props.captureTarget}
+          capture={capabilities.capture}
+          record={capabilities.record}
+          disabled={controller.disabled}
+        />
+      )}
       {props.pictureInPicture === null ? null : (
         <BrowserPictureInPictureButton control={props.pictureInPicture} />
       )}

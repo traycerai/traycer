@@ -20,7 +20,12 @@
  * to satisfy `@typescript-eslint/no-unnecessary-condition` while keeping
  * runtime safety.
  */
-import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { createSelector, lruMemoize } from "reselect";
@@ -270,6 +275,33 @@ export function useEpicHasFreshCloudSyncStatus(): boolean {
 
 export function useEpicPermissionRole(): PermissionRole | null {
   return useEpicStore((s) => s.permissionRole);
+}
+
+/**
+ * The same role for callers that may render BEFORE - or entirely outside - an
+ * `EpicSessionProvider`, where {@link useEpicPermissionRole} throws.
+ *
+ * Tile chrome is exactly that caller: a canvas pane mounts while its open-epic
+ * handle is still resolving, and the same tiles are reused on surfaces that
+ * never open a session at all. Throwing there takes the whole tile down to hide
+ * one button, so no session reads as `null` - which is already this hook's word
+ * for "the store has not said", and which every `isEditableRole` caller already
+ * treats as "not allowed to write". Same tolerance, same reasoning, as
+ * `use-lane-comment-threads.ts`.
+ */
+export function useMaybeEpicPermissionRole(): PermissionRole | null {
+  const handle = useMaybeOpenEpicHandle();
+  const subscribe = useCallback(
+    (onStoreChange: () => void): (() => void) =>
+      handle === null ? () => {} : handle.store.subscribe(onStoreChange),
+    [handle],
+  );
+  const getSnapshot = useCallback(
+    (): PermissionRole | null =>
+      handle === null ? null : handle.store.getState().permissionRole,
+    [handle],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 export function useEpicSnapshotLoaded(): boolean {

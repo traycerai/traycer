@@ -358,6 +358,84 @@ export type HostNotificationWorktreeDeletionPayload = z.infer<
 >;
 
 /**
+ * The operation id a browser recording's row is minted under.
+ *
+ * A recording IS a finished host operation, so it rides the existing
+ * `host.operation.finished` kind rather than a new notification kind: the
+ * operation arm is the documented extension point (see
+ * `payloadKindMatchesNotificationKind`), and a new KIND would have to be
+ * learned by every exhaustive `HostNotificationKind` switch on both sides of
+ * the wire before a single row could render. A new payload arm under a known
+ * kind degrades to the common-field tier on a client that has never heard of
+ * it, which is the property this whole tier exists to provide.
+ */
+export const HOST_OPERATION_BROWSER_RECORDING = "browser.recording";
+
+/**
+ * Where a recording is, as told to a chat (D20). Every phase arrives on the
+ * SAME row id, so a chat carries one entry that moves from "recording" to the
+ * saved card rather than several that have to be reconciled - the coalescing
+ * `browser.human.needed` already uses for a session that parks twice.
+ *
+ * `ended` exists because the alternative is worse than silence: a run that
+ * produced nothing (an immediate stop, a tab closed before the first chunk)
+ * would otherwise leave a row reading "Recording started" for the life of the
+ * chat.
+ */
+export const hostNotificationBrowserRecordingPhaseSchema = z.enum([
+  "started",
+  "saved",
+  "ended",
+]);
+export type HostNotificationBrowserRecordingPhase = z.infer<
+  typeof hostNotificationBrowserRecordingPhaseSchema
+>;
+
+/**
+ * `host.operation.finished` payload for an agent-initiated browser recording
+ * (D20). User-initiated recordings mint nothing: the toolbar that started one
+ * is the surface that reports it, and a durable row per button press is noise.
+ *
+ * `path` is the epic-root-relative MANIFEST key of the clip
+ * (`files/recordings/<recordingId>.mp4`), present only once the run is
+ * `saved`. It is deliberately the one address here - not a filesystem path,
+ * not a URL, not bytes - because it is exactly what the chat's file resolver
+ * turns into an inline player, and it stays meaningful on a host that has
+ * never held the bytes.
+ *
+ * `recordingId` links this row to the manifest entries the run produced and to
+ * every `epic.fileEvents` frame about it. No user id, no host path, no helper
+ * URL: the row is durable, reaches email and webhooks, and outlives the tab.
+ *
+ * An arm of {@link hostNotificationKnownPayloadSchema}, so consumers read it
+ * structurally: the row's copy names the saved clip and its click opens the
+ * chat the run belongs to, where the agent's own markdown link renders the
+ * inline player. A client that predates the arm still renders the row from the
+ * common `operation`/`title`/`message` tier, which the host composes and which
+ * stays true - that degradation is the property this whole tier exists for,
+ * and it is why the recording rides `host.operation.finished` rather than a
+ * notification KIND of its own.
+ */
+export const hostNotificationBrowserRecordingPayloadSchema = z
+  .object({
+    kind: z.literal("browser_recording"),
+    operation: z.literal(HOST_OPERATION_BROWSER_RECORDING),
+    title: z.string().min(1),
+    message: z.string().min(1),
+    epicId: idSchema,
+    chatId: idSchema,
+    recordingId: idSchema,
+    tabId: idSchema,
+    phase: hostNotificationBrowserRecordingPhaseSchema,
+    /** Present on `saved` and nowhere else - the other phases have no clip. */
+    path: z.string().min(1).optional(),
+  })
+  .catchall(z.unknown());
+export type HostNotificationBrowserRecordingPayload = z.infer<
+  typeof hostNotificationBrowserRecordingPayloadSchema
+>;
+
+/**
  * `browser.human.needed` payload: the parked session's tile plus the agent's
  * own reason for parking.
  *
@@ -390,6 +468,7 @@ export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationInterviewPayloadSchema,
   hostNotificationWorktreeDeletionPayloadSchema,
   hostNotificationBrowserHumanNeededPayloadSchema,
+  hostNotificationBrowserRecordingPayloadSchema,
 ]);
 export type HostNotificationKnownPayload = z.infer<
   typeof hostNotificationKnownPayloadSchema
@@ -450,7 +529,10 @@ function payloadKindMatchesNotificationKind(
     // degrade to the common-field tier rather than failing - which is the
     // property the whole payload tier exists to provide.
     case "host.operation.finished":
-      return payloadKind === "worktree_deletion";
+      return (
+        payloadKind === "worktree_deletion" ||
+        payloadKind === "browser_recording"
+      );
     case "browser.human.needed":
       return payloadKind === "browser_human_needed";
   }

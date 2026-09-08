@@ -22,7 +22,12 @@ import type {
   LoginImportRequest,
   BrowserViewReservedChord,
 } from "@traycer-clients/shared/platform/browser-view";
-import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  PipCaptureStartInput,
+  RecordingProbeInput,
+  RecordingStartInput,
+  RecordingStopInput,
+} from "@traycer-clients/shared/platform/browser-view";
 
 const nonEmptyStringSchema = z.string().min(1);
 const tileKeySchema = z.object({
@@ -114,6 +119,68 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
     maxWidth: z.number().int().positive(),
     maxHeight: z.number().int().positive(),
     quality: z.number().int().min(0).max(100),
+  });
+
+/**
+ * Recording control, renderer -> main.
+ *
+ * `helperUrl` is bounded and must be an absolute `http:` URL on the LOOPBACK
+ * interface, because that is the only thing it is ever allowed to be: the
+ * host's own epic-file static server binds `127.0.0.1` and mints this URL
+ * (D15, D32). The window main opens for it runs in the GUEST'S session - the
+ * jar holding every site the user is signed in to - and is the one window in
+ * this process handed a display-capture grant over that guest, so an
+ * off-machine origin here would be a remote page with the user's cookies and a
+ * live view of their tab. A `file:` or custom-scheme value would be worse
+ * still. Nothing about the URL is logged anywhere - the host puts the
+ * recording's one-shot bearer token in it - which is also why the schema
+ * bounds its LENGTH here rather than letting an oversized value reach a WARN
+ * line.
+ */
+const HELPER_URL_MAX_LENGTH = 2_048;
+const LOOPBACK_HELPER_HOSTNAMES: ReadonlySet<string> = new Set([
+  "127.0.0.1",
+  "localhost",
+  "[::1]",
+  "::1",
+]);
+const helperUrlSchema = nonEmptyStringSchema
+  .max(HELPER_URL_MAX_LENGTH)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return (
+        url.protocol === "http:" &&
+        LOOPBACK_HELPER_HOSTNAMES.has(url.hostname.toLowerCase())
+      );
+    } catch {
+      return false;
+    }
+  }, "helperUrl must be an absolute loopback http URL");
+
+const recordingStartSchema: z.ZodType<RecordingStartInput> =
+  nativeTabCapabilitySchema.extend({
+    recordingId: nonEmptyStringSchema,
+    helperUrl: helperUrlSchema,
+  });
+
+const recordingStopSchema: z.ZodType<RecordingStopInput> = z.object({
+  recordingId: nonEmptyStringSchema,
+});
+
+/** Dev-only; the handler that parses this is not registered in a shipped build. */
+const recordingProbeSchema: z.ZodType<RecordingProbeInput> =
+  nativeTabCapabilitySchema.extend({
+    durationMs: z.number().int().positive().max(120_000),
+    runs: z
+      .array(
+        z.object({
+          source: z.enum(["display-media", "capture-page"]),
+          helperUrl: helperUrlSchema,
+        }),
+      )
+      .min(1)
+      .max(4),
   });
 
 /** The saved-logins toggle's new value. */
@@ -218,6 +285,9 @@ export const browserViewIpcPayload = {
   loginImportScan: loginImportScanSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
   pipCaptureStart: pipCaptureStartSchema,
+  recordingStart: recordingStartSchema,
+  recordingStop: recordingStopSchema,
+  recordingProbe: recordingProbeSchema,
   savedLoginSite: savedLoginSiteSchema,
   saveLogins: saveLoginsSchema,
   sessionsStreamKey: sessionsStreamKeySchema,

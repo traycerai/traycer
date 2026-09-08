@@ -22,6 +22,8 @@ import type {
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
+  RecordingEvent,
+  RecordingProbeResult,
 } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserAnnotationAttachedIpcEvent,
@@ -225,6 +227,23 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ) as Promise<void>,
       stopPipCapture: () =>
         ipcRenderer.invoke(RunnerHostInvoke.pipCaptureStop) as Promise<void>,
+      startRecording: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.recordingStart,
+          input,
+        ) as Promise<void>,
+      stopRecording: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.recordingStop,
+          input,
+        ) as Promise<void>,
+      onRecordingEvent: (handler) =>
+        subscribe<RecordingEvent>(RunnerHostEvent.recordingEvent, handler),
+      probeRecordingCaptureSources: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.recordingProbe,
+          input,
+        ) as Promise<RecordingProbeResult>,
       onPipCaptureFrame: (handler) =>
         subscribe<PipCaptureIpcPayload>(
           RunnerHostEvent.pipCaptureFrame,

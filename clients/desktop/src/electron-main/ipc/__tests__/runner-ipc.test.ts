@@ -789,6 +789,13 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.browserViewLoginImportRun,
           RunnerHostInvoke.pipCaptureStart,
           RunnerHostInvoke.pipCaptureStop,
+          // Browser tab recording (D15). `recordingProbe` is here because the
+          // suite runs under the DEV configuration, which is the only one that
+          // registers it; a shipped build has no such handler and this list
+          // would be one shorter there.
+          RunnerHostInvoke.recordingStart,
+          RunnerHostInvoke.recordingStop,
+          RunnerHostInvoke.recordingProbe,
           // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
           RunnerHostInvoke.selectionAttach,
           RunnerHostInvoke.selectionReportEvidence,

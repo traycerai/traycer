@@ -121,6 +121,8 @@ const CHROME_CONTROLLER: TileController = {
     find: false,
     siteInfo: false,
     annotate: false,
+    capture: false,
+    record: false,
   },
   profile: "primary",
   url: "https://example.com/",

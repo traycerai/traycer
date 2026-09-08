@@ -10,6 +10,7 @@ import type {
   BrowserSessionsLifecycle,
   BrowserViewBridge,
   BrowserViewNativeTabCapability,
+  RecordingEvent,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
@@ -21,10 +22,12 @@ import {
   type BrowserSessionsSession,
 } from "@/lib/browser-view/sessions/browser-sessions-session";
 import {
+  electronTabBindingByTab,
   publishElectronTabBinding,
   removeOwnedElectronTabBinding,
   removeOwnedElectronTabBindings,
 } from "@/lib/browser-view/sessions/electron-tab-directory";
+import { setBrowserGuestRecordingPresented } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import {
   applyTabRecordingEnded,
   applyTabRecordingLive,
@@ -245,6 +248,21 @@ const TAB_PREVIEW_TIMEOUT_MS = 5_000;
  */
 const NO_RECORDING_HELPER = "no-recording-helper-runtime";
 
+/**
+ * The host asked this client to record a tab whose Electron guest this window
+ * does not hold - another window's tile, or a binding that was retired between
+ * the frame and this handler. There is nothing to point a helper at.
+ */
+const NO_ELECTRON_GUEST = "no-electron-guest-for-tab";
+
+/**
+ * Main refused or could not begin the helper. A CLOSED string, never the
+ * rejection's message: the message is unbounded, and the request that produced
+ * it carries the recording's bearer token. The cause is logged locally
+ * instead.
+ */
+const HELPER_START_FAILED = "helper-start-failed";
+
 export function browserSessionsCoordinatorState(
   key: string | null,
 ): BrowserSessionsState | null {
@@ -438,6 +456,14 @@ function createBrowserSessionsCoordinator(args: {
   // coordinators with the same `hostId`, and one closing must not clear the
   // other's recording rows.
   const recordingOwner = Symbol("browser-sessions-recordings");
+  /**
+   * Recordings this coordinator started, mapped to the guest registration
+   * holding the recording posture for them. It is both the posture ledger and
+   * the filter that tells this coordinator's helper events from a sibling
+   * coordinator's on the shared bridge channel.
+   */
+  const recordingRegistrationIds = new Map<string, string>();
+  let recordingEvents: { readonly dispose: () => void } | null = null;
   let activeConsumerId: symbol | null = args.consumerId;
   let runtime = args.runtime;
   let session: BrowserSessionsSession | null = null;
@@ -574,21 +600,30 @@ function createBrowserSessionsCoordinator(args: {
 
   /**
    * `startTabRecording`: the host wants a hidden helper window opened at
-   * `helperUrl` for this tab (D15). The window is main's - ticket 20 owns
-   * opening it and answering through {@link reportRecordingHelperReady} - so
-   * all this does is record that a recording was asked for, and settle the one
-   * case it can decide by itself.
+   * `helperUrl` for this tab (D15).
    *
-   * A shell with no `browserView` bridge has no main process and therefore no
-   * way to open a helper at all. It answers immediately rather than leaving
-   * the host to time the recording out: the frame is recording-addressed, and
-   * the protocol already reasons that a client-sent answer names an id only
-   * the host mints and ends a recording the same user could end from the
-   * toolbar.
+   * The window itself is MAIN'S - it holds the display-media grant and the
+   * capture-source seam - so this is a relay: mark the badge, put the guest in
+   * the recording posture, hand main the request, and let
+   * {@link onRecordingEvent} carry main's two answers back up the stream. The
+   * `helperUrl` is passed through verbatim and never inspected here; it
+   * carries the recording's one-shot bearer token, which is why no failure
+   * path below quotes it.
+   *
+   * Two cases this client can settle by itself, and it answers both at once
+   * rather than leaving the host to time the recording out. A shell with no
+   * `browserView` bridge has no main process and can never open a helper. A
+   * tab with no Electron guest in THIS window - another window's tile, or a
+   * binding retired between the frame and here - has nothing to point one at.
+   * Both are `refused` rather than `ended`: nothing was captured and no file
+   * is coming, which is different copy and a different badge. The protocol
+   * already reasons that a client-sent answer names an id only the host mints
+   * and ends a recording the same user could end from the toolbar.
    */
   const startRecording = (frame: {
     readonly tabId: string;
     readonly recordingId: string;
+    readonly helperUrl: string;
   }): void => {
     applyTabRecordingStarted({
       owner: recordingOwner,
@@ -596,18 +631,96 @@ function createBrowserSessionsCoordinator(args: {
       tabId: frame.tabId,
       recordingId: frame.recordingId,
     });
-    if (runtime.browserView !== null) return;
-    applyTabRecordingEnded({
-      recordingId: frame.recordingId,
-      status: "refused",
-      reason: NO_RECORDING_HELPER,
-    });
+    const browserView = runtime.browserView;
+    if (browserView === null) {
+      refuseRecording(frame.recordingId, NO_RECORDING_HELPER);
+      return;
+    }
+    const binding = electronTabBindingByTab(args.owner.hostId, frame.tabId);
+    if (binding === null) {
+      refuseRecording(frame.recordingId, NO_ELECTRON_GUEST);
+      return;
+    }
+    // The recording POSTURE, before the helper exists rather than after: the
+    // capture cannot even START against a guest parked at the retained
+    // off-screen rect (D15 probe finding), so the guest has to be on-screen by
+    // the time main's helper asks for it.
+    recordingRegistrationIds.set(frame.recordingId, binding.registrationId);
+    setBrowserGuestRecordingPresented(binding.registrationId, true);
+    void browserView
+      .startRecording({
+        hostId: binding.hostId,
+        sessionId: binding.sessionId,
+        tabId: binding.tabId,
+        registrationId: binding.registrationId,
+        recordingId: frame.recordingId,
+        helperUrl: frame.helperUrl,
+      })
+      .catch((cause: unknown) => {
+        appLogger.warn("[browser] a recording helper did not open", {
+          cause: cause instanceof Error ? cause.message : String(cause),
+        });
+        releaseRecordingPosture(frame.recordingId);
+        reportRecordingEnded(args.key, frame.recordingId, HELPER_START_FAILED);
+      });
+  };
+
+  /**
+   * Nothing was ever captured and no file is coming, which is a different
+   * badge from a recording that ran and stopped - hence `refused` rather than
+   * `ended`. The host still gets an answer, so it does not wait out the
+   * start timeout for a helper that will never exist.
+   */
+  const refuseRecording = (recordingId: string, reason: string): void => {
+    applyTabRecordingEnded({ recordingId, status: "refused", reason });
     sendRecordingAnswer({
       kind: "recordingEnded",
       hasBinaryPayload: false,
-      recordingId: frame.recordingId,
-      reason: NO_RECORDING_HELPER,
+      recordingId,
+      reason,
     });
+  };
+
+  /** Puts the guest back on whatever placement its tile publisher says. */
+  const releaseRecordingPosture = (recordingId: string): void => {
+    const registrationId = recordingRegistrationIds.get(recordingId);
+    if (registrationId === undefined) return;
+    recordingRegistrationIds.delete(recordingId);
+    setBrowserGuestRecordingPresented(registrationId, false);
+  };
+
+  /**
+   * `stopTabRecording`: the host is tearing the helper down - explicit stop,
+   * auto-stop on tab close, the duration cap. Main owns the window, so the
+   * stop has to reach it; `recordingEnded` comes back through
+   * {@link onRecordingEvent} as the answer, exactly as it does for a helper
+   * that died on its own.
+   */
+  const stopRecording = (recordingId: string): void => {
+    const browserView = runtime.browserView;
+    if (browserView === null) return;
+    void browserView.stopRecording({ recordingId }).catch((cause: unknown) => {
+      appLogger.warn("[browser] a recording stop did not reach main", {
+        cause: cause instanceof Error ? cause.message : String(cause),
+      });
+    });
+  };
+
+  /**
+   * The two facts only main can know, relayed onto this stream.
+   *
+   * Filtered to this coordinator's own recordings: several coordinators share
+   * one `browserView` bridge and therefore one event channel, and a recording
+   * belongs to the stream that asked for it.
+   */
+  const onRecordingEvent = (event: RecordingEvent): void => {
+    if (!recordingRegistrationIds.has(event.recordingId)) return;
+    if (event.kind === "helperReady") {
+      reportRecordingHelperReady(args.key, event.recordingId);
+      return;
+    }
+    releaseRecordingPosture(event.recordingId);
+    reportRecordingEnded(args.key, event.recordingId, event.reason);
   };
 
   const rejectEveryPendingRequest = (): void => {
@@ -629,7 +742,13 @@ function createBrowserSessionsCoordinator(args: {
       removeOwnedElectronTabBindings(tabBindingOwner);
       // A recording is helper- and socket-bound, so a stream that left `live`
       // has none running - and a badge left at `recording` would keep counting
-      // against a run with nothing behind it.
+      // against a run with nothing behind it. The helper window is main's
+      // though, and survives the socket, so it is closed rather than merely
+      // forgotten.
+      for (const recordingId of [...recordingRegistrationIds.keys()]) {
+        stopRecording(recordingId);
+        releaseRecordingPosture(recordingId);
+      }
       forgetOwnedTabRecordings(recordingOwner);
     }
     patchState({
@@ -657,6 +776,7 @@ function createBrowserSessionsCoordinator(args: {
       presenters: selectBrowserSessionsPresenters(runtimes),
       currentItems: () => coordinator.state.items,
       startRecording,
+      stopRecording,
     });
   };
 
@@ -667,6 +787,8 @@ function createBrowserSessionsCoordinator(args: {
   };
 
   const start = (): void => {
+    recordingEvents =
+      runtime.browserView?.onRecordingEvent(onRecordingEvent) ?? null;
     patchState({
       items: [],
       lifecycle: "connecting",
@@ -702,6 +824,17 @@ function createBrowserSessionsCoordinator(args: {
     session?.close();
     session = null;
     lifecycle = "closed";
+    recordingEvents?.dispose();
+    recordingEvents = null;
+    // The helper windows are MAIN'S and outlive this socket, so a stream that
+    // is going away has to close them by hand: nothing else will, the answers
+    // they would send have nowhere to go, and a hidden window per abandoned
+    // recording is the orphan this must not leave behind. The posture goes
+    // with them, or the guest would sit on-screen at opacity 0 forever.
+    for (const recordingId of [...recordingRegistrationIds.keys()]) {
+      stopRecording(recordingId);
+      releaseRecordingPosture(recordingId);
+    }
     removeOwnedElectronTabBindings(tabBindingOwner);
     rejectEveryPendingRequest();
     forgetOwnedTabRecordings(recordingOwner);
@@ -803,7 +936,9 @@ function handleBrowserSessionsFrame(args: {
   readonly startRecording: (frame: {
     readonly tabId: string;
     readonly recordingId: string;
+    readonly helperUrl: string;
   }) => void;
+  readonly stopRecording: (recordingId: string) => void;
 }): void {
   const frame = args.frame;
   switch (frame.kind) {
@@ -860,6 +995,7 @@ function handleBrowserSessionsFrame(args: {
       // duration cap, or the toolbar. Terminal for the badge whether or not a
       // helper ever reported ready; `recordingEnded` is the desktop's own
       // answer to it, and arriving after this changes nothing.
+      args.stopRecording(frame.recordingId);
       applyTabRecordingEnded({
         recordingId: frame.recordingId,
         status: "ended",

@@ -9,6 +9,7 @@ import {
   hostNotificationAgentStalledPayloadSchema,
   hostNotificationApprovalPayloadSchema,
   hostNotificationBrowserHumanNeededPayloadSchema,
+  hostNotificationBrowserRecordingPayloadSchema,
   hostNotificationChatStoppedPayloadSchema,
   hostNotificationEpicStoppedPayloadSchema,
   hostNotificationInterviewPayloadSchema,
@@ -39,6 +40,7 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
   interview: hostNotificationInterviewPayloadSchema,
   worktree_deletion: hostNotificationWorktreeDeletionPayloadSchema,
   browser_human_needed: hostNotificationBrowserHumanNeededPayloadSchema,
+  browser_recording: hostNotificationBrowserRecordingPayloadSchema,
 };
 
 const KINDS = [
@@ -50,6 +52,7 @@ const KINDS = [
   "interview",
   "worktree_deletion",
   "browser_human_needed",
+  "browser_recording",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 
 describe("host notification payload additivity", () => {

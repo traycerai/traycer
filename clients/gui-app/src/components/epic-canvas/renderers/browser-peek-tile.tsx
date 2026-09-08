@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
 import { AlertTriangle, Monitor, Pause, Radio, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
+import type { BrowserTileCaptureTarget } from "@/components/epic-canvas/renderers/browser-tile-capture-controls";
 import {
   BrowserTileToolbar,
   BrowserTileToolbarCompact,
@@ -219,6 +220,16 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       ) : (
         <ScreencastPeekChromeBar
           controller={controller}
+          captureTarget={
+            readOnly
+              ? null
+              : {
+                  epicId,
+                  hostId: node.hostId,
+                  tabId: node.tabId,
+                  viewTabId: props.viewTabId,
+                }
+          }
           pictureInPicture={{
             disabled: client === null,
             convert: () => {
@@ -351,6 +362,11 @@ function ScreencastPeekSurface(props: {
 
 function ScreencastPeekChromeBar(props: {
   readonly controller: TileController;
+  /**
+   * `null` for a `viewer`-tier peek (H12): that tier may not drive this tab at
+   * all, and a capture is a write against the epic behind it (D06).
+   */
+  readonly captureTarget: BrowserTileCaptureTarget | null;
   readonly pictureInPicture: BrowserPictureInPictureControl;
   readonly loading: boolean;
   readonly armed: boolean;
@@ -364,6 +380,7 @@ function ScreencastPeekChromeBar(props: {
         <div className="min-w-0 flex-1 [&>div]:border-b-0">
           <BrowserTileToolbar
             controller={props.controller}
+            captureTarget={props.captureTarget}
             loading={props.loading}
             pictureInPicture={props.pictureInPicture}
           />

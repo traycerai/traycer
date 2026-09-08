@@ -13,10 +13,16 @@
  */
 import type { EpicFileEntry } from "@traycer/protocol/persistence/epic/files";
 import type {
+  CaptureTabScreenshotRequest,
+  CaptureTabScreenshotResponse,
   EpicFileTombstoneRequest,
   EpicFileTombstoneResponse,
   OpenEpicFileInBrowserRequest,
   OpenEpicFileInBrowserResponse,
+  StartTabRecordingRequest,
+  StartTabRecordingResponse,
+  StopTabRecordingRequest,
+  StopTabRecordingResponse,
 } from "@traycer/protocol/host/epic/files";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -168,6 +174,125 @@ export function useEpicOpenFileInBrowser(
       mutationKey: epicMutationKeys.openFileInBrowser(epicId, path),
       onError: (error: HostRpcError) => {
         toastFromHostError(error, "Couldn't open this file in a browser.");
+      },
+    },
+  });
+}
+
+/**
+ * The live CLIP object of one recording (D14), found the same way
+ * {@link useEpicRecordingPoster} finds its poster and for the same reason: a
+ * recording is three entries sharing a `recordingId`, not one entry with three
+ * paths, and the clip's own path is minted host-side.
+ *
+ * This is what gives the tile badge its upload state after `recordingEnded` -
+ * `pending` while the object is going up, then `available` / `local-only` /
+ * `failed` - straight off the manifest, with no second arrival order.
+ */
+export function useEpicRecordingClip(
+  recordingId: string | null,
+): EpicFileRecord | null {
+  return useEpicStore((state: OpenEpicState) =>
+    recordingId === null
+      ? null
+      : (state.files.records.find(
+          (record) =>
+            record.entry.recordingId === recordingId &&
+            record.entry.kind === "recording",
+        ) ?? null),
+  );
+}
+
+export type EpicCaptureTabScreenshotMutation = UseMutationResult<
+  CaptureTabScreenshotResponse,
+  HostRpcError,
+  CaptureTabScreenshotRequest
+>;
+
+/**
+ * One user-initiated screenshot of a browser tab, on the TAB's host (D29).
+ *
+ * No cache to touch: `save: true` mints a manifest entry, which every surface
+ * learns by observing the doc. The response carries the address anyway, so the
+ * save toast can offer "Open" without waiting for the entry to replicate.
+ */
+export function useEpicCaptureTabScreenshot(
+  epicId: string,
+  tabId: string,
+): EpicCaptureTabScreenshotMutation {
+  const client = useTabHostClient();
+  return useHostMutation<HostRpcRegistry, "epic.captureTabScreenshot">({
+    client,
+    method: "epic.captureTabScreenshot",
+    mapVariables: (variables: CaptureTabScreenshotRequest) => variables,
+    options: {
+      mutationKey: epicMutationKeys.captureTabScreenshot(epicId, tabId),
+      onError: (error: HostRpcError) => {
+        toastFromHostError(error, "Couldn't capture this tab.");
+      },
+    },
+  });
+}
+
+export type EpicStartTabRecordingMutation = UseMutationResult<
+  StartTabRecordingResponse,
+  HostRpcError,
+  StartTabRecordingRequest
+>;
+
+/**
+ * Ask the tab's host to start recording it (D20).
+ *
+ * A REFUSAL is not an error here: every arm of `startTabRecordingRefusalSchema`
+ * is a cap or a placement fact the host checked before doing any work (D21), so
+ * it arrives as `{ ok: false, reason }` and the caller renders the reason. Only
+ * a genuine transport/host failure reaches `onError`.
+ */
+export function useEpicStartTabRecording(
+  epicId: string,
+  tabId: string,
+): EpicStartTabRecordingMutation {
+  const client = useTabHostClient();
+  return useHostMutation<HostRpcRegistry, "epic.startTabRecording">({
+    client,
+    method: "epic.startTabRecording",
+    mapVariables: (variables: StartTabRecordingRequest) => variables,
+    options: {
+      mutationKey: epicMutationKeys.startTabRecording(epicId, tabId),
+      onError: (error: HostRpcError) => {
+        toastFromHostError(error, "Couldn't start recording this tab.");
+      },
+    },
+  });
+}
+
+export type EpicStopTabRecordingMutation = UseMutationResult<
+  StopTabRecordingResponse,
+  HostRpcError,
+  StopTabRecordingRequest
+>;
+
+/**
+ * Stop one recording by its `recordingId`.
+ *
+ * Acknowledges the STOP, never the save: finalize (drain, hash, rename,
+ * manifest write) runs after the last chunk lands and reports itself on
+ * `epic.fileEvents`. `{ stopped: false }` means there was no such active
+ * recording, which is what a double-click produces - an ordinary answer.
+ */
+export function useEpicStopTabRecording(
+  epicId: string,
+  tabId: string,
+): EpicStopTabRecordingMutation {
+  const client = useTabHostClient();
+  return useHostMutation<HostRpcRegistry, "epic.stopTabRecording">({
+    client,
+    method: "epic.stopTabRecording",
+    mapVariables: (variables: StopTabRecordingRequest) => variables,
+    options: {
+      mutationKey: epicMutationKeys.stopTabRecording(epicId, tabId),
+      onError: (error: HostRpcError) => {
+        toastFromHostError(error, "Couldn't stop this recording.");
       },
     },
   });

@@ -384,6 +384,15 @@ export const RunnerHostInvoke = {
   // debugger attach; frames are pushed on `pipCaptureFrame`.
   pipCaptureStart: "runnerHost:pipCapture:start",
   pipCaptureStop: "runnerHost:pipCapture:stop",
+  // Browser tab recording (epic-media-pipeline ticket 20). TEXT ONLY: main
+  // opens the hidden helper window and answers with two facts, and the clip's
+  // chunks leave the helper by same-origin `POST` without crossing this bridge
+  // at all (D15).
+  recordingStart: "runnerHost:recording:start",
+  recordingStop: "runnerHost:recording:stop",
+  // DEV BUILDS ONLY - the handler is not registered in a shipped build. Which
+  // capture source actually advances frames on this machine (D15 amendment).
+  recordingProbe: "runnerHost:recording:probe",
 } as const;
 
 export const RunnerHostEvent = {
@@ -473,6 +482,10 @@ export const RunnerHostEvent = {
   browserViewSessionsEvent: "runnerHost:event:browserView:sessions:event",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
+  // The helper facts only main can know - its recorder started, or the
+  // recording is over and why. The renderer relays each onto its
+  // `browser.sessions` stream; it is not the origin of either.
+  recordingEvent: "runnerHost:event:recording:event",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",
   // Selection-authority broadcasts. THREE kinds, each emission carrying its
   // own unique authority revision, so one high-water mark per client totally

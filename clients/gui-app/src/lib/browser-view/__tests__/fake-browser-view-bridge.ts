@@ -25,6 +25,10 @@ import type {
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
+  RecordingEvent,
+  RecordingProbeResult,
+  RecordingStartInput,
+  RecordingStopInput,
 } from "@traycer-clients/shared/platform/browser-view";
 
 /**
@@ -343,6 +347,42 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
 
   onPipCaptureFrame() {
     return { dispose: () => undefined };
+  }
+
+  readonly recordingStarts: RecordingStartInput[] = [];
+  readonly recordingStops: string[] = [];
+  private readonly recordingHandlers = new Set<
+    (event: RecordingEvent) => void
+  >();
+
+  startRecording(input: RecordingStartInput): Promise<void> {
+    this.recordingStarts.push(input);
+    return Promise.resolve();
+  }
+
+  stopRecording(input: RecordingStopInput): Promise<void> {
+    this.recordingStops.push(input.recordingId);
+    return Promise.resolve();
+  }
+
+  onRecordingEvent(handler: (event: RecordingEvent) => void): {
+    dispose: () => void;
+  } {
+    this.recordingHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.recordingHandlers.delete(handler);
+      },
+    };
+  }
+
+  /** Test hook: what main would have pushed back for a live helper. */
+  emitRecordingEvent(event: RecordingEvent): void {
+    for (const handler of [...this.recordingHandlers]) handler(event);
+  }
+
+  probeRecordingCaptureSources(): Promise<RecordingProbeResult> {
+    return Promise.resolve({ runs: [] });
   }
 
   onNativeTabStatusChange() {
