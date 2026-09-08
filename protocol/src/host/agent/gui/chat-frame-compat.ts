@@ -279,6 +279,25 @@ function stripAnswerSelection(value: unknown): unknown {
 }
 
 /**
+ * Drop `allowsCustomAnswer` from every question of one interview carrier.
+ *
+ * The field is `1.9`. It is stripped HERE - on the legacy path - and nowhere
+ * else, because `1.7`/`1.8` take the projector's identity return by design
+ * (`is identity on {1,7}`) and strip it in their own frozen contract instead
+ * (`interviewQuestionSchemaPreCustomAnswer`). Adding a pre-`1.9` pass above
+ * that return would break the identity those lines are built on, and buy
+ * nothing: both routes end with the peer holding a question without the field.
+ */
+function stripQuestionCustomAnswer(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((question) => {
+    if (!isRecord(question)) return question;
+    const { allowsCustomAnswer: _allowsCustomAnswer, ...rest } = question;
+    return rest;
+  });
+}
+
+/**
  * Strip settlement from ONE interview block, leaving every other block and
  * every non-settlement key untouched.
  */
@@ -294,7 +313,11 @@ function projectInterviewBlock(
     settlementExtensions: _settlementExtensions,
     ...rest
   } = block;
-  return { ...rest, answers: stripAnswerSelection(block.answers) };
+  return {
+    ...rest,
+    questions: stripQuestionCustomAnswer(block.questions),
+    answers: stripAnswerSelection(block.answers),
+  };
 }
 
 function projectBlocks(value: unknown): unknown {
@@ -477,7 +500,20 @@ export function projectChatServerFrameForVersion(
     }
     case "blockDelta": {
       const event = frame.event;
-      if (!isRecord(event) || event.type !== "interview.resolved") return frame;
+      if (!isRecord(event)) return frame;
+      // Questions travel on `interview.requested`, answers on
+      // `interview.resolved` - two carriers on the same frame kind, so a strip
+      // written for one silently misses the other.
+      if (event.type === "interview.requested") {
+        return {
+          ...frame,
+          event: {
+            ...event,
+            questions: stripQuestionCustomAnswer(event.questions),
+          },
+        };
+      }
+      if (event.type !== "interview.resolved") return frame;
       return {
         ...frame,
         event: { ...event, answers: stripAnswerSelection(event.answers) },

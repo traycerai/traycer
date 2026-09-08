@@ -1433,6 +1433,59 @@ describe("projectChatServerFrameForVersion", () => {
     }
   });
 
+  // Sibling of the `interview.resolved` case below. Questions and answers ride
+  // the same frame kind on two different event types, so the strip written for
+  // one does not cover the other - this pins the requested side.
+  it("strips allowsCustomAnswer from blockDelta(interview.requested)", () => {
+    const requested = asProjectedServerFrame({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      event: {
+        type: "interview.requested",
+        blockId: "iv-1",
+        timestamp: 10,
+        toolName: "AskUserQuestion",
+        questions: [
+          {
+            questionId: "q-1",
+            question: "Which library?",
+            header: "Library",
+            options: [{ label: "date-fns", description: null, preview: null }],
+            multiSelect: false,
+            allowsCustomAnswer: false,
+          },
+        ],
+      },
+    });
+
+    for (const version of legacyLines()) {
+      const projected = projectChatServerFrameForVersion(requested, version);
+      expect(projected).not.toBe(requested);
+      const event = asRecord(asRecord(projected, "projected").event, "event");
+      if (!Array.isArray(event.questions))
+        throw new Error("expected questions");
+      const question = asRecord(event.questions[0], "question");
+      expect(Object.hasOwn(question, "allowsCustomAnswer")).toBe(false);
+      // The rest of the question must survive untouched - this is a field
+      // strip, not a question rewrite.
+      expect(question.question).toBe("Which library?");
+      expect(question.multiSelect).toBe(false);
+
+      // The projected frame is exactly what the frozen line accepts: parsing
+      // must not add the field back or drop anything else.
+      for (const contract of frozenServerContracts()) {
+        const parsed = contract.parse(projected);
+        const parsedEvent = asRecord(parsed.event, "parsed event");
+        if (!Array.isArray(parsedEvent.questions)) {
+          throw new Error("expected parsed questions");
+        }
+        expect(parsedEvent.questions[0]).toEqual(question);
+      }
+    }
+  });
+
   it("strips selection from blockDelta(interview.resolved) and leaves other event types identical", () => {
     const resolved = asProjectedServerFrame({
       kind: "blockDelta",

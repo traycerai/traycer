@@ -74,6 +74,7 @@ import {
   runtimeApprovalDecisionSchema,
   runtimeEventSchema,
   runtimeEventSchemaPreImage,
+  runtimeEventSchemaV18,
   runtimeEventSchemaPreInReplyTo,
   runtimeEventSchemaPreSettlement,
   runtimeEventSchemaV12PreInReplyTo,
@@ -1223,12 +1224,18 @@ const chatSubscribeSharedServerFrameSchemasV12 = [
 
 // The 1.8 common frames are unchanged in 1.9. New frame kinds belong in
 // the current list below; both versions reuse the existing validators.
+//
+// The `blockDelta` unions are NOT shared, though: 1.7/1.8 take the frozen
+// `runtimeEventSchemaV18` and only 1.9 takes the live one. They were shared
+// until `interview.requested` gained a question-level `allowsCustomAnswer` for
+// 1.9, which reached 1.7 and 1.8 through this list.
 const chatSubscribeSharedServerFrameSchemasV18 = [
   ...chatSubscribeCommonServerFrameSchemasV18,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaV18),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
-  ...chatSubscribeSharedServerFrameSchemasV18,
+  ...chatSubscribeCommonServerFrameSchemasV18,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
 
 // Frozen live-shape shared frames for `chat.subscribe@1.3` (workflow-bearing

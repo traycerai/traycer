@@ -79,9 +79,14 @@ const SERVER_FRAME_DIGESTS = {
     "d48c2215f6c49dec3afd5fc271bd6970c52fb9facecaeed5552d14c3b3bd6895",
     "5228f20b183f6e3c7a3d80e280e532befc35570d7437bae03d7f7423424071d6",
   ],
+  // 1.9 is the CURRENT line, so this pair moves when the live schema gains a
+  // field - unlike 1.0-1.8 above, which are released and must never move.
+  // Updated once since the baseline: `interview.requested` / the `interview`
+  // block gained a question-level `allowsCustomAnswer`, which 1.9 is the first
+  // line to observe (see `interviewQuestionSchemaPreCustomAnswer`).
   9: [
-    "1d76b7bba58b2125c1f178a8f3253fb3e78b1abe18a1a604f407d5cc5a761b4a",
-    "9b0a7ad60cade803ced4099e5eb3aebfff4f381ba4c74f267fda1763e7c7cc34",
+    "118098db22304e8db4d261437b15535cd17bdfba5884142b743cbe3151749e9f",
+    "6eb5cbdc0a7814e35a38490dbc7259b25d21cf0ae414c6c2688a08ea160fe5ee",
   ],
 } as const;
 
@@ -217,6 +222,30 @@ describe("chat.subscribe placement freeze", () => {
         outputFile: null,
       },
     ]);
+  });
+
+  // Companion to the digest freeze above, naming the field the digests protect.
+  // The digest table catches the drift; this says WHAT drifted and why it is
+  // wrong, so a future reader does not "fix" a red digest by re-capturing it.
+  //
+  // The leak this pins was not at the block level: every frozen interview
+  // BLOCK delegated `questions` to the live question schema, so adding
+  // `allowsCustomAnswer` moved all ten released surfaces at once, `@1.0`
+  // included. Both carriers are asserted - the persisted `interview` block and
+  // the `interview.requested` runtime event - because freezing either alone
+  // still leaves the other advertising the field.
+  it("keeps allowsCustomAnswer out of every released line and in 1.9", () => {
+    for (const contract of contracts) {
+      const minor = contract.schemaVersion.minor;
+      const surface = JSON.stringify([
+        z.toJSONSchema(contract.serverFrameSchema, { io: "input" }),
+        z.toJSONSchema(contract.serverFrameSchema, { io: "output" }),
+      ]);
+      expect({
+        minor,
+        carries: surface.includes("allowsCustomAnswer"),
+      }).toEqual({ minor, carries: minor === 9 });
+    }
   });
 
   it("keeps 1.7 whole snapshots separate from 1.8 tail/range bodies", () => {

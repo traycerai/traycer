@@ -1195,6 +1195,27 @@ export const interviewQuestionSchema = z.object({
 });
 export type InterviewQuestion = z.infer<typeof interviewQuestionSchema>;
 
+// Wire-freeze copy of `interviewQuestionSchema` from before
+// `allowsCustomAnswer`. Bound to every `chat.subscribe` line through `@1.8`, so
+// no released line advertises a field it was not shipped with.
+//
+// Hand-frozen field-for-field; NOT derived from the live shape, for the same
+// reason `interviewBlockSchemaPreSettlement` is - a later field added above
+// must not silently leak in here.
+//
+// This is the leaf the freeze actually has to happen at. The block-level
+// freezes DELEGATED `questions` to the live schema, so they were frozen against
+// block fields and wide open at the question level: adding
+// `allowsCustomAnswer` moved all ten released server-frame surfaces at once,
+// including `@1.0`, which is what `chat-schema-checkpoints` caught.
+export const interviewQuestionSchemaPreCustomAnswer = z.object({
+  questionId: z.string().nullable(),
+  question: z.string(),
+  header: z.string().nullable(),
+  options: z.array(interviewQuestionOptionSchema),
+  multiSelect: z.boolean(),
+});
+
 /**
  * Where a selected option actually came from, recorded at submission time.
  *
@@ -1440,16 +1461,38 @@ export type InterviewBlock = z.infer<typeof interviewBlockSchema>;
 // observes `outcome`/`draftAnswers`/`settlement`/`diagnostics`/`delivery`, nor
 // the answers' `selection`. Hand-frozen field-for-field; NOT derived from the
 // live shape (a later field added above must not silently leak in here).
+//
+// `questions` takes the frozen QUESTION schema for the same reason: freezing
+// this object's own keys left the leaf delegated to the live shape, so a field
+// added to a question still reached these lines.
 export const interviewBlockSchemaPreSettlement = z.object({
   ...baseBlockFields,
   type: z.literal("interview"),
   toolName: z.string().nullable(),
   title: z.string().nullable(),
   description: z.string().nullable(),
-  questions: z.array(interviewQuestionSchema),
+  questions: z.array(interviewQuestionSchemaPreCustomAnswer),
   answers: z.array(interviewAnswerSchemaPreSettlement),
   error: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()).nullable(),
+});
+
+// Wire-freeze copy of `interviewBlockSchema` as `chat.subscribe@1.7-1.8`
+// shipped it: canonical settlement IS observed on those lines, so this keeps
+// the live block whole and swaps only `questions` for the pre-`allowsCustom
+// Answer` freeze. Bound to `@1.7`/`@1.8` through `contentBlockSchemaV18`.
+//
+// Deliberately SHALLOW - spread from the live shape rather than hand-frozen,
+// unlike `interviewBlockSchemaPreSettlement` above. That is the same contract
+// every other `contentBlockSchemaV18` member already has ("every other member
+// reuses the live sub-schema"), and it is safe here in a way it was not before:
+// `chat-schema-checkpoints` now digests all ten released server-frame surfaces,
+// so a later live field reaching these lines fails a test instead of shipping.
+// Hand-freezing the settlement fields would duplicate ten `.catch()` defaults
+// whose drift nothing would detect.
+export const interviewBlockSchemaPreCustomAnswer = z.object({
+  ...interviewBlockSchema.shape,
+  questions: z.array(interviewQuestionSchemaPreCustomAnswer),
 });
 
 // The semantic operation an agent performed on an artifact during a turn,
@@ -1701,7 +1744,11 @@ export type PersistedContentBlock =
   | Exclude<ContentBlock, AutonomousResumeBlock>
   | PersistedAutonomousResumeBlock;
 
-/** chat.subscribe 1.8 checkpoint; 1.9 adds notification placement. */
+/**
+ * chat.subscribe 1.8 checkpoint; 1.9 adds notification placement, and 1.9 is
+ * also the first line to observe an interview question's `allowsCustomAnswer`
+ * (hence the frozen `interview` member).
+ */
 export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
   autonomousResumeBlockSchemaV18,
   textBlockSchema,
@@ -1716,6 +1763,6 @@ export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
   errorBlockSchema,
   compactionBlockSchema,
   steerBlockSchema,
-  interviewBlockSchema,
+  interviewBlockSchemaPreCustomAnswer,
   artifactOperationBlockSchema,
 ]);
