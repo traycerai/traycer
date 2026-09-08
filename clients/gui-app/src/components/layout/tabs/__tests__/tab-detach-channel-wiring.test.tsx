@@ -64,6 +64,17 @@ import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 
+// Keep host notification RPCs outside the drag harness.
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+
 const NEIGHBOUR_TAB_ID = "detach-neighbour";
 const EPIC_TAB_EPIC_ID = "detach-epic-id";
 
@@ -449,6 +460,10 @@ describe("tab detach channel wiring", () => {
     seedHeaderProjection();
     const view = await mountTearOffHarness();
     driveTearOff(view);
+
+    // Negative detach assertions require the drag tree to remain mounted.
+    expect(view.getByTestId(HEADER_STRIP_SCROLL_TEST_ID)).toBeTruthy();
+    expect(view.getByTestId("header-drag-source")).toBeTruthy();
 
     expect(
       warn.mock.calls.filter(

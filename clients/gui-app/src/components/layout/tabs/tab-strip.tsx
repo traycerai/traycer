@@ -279,7 +279,7 @@ function TabStripBody() {
               ref={trailingSlotRef}
               data-testid="header-tab-strip-scroll"
               onWheel={handleWheel}
-              className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
+              className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
             >
               {headerItemIds.map((itemId, index) => {
                 return (

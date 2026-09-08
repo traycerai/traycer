@@ -833,5 +833,23 @@ describe("<EpicRootDragOverlayContent />", () => {
         within(overlay).getByTestId(`header-tab-done-${EPIC_ID}`),
       ).toBeTruthy();
     });
+
+    it("renders nothing when the strip item id no longer resolves, even with a valid tabId", () => {
+      const ordinary = scenarios[0];
+      ordinary.seedTabs("Orphaned Tab");
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "stale-strip-item-id",
+          tabKind: "epic",
+          tabId: EPIC_ID,
+          index: 0,
+        },
+        400,
+      );
+      renderOverlay();
+
+      expect(screen.queryByTestId("header-tab-drag-overlay")).toBeNull();
+    });
   });
 });
