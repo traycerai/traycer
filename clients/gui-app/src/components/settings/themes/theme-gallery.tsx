@@ -319,7 +319,8 @@ function ThemePicker({
       <PopoverContent
         ref={contentRef}
         align="end"
-        container={dialogContainer ?? undefined}
+        // Portal outside the dialog's backdrop-filter so this surface can blur
+        // the settings content behind it instead of nesting backdrop roots.
         collisionBoundary={dialogContainer ?? undefined}
         onOpenAutoFocus={onOpenAutoFocus}
         className="w-[min(85vw,var(--container-sm))] max-h-(--radix-popover-content-available-height) overflow-hidden p-0"

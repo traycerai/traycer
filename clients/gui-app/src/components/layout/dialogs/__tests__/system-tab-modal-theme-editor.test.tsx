@@ -160,6 +160,38 @@ describe("SystemTabModalHost theme editor integration", () => {
     await waitFor(() => {
       expect(document.body.style.pointerEvents).toBe("none");
     });
+
+    const darkPicker = within(settings).getByRole("button", {
+      name: "Dark theme",
+    });
+    await user.click(darkPicker);
+    const search = await screen.findByRole("combobox", {
+      name: "Search dark themes",
+    });
+    const picker = search.closest('[data-slot="popover-content"]');
+    expect(picker).not.toBeNull();
+    expect(document.body.contains(picker)).toBe(true);
+    expect(settings.contains(picker)).toBe(false);
+
+    await user.type(search, "Nord");
+    await user.click(screen.getByRole("option", { name: "Use Nord dark" }));
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+    expect(
+      screen.queryByRole("combobox", { name: "Search dark themes" }),
+    ).toBeNull();
+
+    const reopenedPicker = screen.getByRole("button", {
+      name: "Dark theme",
+    });
+    await user.click(reopenedPicker);
+    await screen.findByRole("combobox", { name: "Search dark themes" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Dark theme" }),
+      );
+    });
+
     await user.click(
       within(settings).getByRole("button", { name: "Create theme" }),
     );
