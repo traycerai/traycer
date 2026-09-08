@@ -24,12 +24,34 @@ export interface TileOpenModifiers {
   readonly middle: boolean;
 }
 
-/** Placement is configured per category, never per tile kind (C2, C3). */
+/**
+ * The category a tile KIND places under (C2, C3). Placement is configured per
+ * category, never per tile kind, and every tile on the canvas belongs to
+ * exactly one of these - they are what category affinity (C5) groups by.
+ */
 export type TileCategory = "content" | "conversation" | "browser";
+
+/**
+ * A category an OPEN places under that no tile kind maps to: the tile is a
+ * plain `chat`, but the open was a `/btw` side chat, and "where does an aside
+ * land relative to its conversation" is a different question from "where
+ * does a new agent land". Carried on the placement (`beside`), never derived
+ * from the node, so an open that is not an aside can never claim its row.
+ */
+export type AnchoredTileCategory = "side-chat";
+
+/** Everything the tile placement setting has a row for. */
+export type TilePlacementCategory = TileCategory | AnchoredTileCategory;
 
 /**
  * A placement the caller already decided: a drop position, a PaneOpener's own
  * pane, an Electron popup's originating pane. Overrides the setting (C7).
+ *
+ * `beside` is the half-decided case: the caller names the pane the open is
+ * relative to and the category whose setting row applies, and the setting
+ * still decides tab-versus-split - a tab in that pane, or a split to its
+ * right. A side chat is read next to the conversation it was asked from
+ * whichever the user picked; the row only says how "next to" is drawn.
  */
 export type ExplicitTilePlacement =
   | {
@@ -41,6 +63,11 @@ export type ExplicitTilePlacement =
       readonly kind: "split";
       readonly paneId: string;
       readonly edge: EdgeDropPosition;
+    }
+  | {
+      readonly kind: "beside";
+      readonly paneId: string;
+      readonly category: AnchoredTileCategory;
     };
 
 /** Which epic canvas to open into: a header tab, or the epic behind one. */

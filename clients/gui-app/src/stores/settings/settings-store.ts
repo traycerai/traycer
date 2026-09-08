@@ -35,6 +35,7 @@ import {
   type NotificationChimeSoundsByEvent,
 } from "@/lib/notifications/notification-chime";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
+import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
@@ -56,6 +57,14 @@ export interface TilePlacementSettings {
   content: TilePlacement;
   conversation: TilePlacement;
   browser: BrowserTilePlacement;
+  /**
+   * A `/btw` side chat, which is always placed relative to the chat it was
+   * asked from: `split` opens it to that pane's right, `tab` as a tab of that
+   * pane. Its own row rather than `conversation` because the aside is read
+   * BESIDE its conversation - a user who tabs every new agent still wants
+   * the aside next to the chat it is about.
+   */
+  sideChat: TilePlacement;
 }
 /**
  * Whether a tab the AGENT opens via its browser REPL (`openTab`) reaches the
@@ -79,6 +88,7 @@ export const DEFAULT_TILE_PLACEMENT_SETTINGS: TilePlacementSettings = {
   content: "tab",
   conversation: "tab",
   browser: "split",
+  sideChat: "split",
 };
 const DEFAULT_AGENT_TAB_SURFACING: AgentTabSurfacing = "off";
 export type MinimapSide = "left" | "right";
@@ -667,14 +677,27 @@ export function linkOpenModeForKind(
   return settings.default === "per-kind" ? settings[kind] : settings.default;
 }
 
+/** The setting row each placement category reads. Spelled out because the
+ * category words are the resolver's and the keys are the store's; a total
+ * record keeps the two in step when either side grows. */
+const TILE_PLACEMENT_KEY_BY_CATEGORY: Record<
+  TilePlacementCategory,
+  Exclude<keyof TilePlacementSettings, "default">
+> = {
+  content: "content",
+  conversation: "conversation",
+  browser: "browser",
+  "side-chat": "sideChat",
+};
+
 /** Same shape for tiles: the global default wins unless it defers per
  * category. Only `browser` can answer `pip`. */
 export function tilePlacementForCategory(
   settings: TilePlacementSettings,
-  category: "content" | "conversation" | "browser",
+  category: TilePlacementCategory,
 ): BrowserTilePlacement {
   return settings.default === "per-category"
-    ? settings[category]
+    ? settings[TILE_PLACEMENT_KEY_BY_CATEGORY[category]]
     : settings.default;
 }
 
@@ -752,6 +775,11 @@ function resolvePersistedTilePlacement(
     browser: isBrowserTilePlacement(stored.browser)
       ? stored.browser
       : DEFAULT_TILE_PLACEMENT_SETTINGS.browser,
+    // Newer than the other rows: a blob written before it existed takes the
+    // default, which is the split-beside-the-source the feature always did.
+    sideChat: isTilePlacement(stored.sideChat)
+      ? stored.sideChat
+      : DEFAULT_TILE_PLACEMENT_SETTINGS.sideChat,
   };
 }
 
