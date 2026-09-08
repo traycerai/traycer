@@ -9,10 +9,8 @@ import { use, useMemo, type ReactNode } from "react";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import { WorkspaceFileIconSpriteSheet } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
-import {
-  EpicDurabilityRemedies,
-  useEpicDurabilityPlane,
-} from "@/components/epic-canvas/panels/epic-durability-plane";
+import { useEpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
+import { EpicDurabilityRemedies } from "@/components/epic-canvas/panels/epic-durability-remedies";
 import { EpicWriteCommandsEntryPoint } from "@/components/epic-canvas/panels/epic-write-commands-entry-point";
 import { EpicUsageEntryPoint } from "@/components/epic-canvas/panels/epic-usage-entry-point";
 import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";

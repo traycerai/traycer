@@ -1096,9 +1096,9 @@ describe("<EpicConnectionPill />", () => {
 
       const pill = screen.getByRole<HTMLButtonElement>("button");
       expect(pill.dataset.source).toBe("durability");
-      expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
-        "bg-red-500",
-      );
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-red-500");
     });
 
     it("loses the tie to an offlineChangesSavedLocally artifact leg and rides the tooltip as a second entry", async () => {

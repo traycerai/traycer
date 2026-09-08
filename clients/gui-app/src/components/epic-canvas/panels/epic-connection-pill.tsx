@@ -38,7 +38,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
  * Small inline status pill that the active Epic header renders. It selects the
  * highest-severity signal across artifact/Yjs durability, the host's routing
  * truth for the epic (local, promoting, an offline mirror, a stale local copy
- * - `epic-durability-plane.tsx`), chat publication, remote-terminal
+ * - `epic-durability-plane.ts`), chat publication, remote-terminal
  * discovery, the communication-graph feed, and agent-activity presence.
  * Secondary-plane failures live here rather than only in the panel whose data
  * happened to expose them - or, in the graph's case, captioned onto every
@@ -594,24 +594,32 @@ function indicatorForWriteCommandAlert(
  * ("Stored locally") is never selected over the artifact leg's own steady
  * verdict, which already says the same thing in its tooltip.
  */
+const DURABILITY_DOT_CLASS: Readonly<
+  Record<EpicDurabilityPlane["severity"], string>
+> = {
+  steady: "",
+  activity: "",
+  warning: "bg-amber-500",
+  danger: "bg-red-500",
+};
+
+const DURABILITY_PULSE: Readonly<
+  Record<EpicDurabilityPlane["severity"], PillIndicator["pulse"]>
+> = {
+  steady: "active",
+  activity: "idle",
+  warning: null,
+  danger: null,
+};
+
 function indicatorForDurability(plane: EpicDurabilityPlane): PillIndicator {
   return {
     severity: plane.severity,
     containerClassName: QUIET_CONTAINER_CLASS,
-    dotClassName:
-      plane.severity === "danger"
-        ? "bg-red-500"
-        : plane.severity === "warning"
-          ? "bg-amber-500"
-          : "",
+    dotClassName: DURABILITY_DOT_CLASS[plane.severity],
     label: null,
     showAgentSpinner: false,
-    pulse:
-      plane.severity === "activity"
-        ? "idle"
-        : plane.severity === "steady"
-          ? "active"
-          : null,
+    pulse: DURABILITY_PULSE[plane.severity],
     tooltip: plane.sentence,
     ariaLabel: plane.sentence,
   };

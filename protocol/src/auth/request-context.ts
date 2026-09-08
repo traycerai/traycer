@@ -452,9 +452,7 @@ export function buildBearerHeadersFromContext(
     throw cause;
   }
   if (token.length === 0) {
-    throw new Err(
-      `${options.operationLabel}: empty bearer token`,
-    );
+    throw new Err(`${options.operationLabel}: empty bearer token`);
   }
   const headers = new Headers();
   headers.set("Authorization", `Bearer ${token}`);

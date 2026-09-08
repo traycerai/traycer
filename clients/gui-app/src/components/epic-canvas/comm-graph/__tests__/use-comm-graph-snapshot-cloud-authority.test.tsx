@@ -408,7 +408,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
     useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
 
-    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"]));
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"], null));
 
     // The local fan-in is this host's own event log and serves the unverified
     // session; the cloud-sourced relay is not claimed without a verdict.
@@ -449,7 +449,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     });
 
     const { result } = renderHook(() =>
-      useCommGraphSnapshot("epic-1", ["origin-a"]),
+      useCommGraphSnapshot("epic-1", ["origin-a"], null),
     );
     await waitFor(() => expect(cloudRequests).toHaveLength(1));
     act(() => {

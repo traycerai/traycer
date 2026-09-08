@@ -10,9 +10,9 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   deriveEpicDurabilityPlane,
-  EpicDurabilityRemedies,
   type EpicDurabilityPlane,
 } from "../epic-durability-plane";
+import { EpicDurabilityRemedies } from "../epic-durability-remedies";
 import {
   deriveEpicCloudFreshnessView,
   deriveEpicDurabilityView,
@@ -140,7 +140,11 @@ function planeFor(scenario: PlaneScenario): EpicDurabilityPlane | null {
 describe("deriveEpicDurabilityPlane", () => {
   it.each<EpicCloudFreshness | null>([
     null,
-    { kind: "lastCloudSyncAt", reconciledAtEpochMs: NOW - 30_000, state: "current" },
+    {
+      kind: "lastCloudSyncAt",
+      reconciledAtEpochMs: NOW - 30_000,
+      state: "current",
+    },
   ])(
     "stays silent for a cloud-durable, armed epic with freshness %o",
     (cloudFreshness) => {

@@ -1045,7 +1045,11 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
         cloudSyncStatus: "connected",
         durability: "cloud",
         localProtection: "armed",
-        freshness: { kind: "lastCloudSyncAt", reconciledAtEpochMs: 10, state: "current" },
+        freshness: {
+          kind: "lastCloudSyncAt",
+          reconciledAtEpochMs: 10,
+          state: "current",
+        },
       }),
     );
 
@@ -1075,7 +1079,11 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
           pauseReason: undefined,
           promotionState: undefined,
           localProtection: "armed",
-          freshness: { kind: "lastCloudSyncAt", reconciledAtEpochMs: 10, state: "current" },
+          freshness: {
+            kind: "lastCloudSyncAt",
+            reconciledAtEpochMs: 10,
+            state: "current",
+          },
           peerSpeaksDurabilityLegs: true,
         },
       },

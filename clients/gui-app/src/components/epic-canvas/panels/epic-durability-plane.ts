@@ -1,21 +1,12 @@
-import { Button } from "@/components/ui/button";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
-import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import {
-  useEpicArtifactRecords,
   useEpicCloudFreshnessView,
   useEpicDurabilityPauseReason,
   useEpicDurabilityPromotionState,
   useEpicDurabilityView,
-  useEpicSnapshotMeta,
   type EpicCloudFreshnessView,
   type EpicDurabilityView,
 } from "@/lib/epic-selectors";
 import { formatCompactRelativeTime, useSampledNow } from "@/lib/relative-time";
-import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
   EpicDurabilityPauseReasonV15,
   EpicPromotionState,
@@ -33,13 +24,15 @@ import type {
  * date · synced 3d" sat in the status row for the whole of an outage. Three
  * clauses is the honest reading of that state, and rendered inline it was a
  * banner, which reads as an alarm rather than a status. So the whole reading
- * now feeds {@link EpicConnectionPill} as one more plane: the dot's colour is
- * the summary, the sentence is its tooltip and accessible name, and a second
+ * now feeds `EpicConnectionPill` as one more plane: the dot's colour is the
+ * summary, the sentence is its tooltip and accessible name, and a second
  * degraded plane rides the same hover instead of claiming its own light.
  *
  * The one thing that stays in the row is an ACTION. The paused-only remedies
  * (Upgrade, Export artifacts) are things a person has to click, and a tooltip
- * is not a place to click - {@link EpicDurabilityRemedies}.
+ * is not a place to click - `EpicDurabilityRemedies`, which lives in its own
+ * `.tsx` beside this file because a module that exports a component may
+ * export nothing else (`react(only-export-components)`).
  */
 export interface EpicDurabilityPlane {
   /**
@@ -151,137 +144,27 @@ export function deriveEpicDurabilityPlane(
   };
 }
 
-const SEVERITY_RANK: Readonly<
-  Record<EpicDurabilityPlane["severity"], number>
-> = {
-  steady: 0,
-  activity: 1,
-  warning: 2,
-  danger: 3,
-};
+const SEVERITY_RANK: Readonly<Record<EpicDurabilityPlane["severity"], number>> =
+  {
+    steady: 0,
+    activity: 1,
+    warning: 2,
+    danger: 3,
+  };
 
 function strongestSeverity(
   severities: ReadonlyArray<EpicDurabilityPlane["severity"] | null>,
 ): EpicDurabilityPlane["severity"] {
   let strongest: EpicDurabilityPlane["severity"] = "steady";
   for (const severity of severities) {
-    if (severity !== null && SEVERITY_RANK[severity] > SEVERITY_RANK[strongest]) {
+    if (
+      severity !== null &&
+      SEVERITY_RANK[severity] > SEVERITY_RANK[strongest]
+    ) {
       strongest = severity;
     }
   }
   return strongest;
-}
-
-/**
- * The paused-only remedies, the one part of the old badge that stays in the
- * status row: an action a person has to take is not a detail, and a tooltip
- * is not a place to click. Renders nothing for every status but `paused`,
- * and nothing for the paused reasons that have no remedy.
- */
-export function EpicDurabilityRemedies() {
-  const view = useEpicDurabilityView();
-  const pauseReason = useEpicDurabilityPauseReason();
-  // The status is decided BEFORE any provider-bound hook runs: the child
-  // below reads the runner host and the export mutation, which exist only
-  // under the app shell, and every status row renders this component. The
-  // old badge reached those hooks only on its paused arm, and so does this.
-  if (viewStatus(view) !== "paused") return null;
-  if (pauseReason !== "entitlement-lapsed" && !exportIsTheRemedy(pauseReason)) {
-    return null;
-  }
-  return <PausedRemedies pauseReason={pauseReason} />;
-}
-
-function PausedRemedies(props: {
-  readonly pauseReason: EpicDurabilityPauseReasonV15 | null;
-}) {
-  const { pauseReason } = props;
-  const runnerHost = useRunnerHost();
-  const exportArtifacts = useEpicExportArtifacts();
-  const records = useEpicArtifactRecords();
-  const meta = useEpicSnapshotMeta();
-  const artifacts = records.flatMap((record) =>
-    isEpicArtifactKind(record.type)
-      ? [{ id: record.id, title: record.name }]
-      : [],
-  );
-  const exportLocalArtifacts = (): void => {
-    exportArtifacts.mutate({
-      artifacts,
-      format: "markdown",
-      archive: true,
-      archiveTitle: meta?.epicLight?.title ?? "Traycer",
-    });
-  };
-  return (
-    <>
-      {pauseReason === "entitlement-lapsed" ? (
-        <UpgradeAction signInUrl={runnerHost.signInUrl} />
-      ) : null}
-      {exportIsTheRemedy(pauseReason) ? (
-        <ExportArtifactsAction
-          disabled={artifacts.length === 0 || exportArtifacts.isPending}
-          pending={exportArtifacts.isPending}
-          onExport={exportLocalArtifacts}
-        />
-      ) : null}
-    </>
-  );
-}
-
-/** Inline pending indicator, at the size the row's own type scale wants. */
-function RemedyActionSpinner() {
-  return (
-    <AgentSpinningDots
-      className="size-3"
-      testId={undefined}
-      variant={undefined}
-    />
-  );
-}
-
-/**
- * The link goes through `useRunnerOpenExternalLink` rather than the bridge
- * directly: the mutation owns the shared query key and the runner-error toast,
- * so a rejected `openExternalLink` is reported instead of silently dropped.
- */
-function UpgradeAction(props: { readonly signInUrl: string }) {
-  const { isPending, openLink } = useOpenLinkWithPending();
-  return (
-    <button
-      type="button"
-      className="text-ui-xs font-medium underline underline-offset-2"
-      data-testid="epic-durability-upgrade"
-      disabled={isPending}
-      onClick={() => {
-        void openLink(resolvePlatformBaseUrl(props.signInUrl), "auth", null);
-      }}
-    >
-      Upgrade
-      {isPending ? <RemedyActionSpinner /> : null}
-    </button>
-  );
-}
-
-function ExportArtifactsAction(props: {
-  readonly disabled: boolean;
-  readonly pending: boolean;
-  readonly onExport: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      size="xs"
-      variant="ghost"
-      className="h-auto px-0 text-current underline underline-offset-2"
-      data-testid="epic-durability-export"
-      disabled={props.disabled}
-      onClick={props.onExport}
-    >
-      Export artifacts
-      {props.pending ? <RemedyActionSpinner /> : null}
-    </Button>
-  );
 }
 
 /**
@@ -369,31 +252,12 @@ function freshnessClause(copy: CloudFreshnessCopy, now: number): string {
 }
 
 /**
- * The pause reasons whose remedy is getting the bytes out.
+ * The concrete durability value, or `null` for indeterminate.
  *
- * `access-revoked` is the original: the cloud will not take another byte, so
- * the local copy is all there is. `orphaned-local-edits-after-cloud-delete` is
- * the same shape from the other direction and is the ACTIONABLE half of
- * `s5-orphaned-epic-recovery` - the cloud object is gone, this host refused to
- * destroy the never-uploaded edits, and the epic is reachable again precisely
- * so the person can take them somewhere. Reaching a preserved epic and finding
- * nothing to do with it would be the dark archive with a nicer label.
- *
- * The other three paused reasons are deliberately absent: an entitlement lapse
- * has an Upgrade path, and the two delete-bookkeeping reasons are transient
- * states of an epic that is not going anywhere.
+ * Exported for `EpicDurabilityRemedies`, which gates its provider-bound hooks
+ * on the same `paused` reading this uses.
  */
-function exportIsTheRemedy(
-  pauseReason: EpicDurabilityPauseReasonV15 | null,
-): boolean {
-  return (
-    pauseReason === "access-revoked" ||
-    pauseReason === "orphaned-local-edits-after-cloud-delete"
-  );
-}
-
-/** The concrete durability value, or `null` for indeterminate. */
-function viewStatus(
+export function viewStatus(
   view: EpicDurabilityView,
 ): "local" | "promoting" | "paused" | "offline" | null {
   if (view.kind === "stated") return view.status;
