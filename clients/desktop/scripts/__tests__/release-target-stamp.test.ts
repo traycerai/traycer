@@ -384,12 +384,17 @@ describe("cliInstallRoot and hostInstallRoot must be home-relative", () => {
     ).toThrow(/cliInstallRoot must be home-relative/);
   });
 
+  // The accepted value is the TARGET's own root, not merely any home-relative
+  // one: the shape guard runs first and the identity pin second, so a
+  // well-formed path for the wrong target is caught by the pin rather than
+  // here. Using the production root under a `staging` validation would now be
+  // asserting that two different installs may share a directory.
   it("accepts a home-relative cliInstallRoot on the cli stamp", () => {
     const stamp = cliStamp();
-    stamp.cliInstallRoot = "~/.traycer/cli";
+    stamp.cliInstallRoot = "~/.traycer/cli/staging";
     expect(
       stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
-    ).toMatchObject({ cliInstallRoot: "~/.traycer/cli" });
+    ).toMatchObject({ cliInstallRoot: "~/.traycer/cli/staging" });
   });
 
   it("rejects an absolute cliInstallRoot on the desktop stamp", () => {
@@ -406,14 +411,14 @@ describe("cliInstallRoot and hostInstallRoot must be home-relative", () => {
 
   it("accepts a home-relative cliInstallRoot on the desktop stamp", () => {
     const stamp = desktopStamp();
-    stamp.cliInstallRoot = "~/.traycer/cli";
+    stamp.cliInstallRoot = "~/.traycer/cli/staging";
     expect(
       stampModule.readClientTargetStamp(
         writeStamp(stamp),
         "staging",
         "desktop",
       ),
-    ).toMatchObject({ cliInstallRoot: "~/.traycer/cli" });
+    ).toMatchObject({ cliInstallRoot: "~/.traycer/cli/staging" });
   });
 
   it("rejects an absolute hostInstallRoot on the cli stamp", () => {
@@ -426,10 +431,10 @@ describe("cliInstallRoot and hostInstallRoot must be home-relative", () => {
 
   it("accepts a home-relative hostInstallRoot on the cli stamp", () => {
     const stamp = cliStamp();
-    stamp.hostInstallRoot = "~/.traycer/host";
+    stamp.hostInstallRoot = "~/.traycer/host/staging";
     expect(
       stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
-    ).toMatchObject({ hostInstallRoot: "~/.traycer/host" });
+    ).toMatchObject({ hostInstallRoot: "~/.traycer/host/staging" });
   });
 
   it("rejects a hostInstallRoot that escapes the home directory via ..", () => {
@@ -545,11 +550,22 @@ function productionDesktopStamp(): Stamp {
  * and the check reads every identity key that is PRESENT, not only the
  * required ones. Both are set here for that reason.
  */
+// EVERY install-identity field, not the ones a given assertion happens to
+// read. This helper exists because `productionDesktopStamp()` used to flip only
+// target/environment/releaseChannel and keep the STAGING identity underneath -
+// a fixture that asserts "production" while carrying staging coordinates makes
+// any pin added later look like a regression. Each field pinned in
+// `REQUIRED_INSTALL_IDENTITY` (plus the derived agent label) has to appear
+// here, so adding a pin there and forgetting this one reddens loudly rather
+// than quietly re-teaching the bug.
 function toProductionInstallIdentity(stamp: Stamp): Stamp {
   stamp.cliInstallRoot = "~/.traycer/cli";
   stamp.hostInstallRoot = "~/.traycer/host";
   stamp.serviceLabelId = "ai.traycer.host";
   stamp.windowsTaskName = "\\Traycer\\Host";
+  if (stamp.mac !== undefined) {
+    (stamp.mac as Stamp).launchAgentLabel = "ai.traycer.host.agent";
+  }
   return stamp;
 }
 
@@ -671,6 +687,70 @@ describe("install identity must match the target", () => {
     ).toThrow(/windowsTaskName/);
   });
 
+  it("rejects an install root that is well-formed but names the wrong slot", () => {
+    // The point of this pair: the home-relative guard CANNOT catch these.
+    // `~/.traycer/cli/stagng` is home-relative, has no `..`, no dots-only
+    // segment and a real-looking directory name - it passes every shape check
+    // and then names a directory the CLI, which derives its own root from the
+    // environment, never reads or writes. Only an exact pin sees it.
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "~/.traycer/cli/stagng";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/cliInstallRoot/);
+
+    const hostStamp = cliStamp();
+    hostStamp.hostInstallRoot = "~/.traycer/host/stagng";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(hostStamp),
+        "staging",
+        "cli",
+      ),
+    ).toThrow(/hostInstallRoot/);
+  });
+
+  it("rejects the PRODUCTION install root on a staging stamp", () => {
+    // The consequential direction again: a staging CLI stamped with the
+    // production root installs itself over the production CLI instead of
+    // beside it, which is the whole point of the side-by-side slot.
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "~/.traycer/cli";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/cliInstallRoot/);
+  });
+
+  it("rejects a launchAgentLabel that ends in .agent but names another service", () => {
+    // `inject-host-launch-agent.cjs` asks only that the label END IN `.agent`,
+    // so this passes the injector and is written as the in-bundle plist's
+    // filename. SMAppService then resolves the plist by exact filename, and the
+    // desktop asks for `<serviceLabelId>.agent` derived from its environment -
+    // so the packaged app can never register its host login item, and nothing
+    // before runtime says so.
+    const stamp = desktopStamp();
+    (stamp.mac as Stamp).launchAgentLabel = "ai.traycer.host.stagin.agent";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/launchAgentLabel/);
+  });
+
+  it("rejects the PRODUCTION launchAgentLabel on a staging stamp", () => {
+    const stamp = desktopStamp();
+    (stamp.mac as Stamp).launchAgentLabel = "ai.traycer.host.agent";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/launchAgentLabel/);
+  });
+
   it("accepts each target's own identity", () => {
     expect(
       stampModule.readClientTargetStamp(
@@ -681,6 +761,20 @@ describe("install identity must match the target", () => {
     ).toMatchObject({
       serviceLabelId: "ai.traycer.host.staging",
       windowsTaskName: "\\Traycer\\Host-Staging",
+      cliInstallRoot: "~/.traycer/cli/staging",
+      hostInstallRoot: "~/.traycer/host/staging",
+    });
+    // Positive control for the agent-label pin: the staging desktop stamp's
+    // own label must be ACCEPTED, or the four rejections above would all pass
+    // against a check that refuses everything.
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(desktopStamp()),
+        "staging",
+        "desktop",
+      ),
+    ).toMatchObject({
+      mac: { launchAgentLabel: "ai.traycer.host.staging.agent" },
     });
     expect(
       stampModule.readClientTargetStamp(
@@ -691,6 +785,8 @@ describe("install identity must match the target", () => {
     ).toMatchObject({
       serviceLabelId: "ai.traycer.host",
       windowsTaskName: "\\Traycer\\Host",
+      cliInstallRoot: "~/.traycer/cli",
+      hostInstallRoot: "~/.traycer/host",
     });
   });
 });

@@ -47,16 +47,45 @@ const REQUIRED_RELEASE_CHANNEL = {
 // `clients/traycer-cli/src/service/__tests__/label.test.ts`, so a change to
 // `serviceLabelFor`/`windowsTaskName` reddens there rather than shipping a
 // silent divergence.
+//   - the install roots are the same bug with a filesystem instead of a
+//     service registry. The CLI computes them from the environment alone
+//     (`environmentSubdir` in `clients/traycer-cli/src/store/paths.ts`:
+//     production keeps the base, every other environment takes a subdirectory
+//     named after itself), so `~/.traycer/cli/stagng` is a well-formed
+//     home-relative path that passes every shape check here and names a
+//     directory the CLI never reads or writes.
 const REQUIRED_INSTALL_IDENTITY = {
   production: {
     serviceLabelId: "ai.traycer.host",
     windowsTaskName: "\\Traycer\\Host",
+    cliInstallRoot: "~/.traycer/cli",
+    hostInstallRoot: "~/.traycer/host",
   },
   staging: {
     serviceLabelId: "ai.traycer.host.staging",
     windowsTaskName: "\\Traycer\\Host-Staging",
+    cliInstallRoot: "~/.traycer/cli/staging",
+    hostInstallRoot: "~/.traycer/host/staging",
   },
 };
+
+/**
+ * The LaunchAgent label the desktop's in-bundle plist must be named.
+ *
+ * DERIVED, not a third column, because the runtime derives it the same way:
+ * `host-login-item.ts` computes
+ * `smAppServiceAgentLabelId(labelForEnvironment(config.environment).id)` -
+ * literally `<serviceLabelId>.agent` - and SMAppService then resolves the
+ * in-bundle plist by that EXACT filename. Spelling it out per target would
+ * make the agent label a value that can disagree with the service label it is
+ * built from, which is the whole failure being closed.
+ *
+ * The desktop stamp carries `mac.launchAgentLabel` and no `serviceLabelId`,
+ * so this is the only place the desktop's half of the label is pinned at all.
+ */
+function requiredLaunchAgentLabel(target) {
+  return `${REQUIRED_INSTALL_IDENTITY[target].serviceLabelId}.agent`;
+}
 // Scalar keys must be non-empty strings; structured keys are checked by shape
 // below. Keeping the two sets apart is what makes a `null` scalar fail here
 // instead of being packaged as `appId: null` or `schemes: [null]`.
@@ -290,14 +319,22 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
     );
   }
   // Below the target check, because the target is what these are derived from.
-  // Applied per key IF PRESENT, the same way the install roots are: the CLI
-  // stamp carries both, the desktop stamp only `windowsTaskName`.
+  // Applied per key IF PRESENT, because the two components carry different
+  // subsets: the CLI stamp has all four, the desktop stamp has
+  // `cliInstallRoot` and `windowsTaskName` (its NSIS uninstaller removes the
+  // CLI-installed host autostart) and neither `serviceLabelId` nor
+  // `hostInstallRoot`.
   const requiredIdentity = REQUIRED_INSTALL_IDENTITY[stamp.target];
-  for (const key of ["serviceLabelId", "windowsTaskName"]) {
+  for (const key of [
+    "serviceLabelId",
+    "windowsTaskName",
+    "cliInstallRoot",
+    "hostInstallRoot",
+  ]) {
     if (!(key in stamp)) continue;
     if (stamp[key] !== requiredIdentity[key]) {
       throw new ClientTargetStampError(
-        `client target stamp ${key} ${JSON.stringify(stamp[key])} is not the ${JSON.stringify(stamp.target)} ${key} ${JSON.stringify(requiredIdentity[key])}. The CLI derives this value from its environment and never reads the stamp, so a build stamped with anything else names a service that does not exist.`,
+        `client target stamp ${key} ${JSON.stringify(stamp[key])} is not the ${JSON.stringify(stamp.target)} ${key} ${JSON.stringify(requiredIdentity[key])}. The CLI derives this value from its environment and never reads the stamp, so a build stamped with anything else names a service or directory the CLI never touches.`,
       );
     }
   }
@@ -330,6 +367,19 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
       ["bundleName", "helperBundleId", "launchAgentLabel"],
       "client target stamp.mac",
     );
+    // `inject-host-launch-agent.cjs` only asks that this END IN `.agent`, and
+    // then writes it as the in-bundle plist's filename and strips the suffix
+    // back off for the legacy label. Both halves of that are satisfied by any
+    // `<anything>.agent`, so a suffix check cannot tell the right service from
+    // a plausible-looking neighbour. SMAppService resolves the plist by exact
+    // filename, so a packaged app whose plist is named anything else simply
+    // cannot register its host login item - and nothing before runtime says so.
+    const expectedAgentLabel = requiredLaunchAgentLabel(stamp.target);
+    if (stamp.mac.launchAgentLabel !== expectedAgentLabel) {
+      throw new ClientTargetStampError(
+        `client target stamp.mac.launchAgentLabel ${JSON.stringify(stamp.mac.launchAgentLabel)} is not the ${JSON.stringify(stamp.target)} agent label ${JSON.stringify(expectedAgentLabel)}. The desktop derives this from its environment as \`<serviceLabelId>.agent\` and asks SMAppService for that exact plist filename, so a bundle stamped with anything else can never register its host login item.`,
+      );
+    }
     requireScalarKeys(
       stamp.windows,
       ["appUserModelId", "executableName", "installerDisplayName"],
@@ -447,6 +497,10 @@ module.exports = {
   // and `serviceLabelFor`/`windowsTaskName` are reachable at once. Nothing in
   // the build path reads it from here.
   REQUIRED_INSTALL_IDENTITY,
+  // Same reason, for the derived half: the CLI-side lockstep compares this
+  // against `smAppServiceAgentLabelId`, so the `.agent` suffix living in two
+  // packages cannot drift in one of them.
+  requiredLaunchAgentLabel,
   readClientTargetStamp,
   resolveReleaseRepoForTarget,
   targetInputFromArg,

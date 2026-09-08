@@ -60,8 +60,18 @@ function desktopStamp(
     releaseChannel: staging ? "staging" : "stable",
     mac: {
       bundleName: staging ? "Traycer Staging" : "Traycer",
-      helperBundleId: `ai.traycer.${target}.host`,
-      launchAgentLabel: `ai.traycer.${target}.host.agent`,
+      // Same fabrication the `releaseChannel` note above describes, twice more:
+      // `ai.traycer.<target>.host` interpolates the TARGET NAME into an id the
+      // descriptor derives from the app id, so it matched neither row. The real
+      // values are `ai.traycer.desktop[.staging].host` and, for the agent,
+      // `<serviceLabelId>.agent` - which is what the CLI registers and what
+      // SMAppService resolves the in-bundle plist by.
+      helperBundleId: staging
+        ? "ai.traycer.desktop.staging.host"
+        : "ai.traycer.desktop.host",
+      launchAgentLabel: staging
+        ? "ai.traycer.host.staging.agent"
+        : "ai.traycer.host.agent",
     },
     windows: {
       appUserModelId: staging
