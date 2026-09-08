@@ -9,6 +9,7 @@ import type {
   ReadEpicFileResponse,
 } from "@traycer/protocol/host/epic/files";
 
+import type { FileAssetState } from "@/hooks/assets/use-file-asset";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
@@ -16,6 +17,7 @@ import {
   resetEpicFileHostSupportForTests,
   useFileBytes,
   type EpicFileByteSource,
+  type WorkspacePathByteSource,
 } from "@/lib/files/byte-source";
 
 /**
@@ -38,6 +40,18 @@ const mocks = vi.hoisted(() => ({
     >(),
   hostVersion: "1.0.0",
   coLocatedHostId: "colocated-host",
+  reportDecodeFailure: vi.fn(),
+  // The workspace/git leg's answer. Inert by default so it can never satisfy
+  // an assertion meant for the epic-file leg; the workspace describe below
+  // sets it.
+  assetState: {
+    status: "loading",
+    url: null,
+    meta: null,
+    reason: null,
+    totalBytes: null,
+    servedFromCache: false,
+  } as FileAssetState,
 }));
 
 // The epic-file leg resolves its client by NAMED host id rather than through
@@ -68,13 +82,8 @@ vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
 // doesn't drag a WebSocket transport into this suite.
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: () => ({
-    status: "loading",
-    url: null,
-    meta: null,
-    reason: null,
-    totalBytes: null,
-    servedFromCache: false,
-    reportDecodeFailure: () => {},
+    ...mocks.assetState,
+    reportDecodeFailure: mocks.reportDecodeFailure,
   }),
 }));
 vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
@@ -155,6 +164,15 @@ beforeEach(() => {
   mocks.requestWithSignal.mockReset();
   mocks.hostVersion = "1.0.0";
   mocks.coLocatedHostId = "colocated-host";
+  mocks.reportDecodeFailure.mockClear();
+  mocks.assetState = {
+    status: "loading",
+    url: null,
+    meta: null,
+    reason: null,
+    totalBytes: null,
+    servedFromCache: false,
+  };
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   Object.defineProperty(URL, "createObjectURL", {
@@ -341,5 +359,123 @@ describe("useFileBytes - epic-file source, co-located vantage", () => {
       expect.objectContaining({ coLocatedHostId: "the-declared-vantage-host" }),
       expect.anything(),
     );
+  });
+});
+
+/**
+ * The workspace/git leg's own translation, which had no coverage before the
+ * renderers were ported onto it (ticket 27 phase B2). Delivery is the load-
+ * bearing one: pdf.js is handed `src` directly, and D10 gives a direct url
+ * only to sniffed image/video - which only the epic-file plane can answer
+ * with. A workspace file is therefore always a `blob:` this client owns.
+ */
+const WORKSPACE_SOURCE: WorkspacePathByteSource = {
+  kind: "workspace-path",
+  workspacePath: "/repo",
+  filePath: "docs/report.pdf",
+};
+
+describe("useFileBytes - workspace-path source", () => {
+  it("delivers a blob, never a url, for a pdf", () => {
+    mocks.assetState = {
+      status: "ready",
+      url: "blob:pdf",
+      meta: {
+        mediaType: "application/pdf",
+        sizeBytes: 4096,
+        width: null,
+        height: null,
+      },
+      reason: null,
+      totalBytes: 4096,
+      servedFromCache: true,
+    };
+
+    const { result } = renderHook(() => useFileBytes(WORKSPACE_SOURCE), {
+      wrapper: Wrapper,
+    });
+
+    expect(result.current.status).toBe("ready");
+    expect(result.current.src).toBe("blob:pdf");
+    expect(result.current.delivery).toBe("blob");
+    expect(result.current.mediaType).toBe("application/pdf");
+    expect(result.current.servedFromCache).toBe(true);
+    expect(result.current.header).toEqual({
+      width: null,
+      height: null,
+      sizeBytes: 4096,
+    });
+  });
+
+  it("keeps the stream's header phase as a loading arm that already knows the shape", () => {
+    mocks.assetState = {
+      status: "header",
+      url: null,
+      meta: {
+        mediaType: "image/png",
+        sizeBytes: 2048,
+        width: 640,
+        height: 480,
+      },
+      reason: null,
+      totalBytes: 2048,
+      servedFromCache: false,
+    };
+
+    const { result } = renderHook(() => useFileBytes(WORKSPACE_SOURCE), {
+      wrapper: Wrapper,
+    });
+
+    expect(result.current.status).toBe("loading");
+    expect(result.current.header).toEqual({
+      width: 640,
+      height: 480,
+      sizeBytes: 2048,
+    });
+  });
+
+  it("carries the stream's human copy on message and the size it had already declared", () => {
+    mocks.assetState = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This PDF is too large to preview.",
+      totalBytes: 900,
+      servedFromCache: false,
+    };
+
+    const { result } = renderHook(() => useFileBytes(WORKSPACE_SOURCE), {
+      wrapper: Wrapper,
+    });
+
+    expect(result.current.status).toBe("unavailable");
+    expect(result.current.message).toBe("This PDF is too large to preview.");
+    // Machine-readable `reason` stays the protocol enum's job; the asset
+    // stream has none to give.
+    expect(result.current.reason).toBeNull();
+    expect(result.current.header?.sizeBytes).toBe(900);
+  });
+
+  it("hands the asset stream's own decode reporter straight through", () => {
+    mocks.assetState = {
+      status: "ready",
+      url: "blob:image",
+      meta: {
+        mediaType: "image/png",
+        sizeBytes: 8,
+        width: 1,
+        height: 1,
+      },
+      reason: null,
+      totalBytes: 8,
+      servedFromCache: false,
+    };
+
+    const { result } = renderHook(() => useFileBytes(WORKSPACE_SOURCE), {
+      wrapper: Wrapper,
+    });
+    result.current.reportDecodeFailure();
+
+    expect(mocks.reportDecodeFailure).toHaveBeenCalledTimes(1);
   });
 });

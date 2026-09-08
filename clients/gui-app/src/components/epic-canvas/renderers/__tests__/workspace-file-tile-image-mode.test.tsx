@@ -108,6 +108,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-A",
+  // The byte legs read the TOLERANT form (ticket 27 phase A2).
+  useMaybeTabHostId: () => "host-A",
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -225,6 +227,15 @@ vi.mock("@/markdown", () => ({
   TraycerMarkdown: () => null,
 }));
 
+// `useFileBytes` mounts its epic-file leg on every render whatever the source
+// kind is (ticket 27 phase B2), and that leg is a host query. This suite
+// replaces `@tanstack/react-query` wholesale, so the query seam - not a
+// provider - is what has to answer here. `data: undefined` is the leg's own
+// pre-answer state, which it settles as `loading` and this suite never reads.
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: () => ({ data: undefined, error: null }),
+}));
+
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
@@ -272,7 +283,16 @@ function resetState(): void {
   state.asset = {
     status: "ready",
     url: "blob:image",
-    meta: null,
+    meta: {
+    // The real hook always has a header by the time it is `ready` (it is
+    // set in `onHeader`), and the byte core reads the delivered media type
+    // off it - so a `ready` fixture without one is not a state the stream
+    // can produce (ticket 27 phase B2).
+    mediaType: "image/png",
+    sizeBytes: 42,
+    width: null,
+    height: null,
+    },
     reason: null,
     totalBytes: null,
     servedFromCache: false,
@@ -425,7 +445,16 @@ describe("<WorkspaceFileTile /> image mode", () => {
     state.asset = {
       status: "ready",
       url: "blob:image-new",
-      meta: null,
+      meta: {
+      // The real hook always has a header by the time it is `ready` (it is
+      // set in `onHeader`), and the byte core reads the delivered media type
+      // off it - so a `ready` fixture without one is not a state the stream
+      // can produce (ticket 27 phase B2).
+      mediaType: "image/png",
+      sizeBytes: 42,
+      width: null,
+      height: null,
+    },
       reason: null,
       totalBytes: null,
       servedFromCache: false,

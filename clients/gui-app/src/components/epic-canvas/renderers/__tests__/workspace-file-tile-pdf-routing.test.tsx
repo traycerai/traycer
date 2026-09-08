@@ -90,6 +90,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-A",
+  // The byte legs read the TOLERANT form (ticket 27 phase A2).
+  useMaybeTabHostId: () => "host-A",
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -208,6 +210,15 @@ vi.mock("@/markdown", () => ({
   TraycerMarkdown: () => null,
 }));
 
+// `useFileBytes` mounts its epic-file leg on every render whatever the source
+// kind is (ticket 27 phase B2), and that leg is a host query. This suite
+// replaces `@tanstack/react-query` wholesale, so the query seam - not a
+// provider - is what has to answer here. `data: undefined` is the leg's own
+// pre-answer state, which it settles as `loading` and this suite never reads.
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: () => ({ data: undefined, error: null }),
+}));
+
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
@@ -274,7 +285,15 @@ describe("workspace file tile PDF routing", () => {
     state.asset = {
       status: "ready",
       url: "blob:pdf",
-      meta: null,
+      meta: {
+      // See the image suite: `ready` without a header is not a state the
+      // asset stream can produce, and the byte core reads the delivered
+      // media type off it (ticket 27 phase B2).
+      mediaType: "application/pdf",
+      sizeBytes: 42,
+      width: null,
+      height: null,
+    },
       reason: null,
       totalBytes: null,
       servedFromCache: false,

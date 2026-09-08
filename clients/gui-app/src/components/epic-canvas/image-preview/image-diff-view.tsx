@@ -24,7 +24,8 @@ import {
   type GitObjectByteSource,
   type UseFileBytesResult,
 } from "@/lib/files/byte-source";
-import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
+import { ImagePreview } from "./image-preview";
+import { imagePreviewStatusOf } from "./image-preview-status";
 import {
   clampPositionToVisibleBounds,
   fitScaleFor,
@@ -781,17 +782,6 @@ function ImageDiffSide(props: {
       onDecodeError={handleDecodeError}
     />
   );
-}
-
-/**
- * The core has one `loading` arm; this viewer distinguishes two, and the
- * difference is visible - `loading` paints a spinner, `header` an
- * aspect-ratio skeleton. A `loading` state that already carries a header IS
- * the asset stream's header phase, so that is what decides.
- */
-function imagePreviewStatusOf(bytes: UseFileBytesResult): ImagePreviewStatus {
-  if (bytes.status === "ready") return "ready";
-  return bytes.header === null ? "loading" : "header";
 }
 
 function ImageDiffEmptyState(props: {

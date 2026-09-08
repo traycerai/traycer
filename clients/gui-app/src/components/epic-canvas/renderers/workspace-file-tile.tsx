@@ -71,7 +71,10 @@ import {
   isPdfAssetPath,
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
-import { useFileAsset } from "@/hooks/assets/use-file-asset";
+import {
+  useFileBytes,
+  type FileBytesState,
+} from "@/lib/files/byte-source";
 import {
   PDF_VIEWER_UNAVAILABLE_REASON,
   PdfPreviewLazy,
@@ -80,6 +83,7 @@ import {
   DEFAULT_ANIMATION_MS,
   ImagePreview,
 } from "@/components/epic-canvas/image-preview/image-preview";
+import { imagePreviewStatusOf } from "@/components/epic-canvas/image-preview/image-preview-status";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
 import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
 import { usePdfOpenExternallyTarget } from "@/hooks/editor/use-pdf-open-target";
@@ -149,6 +153,18 @@ export function WorkspaceFileTile(props: {
       revealTarget={revealTarget}
     />
   );
+}
+
+/**
+ * Every settled failure of a workspace byte source, as one predicate.
+ *
+ * `unsupported` is unreachable here - only the epic-file plane answers it -
+ * but falling through to a viewer with a `null` src would be worse than the
+ * placeholder if that ever changed, and the placeholder is already the
+ * uniform treatment for every other reason (decision #14).
+ */
+function isSettledFailure(bytes: FileBytesState): boolean {
+  return bytes.status === "unavailable" || bytes.status === "unsupported";
 }
 
 /**
@@ -234,10 +250,10 @@ function WorkspaceFileTileRouter(props: {
 }
 
 /**
- * Image mode for a workspace file tile: fetches over `useFileAsset` (never
+ * Image mode for a workspace file tile: fetches over `useFileBytes` (never
  * `workspace.readFile`) and renders `ImagePreview`, or the shared
- * `BinaryPlaceholder` for a `fallback` status - uniformly, regardless of
- * WHY the fetch fell back (image-preview decision log, decision #14).
+ * `BinaryPlaceholder` for any settled failure - uniformly, regardless of WHY
+ * the fetch failed (image-preview decision log, decision #14).
  * Editing/drafts/markdown/find never mount here.
  */
 function WorkspaceImageFileTile(props: {
@@ -247,18 +263,18 @@ function WorkspaceImageFileTile(props: {
   readonly svgToggle: ReactNode;
 }) {
   const { node, revealTarget } = props;
-  const assetState = useFileAsset({
-    method: "workspace",
+  const bytes = useFileBytes({
+    kind: "workspace-path",
     workspacePath: node.workspacePath,
     filePath: node.filePath,
   });
   // Magic-valid, header-parseable bytes can still fail to decode in the
   // browser (pre-landing review, P1) - `<img onError>` has no other signal
   // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
-  // cache entry AND transitions the hook's own state to `fallback`, so this
-  // tile renders straight from `assetState.status` like every other
-  // failure - no local decode-failed flag to track or reset.
-  const handleDecodeError = assetState.reportDecodeFailure;
+  // cache entry AND transitions the leg's own state to `unavailable`, so this
+  // tile renders straight from `bytes.status` like every other failure - no
+  // local decode-failed flag to track or reset.
+  const handleDecodeError = bytes.reportDecodeFailure;
   const openTarget = useEffectiveDefaultEditor(node.hostId);
   const {
     opening: openExternallyOpening,
@@ -278,7 +294,7 @@ function WorkspaceImageFileTile(props: {
     }
   }, [revealTarget, props.viewTabId, node.id]);
 
-  if (assetState.status === "fallback") {
+  if (isSettledFailure(bytes)) {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceMediaFileToolbar
@@ -289,8 +305,8 @@ function WorkspaceImageFileTile(props: {
         <div className="min-h-0 flex-1">
           <BinaryPlaceholder
             fileName={node.name}
-            sizeBytes={assetState.totalBytes}
-            reason={assetState.reason}
+            sizeBytes={bytes.header?.sizeBytes ?? null}
+            reason={bytes.message}
             onOpenExternally={handleOpenExternally}
             openExternallyOpening={openExternallyOpening}
             compact={false}
@@ -312,10 +328,10 @@ function WorkspaceImageFileTile(props: {
       />
       <div className="min-h-0 flex-1">
         <ImagePreview
-          status={assetState.status}
-          url={assetState.url}
-          meta={assetState.meta}
-          servedFromCache={assetState.servedFromCache}
+          status={imagePreviewStatusOf(bytes)}
+          url={bytes.src}
+          meta={bytes.header}
+          servedFromCache={bytes.servedFromCache}
           fileName={node.name}
           compact={false}
           gesturesEnabled
@@ -332,10 +348,13 @@ function WorkspaceImageFileTile(props: {
 
 /**
  * PDF mode for a workspace file tile: same shape as the image mode above -
- * `useFileAsset` for the bytes, `BinaryPlaceholder` for any fallback,
- * uniformly - but the ready state hands the blob to the lazy-loaded pdf.js
- * viewer instead of an `<img>`. Only mounted behind the router's
- * `workspace.streamAsset >= 1.1` gate.
+ * `useFileBytes` for the bytes, `BinaryPlaceholder` for any settled failure,
+ * uniformly - but the ready state hands the BLOB to the lazy-loaded pdf.js
+ * viewer instead of an `<img>`. A workspace source is always `delivery:
+ * "blob"` (D10 hands a direct url only to sniffed image/video, and only the
+ * epic-file plane has one to hand), which is what keeps pdf.js reading local
+ * bytes rather than fetching a remote origin. Only mounted behind the
+ * router's `workspace.streamAsset >= 1.1` gate.
  */
 function WorkspacePdfFileTile(props: {
   readonly node: WorkspaceFileRef;
@@ -343,12 +362,12 @@ function WorkspacePdfFileTile(props: {
   readonly revealTarget: WorkspaceFileRevealTarget | null;
 }) {
   const { node, revealTarget } = props;
-  const assetState = useFileAsset({
-    method: "workspace",
+  const bytes = useFileBytes({
+    kind: "workspace-path",
     workspacePath: node.workspacePath,
     filePath: node.filePath,
   });
-  const handleRenderFailure = assetState.reportDecodeFailure;
+  const handleRenderFailure = bytes.reportDecodeFailure;
   // The viewer itself could not load or start on this device (old engine) -
   // distinct from a decode failure: the bytes are fine, so the blob stays
   // cached and Open Externally remains the way to read the file.
@@ -377,7 +396,7 @@ function WorkspacePdfFileTile(props: {
     }
   }, [revealTarget, props.viewTabId, node.id]);
 
-  if (assetState.status === "fallback" || viewerUnavailable) {
+  if (isSettledFailure(bytes) || viewerUnavailable) {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceMediaFileToolbar
@@ -388,11 +407,9 @@ function WorkspacePdfFileTile(props: {
         <div className="min-h-0 flex-1">
           <BinaryPlaceholder
             fileName={node.name}
-            sizeBytes={assetState.totalBytes}
+            sizeBytes={bytes.header?.sizeBytes ?? null}
             reason={
-              viewerUnavailable
-                ? PDF_VIEWER_UNAVAILABLE_REASON
-                : assetState.reason
+              viewerUnavailable ? PDF_VIEWER_UNAVAILABLE_REASON : bytes.message
             }
             onOpenExternally={handleOpenExternally}
             openExternallyOpening={openExternallyOpening}
@@ -403,14 +420,14 @@ function WorkspacePdfFileTile(props: {
     );
   }
 
-  if (assetState.status === "ready" && assetState.url !== null) {
+  if (bytes.status === "ready") {
     // The viewer's toolbar is the tile's ONE bar: it carries the file path
     // as its caption and the tile's Open Externally action - a second
     // path/actions bar above it would repeat both.
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <PdfPreviewLazy
-          url={assetState.url}
+          url={bytes.src}
           fileName={node.filePath}
           compact={false}
           toolbarActions={
