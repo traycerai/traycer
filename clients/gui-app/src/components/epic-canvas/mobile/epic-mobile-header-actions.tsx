@@ -7,7 +7,10 @@ import {
   epicTabRightActionsKey,
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
-import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import {
+  useIsMobileSwitcherMounted,
+  useMobileSwitcherStore,
+} from "@/stores/epics/mobile-switcher-store";
 import { useRegisteredEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useQueryClient } from "@tanstack/react-query";
@@ -31,6 +34,17 @@ import {
  * this trigger renders from the app provider stack, OUTSIDE the epic session
  * tree.
  *
+ * Disabled until a sheet is actually mounted for this tab. The header slot is
+ * bound for the whole epic PANE, but the sheet only mounts from the canvas
+ * branches that have a session and a loaded snapshot - so while the epic is
+ * still loading (header titled, body a skeleton), and on the fetch-error and
+ * repoint-failure branches, this control is on screen with nothing listening.
+ * It used to accept the tap anyway and write the open flag into the store,
+ * which read as a dead button and then popped the sheet open unasked once the
+ * canvas mounted and picked the stale flag up. Natively `disabled`, not
+ * `aria-disabled`: the tap must not reach `setOpen` at all, and the base button
+ * variant already carries the muted `disabled:opacity-50` treatment.
+ *
  * Ungated by permission: switching tabs reads, it does not mutate, so a viewer
  * gets the same trigger. The create actions inside the sheet carry their own
  * editor gate.
@@ -38,6 +52,7 @@ import {
 export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
   const { tabId } = props;
   const setOpen = useMobileSwitcherStore((state) => state.setOpen);
+  const mounted = useIsMobileSwitcherMounted(tabId);
   return (
     <Button
       type="button"
@@ -45,6 +60,7 @@ export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
       size="icon-sm"
       aria-label="Switch tab"
       data-testid="mobile-epic-switcher-trigger"
+      disabled={!mounted}
       onClick={() => setOpen(tabId, true)}
       className="shrink-0 text-muted-foreground hover:text-foreground"
     >
