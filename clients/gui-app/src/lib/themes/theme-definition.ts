@@ -218,3 +218,40 @@ export function deriveThemeColors(
     "term-selection": primary.slice(0, 7) + "55",
   };
 }
+
+/** VS Code borders can be transparent or match surfaces that differ in Traycer. */
+export function ensureVisibleThemeBorders(
+  colors: ThemeDefinition["colors"],
+): void {
+  for (const token of ["canvas-border", "border", "input"] as const) {
+    const surfaces = (
+      token === "canvas-border"
+        ? [colors.canvas]
+        : [colors.background, colors.card, colors.popover, colors.sidebar]
+    ).filter((color): color is string => color !== undefined);
+    const original = colors[token];
+    if (!original || surfaces.length === 0) continue;
+    const visible = (color: string) =>
+      surfaces.every((surface) => wcagContrast(color, surface) >= 1.3);
+    if (visible(original)) continue;
+    const source = rgb(parse(original));
+    if (!source) continue;
+    const ink = ["#ffffff", "#000000"].sort(
+      (a, b) =>
+        Math.min(...surfaces.map((surface) => wcagContrast(b, surface))) -
+        Math.min(...surfaces.map((surface) => wcagContrast(a, surface))),
+    )[0];
+    const channel = ink === "#ffffff" ? 1 : 0;
+    for (let step = 1; step <= 20; step += 1) {
+      const amount = step / 20;
+      const candidate = formatHex8({
+        mode: "rgb",
+        r: source.r + (channel - source.r) * amount,
+        g: source.g + (channel - source.g) * amount,
+        b: source.b + (channel - source.b) * amount,
+      });
+      colors[token] = candidate;
+      if (visible(candidate)) break;
+    }
+  }
+}

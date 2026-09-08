@@ -1,9 +1,11 @@
 import { zipSync, strToU8 } from "fflate";
+import { wcagContrast } from "culori";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeThemeColor,
   themeDefinitionSchema,
   type ThemeDefinition,
+  type ThemeToken,
 } from "@/lib/themes/theme-definition";
 import {
   importThemeFiles,
@@ -145,6 +147,79 @@ describe("theme customization contract", () => {
     expect(theme.syntax?.tokenColors[0]?.settings.fontStyle).toBe(
       "bold underline",
     );
+  });
+
+  it("accepts VS Code default sentinels and removes inherited values through includes", async () => {
+    const [theme] = await importThemePackage(
+      pack({
+        "extension/package.json": manifest("themes/child.json"),
+        "extension/themes/base.json": JSON.stringify({
+          colors: {
+            "actionBar.toggledBackground": "#112233",
+            "editor.background": "#1d2129",
+          },
+        }),
+        "extension/themes/child.json": JSON.stringify({
+          include: "./base.json",
+          colors: { "actionBar.toggledBackground": "default" },
+        }),
+      }),
+    );
+
+    expect(theme.syntax?.colors["actionBar.toggledBackground"]).toBeUndefined();
+    expect(theme.colors.canvas).toBe("#1d2129ff");
+  });
+
+  it("truncates an overlong token rule name without dropping its settings", () => {
+    const longName =
+      "Source Json Meta Structure Dictionary Json > Value Json > String Quoted Json,source Json Meta Structure Array Json > Value Json > String Quoted Json,source Json Meta Structure Dictionary Json > Value Json > String Quoted Json > Punctuation,source Json Meta Structure Array Json > Value Json > String Quoted Json > Punctuation";
+    const [theme] = importThemeText(
+      JSON.stringify({
+        name: "Manjaro OneDark",
+        type: "dark",
+        colors: { "editor.background": "#222D31" },
+        tokenColors: [{ name: longName, settings: { foreground: "#98c379" } }],
+      }),
+      "fallback",
+    );
+
+    expect(theme.syntax?.tokenColors[0]?.name).toHaveLength(256);
+    expect(theme.syntax?.tokenColors[0]?.settings.foreground).toBe("#98c379ff");
+  });
+
+  it("keeps imported borders visibly distinct from their surfaces", () => {
+    const [theme] = importThemeText(
+      JSON.stringify({
+        name: "Nord Visual Studio Code",
+        type: "dark",
+        colors: {
+          "editor.background": "#2e3440",
+          "editorGroup.border": "#3b425201",
+          "panel.border": "#3b4252",
+          "menu.background": "#3b4252",
+          "sideBar.background": "#3b4252",
+          "editorWidget.background": "#3b4252",
+        },
+      }),
+      "fallback",
+    );
+    const contrast = (token: ThemeToken, surface: ThemeToken): number =>
+      wcagContrast(
+        theme.colors[token] ?? "#000000",
+        theme.colors[surface] ?? "#000000",
+      );
+
+    expect(contrast("canvas-border", "canvas")).toBeGreaterThanOrEqual(1.3);
+    for (const token of ["border", "input"] as const) {
+      for (const surface of [
+        "background",
+        "card",
+        "popover",
+        "sidebar",
+      ] as const) {
+        expect(contrast(token, surface)).toBeGreaterThanOrEqual(1.3);
+      }
+    }
   });
 
   it("resolves real VSIX includes and keeps collection identity", async () => {

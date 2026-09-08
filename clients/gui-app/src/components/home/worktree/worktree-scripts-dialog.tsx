@@ -741,8 +741,7 @@ function describeTarget(input: {
     return {
       pathLabel: "Worktree path",
       pathValue: input.resolved.worktreePath,
-      scriptsNote:
-        "Edit the setup and teardown scripts for this worktree. Saved to its own environment file, never the source checkout.",
+      scriptsNote: "Changes apply to this worktree only.",
     };
   }
   if (input.resolved.kind === "new-branch-worktree") {
@@ -754,21 +753,20 @@ function describeTarget(input: {
       pathLabel: null,
       pathValue: null,
       scriptsNote:
-        "These scripts ride the worktree request - the host writes them into the new worktree when the agent starts.",
+        "Saved for the new worktree. Setup runs when the agent starts.",
     };
   }
   if (input.resolved.kind === "checkout-branch-worktree") {
     return {
       pathLabel: "Existing branch",
       pathValue: input.resolved.branchName,
-      scriptsNote:
-        "This branch is checked out into a new worktree. The scripts ride the request - written into the new worktree at create.",
+      scriptsNote: "Saved for the new worktree created from this branch.",
     };
   }
   return {
     pathLabel: "Folder",
     pathValue: input.workspacePath,
     scriptsNote:
-      "This folder runs in your checkout. Saved to the repo's own environment file - commit it to share.",
+      "Saved in this checkout. Commit the environment file to share these scripts.",
   };
 }

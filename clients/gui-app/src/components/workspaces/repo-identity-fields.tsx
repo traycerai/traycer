@@ -1,5 +1,6 @@
-import { useRef } from "react";
-import { Folder } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { appearanceIconSchema } from "@traycer/protocol/host/workspace/appearance-schemas";
+import { Folder, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppearanceAsset } from "@/hooks/appearance/use-appearance-assets";
@@ -11,78 +12,113 @@ import {
 } from "./use-repo-identity-draft";
 
 /**
- * The identity block at the top of Repository settings: a 56 px preview tile,
- * the curated swatch row, and the icon controls. Presentation only - the draft
+ * Repository appearance controls and a live preview. Presentation only - the draft
  * above owns the state and the write.
  */
 export function RepoIdentityFields(props: {
   readonly draft: RepoIdentityDraft;
 }) {
   const { draft } = props;
+  const [choosingEmoji, setChoosingEmoji] = useState(false);
+  const emojiTriggerRef = useRef<HTMLButtonElement>(null);
+  const wasChoosingEmoji = useRef(false);
+  const icon = draft.values.icon;
+  const labels = ICON_LABELS[icon?.kind ?? "default"];
+  useEffect(() => {
+    if (!choosingEmoji && wasChoosingEmoji.current)
+      emojiTriggerRef.current?.focus();
+    wasChoosingEmoji.current = choosingEmoji;
+  }, [choosingEmoji]);
   const fileRef = useRef<HTMLInputElement | null>(null);
   return (
-    <div className="flex flex-col gap-2" data-testid="repo-identity-fields">
-      <div className="flex items-center gap-4">
-        <RepoIdentityTile draft={draft} />
-        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+    <div className="flex flex-col gap-4" data-testid="repo-identity-fields">
+      <h3 className="text-ui-sm font-semibold">Appearance</h3>
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="space-y-3">
+          <p className="text-ui-xs font-medium">Repository icon</p>
+          <div className="flex items-start gap-3">
+            <RepoIdentityTile draft={draft} />
+            <div className="min-w-0 flex-1 space-y-2">
+              {choosingEmoji ? (
+                <RepoEmojiEditor
+                  draft={draft}
+                  onClose={() => setChoosingEmoji(false)}
+                />
+              ) : (
+                <>
+                  <p className="text-ui-xs text-muted-foreground">
+                    {labels.status}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={draft.disabled || draft.busy}
+                      onClick={() => fileRef.current?.click()}
+                    >
+                      <Upload className="size-3.5" aria-hidden />
+                      {labels.upload}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={draft.disabled || draft.busy}
+                      ref={emojiTriggerRef}
+                      onClick={() => setChoosingEmoji(true)}
+                    >
+                      {labels.emoji}
+                    </Button>
+                    {icon !== null ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={draft.disabled || draft.busy}
+                        onClick={draft.clearIcon}
+                      >
+                        Remove icon
+                      </Button>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="sr-only"
+            aria-hidden
+            tabIndex={-1}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0] ?? null;
+              event.currentTarget.value = "";
+              if (file !== null) {
+                draft.chooseLogo(file);
+              }
+            }}
+          />
+        </div>
+        <div className="space-y-3">
+          <p className="text-ui-xs font-medium">Tab color</p>
           <div
             role="group"
             aria-label="Repository color"
-            className="flex flex-wrap items-center gap-2"
+            className="flex flex-wrap items-center gap-1.5"
           >
             <ColorSwatch draft={draft} color={null} />
             {REPOSITORY_IDENTITY_COLORS.map((color) => (
               <ColorSwatch key={color} draft={draft} color={color} />
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              aria-label="Emoji"
-              aria-invalid={draft.emojiInvalid}
-              value={draft.emojiText}
-              disabled={draft.disabled}
-              maxLength={32}
-              className="w-16 text-center"
-              onChange={(event) => draft.setEmoji(event.currentTarget.value)}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={draft.disabled || draft.busy}
-              onClick={() => fileRef.current?.click()}
-            >
-              Upload logo…
-            </Button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="sr-only"
-              aria-hidden
-              tabIndex={-1}
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0] ?? null;
-                event.currentTarget.value = "";
-                if (file !== null) draft.chooseLogo(file);
-              }}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={draft.disabled || draft.values.icon === null}
-              onClick={draft.clearIcon}
-            >
-              None
-            </Button>
-          </div>
-          <p className="text-ui-xs text-muted-foreground">
-            Shows on this repo&apos;s tabs and in the workspace picker.
-            Committed with the repo.
-          </p>
         </div>
       </div>
+      <p className="text-ui-xs text-muted-foreground">
+        Shown in tabs and the workspace picker. Commit to share with your team.
+      </p>
       {draft.emojiInvalid ? (
         <p role="alert" className="text-ui-xs text-destructive">
           Enter one emoji.
@@ -96,6 +132,82 @@ export function RepoIdentityFields(props: {
       {draft.note !== null ? (
         <p className="text-ui-xs text-muted-foreground">{draft.note}</p>
       ) : null}
+    </div>
+  );
+}
+
+const ICON_LABELS = {
+  image: {
+    status: "Uploaded image",
+    upload: "Replace image",
+    emoji: "Use emoji instead",
+  },
+  emoji: {
+    status: "Emoji icon",
+    upload: "Upload image instead",
+    emoji: "Change emoji",
+  },
+  default: {
+    status: "Default folder",
+    upload: "Upload image",
+    emoji: "Use emoji",
+  },
+};
+
+function RepoEmojiEditor({
+  draft,
+  onClose,
+}: {
+  readonly draft: RepoIdentityDraft;
+  readonly onClose: () => void;
+}) {
+  const emojiId = useId();
+  const emojiRef = useRef<HTMLInputElement>(null);
+  const [emojiChoice, setEmojiChoice] = useState(draft.emojiText);
+  const validEmoji = appearanceIconSchema.safeParse({
+    kind: "emoji",
+    value: emojiChoice.trim(),
+  }).success;
+  useEffect(() => {
+    emojiRef.current?.focus();
+  }, []);
+  return (
+    <div className="space-y-3">
+      <label htmlFor={emojiId} className="sr-only">
+        Emoji
+      </label>
+      <Input
+        ref={emojiRef}
+        id={emojiId}
+        placeholder="Type or paste an emoji"
+        aria-invalid={emojiChoice.length > 0 && !validEmoji}
+        value={emojiChoice}
+        disabled={draft.disabled || draft.busy}
+        maxLength={32}
+        className="h-10 w-full border-foreground/20 bg-foreground/5 text-lg placeholder:text-ui-xs"
+        onChange={(event) => setEmojiChoice(event.currentTarget.value)}
+      />
+      {emojiChoice.length > 0 && !validEmoji ? (
+        <p role="alert" className="text-ui-xs text-destructive">
+          Enter one emoji.
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button
+          type="button"
+          size="sm"
+          disabled={draft.disabled || draft.busy || !validEmoji}
+          onClick={() => {
+            draft.setEmoji(emojiChoice.trim());
+            onClose();
+          }}
+        >
+          Use emoji
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }
@@ -162,8 +274,10 @@ function ColorSwatch(props: {
       disabled={draft.disabled}
       onClick={() => draft.setColor(color)}
       className={cn(
-        "size-5.5 shrink-0 rounded-full border-2 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-        selected ? "border-foreground" : "border-transparent",
+        "size-6 shrink-0 rounded-full border-2 outline-none ring-offset-2 ring-offset-popover focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+        selected
+          ? "border-popover ring-2 ring-foreground"
+          : "border-transparent",
         color === null && !selected && "border-border",
       )}
       style={

@@ -30,10 +30,10 @@
     ),
     radial-gradient(
       ellipse at var(--wallpaper-focus-x, 50%) var(--wallpaper-focus-y, 56%),
-      var(--background) 20%,
-      color-mix(in srgb, var(--background) 96%, transparent) 38%,
-      color-mix(in srgb, var(--background) 22%, transparent) 78%,
-      transparent
+      color-mix(in srgb, var(--background) 85%, transparent),
+      color-mix(in srgb, var(--background) 65%, transparent) 30%,
+      color-mix(in srgb, var(--background) 40%, transparent) 55%,
+      color-mix(in srgb, var(--background) 12%, transparent) 72%,
+      transparent 88%
     );
-  backdrop-filter: blur(0.5px);
 }

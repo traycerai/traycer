@@ -72,6 +72,10 @@ const mocks = vi.hoisted(() => ({
   appearanceStatus: {
     current: "present",
   },
+  appearanceIcon: {
+    current: null as { kind: "image"; path: string } | null,
+  },
+  appearanceAssetUrl: { current: null as string | null },
 }));
 
 const SOURCE_ROOT = "/tmp/a-source";
@@ -84,7 +88,12 @@ vi.mock("@/hooks/appearance/use-workspace-appearance", () => ({
       // the workspace path the dialog was opened for.
       canonicalSourceRoot: SOURCE_ROOT,
       status: mocks.appearanceStatus.current,
-      appearance: { version: 1 as const },
+      appearance: {
+        version: 1 as const,
+        ...(mocks.appearanceIcon.current === null
+          ? {}
+          : { icon: mocks.appearanceIcon.current }),
+      },
       issues: [],
     },
     scope: null,
@@ -102,7 +111,7 @@ vi.mock("@/hooks/appearance/use-workspace-appearance", () => ({
 }));
 vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
   useAppearanceAsset: () => ({
-    url: null,
+    url: mocks.appearanceAssetUrl.current,
     status: "empty",
     reason: null,
     reportDecodeFailure: () => {},
@@ -411,6 +420,8 @@ describe("<WorktreeScriptsDialog />", () => {
     mocks.setAppearanceMutate.mockReset();
     mocks.appearanceCanEdit.current = true;
     mocks.appearanceStatus.current = "present";
+    mocks.appearanceIcon.current = null;
+    mocks.appearanceAssetUrl.current = null;
   });
   afterEach(() => {
     cleanup();
@@ -420,9 +431,11 @@ describe("<WorktreeScriptsDialog />", () => {
     renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
 
     fireEvent.click(screen.getByRole("button", { name: "Color #7c6cf0" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
     fireEvent.change(screen.getByLabelText("Emoji"), {
       target: { value: "🧭" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
     await act(async () => {
       fireEvent.click(saveScriptsButton());
       await Promise.resolve();
@@ -438,6 +451,62 @@ describe("<WorktreeScriptsDialog />", () => {
     });
     // Untouched scripts must not be rewritten just because identity moved.
     expect(mocks.setRepoScriptsMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps an existing image through emoji editing and a cancelled replacement", () => {
+    mocks.appearanceIcon.current = {
+      kind: "image",
+      path: ".traycer/repository-logo.png",
+    };
+    mocks.appearanceAssetUrl.current = "blob:existing-logo";
+    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
+
+    expect(screen.getByText("Uploaded image")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Replace image" })).toBeTruthy();
+    expect(screen.queryByLabelText("Emoji")).toBeNull();
+
+    const fileInput = document.querySelector('input[type="file"]');
+    if (!(fileInput instanceof HTMLInputElement))
+      throw new Error("expected repository icon file input");
+    fireEvent.change(fileInput, { target: { files: [] } });
+    expect(screen.getByText("Uploaded image")).toBeTruthy();
+
+    const tileBeforeChooser =
+      screen.getByTestId("repo-identity-tile").innerHTML;
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji instead" }));
+    const emoji = screen.getByLabelText("Emoji");
+    fireEvent.change(emoji, { target: { value: "not an emoji" } });
+    expect(screen.getByRole("alert").textContent).toBe("Enter one emoji.");
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Use emoji" })
+        .disabled,
+    ).toBe(true);
+    expect(screen.getByTestId("repo-identity-tile").innerHTML).toBe(
+      tileBeforeChooser,
+    );
+    expect(mocks.setAppearanceMutate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Emoji")).toBeNull();
+    expect(screen.getByText("Uploaded image")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji instead" }));
+    const cancelledEmoji = screen.getByLabelText("Emoji");
+    fireEvent.change(cancelledEmoji, { target: { value: "🧭" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Emoji")).toBeNull();
+    expect(screen.getByText("Uploaded image")).toBeTruthy();
+    expect(mocks.setAppearanceMutate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji instead" }));
+    const appliedEmoji = screen.getByLabelText("Emoji");
+    fireEvent.change(appliedEmoji, { target: { value: "🧭" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
+    expect(screen.queryByText("Uploaded image")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Upload image instead" }),
+    ).toBeTruthy();
+    expect(mocks.setAppearanceMutate).not.toHaveBeenCalled();
   });
 
   it("disables the identity controls when the repo has no editable appearance", () => {

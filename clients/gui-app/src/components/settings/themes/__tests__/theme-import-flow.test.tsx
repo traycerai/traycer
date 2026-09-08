@@ -214,4 +214,35 @@ describe("theme import flow", () => {
       expect(themes.some((theme) => theme.id !== imported.id)).toBe(true);
     });
   });
+
+  it("renders malformed color errors in the dialog header", async () => {
+    const user = userEvent.setup();
+    renderThemes();
+
+    await user.click(screen.getByRole("button", { name: "Import theme" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Find your next palette",
+    });
+    await user.click(within(dialog).getByRole("tab", { name: "Import files" }));
+    await user.click(within(dialog).getByText("Paste theme JSON"));
+    fireEvent.change(within(dialog).getByLabelText("Theme JSON"), {
+      target: {
+        value: JSON.stringify({
+          name: "Malformed fixture",
+          type: "dark",
+          colors: { "editor.background": "var(--unsupported)" },
+        }),
+      },
+    });
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "Preview import" }),
+    );
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toBe(
+      "The theme contains unsupported values. Check its colors and syntax rules.",
+    );
+    expect(alert.closest('[data-slot="dialog-header"]')).not.toBeNull();
+    expect(alert.closest('[class*="overflow-y-auto"]')).toBeNull();
+  });
 });

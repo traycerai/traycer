@@ -178,26 +178,28 @@ export function ScriptsReviewDialog(props: {
   return (
     <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent
-        className="w-[min(92vw,44rem)] max-h-[min(92vh,52rem)] gap-0 overflow-hidden p-0 sm:max-w-none"
+        className="flex max-h-[90dvh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(52rem,var(--safe-area-width),calc(100%-2rem))]"
         data-testid={props.testId}
         showCloseButton={!saveBusy}
         onEscapeKeyDown={props.onEscapeKeyDown}
       >
-        <DialogHeader className="gap-2 px-5 pt-5 pb-4">
-          <DialogTitle>{props.title}</DialogTitle>
+        <DialogHeader className="shrink-0 gap-1.5 border-b border-foreground/10 px-6 py-4 pr-12">
+          <DialogTitle className="text-lg font-semibold">
+            {props.title}
+          </DialogTitle>
           <DialogDescription>{props.description}</DialogDescription>
         </DialogHeader>
-        <div className="flex max-h-[min(80vh,42rem)] flex-col gap-5 overflow-y-auto px-5 pb-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6">
           {identity !== null ? (
-            <div className="border-b border-border/60 pb-5">
+            <div className="border-b border-foreground/10 py-4">
               {identity.slot}
             </div>
           ) : null}
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3 py-4">
             {props.repositoryDefaultsSlot !== null ? (
-              <p className="text-ui-xs font-medium text-muted-foreground/70 uppercase tracking-wide">
+              <h3 className="text-ui-sm font-semibold text-foreground">
                 Setup &amp; teardown scripts
-              </p>
+              </h3>
             ) : null}
             <ScriptsPathRow label={props.pathLabel} value={props.pathValue} />
             {props.scriptsNote !== null ? (
@@ -230,12 +232,12 @@ export function ScriptsReviewDialog(props: {
             ) : null}
           </div>
           {props.repositoryDefaultsSlot !== null ? (
-            <div className="flex flex-col gap-4 border-t border-border/60 pt-5">
+            <div className="flex flex-col gap-4 border-t border-foreground/10 py-4">
               {props.repositoryDefaultsSlot}
             </div>
           ) : null}
         </div>
-        <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+        <DialogFooter className="mx-0 mb-0 shrink-0 flex-row justify-end rounded-b-xl border-t border-foreground/10 bg-foreground/3 px-6 py-3">
           <Button
             type="button"
             variant="ghost"

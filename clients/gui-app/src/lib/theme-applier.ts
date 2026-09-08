@@ -16,6 +16,7 @@ import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { getBuiltinThemeColors } from "@/lib/themes/builtin-palettes";
 import {
   themeTokenNames,
+  ensureVisibleThemeBorders,
   type ThemeDefinition,
 } from "@/lib/themes/theme-definition";
 
@@ -104,6 +105,7 @@ function applyFromState(): void {
   const root = window.document.documentElement;
   for (const token of themeTokenNames) root.style.removeProperty(`--${token}`);
   const colors = { ...getBuiltinThemeColors(preset, mode), ...custom?.colors };
+  if (custom?.syntax) ensureVisibleThemeBorders(colors);
   for (const [token, color] of Object.entries(colors)) {
     root.style.setProperty(`--${token}`, color);
   }
@@ -124,7 +126,17 @@ function applyFromState(): void {
     "--panel-animation-duration",
     `${library.panelAnimationDuration}ms`,
   );
-  if (library.contrast !== 100) {
+  applyContrast(root, library.contrast);
+  root.setAttribute("data-theme-id", custom?.id ?? preset);
+  root.toggleAttribute(
+    "data-theme-sidebar-artwork",
+    custom?.sidebarArtwork === true,
+  );
+  themeRevision += 1;
+}
+
+function applyContrast(root: HTMLElement, contrast: number): void {
+  if (contrast !== 100) {
     const computed = getComputedStyle(root);
     for (const [foreground, background] of [
       ["foreground", "background"],
@@ -140,14 +152,14 @@ function applyFromState(): void {
       if (!fg || !bg) continue;
       const source = rgb(fg);
       const destination =
-        library.contrast < 100
+        contrast < 100
           ? rgb(bg)
           : rgb(
               wcagContrast(bg, "#fff") > wcagContrast(bg, "#000")
                 ? { mode: "rgb", r: 1, g: 1, b: 1 }
                 : { mode: "rgb", r: 0, g: 0, b: 0 },
             );
-      const amount = Math.abs(library.contrast - 100) / 100;
+      const amount = Math.abs(contrast - 100) / 100;
       root.style.setProperty(
         `--${foreground}`,
         formatHex8({
@@ -160,12 +172,6 @@ function applyFromState(): void {
       );
     }
   }
-  root.setAttribute("data-theme-id", custom?.id ?? preset);
-  root.toggleAttribute(
-    "data-theme-sidebar-artwork",
-    custom?.sidebarArtwork === true,
-  );
-  themeRevision += 1;
 }
 
 function notify(): void {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { wcagContrast } from "culori";
 import { getBuiltinThemeColors } from "@/lib/themes/builtin-palettes";
 import { createThemeFromPreset } from "@/lib/themes/theme-library";
 import {
@@ -78,5 +79,44 @@ describe("theme applier", () => {
     expect(
       document.documentElement.style.getPropertyValue("--term-ansi-red"),
     ).toBe(builtins["term-ansi-red"]);
+  });
+
+  it("repairs collapsed legacy imported surfaces only in rendered colors", () => {
+    const base = createThemeFromPreset("neutral", "light");
+    const legacy = {
+      ...base,
+      id: "legacy-imported-theme",
+      name: "Legacy imported theme",
+      colors: {
+        ...base.colors,
+        "canvas-border": base.colors.canvas,
+        input: base.colors.popover,
+        border: base.colors.popover,
+      },
+      syntax: {
+        colors: { "editor.background": "#101010ff" },
+        tokenColors: [],
+      },
+    };
+    const savedColors = { ...legacy.colors };
+
+    expect(useThemeLibraryStore.getState().saveTheme(legacy)).toBe(true);
+
+    expect(useThemeLibraryStore.getState().themes[0]?.colors).toEqual(
+      savedColors,
+    );
+    const rendered = (token: string): string =>
+      document.documentElement.style.getPropertyValue(`--${token}`);
+    expect(
+      wcagContrast(rendered("canvas-border"), rendered("canvas")),
+    ).toBeGreaterThanOrEqual(1.3);
+    for (const token of ["input", "border"]) {
+      expect(
+        wcagContrast(rendered(token), rendered("popover")),
+      ).toBeGreaterThanOrEqual(1.3);
+    }
+    expect(rendered("canvas-border")).not.toBe(savedColors["canvas-border"]);
+    expect(rendered("input")).not.toBe(savedColors.input);
+    expect(rendered("border")).not.toBe(savedColors.border);
   });
 });

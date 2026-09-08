@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { z } from "zod";
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Check,
@@ -134,6 +135,13 @@ async function stageThemeImport(
         ),
       ),
     };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new Error(
+        "The theme contains unsupported values. Check its colors and syntax rules.",
+      );
+    }
+    throw error;
   } finally {
     controllers.delete(controller);
   }
@@ -271,6 +279,24 @@ function ThemeImportDialogBody({
           <DialogDescription className="max-w-prose pr-4">
             Browse Open VSX or import theme files.
           </DialogDescription>
+          {loadThemes.isPending ? (
+            <div
+              role="status"
+              className="flex items-center gap-2 text-muted-foreground"
+            >
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+              Reading theme data
+            </div>
+          ) : null}
+          {loadThemes.isError ? (
+            <p role="alert" className="text-destructive">
+              {loadThemes.error.message}
+            </p>
+          ) : null}
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto px-4 pb-4">
           <Tabs defaultValue="browse" className="gap-3 pt-3">
@@ -513,24 +539,6 @@ function ThemeImportDialogBody({
             </TabsContent>
           </Tabs>
           <div className="space-y-3 pt-3">
-            {loadThemes.isPending ? (
-              <div
-                role="status"
-                className="flex items-center gap-2 text-muted-foreground"
-              >
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-                Reading theme data
-              </div>
-            ) : null}
-            {loadThemes.isError ? (
-              <p role="alert" className="text-destructive">
-                {loadThemes.error.message}
-              </p>
-            ) : null}
             {conflictError ? (
               <p role="alert" className="text-destructive">
                 {conflictError}
