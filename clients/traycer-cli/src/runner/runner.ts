@@ -1,7 +1,12 @@
 import * as Sentry from "@sentry/node";
 import { errorFromUnknown } from "../logger";
 import { CLI_ERROR_CODES, toCliError } from "./errors";
-import { finishAndExit, isProcessFatal } from "./exit";
+import {
+  finishAndExit,
+  isProcessFatal,
+  markCommandSettled,
+  markCommandStarted,
+} from "./exit";
 import { createOutput, type Output, type ProgressInfo } from "./output";
 import {
   type RawRunnerFlags,
@@ -69,9 +74,16 @@ export async function runCommand(
     nonInteractive: runtime.nonInteractive,
   });
   let result: CommandResult;
+  // Bracketing the ONE await the command body lives in. A process-fatal
+  // handler that fires inside it records its code but must leave the exit to
+  // this function - it cannot know whether the command is mid-download or mid
+  // install-directory swap - and the two `finishAndExit` calls below are where
+  // that exit happens. See `finishAfterProcessFatal` in exit.ts.
+  markCommandStarted();
   try {
     result = await fn(ctx);
   } catch (err) {
+    markCommandSettled();
     Sentry.captureException(err);
     const cliErr = toCliError(err);
     runtime.logger.error(
@@ -91,12 +103,16 @@ export async function runCommand(
     await finishAndExit(cliErr.exitCode);
     return;
   }
+  markCommandSettled();
   // A process-fatal handler (unhandled rejection / uncaught exception) may
   // have fired WHILE this command was running. Draining is what makes that
   // survivable - the command keeps going and can still return a result - but
   // the process has already failed, and Desktop now trusts a terminal `ok`
   // over a non-zero exit. Emitting success here would report a failed
   // install/update/ensure as successful, so report what actually happened.
+  // This is also where the drain watchdog is armed for such a process: the
+  // fatal handler recorded its 1 at once but deferred the arming to here, so
+  // its `process.exit` cannot land inside the work the command was doing.
   if (isProcessFatal()) {
     runtime.logger.error(
       "CLI command completed after a process-fatal failure",

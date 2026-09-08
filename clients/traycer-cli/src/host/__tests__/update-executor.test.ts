@@ -18,12 +18,18 @@ import {
   commitAttemptMutation,
   readUpdateAttemptRecord,
   updateAttemptRecordPath,
+  type AcquireUpdateAttemptLockOutcome,
   type AttemptCommitOutcome,
   type AttemptRecoveryEvidence,
+  type HostUpdateAttemptClaimBaseline,
   type HostUpdateAttemptIdentity,
+  type HostUpdateAttemptRead,
+  type HostUpdateAttemptRecord,
   type UpdateMutationCapability,
+  HOST_START_STAMP_FLOOR,
 } from "@traycer-clients/shared/host-update";
 import { commitExecutorAttemptMutation } from "@traycer-clients/shared/host-update/contender";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 
 // The CLI's rollout fence (`decideUpdateExecutorCohort`) is intentionally
 // static release policy with NO shipped enable seam (see
@@ -122,17 +128,24 @@ import {
   runLocalAttemptExecutorSegment,
   type DispatchAttemptExecutorOptions,
   type ExecutorClaimOutcome,
+  type ExecutorClaimRequest,
+  type ExecutorClaimSelection,
+  type ExecutorClaimSelector,
   type ExecutorPrivateAcknowledgement,
   type RunAttemptExecutorClaimOptions,
   type SpawnedAttemptExecutor,
   type UpdateExecutorFaults,
 } from "../update-executor";
+import type { InstallGenerationIdentity } from "@traycer-clients/shared/host-version/install-generation";
 import {
   decodeUpdateDispatchAck,
   updateDispatchAckPath,
 } from "@traycer/protocol/config/host-update-ack";
 import { stampUpdateDispatchAck } from "../update-dispatch-ack";
-import { writeHostInstallRecord } from "../../manifest/host-install";
+import {
+  readHostInstallRecord,
+  writeHostInstallRecord,
+} from "../../manifest/host-install";
 import * as paths from "../../store/paths";
 import type { AttemptRecoveryEvidenceObservation } from "../update-recovery-evidence";
 
@@ -144,14 +157,54 @@ async function freshHome(): Promise<string> {
   return join(root, "host-home");
 }
 
+/**
+ * An injected observation carrying evidence only, with no install identity to
+ * refresh a claim baseline from. Tests that care what a park RECORDS use
+ * `observationOf` and pass one.
+ */
 function observation(
   evidence: AttemptRecoveryEvidence,
 ): AttemptRecoveryEvidenceObservation {
+  return observationOf(evidence, null, null);
+}
+
+function observationOf(
+  evidence: AttemptRecoveryEvidence,
+  installIdentity: InstallGenerationIdentity | null,
+  stageFingerprint: string | null,
+): AttemptRecoveryEvidenceObservation {
   // A test-only surrogate fingerprint: it only needs to be a pure function
-  // of the evidence content so `sameAttemptRecoveryEvidenceObservation`
+  // of the observation's content so `sameAttemptRecoveryEvidenceObservation`
   // (real fingerprint string equality) reacts correctly to a changed vs.
   // unchanged evidence object between two injected reads.
-  return { evidence, fingerprint: JSON.stringify(evidence) };
+  return {
+    evidence,
+    // Not part of the fingerprint in production either: it explains a reading,
+    // it never participates in one.
+    runningDiagnosis: "classified",
+    // The same contract, and the same reason it is safe to pin at a constant
+    // here: a `classified` reading is by definition one the host answered.
+    runningRefusal: null,
+    // The recovery path always takes the STRONG rule - it has no target
+    // version to gate Q1's fallback on - so its surrogate reports a real
+    // identity comparison.
+    identityCompared: true,
+    fingerprint: JSON.stringify({
+      evidence,
+      installIdentity,
+      stageFingerprint,
+    }),
+    installIdentity,
+    stageFingerprint,
+  };
+}
+
+/**
+ * A request fixed before the lock, wrapped as the selector the executor now
+ * takes - the shape every caller that does not decide under the lock uses.
+ */
+function fixedSelection(request: ExecutorClaimRequest): ExecutorClaimSelector {
+  return async () => ({ kind: "claim", request });
 }
 
 beforeEach(async () => {
@@ -181,6 +234,17 @@ function mockCohortEligible(platform: "linux" | "win32"): void {
       ? { kind: "eligible", platform }
       : { kind: "shadow", reason: "disabled" },
   );
+}
+
+// The cutover made `eligible` the shipped verdict for every platform, so the
+// REFUSAL arm of every gate below is now only reachable through the mock. That
+// is the whole reason `decideUpdateExecutorCohort` survived as a function: a
+// deleted gate takes its tests with it, while a narrowed one keeps them.
+function mockCohortShadow(): void {
+  cohortMock.decide.mockImplementation(() => ({
+    kind: "shadow",
+    reason: "disabled",
+  }));
 }
 
 // ---- dispatchAttemptExecutor -------------------------------------------------
@@ -244,7 +308,11 @@ function childWithAck(
 }
 
 describe("dispatchAttemptExecutor - cohort gate is derived internally, never caller-supplied", () => {
-  it("returns disabled without spawning while the cohort is shadow (the production default)", async () => {
+  it("returns disabled without spawning while the cohort is shadow", async () => {
+    // Shadow is MOCKED here: since the cutover the shipped policy answers
+    // `eligible` for every platform, so this arm is reachable only by forcing
+    // the verdict. The block below pins the shipped default itself.
+    mockCohortShadow();
     let spawnCalls = 0;
     const outcome = await dispatchAttemptExecutor(
       dispatchOptions({
@@ -291,10 +359,39 @@ describe("dispatchAttemptExecutor - cohort gate is derived internally, never cal
   });
 });
 
-describe("decideUpdateExecutorCohort - static shadow-only production default, unmocked in this describe block", () => {
+describe("decideUpdateExecutorCohort - the shipped default, unmocked in this describe block", () => {
+  // Inverted by the cutover, and deliberately kept rather than deleted: the
+  // question this block answers ("what does the SHIPPED policy do, with no
+  // mock in the way") is the same one, and its answer moved. Before the
+  // cutover every platform was refused before any spawn; now every platform
+  // is admitted and dispatch proceeds to the transport.
   it.each(["darwin", "win32", "linux"] as const)(
-    "dispatchAttemptExecutor stays disabled for %s with zero spawn/reconcile side effects against the real (beforeEach-reset) implementation",
+    "dispatchAttemptExecutor is ADMITTED for %s against the real (beforeEach-reset) implementation - it spawns rather than answering disabled",
     async (platform) => {
+      let spawnCalls = 0;
+      const outcome = await dispatchAttemptExecutor(
+        dispatchOptions({
+          platform,
+          spawn: () => {
+            spawnCalls += 1;
+            return Promise.reject(new Error("spawn refused by the fixture"));
+          },
+          reconcile: () => Promise.resolve(null),
+        }),
+      );
+      // The gate did not refuse: the run reached the transport, whose fixture
+      // spawn then failed, which is `indeterminate` and never `disabled`.
+      expect(outcome).toEqual({ kind: "indeterminate", canonical: null });
+      expect(spawnCalls).toBe(1);
+    },
+  );
+
+  // The control the inversion needs: without it, deleting the gate entirely
+  // would satisfy every assertion above.
+  it.each(["darwin", "win32", "linux"] as const)(
+    "a SHADOW verdict still disables dispatch for %s with zero spawn/reconcile side effects",
+    async (platform) => {
+      mockCohortShadow();
       let spawnCalls = 0;
       let reconcileCalls = 0;
       const outcome = await dispatchAttemptExecutor(
@@ -687,14 +784,20 @@ function claimOptions(
       waitMs: 0,
       pollIntervalMs: 10,
     },
-    request: {
+    request: fixedSelection({
       targetVersion: "1.2.3",
       trigger: "manual",
       action: "start",
       expected: null,
       newAttemptId: "attempt-1",
       initialPhase: "downloading",
-    },
+      initialContinuation: null,
+      claim: null,
+    }),
+    // Today's verifier disposition is the default here, so every pre-existing
+    // test in this file keeps asserting exactly the behaviour it always did.
+    recoveredActivation: "park",
+    afterRecovery: "report",
     readRecoveryEvidence: () =>
       Promise.reject(new Error("recovery evidence not configured")),
     nowIso: () => "2026-01-01T00:00:00.000Z",
@@ -743,7 +846,11 @@ describe("runAttemptExecutorSegment - acknowledge runs before execute, and only 
     }
   });
 
-  it("never calls acknowledge or execute when the cohort is shadow (the production default)", async () => {
+  it("never calls acknowledge or execute when the cohort is shadow", async () => {
+    // The CONTROL half of the Finding-2 pair below. Shadow is mocked since the
+    // cutover; what it controls is unchanged - "skip the gate whenever a
+    // record exists", or deleting the gate, must not satisfy the trace.
+    mockCohortShadow();
     const hostHomeDir = await freshHome();
     let acknowledgeCalls = 0;
     let executeCalls = 0;
@@ -777,14 +884,16 @@ describe("runAttemptExecutorSegment - acknowledge runs before execute, and only 
     // is refused before any write - a pre-claim rejection, not a fault.
     const outcome = await runAttemptExecutorSegment(
       claimOptions(hostHomeDir, {
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "force",
           expected: { attemptId: "gone", generation: 1, sequence: 1 },
           newAttemptId: "attempt-1",
           initialPhase: "downloading",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
       }),
       async () => {
         acknowledgeCalls += 1;
@@ -953,8 +1062,11 @@ describe("runAttemptExecutorSegment - the dispatch ACK is stamped AFTER the clai
         await stampUpdateDispatchAck({
           hostHomeDir,
           nonce: "nonce-abcdefgh",
-          identity: claim.identity,
-          claimedAtIso: "2026-01-01T00:00:00.000Z",
+          decision: {
+            kind: "claimed",
+            identity: claim.identity,
+            claimedAtIso: "2026-01-01T00:00:00.000Z",
+          },
         });
       },
       async () => "ran",
@@ -972,7 +1084,10 @@ describe("runAttemptExecutorSegment - the dispatch ACK is stamped AFTER the clai
     );
     expect(decoded.kind).toBe("valid");
     if (decoded.kind !== "valid") return;
-    expect(decoded.ack.attemptId).toBe(stampedIdentity);
+    expect(decoded.ack.result).toMatchObject({
+      kind: "claimed",
+      attemptId: stampedIdentity,
+    });
     expect(decoded.ack.nonce).toBe("nonce-abcdefgh");
   });
 });
@@ -1006,6 +1121,8 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
           expected: null,
           newAttemptId: "adopted-attempt-1",
           initialPhase: "applying",
+          initialContinuation: null,
+          claim: null,
           nowIso: "2026-01-01T00:00:00.000Z",
         },
       },
@@ -1023,6 +1140,8 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
           continuation: "activate",
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:01:00.000Z",
         },
       },
@@ -1047,20 +1166,23 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
   // runs `runLocalAttemptExecutorSegment` -> here. Refusing an already-adopted
   // continuation on that path abandons the attempt the verification exists to
   // conclude - the Finding-2 stranding, on the verify route.
-  it("does NOT reject an ADOPTED continuation under the shipped shadow cohort", async () => {
+  it("does NOT reject an ADOPTED continuation under a shadow cohort", async () => {
+    mockCohortShadow();
     const hostHomeDir = await freshHome();
     const identity = await seedAdoptedActivationContinuation(hostHomeDir);
 
     const outcome = await runAttemptExecutorSegment(
       claimOptions(hostHomeDir, {
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "activate",
           expected: identity,
           newAttemptId: "unused-for-resume",
           initialPhase: "applying",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
       }),
       async () => {},
       async () => "ran",
@@ -1077,11 +1199,16 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
   });
 
   // The CONTROL half already exists above - "never calls acknowledge or
-  // execute when the cohort is shadow (the production default)" runs against a
-  // `freshHome()` with NOTHING adopted, and still expects
-  // `{rejected, cohort-disabled}`. Named here so the pair is discoverable
-  // together: that test is what stops "skip the gate whenever a record exists"
-  // - or deleting the gate - from satisfying the trace above.
+  // execute when the cohort is shadow" runs against a `freshHome()` with
+  // NOTHING adopted, and still expects `{rejected, cohort-disabled}`. Named
+  // here so the pair is discoverable together: that test is what stops "skip
+  // the gate whenever a record exists" - or deleting the gate - from
+  // satisfying the trace above.
+  //
+  // Both halves now MOCK the shadow verdict. Since the cutover the shipped
+  // policy is `eligible` on every platform, so the pair would otherwise pass
+  // with the gate disconnected: the trace would be admitted for the wrong
+  // reason and the control would never refuse.
 });
 
 describe("runAttemptExecutorSegment - recovery path runs the injected reader under the real capability/CLI-lock ordering", () => {
@@ -1115,6 +1242,8 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
           expected: null,
           newAttemptId: "attempt-1",
           initialPhase: "applying",
+          initialContinuation: null,
+          claim: null,
           nowIso: "2026-01-01T00:00:00.000Z",
         },
       },
@@ -1148,14 +1277,16 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
         // (`actionMayResume` never authorizes "start"). Reaching
         // `resume-new-generation` needs an identity-bound resume-class
         // request, matching the seeded record's identity.
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "activate",
           expected: { attemptId: "attempt-1", generation: 1, sequence: 1 },
           newAttemptId: "attempt-1",
           initialPhase: "downloading",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
         readRecoveryEvidence: () => {
           readRecoveryEvidenceCalls += 1;
           calls.push("read-recovery-evidence");
@@ -1323,14 +1454,16 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
         // (`actionMayResume` never authorizes "start"). Reaching
         // `resume-new-generation` needs an identity-bound resume-class
         // request, matching the seeded record's identity.
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "activate",
           expected: { attemptId: "attempt-1", generation: 1, sequence: 1 },
           newAttemptId: "attempt-1",
           initialPhase: "downloading",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
         readRecoveryEvidence: () => Promise.resolve(observation(evidence)),
       }),
       async () => {},
@@ -1515,14 +1648,16 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
     let retryExecuteCalls = 0;
     const retryOutcome = await runAttemptExecutorSegment(
       claimOptions(hostHomeDir, {
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "start",
           expected: null,
           newAttemptId: "attempt-2",
           initialPhase: "downloading",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
       }),
       async () => {
         retryAcknowledgeCalls += 1;
@@ -1546,6 +1681,1508 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
       expect(afterRetry.value.generation).toBe(1);
       expect(afterRetry.value.execution).toBe("active");
     }
+  });
+});
+
+describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-report (ticket 02)", () => {
+  /** A parked, claimable record - no holder, continuation "activate". */
+  async function seedParkedActivateRecord(
+    hostHomeDir: string,
+    attemptId: string,
+    targetVersion: string,
+  ): Promise<void> {
+    await mkdir(hostHomeDir, { recursive: true });
+    const acquired = await acquireUpdateAttemptLock({
+      hostHomeDir,
+      reason: "seed-parked-record",
+      waitMs: 0,
+      pollIntervalMs: 10,
+    });
+    if (acquired.kind !== "acquired") {
+      throw new Error(`expected the seeding lock, got ${acquired.kind}`);
+    }
+    const created = await commitAttemptMutation({
+      handle: acquired.handle,
+      intent: {
+        kind: "create",
+        request: {
+          targetVersion,
+          trigger: "manual",
+          action: "start",
+          expected: null,
+          newAttemptId: attemptId,
+          initialPhase: "applying",
+          initialContinuation: null,
+          claim: null,
+          nowIso: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    });
+    if (created.kind !== "committed") {
+      throw new Error(`seed create failed: ${created.kind}`);
+    }
+    const parked = await commitAttemptMutation({
+      handle: acquired.handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-to-activate",
+          continuation: "activate",
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          verification: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    if (parked.kind !== "committed") {
+      throw new Error(`seed park failed: ${parked.kind}`);
+    }
+    await acquired.handle.release();
+  }
+
+  /** An active record with no live holder - a segment that died mid-execution. */
+  async function seedInterruptedActiveRecordAt(
+    hostHomeDir: string,
+    attemptId: string,
+    targetVersion: string,
+    claim: HostUpdateAttemptClaimBaseline | null,
+  ): Promise<void> {
+    await mkdir(hostHomeDir, { recursive: true });
+    const acquired = await acquireUpdateAttemptLock({
+      hostHomeDir,
+      reason: "seed-interrupted-record",
+      waitMs: 0,
+      pollIntervalMs: 10,
+    });
+    if (acquired.kind !== "acquired") {
+      throw new Error(`expected the seeding lock, got ${acquired.kind}`);
+    }
+    const committed = await commitAttemptMutation({
+      handle: acquired.handle,
+      intent: {
+        kind: "create",
+        request: {
+          targetVersion,
+          trigger: "manual",
+          action: "start",
+          expected: null,
+          newAttemptId: attemptId,
+          initialPhase: "applying",
+          initialContinuation: null,
+          claim,
+          nowIso: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    });
+    if (committed.kind !== "committed") {
+      throw new Error(
+        `expected the seed create to commit, got ${committed.kind}`,
+      );
+    }
+    await acquired.handle.release();
+  }
+
+  it.each(["report", "reselect"] as const)(
+    "P2: a DECLINE closes an interrupted attempt it would otherwise strand (afterRecovery: %s)",
+    async (afterRecovery) => {
+      // Codex #1773. Recovery lives on the CLAIM path, so a release returned
+      // before `decideAttemptClaim` was ever taken - and an interrupted
+      // attempt for A, met by a run whose plan is a no-op for B, stayed active
+      // forever: no later default run names A, and every contender keeps
+      // refusing it as active.
+      // Falsification (the ablation): return the plain
+      // `{ kind: "released", reason, outcome: null }` from the release arm and
+      // both rows redden on the record still being active.
+      mockCohortEligible("linux");
+      const hostHomeDir = await freshHome();
+      await seedInterruptedActiveRecordAt(
+        hostHomeDir,
+        "attempt-p2-stale",
+        "1.2.3",
+        null,
+      );
+
+      const outcome = await runAttemptExecutorSegment(
+        claimOptions(hostHomeDir, {
+          afterRecovery,
+          request: async () => ({
+            kind: "release",
+            boundAttemptId: null,
+            boundIdentity: null,
+            reason: "nothing-to-do",
+          }),
+          // The world moved on: another actor installed and runs 3.0.0, so
+          // the interrupted 1.2.3 attempt is stale by evidence, not by phase.
+          readRecoveryEvidence: () =>
+            Promise.resolve(
+              observation({
+                installed: { kind: "verified", version: "3.0.0" },
+                staged: { kind: "absent" },
+                running: {
+                  kind: "verified",
+                  version: "3.0.0",
+                  owner: "host-home-bound",
+                },
+              }),
+            ),
+        }),
+        async () => {},
+        async () => "must-not-run",
+      );
+
+      expect(outcome.kind).toBe("released");
+      if (outcome.kind === "released") {
+        // The ACK can tell "nothing to do" from "nothing to do, and a dead
+        // run's attempt was closed".
+        expect(outcome.reason).toBe("nothing-to-do-stale-attempt-closed");
+        expect(outcome.outcome).not.toBeNull();
+        expect(outcome.outcome?.attemptId).toBe("attempt-p2-stale");
+      }
+
+      const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+      expect(onDisk.kind).toBe("valid");
+      if (onDisk.kind === "valid") {
+        // Closed, and NOTHING minted: still A's attempt, now terminal. This is
+        // the observable that stands in for "the `supersede` arm is
+        // unreachable when the recovery is driven with the record's own
+        // target" - a replacement would show up here as a different id.
+        expect(onDisk.value.attemptId).toBe("attempt-p2-stale");
+        expect(onDisk.value.execution).toBe("terminal");
+        expect(onDisk.value.targetVersion).toBe("1.2.3");
+      }
+    },
+  );
+
+  it("Q26: the released `outcome` carries the closure's VERDICT - a stale attempt closed as `complete`", async () => {
+    // The field `update-run.ts`'s Q16 guard reads, and the reason it reads a
+    // record rather than the reason string: the suffix is identical over a
+    // closure that settled `complete` and one that settled `failed`, so only
+    // this field can tell them apart.
+    //
+    // The twin is the P2 row above, whose evidence (installed and running
+    // 3.0.0 against a 1.2.3 record) settles `failed`. Here the evidence says
+    // the interrupted attempt's own target IS installed and running, so the
+    // recovery concludes it DONE - and the decline still declines, carrying
+    // that verdict out with it.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-q26-complete",
+      "1.2.3",
+      null,
+    );
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          boundAttemptId: null,
+          boundIdentity: null,
+          reason: "nothing-to-do",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "1.2.3" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "1.2.3",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("nothing-to-do-stale-attempt-closed");
+      // Non-null and `complete`: exactly the shape the CLI guard narrows on.
+      expect(outcome.outcome).not.toBeNull();
+      expect(outcome.outcome?.attemptId).toBe("attempt-q26-complete");
+      expect(outcome.outcome?.phase).toBe("complete");
+    }
+  });
+
+  it("P1: a decline whose bound IDENTITY missed leaves the active record alone", async () => {
+    // The guard widened at assembly. `boundAttemptId` matching is no longer
+    // enough to authorize a close: a verb can bind to the full
+    // `{attemptId, generation, sequence}`, and an attempt that advances and
+    // parks again keeps its id while moving the other two. An id-only guard
+    // therefore reads "this is the record you named" about a record the verb
+    // did not authorize.
+    //
+    // Falsification (the ablation): drop the identity disjunct and this row
+    // reddens on the record being terminalized, with the reason arriving
+    // suffixed.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-p1-moved",
+      "1.2.3",
+      null,
+    );
+    const before = await readUpdateAttemptRecord(hostHomeDir);
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async (current) => ({
+          kind: "release",
+          boundAttemptId: "attempt-p1-moved",
+          // Same id, a generation the record has since left behind.
+          boundIdentity: {
+            attemptId: "attempt-p1-moved",
+            generation:
+              (current.kind === "valid" ? current.value.generation : 0) + 1,
+            sequence: current.kind === "valid" ? current.value.sequence : 1,
+          },
+          reason: "refused-attempt-moved",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.reject(new Error("a stale refusal must not reach recovery")),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      // Unsuffixed, and no record handed back: nothing was closed.
+      expect(outcome.reason).toBe("refused-attempt-moved");
+      expect(outcome.outcome).toBeNull();
+    }
+    expect(await readUpdateAttemptRecord(hostHomeDir)).toEqual(before);
+  });
+
+  it("P1 control: a decline whose bound identity MATCHES closes as before", async () => {
+    // The control that keeps the row above from passing for the wrong reason.
+    // A guard that refused every non-null `boundIdentity` would satisfy it and
+    // would silently disable the #1773 cleanup for every bound verb.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-p1-matched",
+      "1.2.3",
+      null,
+    );
+    const seeded = await readUpdateAttemptRecord(hostHomeDir);
+    if (seeded.kind !== "valid") throw new Error("expected a seeded record");
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          boundAttemptId: "attempt-p1-matched",
+          boundIdentity: {
+            attemptId: seeded.value.attemptId,
+            generation: seeded.value.generation,
+            sequence: seeded.value.sequence,
+          },
+          reason: "nothing-to-do",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "3.0.0" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "3.0.0",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("nothing-to-do-stale-attempt-closed");
+      expect(outcome.outcome?.attemptId).toBe("attempt-p1-matched");
+    }
+    const after = await readUpdateAttemptRecord(hostHomeDir);
+    expect(after.kind).toBe("valid");
+    if (after.kind === "valid") expect(after.value.execution).toBe("terminal");
+  });
+
+  it("P1 legacy: a decline that named a MATCHED id and no identity closes as today", async () => {
+    // A dispatcher that predates `--expect-generation`/`--expect-sequence`
+    // sends `boundIdentity: null`, and must keep exactly today's behaviour.
+    // The widened guard has to be additive, not a new precondition: a version
+    // of it that required a non-null identity to close would pass both rows
+    // above and silently retire the #1773 cleanup on every un-upgraded host.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-p1-legacy",
+      "1.2.3",
+      null,
+    );
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          boundAttemptId: "attempt-p1-legacy",
+          boundIdentity: null,
+          reason: "nothing-to-do",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "3.0.0" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "3.0.0",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("nothing-to-do-stale-attempt-closed");
+      expect(outcome.outcome?.attemptId).toBe("attempt-p1-legacy");
+    }
+  });
+
+  it("P2 control: a BOUND decline that named ANOTHER attempt leaves this one alone", async () => {
+    // "You may close what you could have named" (cold review + ticket-02
+    // owner). #1773's justification is that the record is unreferenced DEBRIS,
+    // which is a claim about a record nobody will ever name. A bound verb whose
+    // id missed named something specific, and the record actually present is a
+    // bystander - after ticket 02's recovery fix, precisely what a CORRECT
+    // `--expect-attempt` resumes. Correct-id-resumes / wrong-id-destroys is not
+    // an acceptable pairing on a recovery verb.
+    //
+    // The deciding case is automated, not a typo: the reconciler dispatches
+    // bound verbs on a timer from a park's `attemptId`, so a record that moves
+    // between that read and this lock acquisition mismatches on an ordinary
+    // race - and would otherwise terminalize a record nothing named.
+    //
+    // Falsification (the ablation): drop the `boundAttemptId` guard from
+    // `releaseAfterClosingStaleAttempt` and this reddens on the record being
+    // terminalized, while the unbound P2 rows stay green.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-bystander",
+      "1.2.3",
+      null,
+    );
+    const before = await readUpdateAttemptRecord(hostHomeDir);
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          // The verb named a DIFFERENT attempt than the one on disk.
+          boundAttemptId: "attempt-the-caller-actually-named",
+          boundIdentity: null,
+          reason: "refused-attempt-gone",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.reject(
+            new Error("a bystander record must not reach recovery"),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      // The plain reason: nothing was closed, so nothing is claimed to be.
+      expect(outcome.reason).toBe("refused-attempt-gone");
+      expect(outcome.outcome).toBeNull();
+    }
+    const after = await readUpdateAttemptRecord(hostHomeDir);
+    expect(after).toEqual(before);
+    if (after.kind === "valid") {
+      expect(after.value.attemptId).toBe("attempt-bystander");
+      expect(after.value.execution).toBe("active");
+    }
+  });
+
+  it("P2 control: a DECLINE leaves a PARK exactly as it found it", async () => {
+    // The half that must not change. A park is waiting for its own
+    // continuation and is resumable by design (D-49); closing one here would
+    // destroy work a later run is entitled to finish.
+    // Falsification (the ablation): drop the `execution !== "active"` guard
+    // from `releaseAfterClosingStaleAttempt` and this reddens on the phase.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedParkedActivateRecord(hostHomeDir, "attempt-p2-park", "1.2.3");
+    const before = await readUpdateAttemptRecord(hostHomeDir);
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          boundAttemptId: null,
+          boundIdentity: null,
+          reason: "nothing-to-do",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.reject(new Error("a park must not reach recovery")),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("nothing-to-do");
+      expect(outcome.outcome).toBeNull();
+    }
+    const after = await readUpdateAttemptRecord(hostHomeDir);
+    expect(after).toEqual(before);
+    if (after.kind === "valid") {
+      expect(after.value.execution).toBe("parked");
+      expect(after.value.attemptId).toBe("attempt-p2-park");
+    }
+  });
+
+  it.each([
+    {
+      label:
+        "a verified STAGE (continuation resume-apply), afterRecovery report",
+      attemptId: "attempt-p2-resumable-stage-report",
+      recoveredActivation: "execute" as const,
+      afterRecovery: "report" as const,
+      evidence: {
+        installed: { kind: "verified" as const, version: "1.0.0" },
+        staged: { kind: "verified" as const, version: "1.2.3" },
+        running: {
+          kind: "verified" as const,
+          version: "1.0.0",
+          owner: "host-home-bound" as const,
+        },
+      },
+    },
+    {
+      label:
+        "a verified STAGE (continuation resume-apply), PRODUCTION shape (execute + reselect)",
+      attemptId: "attempt-p2-resumable-stage-reselect",
+      recoveredActivation: "execute" as const,
+      afterRecovery: "reselect" as const,
+      evidence: {
+        installed: { kind: "verified" as const, version: "1.0.0" },
+        staged: { kind: "verified" as const, version: "1.2.3" },
+        running: {
+          kind: "verified" as const,
+          version: "1.0.0",
+          owner: "host-home-bound" as const,
+        },
+      },
+    },
+    {
+      label:
+        "verified INSTALLED bytes (continuation activate), afterRecovery report",
+      attemptId: "attempt-p2-resumable-installed-report",
+      recoveredActivation: "park" as const,
+      afterRecovery: "report" as const,
+      evidence: {
+        installed: { kind: "verified" as const, version: "1.2.3" },
+        staged: { kind: "absent" as const },
+        running: {
+          kind: "verified" as const,
+          version: "1.0.0",
+          owner: "host-home-bound" as const,
+        },
+      },
+    },
+    {
+      label:
+        "verified INSTALLED bytes (continuation activate), PRODUCTION shape (execute + reselect)",
+      attemptId: "attempt-p2-resumable-installed-reselect",
+      recoveredActivation: "execute" as const,
+      afterRecovery: "reselect" as const,
+      evidence: {
+        installed: { kind: "verified" as const, version: "1.2.3" },
+        staged: { kind: "absent" as const },
+        running: {
+          kind: "verified" as const,
+          version: "1.0.0",
+          owner: "host-home-bound" as const,
+        },
+      },
+    },
+  ])(
+    "P2: a DECLINE never RESUMES a recoverable attempt - $label",
+    async ({ attemptId, recoveredActivation, afterRecovery, evidence }) => {
+      // The blocker the cold review found in the first cut of this fix.
+      // `supersede` is not the only arm of `decideAttemptRecovery` that creates
+      // work: with the targets equal the decision falls through to
+      // `recoveryContinuation`, and `actionMayResume("continue", …)` is
+      // UNCONDITIONALLY true (transition.ts). So a synthetic `continue` reached
+      // `resume-new-generation`, committed generation 2, returned `claimed`,
+      // and the caller RAN the segment - a run whose own plan was a no-op for B
+      // resuming and applying A. The user asked for nothing and got an install.
+      //
+      // `defer` is what closes it, and the transition core says so itself: "a
+      // defer request can reconcile to a terminal fact but can never start
+      // work." `actionMayResume` refuses `defer` for BOTH continuations.
+      //
+      // BOTH `afterRecovery` dispositions are rowed, because they fail
+      // DIFFERENTLY and only one of them is production. Under `report` the
+      // resume arm still commits generation 2 inside the recovery closure but
+      // the segment body never runs, so only the record shows it. Under
+      // `reselect` - what `update-run.ts:320` actually passes, beside
+      // `recoveredActivation: "execute"` at `:317` - the re-selection reaches
+      // the claim and the BODY RUNS: a run whose own plan was a no-op installs
+      // 1.2.3. A row that pinned only `report` would call the second one green.
+      //
+      // Falsification (the ablation): change `action: "defer"` back to
+      // `"continue"` in `releaseAfterClosingStaleAttempt`. All four rows redden.
+      //
+      // The two fixes INTERLOCK, and the ablation shows it. Reverting the
+      // action alone reddens all four on the RECORD (generation 2, still
+      // active) but not on `bodyRan`, because the trailing
+      // `{kind:"released", …}` catches the `claimed` the recovery now returns -
+      // defence in depth doing its job. Revert BOTH (action to `"continue"`
+      // AND the trailing arm to `return outcome;`) and all four redden on
+      // `bodyRan` instead: the segment runs and installs 1.2.3. Neither fix
+      // alone is sufficient - the resume arm commits its write inside the
+      // recovery closure, before any outcome is returned.
+      mockCohortEligible("linux");
+      const hostHomeDir = await freshHome();
+      await seedInterruptedActiveRecordAt(
+        hostHomeDir,
+        attemptId,
+        "1.2.3",
+        null,
+      );
+      const before = await readUpdateAttemptRecord(hostHomeDir);
+
+      let bodyRan = false;
+      const outcome = await runAttemptExecutorSegment(
+        claimOptions(hostHomeDir, {
+          recoveredActivation,
+          afterRecovery,
+          request: async () => ({
+            kind: "release",
+            boundAttemptId: null,
+            boundIdentity: null,
+            reason: "nothing-to-do",
+          }),
+          readRecoveryEvidence: () => Promise.resolve(observation(evidence)),
+        }),
+        async () => {},
+        async () => {
+          bodyRan = true;
+          return "must-not-run";
+        },
+      );
+
+      expect(bodyRan).toBe(false);
+      expect(outcome.kind).toBe("released");
+      if (outcome.kind === "released") {
+        // No suffix: nothing was CLOSED. A recoverable attempt is exactly the
+        // work D-49 protects, so the honest answer is the plain decline the
+        // selector already made, not a claim and not a failure.
+        expect(outcome.reason).toBe("nothing-to-do");
+        expect(outcome.outcome).toBeNull();
+      }
+
+      // Byte-for-byte untouched: no generation 2, no phase move, no
+      // continuation written. The resume arm commits INSIDE the recovery
+      // closure, so a fallback that only fixed the returned outcome would
+      // still show up here.
+      const after = await readUpdateAttemptRecord(hostHomeDir);
+      expect(after).toEqual(before);
+      if (after.kind === "valid") {
+        expect(after.value.attemptId).toBe(attemptId);
+        expect(after.value.generation).toBe(1);
+        expect(after.value.execution).toBe("active");
+      }
+    },
+  );
+
+  it("P2: a DECLINE never lets the RESELECT mint a fresh attempt behind it", async () => {
+    // Cold review, rev3. The `defer` action shuts `resume-new-generation`, but
+    // that check sits BELOW the terminalize arms - so under the caller's
+    // production `afterRecovery: "reselect"` a terminalizing recovery reached
+    // `afterTerminalizingRecovery`, called the selector a SECOND time, and
+    // could commit a brand-new claim. The second call decides in a different
+    // world: `selectClaim` maps the now-terminal record to `null`, so a
+    // selector that declined an ACTIVE record can legitimately claim against
+    // `null` - which is what the activation-debt route does when the host
+    // exits between the two under-lock activation reads.
+    //
+    // The observable that matters is NOT the returned outcome (the trailing
+    // fallback would flatten it to `released` either way) but what is left ON
+    // DISK: before the fix, a fresh attempt, generation 1, `downloading`,
+    // ACTIVE and unheld, while the caller was told "nothing to do".
+    //
+    // Falsification (the ablation): drop the `{...options, afterRecovery:
+    // "report"}` override and pass `options` through. This reddens on
+    // `selectorCalls` and on the minted record; the four rows above stay green,
+    // which is why this row exists.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-p2-reselect",
+      "1.2.3",
+      null,
+    );
+
+    let selectorCalls = 0;
+    let bodyRan = false;
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        // The production pair, which is the only one that reaches the second
+        // selector call.
+        recoveredActivation: "execute",
+        afterRecovery: "reselect",
+        request: async () => {
+          selectorCalls += 1;
+          if (selectorCalls === 1) {
+            return {
+              kind: "release",
+              boundAttemptId: null,
+              boundIdentity: null,
+              reason: "nothing-to-do",
+            };
+          }
+          return {
+            kind: "claim",
+            request: {
+              targetVersion: "1.2.3",
+              trigger: "manual",
+              action: "start",
+              expected: null,
+              newAttemptId: "attempt-review-minted",
+              initialPhase: "downloading",
+              initialContinuation: null,
+              claim: null,
+            },
+          };
+        },
+        // Terminalizing evidence: the world moved past 1.2.3 entirely, so the
+        // recovery concludes rather than resuming.
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "3.0.0" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "3.0.0",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => {
+        bodyRan = true;
+        return "must-not-run";
+      },
+    );
+
+    // The selector is asked ONCE. It is not side-effect free - it mutates the
+    // shared `SelectionFacts` the shell renders from - so a second call is a
+    // defect in its own right, before anything is committed.
+    expect(selectorCalls).toBe(1);
+    expect(bodyRan).toBe(false);
+    expect(outcome.kind).toBe("released");
+
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      // The recovery's terminal record for the ORIGINAL attempt - never the
+      // minted one.
+      expect(onDisk.value.attemptId).toBe("attempt-p2-reselect");
+      expect(onDisk.value.execution).toBe("terminal");
+    }
+  });
+
+  it("A1: the selector receives the record read UNDER the lock, and the executor's own lock is held while it runs", async () => {
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedParkedActivateRecord(hostHomeDir, "attempt-a1", "1.2.3");
+
+    const capturedCurrents: HostUpdateAttemptRead[] = [];
+    const lockProbes: AcquireUpdateAttemptLockOutcome[] = [];
+    const selector: ExecutorClaimSelector = async (current) => {
+      capturedCurrents.push(current);
+      lockProbes.push(
+        await acquireUpdateAttemptLock({
+          hostHomeDir,
+          reason: "a1-probe-from-inside-selector",
+          waitMs: 0,
+          pollIntervalMs: 10,
+        }),
+      );
+      return {
+        kind: "release",
+        boundAttemptId: null,
+        boundIdentity: null,
+        reason: "a1-observed",
+      };
+    };
+
+    await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, { request: selector }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(capturedCurrents).toHaveLength(1);
+    const seen = capturedCurrents[0];
+    expect(seen?.kind).toBe("valid");
+    if (seen?.kind === "valid") {
+      expect(seen.value.attemptId).toBe("attempt-a1");
+    }
+    // The executor's own capability already holds the lock while the
+    // selector runs, so a second acquisition attempt from inside it must not
+    // itself succeed as "acquired".
+    expect(lockProbes).toHaveLength(1);
+    expect(lockProbes[0]?.kind).not.toBe("acquired");
+  });
+
+  it("A2: a selector that resolves on a later tick still decides the claim with the record it received, and nothing is written before it resolves", async () => {
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+
+    const capturedCurrents: HostUpdateAttemptRead[] = [];
+    const diskDuringDefers: HostUpdateAttemptRead[] = [];
+    const selector: ExecutorClaimSelector = async (current) => {
+      capturedCurrents.push(current);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      diskDuringDefers.push(await readUpdateAttemptRecord(hostHomeDir));
+      return {
+        kind: "claim",
+        request: {
+          targetVersion: "1.2.3",
+          trigger: "manual",
+          action: "start",
+          expected: null,
+          newAttemptId: "attempt-deferred",
+          initialPhase: "downloading",
+          initialContinuation: null,
+          claim: null,
+        },
+      };
+    };
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, { request: selector }),
+      async () => {},
+      async (_capability, claim) => claim,
+    );
+
+    expect(capturedCurrents).toHaveLength(1);
+    expect(capturedCurrents[0]?.kind).toBe("absent");
+    expect(diskDuringDefers).toHaveLength(1);
+    expect(diskDuringDefers[0]?.kind).toBe("absent");
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind === "executed") {
+      expect(outcome.claim.record.attemptId).toBe("attempt-deferred");
+    }
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-deferred");
+    }
+  });
+
+  it("A3: a selector that throws leaves no record and no ACK stamp, and never calls acknowledge/execute", async () => {
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    let acknowledgeCalls = 0;
+    let executeCalls = 0;
+    const selector: ExecutorClaimSelector = async () => {
+      throw new Error("selector exploded");
+    };
+
+    await expect(
+      runAttemptExecutorSegment(
+        claimOptions(hostHomeDir, { request: selector }),
+        async (claim) => {
+          acknowledgeCalls += 1;
+          await stampUpdateDispatchAck({
+            hostHomeDir,
+            nonce: "nonce-a3",
+            decision: {
+              kind: "claimed",
+              identity: claim.identity,
+              claimedAtIso: "2026-01-01T00:00:00.000Z",
+            },
+          });
+        },
+        async () => {
+          executeCalls += 1;
+          return "must-not-run";
+        },
+      ),
+    ).rejects.toThrow("selector exploded");
+
+    expect(acknowledgeCalls).toBe(0);
+    expect(executeCalls).toBe(0);
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("absent");
+    expect(existsSync(updateDispatchAckPath(hostHomeDir))).toBe(false);
+  });
+
+  it("A4: a selector that releases produces `released` with that reason and no claim, and writes nothing", async () => {
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    let acknowledgeCalls = 0;
+    let executeCalls = 0;
+    const selector: ExecutorClaimSelector = async () => ({
+      kind: "release",
+      boundAttemptId: null,
+      boundIdentity: null,
+      reason: "nothing-to-do",
+    });
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, { request: selector }),
+      async () => {
+        acknowledgeCalls += 1;
+      },
+      async () => {
+        executeCalls += 1;
+        return "must-not-run";
+      },
+    );
+
+    expect(outcome).toEqual({
+      kind: "released",
+      reason: "nothing-to-do",
+      outcome: null,
+    });
+    expect(acknowledgeCalls).toBe(0);
+    expect(executeCalls).toBe(0);
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("absent");
+  });
+
+  it("A5: createAfterSupersede re-selects against the POST-supersede read, and a late resolution still creates from it", async () => {
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedParkedActivateRecord(hostHomeDir, "attempt-a5-old", "1.2.3");
+
+    let calls = 0;
+    const seenCurrents: HostUpdateAttemptRead[] = [];
+    const selector: ExecutorClaimSelector = async (current) => {
+      seenCurrents.push(current);
+      calls += 1;
+      if (calls === 2) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      return {
+        kind: "claim",
+        request: {
+          targetVersion: "9.9.9",
+          trigger: "manual",
+          action: "start",
+          expected: null,
+          newAttemptId: "attempt-a5-new",
+          initialPhase: "downloading",
+          initialContinuation: null,
+          claim: null,
+        },
+      };
+    };
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, { request: selector }),
+      async () => {},
+      async (_capability, claim) => claim,
+    );
+
+    expect(calls).toBe(2);
+    expect(seenCurrents).toHaveLength(2);
+    const first = seenCurrents[0];
+    expect(first?.kind).toBe("valid");
+    if (first?.kind === "valid") {
+      expect(first.value.attemptId).toBe("attempt-a5-old");
+    }
+    const second = seenCurrents[1];
+    expect(second?.kind).toBe("valid");
+    if (second?.kind === "valid") {
+      expect(second.value.attemptId).toBe("attempt-a5-old");
+      expect(second.value.execution).toBe("terminal");
+    }
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind === "executed") {
+      expect(outcome.claim.record.attemptId).toBe("attempt-a5-new");
+      expect(outcome.claim.record.targetVersion).toBe("9.9.9");
+    }
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-a5-new");
+      expect(onDisk.value.execution).toBe("active");
+    }
+  });
+
+  it("A5 twin: a RELEASE on the post-supersede reselect still names the attempt this run superseded (CodeRabbit T3)", async () => {
+    // The same two-call shape as A5, with the second call declining: the world
+    // moved between the two reads under the lock (the supersede is durable by
+    // then, so the selector's own live reads can legitimately answer "nothing
+    // left to do").
+    //
+    // This arm used to return `outcome: null`, which the type documents as
+    // "a plain release wrote nothing" - a generic nothing-to-do reported over
+    // an attempt this segment terminalized. The recovery reselect arm carries
+    // its terminal record for exactly this reason.
+    // Falsification (the ablation): return `outcome: null` from
+    // `createAfterSupersede`'s release arm and the `attemptId` assertion
+    // reddens.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedParkedActivateRecord(hostHomeDir, "attempt-a5t-old", "1.2.3");
+
+    let calls = 0;
+    const selector: ExecutorClaimSelector = async () => {
+      calls += 1;
+      return calls === 1
+        ? {
+            kind: "claim",
+            request: {
+              targetVersion: "9.9.9",
+              trigger: "manual",
+              action: "start",
+              expected: null,
+              newAttemptId: "attempt-a5t-new",
+              initialPhase: "downloading",
+              initialContinuation: null,
+              claim: null,
+            },
+          }
+        : {
+            kind: "release",
+            boundAttemptId: null,
+            boundIdentity: null,
+            reason: "install-changed-under-lock",
+          };
+    };
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, { request: selector }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(calls).toBe(2);
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("install-changed-under-lock");
+      expect(outcome.outcome).not.toBeNull();
+      expect(outcome.outcome?.attemptId).toBe("attempt-a5t-old");
+      expect(outcome.outcome?.phase).toBe("superseded");
+      expect(outcome.outcome?.execution).toBe("terminal");
+    }
+    // The supersede stands and NO replacement was minted: the decline is a
+    // decline, not a half-finished two-write sequence.
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-a5t-old");
+      expect(onDisk.value.phase).toBe("superseded");
+    }
+  });
+
+  function startSelectionFor(
+    targetVersion: string,
+    newAttemptId: string,
+  ): ExecutorClaimSelection {
+    return {
+      kind: "claim",
+      request: {
+        targetVersion,
+        trigger: "manual",
+        action: "start",
+        expected: null,
+        newAttemptId,
+        initialPhase: "downloading",
+        initialContinuation: null,
+        claim: null,
+      },
+    };
+  }
+
+  it("A6: `reselect` after a terminalizing recovery starts the other target (interrupted A + request B)", async () => {
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-a6-a",
+      "1.2.3",
+      null,
+    );
+
+    let calls = 0;
+    const seenCurrents: HostUpdateAttemptRead[] = [];
+    const selector: ExecutorClaimSelector = async (current) => {
+      seenCurrents.push(current);
+      calls += 1;
+      return startSelectionFor("9.9.9", "attempt-a6-b");
+    };
+    let executeCalls = 0;
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: selector,
+        afterRecovery: "reselect",
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "1.2.3" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "1.2.3",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async (_capability, claim) => {
+        executeCalls += 1;
+        return claim;
+      },
+    );
+
+    expect(calls).toBe(2);
+    const second = seenCurrents[1];
+    expect(second?.kind).toBe("valid");
+    if (second?.kind === "valid") {
+      expect(second.value.attemptId).toBe("attempt-a6-a");
+      expect(second.value.phase).toBe("complete");
+      expect(second.value.execution).toBe("terminal");
+    }
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind === "executed") {
+      expect(outcome.claim.record.targetVersion).toBe("9.9.9");
+      expect(outcome.claim.record.attemptId).toBe("attempt-a6-b");
+    }
+    expect(executeCalls).toBe(1);
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-a6-b");
+      expect(onDisk.value.execution).toBe("active");
+    }
+  });
+
+  it("A7: a declined reselect carries the RECOVERY's reason and the terminal record, never the selector's - complete and failed twins", async () => {
+    mockCohortEligible("linux");
+
+    // complete twin
+    {
+      const hostHomeDir = await freshHome();
+      await seedInterruptedActiveRecordAt(
+        hostHomeDir,
+        "attempt-a7c-a",
+        "1.2.3",
+        null,
+      );
+      let calls = 0;
+      const selector: ExecutorClaimSelector = async () => {
+        calls += 1;
+        return calls === 1
+          ? startSelectionFor("9.9.9", "attempt-a7c-b")
+          : {
+              kind: "release",
+              boundAttemptId: null,
+              boundIdentity: null,
+              reason: "nothing-to-do",
+            };
+      };
+
+      const outcome = await runAttemptExecutorSegment(
+        claimOptions(hostHomeDir, {
+          request: selector,
+          afterRecovery: "reselect",
+          readRecoveryEvidence: () =>
+            Promise.resolve(
+              observation({
+                installed: { kind: "verified", version: "1.2.3" },
+                staged: { kind: "absent" },
+                running: {
+                  kind: "verified",
+                  version: "1.2.3",
+                  owner: "host-home-bound",
+                },
+              }),
+            ),
+        }),
+        async () => {},
+        async () => "must-not-run",
+      );
+
+      expect(outcome.kind).toBe("released");
+      if (outcome.kind === "released") {
+        expect(outcome.reason).toBe("recovered-complete");
+        expect(outcome.reason).not.toBe("nothing-to-do");
+        expect(outcome.outcome).not.toBeNull();
+        expect(outcome.outcome?.attemptId).toBe("attempt-a7c-a");
+        expect(outcome.outcome?.phase).toBe("complete");
+        expect(outcome.outcome?.execution).toBe("terminal");
+      }
+    }
+
+    // failed twin - a positively bound running host that contradicts the
+    // installed leg (`recoveryEvidenceContradicts`).
+    {
+      const hostHomeDir = await freshHome();
+      await seedInterruptedActiveRecordAt(
+        hostHomeDir,
+        "attempt-a7f-a",
+        "1.2.3",
+        null,
+      );
+      let calls = 0;
+      const selector: ExecutorClaimSelector = async () => {
+        calls += 1;
+        return calls === 1
+          ? startSelectionFor("9.9.9", "attempt-a7f-b")
+          : {
+              kind: "release",
+              boundAttemptId: null,
+              boundIdentity: null,
+              reason: "nothing-to-do",
+            };
+      };
+
+      const outcome = await runAttemptExecutorSegment(
+        claimOptions(hostHomeDir, {
+          request: selector,
+          afterRecovery: "reselect",
+          readRecoveryEvidence: () =>
+            Promise.resolve(
+              observation({
+                installed: { kind: "verified", version: "9.9.9" },
+                staged: { kind: "absent" },
+                running: {
+                  kind: "verified",
+                  version: "1.2.3",
+                  owner: "host-home-bound",
+                },
+              }),
+            ),
+        }),
+        async () => {},
+        async () => "must-not-run",
+      );
+
+      expect(outcome.kind).toBe("released");
+      if (outcome.kind === "released") {
+        expect(outcome.reason).toBe("recovered-failed");
+        expect(outcome.reason).not.toBe("nothing-to-do");
+        expect(outcome.outcome).not.toBeNull();
+        expect(outcome.outcome?.attemptId).toBe("attempt-a7f-a");
+        expect(outcome.outcome?.phase).toBe("failed");
+        expect(outcome.outcome?.execution).toBe("terminal");
+      }
+    }
+  });
+
+  it("A8: a reselect whose claim is REFUSED returns `rejected` with the core's reason, and leaves the terminal record standing", async () => {
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-a8-a",
+      "1.2.3",
+      null,
+    );
+
+    // The SAME identity-bound activate request on every call, carrying the
+    // PRE-recovery identity (generation 1) - recovery bumps the generation to
+    // 2, so the second call's claim is refused stale-expectation.
+    const staleActivateSelection: ExecutorClaimSelection = {
+      kind: "claim",
+      request: {
+        targetVersion: "1.2.3",
+        trigger: "manual",
+        action: "activate",
+        expected: { attemptId: "attempt-a8-a", generation: 1, sequence: 1 },
+        newAttemptId: "unused",
+        initialPhase: "preparing",
+        initialContinuation: null,
+        claim: null,
+      },
+    };
+    let calls = 0;
+    const selector: ExecutorClaimSelector = async () => {
+      calls += 1;
+      return staleActivateSelection;
+    };
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: selector,
+        afterRecovery: "reselect",
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "1.2.3" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "1.2.3",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(calls).toBe(2);
+    expect(outcome.kind).toBe("rejected");
+    if (outcome.kind === "rejected") {
+      expect(outcome.reason).toBe("stale-expectation");
+    }
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-a8-a");
+      expect(onDisk.value.phase).toBe("complete");
+      expect(onDisk.value.execution).toBe("terminal");
+    }
+  });
+
+  it('A9: `recoveredActivation: "execute"` returns the resumed ACTIVE record to `execute` instead of parking it (control: the existing "park" test)', async () => {
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-1",
+      "1.2.3",
+      null,
+    );
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: fixedSelection({
+          targetVersion: "1.2.3",
+          trigger: "manual",
+          action: "activate",
+          expected: { attemptId: "attempt-1", generation: 1, sequence: 1 },
+          newAttemptId: "attempt-1",
+          initialPhase: "downloading",
+          initialContinuation: null,
+          claim: null,
+        }),
+        recoveredActivation: "execute",
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "1.2.3" },
+              staged: { kind: "absent" },
+              running: { kind: "absent" },
+            }),
+          ),
+      }),
+      async () => {},
+      async (_capability, claim) => claim,
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind === "executed") {
+      const record: HostUpdateAttemptRecord = outcome.claim.record;
+      expect(record.phase).toBe("preparing");
+      expect(record.continuation).toBe("activate");
+      expect(record.execution).toBe("active");
+      expect(record.generation).toBe(2);
+    }
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.phase).toBe("preparing");
+      expect(onDisk.value.continuation).toBe("activate");
+      expect(onDisk.value.execution).toBe("active");
+    }
+  });
+
+  /**
+   * Real install fixture with NO pid.json (running absent), through the same
+   * sandboxed `store/paths` + process-identity + host-rpc boundaries the
+   * genuine-proof tests in "execute()'s complete() closure" use - but without
+   * the running snapshot, so recovery decides `resume-new-generation`/
+   * `activate` rather than a terminal outcome.
+   */
+  async function seedGenuineInstallOnlyAt(
+    hostHomeDir: string,
+    version: string,
+    installId: string,
+  ): Promise<void> {
+    currentHome.value = hostHomeDir;
+    const installDir = paths.hostInstallDir("production");
+    await mkdir(installDir, { recursive: true });
+    const executablePath = join(installDir, "traycer-host");
+    writeFileSync(executablePath, "binary-bytes");
+    await writeHostInstallRecord("production", {
+      installId,
+      version,
+      runtimeVersion: null,
+      platform: "linux",
+      arch: "x64",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      source: { kind: "registry", value: version },
+      archiveSha256: "a".repeat(64),
+      executableSha256: createHash("sha256")
+        .update("binary-bytes")
+        .digest("hex"),
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+      signatureKeyId: "test-key",
+      sizeBytes: 1234,
+      executablePath,
+    });
+  }
+
+  it("A10: a recovered activation park carries a refreshed baseline EQUAL to the live install record - and a claim-less record parks claim-less", async () => {
+    mockCohortEligible("linux");
+
+    // Positive half: a deliberately STALE seeded claim baseline.
+    {
+      const hostHomeDir = await freshHome();
+      await seedGenuineInstallOnlyAt(hostHomeDir, "1.2.3", "install-1");
+      await seedInterruptedActiveRecordAt(hostHomeDir, "attempt-a10", "1.2.3", {
+        installedVersion: "1.2.2",
+        installGeneration: "id:install-0",
+        stageFingerprint: null,
+        allowDowngrade: false,
+      });
+
+      const outcome = await runLocalAttemptExecutorSegment(
+        claimOptions(hostHomeDir, {
+          request: fixedSelection({
+            targetVersion: "1.2.3",
+            trigger: "manual",
+            action: "activate",
+            expected: { attemptId: "attempt-a10", generation: 1, sequence: 1 },
+            newAttemptId: "unused",
+            initialPhase: "preparing",
+            initialContinuation: null,
+            claim: null,
+          }),
+        }),
+        async () => {},
+        async () => "must-not-run",
+      );
+      expect(outcome.kind).toBe("executed");
+
+      const liveInstall = await readHostInstallRecord("production");
+      expect(liveInstall).not.toBeNull();
+      if (liveInstall === null)
+        throw new Error("expected a live install record");
+      const expectedGeneration = encodeInstallGeneration({
+        installId: liveInstall.installId,
+        installedAt: liveInstall.installedAt,
+        archiveSha256: liveInstall.archiveSha256,
+        version: liveInstall.version,
+      });
+
+      const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+      expect(onDisk.kind).toBe("valid");
+      if (onDisk.kind === "valid") {
+        expect(onDisk.value.phase).toBe("waiting-to-activate");
+        const claim = onDisk.value.claim;
+        expect(claim).not.toBeUndefined();
+        if (claim === undefined) throw new Error("expected a claim baseline");
+        expect(claim.installedVersion).toBe(liveInstall.version);
+        expect(claim.installedVersion).not.toBe("1.2.2");
+        expect(claim.installGeneration).toBe(expectedGeneration);
+        expect(claim.installGeneration).not.toBe("id:install-0");
+        expect(claim.allowDowngrade).toBe(false);
+      }
+    }
+
+    // Negative twin: a claim-less seeded record parks claim-less. A refresh
+    // may not grant a baseline nobody issued.
+    {
+      const hostHomeDir = await freshHome();
+      await seedGenuineInstallOnlyAt(hostHomeDir, "1.2.3", "install-2");
+      await seedInterruptedActiveRecordAt(
+        hostHomeDir,
+        "attempt-a10-noclaim",
+        "1.2.3",
+        null,
+      );
+
+      const outcome = await runLocalAttemptExecutorSegment(
+        claimOptions(hostHomeDir, {
+          request: fixedSelection({
+            targetVersion: "1.2.3",
+            trigger: "manual",
+            action: "activate",
+            expected: {
+              attemptId: "attempt-a10-noclaim",
+              generation: 1,
+              sequence: 1,
+            },
+            newAttemptId: "unused",
+            initialPhase: "preparing",
+            initialContinuation: null,
+            claim: null,
+          }),
+        }),
+        async () => {},
+        async () => "must-not-run",
+      );
+      expect(outcome.kind).toBe("executed");
+
+      const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+      expect(onDisk.kind).toBe("valid");
+      if (onDisk.kind === "valid") {
+        expect(onDisk.value.phase).toBe("waiting-to-activate");
+        expect(onDisk.value.claim).toBeUndefined();
+      }
+    }
+  });
+
+  it("A11: dispatchAttemptExecutor maps a `released` acknowledgement to `released`, and never reconciles", async () => {
+    mockCohortEligible("linux");
+    let reconcileCalls = 0;
+    const releasedOutcome: Extract<ExecutorClaimOutcome, { kind: "released" }> =
+      { kind: "released", reason: "nothing-to-do", outcome: null };
+    const ack: ExecutorPrivateAcknowledgement = {
+      nonce: "n1",
+      outcome: releasedOutcome,
+    };
+    const child = childWithAck(() => Promise.resolve(ack));
+    const outcome = await dispatchAttemptExecutor(
+      dispatchOptions({
+        nonce: "n1",
+        spawn: () => Promise.resolve(child),
+        reconcile: () => {
+          reconcileCalls += 1;
+          return Promise.resolve(null);
+        },
+      }),
+    );
+    expect(outcome).toEqual({ kind: "released", outcome: releasedOutcome });
+    expect(reconcileCalls).toBe(0);
   });
 });
 
@@ -1606,6 +3243,8 @@ describe("execute()'s complete() closure - fault points around the terminal writ
             continuation: null,
             progress: null,
             error: null,
+            claimRefresh: null,
+            verification: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         },
@@ -1619,14 +3258,39 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     }
   }
 
+  /**
+   * `targetVersion` is explicit rather than defaulted because the Q1 rows and
+   * every pre-existing row here disagree about it, and the disagreement is
+   * load-bearing: `claimOptions` writes the target into the CLAIM record while
+   * `seedGenuineVerifiedProof*` writes the host's own version into the install
+   * record, `pid.json` and the RPC snapshot. The completion refuses a mismatch
+   * between the two, so a row that moves the fixture's version without moving
+   * the target here is rejected for a version mismatch and never reaches the
+   * stamp arm it means to exercise - green or red for the wrong reason. Lint
+   * bans a default value, which is the right ban here: every caller says which
+   * side of the stamp floor it is on.
+   */
   async function runToVerifyingThenComplete(
     hostHomeDir: string,
     reason: string,
     faults: UpdateExecutorFaults,
+    targetVersion: string,
   ) {
     mockCohortEligible("linux");
     return runLocalAttemptExecutorSegment(
-      claimOptions(hostHomeDir, { faults }),
+      claimOptions(hostHomeDir, {
+        faults,
+        request: fixedSelection({
+          targetVersion,
+          trigger: "manual",
+          action: "start",
+          expected: null,
+          newAttemptId: "attempt-1",
+          initialPhase: "downloading",
+          initialContinuation: null,
+          claim: null,
+        }),
+      }),
       async () => {},
       async (capability, claim, complete) => {
         await advanceToVerifying(capability, claim, hostHomeDir, reason);
@@ -1648,6 +3312,23 @@ describe("execute()'s complete() closure - fault points around the terminal writ
   async function seedGenuineVerifiedProofAt(
     hostHomeDir: string,
     version: string,
+  ): Promise<void> {
+    await seedGenuineVerifiedProofWithStamp(
+      hostHomeDir,
+      version,
+      "linux:boot-a 4242",
+    );
+  }
+
+  /**
+   * The same genuine fixture, with the #1763 start stamp as a parameter.
+   * `null` models every host released through 1.3.0-rc.3 - none of them write
+   * it - which is the population Q1 is about.
+   */
+  async function seedGenuineVerifiedProofWithStamp(
+    hostHomeDir: string,
+    version: string,
+    processStartIdentity: string | null,
   ): Promise<void> {
     currentHome.value = hostHomeDir;
     const installDir = paths.hostInstallDir("production");
@@ -1683,7 +3364,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
         version,
         websocketUrl: "ws://127.0.0.1:58036/rpc",
         startedAt: "2026-01-01T00:00:00.000Z",
-        processStartIdentity: "linux:boot-a 4242",
+        processStartIdentity,
       }),
       "utf8",
     );
@@ -1707,6 +3388,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       hostHomeDir,
       "complete-genuine",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.2.3",
     );
 
     expect(outcome.kind).toBe("executed");
@@ -1715,6 +3397,138 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     if (outcome.result.kind === "committed") {
       expect(outcome.result.record.phase).toBe("complete");
     }
+  });
+
+  it("Q1 END TO END: the terminal write COMMITS for a below-floor target whose host carries no start stamp", async () => {
+    // The row the whole Q1 remedy exists for, and the one that catches the
+    // half nobody looks at. Fixing only the verify leg's poll loop leaves this
+    // write deciding strictly on its own, so a healthy pre-stamp host polls
+    // green and is then refused `intent-not-legal` at the commit - reported to
+    // the user as a verify-timeout on a machine that is up and serving.
+    //
+    // 1.1.5 is below `HOST_START_STAMP_FLOOR`, and no host at that version
+    // writes `processStartIdentity`. This is Linux E8v leg 1 in miniature.
+    //
+    // The version is <= 1.1.8 deliberately, and that bound is chosen against
+    // the OBSERVATION rather than against today's constant. Three lines are in
+    // play and only one of them is stable: the shipped
+    // `HOST_START_STAMP_FLOOR` is the err-high proven line (1.1.11), and it
+    // drops to `HOST_START_STAMP_WRITER_FLOOR` (1.1.9) when the Linux
+    // 1.1.9/1.1.10 rows land. <= 1.1.8 is the band where raw `pid.json`
+    // readings show NO stamp, so it is below every line the constant can take,
+    // and this row keeps asserting the arm it names across that move. The
+    // floor has moved twice already; a row pinned to whatever it is today goes
+    // green for the wrong mechanism on the third move, and 1.1.11 and 1.2.0
+    // additionally fail verify for a different, still-open reason (Q15).
+    const hostHomeDir = await freshHome();
+    await seedGenuineVerifiedProofWithStamp(hostHomeDir, "1.1.5", null);
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-q1-prestamp",
+      NO_UPDATE_EXECUTOR_FAULTS,
+      "1.1.5",
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.result.kind).toBe("committed");
+    if (outcome.result.kind === "committed") {
+      expect(outcome.result.record.phase).toBe("complete");
+      // And the record SAYS it verified weakly. Without this the fix would be
+      // silent: a machine verified through the fallback would be
+      // indistinguishable from one verified fully, which is the property the
+      // positive-write key exists to remove.
+      expect(outcome.result.record.verification).toEqual({
+        mode: "version-only",
+        reason: "pid-start-stamp-missing",
+        floor: HOST_START_STAMP_FLOOR,
+      });
+    }
+    // The identity verdict was never consulted: there was no stamp to consult
+    // it with. Distinguishes "skipped a check it could not make" from "made it
+    // and ignored the answer".
+    expect(rpcMocks.identityVerdict).not.toHaveBeenCalled();
+    // Ablation: hard-code `"identity-required"` at this function's
+    // `observeAttemptRecoveryEvidence` call and this row reddens as
+    // `rejected`/`intent-not-legal` while every other terminal-write test
+    // stays green - which is exactly how the gap survived being written.
+  });
+
+  it("CONTROL: a below-floor target whose host HAS a stamp records `identity`, not `version-only`", async () => {
+    // The record reports what the run DID, never what its policy allowed. This
+    // target is below the floor, so the fallback was permitted - and unused,
+    // because the stamp was there. A record that said `version-only` here
+    // would overstate the weakness and make the field useless for deciding
+    // which machines actually need re-verifying.
+    const hostHomeDir = await freshHome();
+    await seedGenuineVerifiedProofWithStamp(
+      hostHomeDir,
+      "1.1.5",
+      "linux:boot-a 4242",
+    );
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-q1-belowfloor-stamped",
+      NO_UPDATE_EXECUTOR_FAULTS,
+      "1.1.5",
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.result.kind).toBe("committed");
+    if (outcome.result.kind === "committed") {
+      expect(outcome.result.record.verification).toEqual({ mode: "identity" });
+    }
+    expect(rpcMocks.identityVerdict).toHaveBeenCalled();
+  });
+
+  it("CONTROL: an ABOVE-floor target whose host carries no stamp is still REJECTED at the terminal write", async () => {
+    // The gate is on the TARGET, so a post-floor host that fails to write the
+    // stamp is a real fault and must still fail. Without this row the fix
+    // above is indistinguishable from "stop checking identity".
+    const hostHomeDir = await freshHome();
+    await seedGenuineVerifiedProofWithStamp(hostHomeDir, "1.4.2", null);
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-q1-postfloor",
+      NO_UPDATE_EXECUTOR_FAULTS,
+      "1.2.3",
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.result.kind).toBe("rejected");
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") expect(onDisk.value.phase).toBe("verifying");
+  });
+
+  it("CONTROL: a below-floor target whose host DOES carry a stamp still has its identity compared", async () => {
+    // Fallback, not blanket, proven at the terminal write too: the policy is
+    // permissive for this target, and the stamp is still consulted because it
+    // exists. A recycled pid on such a host is therefore still caught here.
+    const hostHomeDir = await freshHome();
+    await seedGenuineVerifiedProofWithStamp(
+      hostHomeDir,
+      "1.1.5",
+      "linux:boot-a 4242",
+    );
+    rpcMocks.identityVerdict.mockResolvedValue("mismatch");
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-q1-recycled",
+      NO_UPDATE_EXECUTOR_FAULTS,
+      "1.1.5",
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.result.kind).toBe("rejected");
+    expect(rpcMocks.identityVerdict).toHaveBeenCalled();
   });
 
   it("the legal preparing/applying/restarting/verifying advances bump sequence past the claimed identity, yet zero-argument complete() still commits - it re-derives the current verifying identity from the canonical read rather than reusing the stale claim", async () => {
@@ -1822,12 +3636,80 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       hostHomeDir,
       "complete-wrong-version",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.2.3",
     );
 
     expect(outcome.kind).toBe("executed");
     if (outcome.kind === "executed")
       expect(outcome.result.kind).toBe("rejected");
 
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") expect(onDisk.value.phase).toBe("verifying");
+  });
+
+  /**
+   * The C/R collision, as a genuine fixture: the install record names catalog
+   * version V but stamps a DIFFERENT `runtimeVersion`, and a healthy host
+   * reports V. Every version string the completion gate compares reads equal
+   * to the target - which is exactly why this fixture exists.
+   */
+  async function seedGenuineCollisionProofAt(
+    hostHomeDir: string,
+    version: string,
+    runtimeVersion: string,
+  ): Promise<void> {
+    await seedGenuineVerifiedProofAt(hostHomeDir, version);
+    await writeHostInstallRecord("production", {
+      installId: "install-1",
+      version,
+      runtimeVersion,
+      platform: "linux",
+      arch: "x64",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      source: { kind: "registry", value: version },
+      archiveSha256: "a".repeat(64),
+      executableSha256: createHash("sha256")
+        .update("binary-bytes")
+        .digest("hex"),
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+      signatureKeyId: "test-key",
+      sizeBytes: 1234,
+      executablePath: join(paths.hostInstallDir("production"), "traycer-host"),
+    });
+  }
+
+  it("a `foreign` running leg never completes: the C/R collision is rejected intent-not-legal (never writes), even though the host reports the exact target version", async () => {
+    const hostHomeDir = await freshHome();
+    // The installed leg genuinely verifies 1.2.3 and the live host genuinely
+    // answers `host.status` at 1.2.3 - the shape that completed before D9.
+    // The install record names a different runtime stamp, so the process is
+    // NOT running the archive this record vouches for: `foreign`, which no
+    // equality in the completion gate accepts.
+    await seedGenuineCollisionProofAt(
+      hostHomeDir,
+      "1.2.3",
+      "staging.1700000000.abc123",
+    );
+
+    const outcome = await runToVerifyingThenComplete(
+      hostHomeDir,
+      "complete-collision",
+      NO_UPDATE_EXECUTOR_FAULTS,
+      "1.2.3",
+    );
+
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind === "executed") {
+      expect(outcome.result.kind).toBe("rejected");
+      if (outcome.result.kind === "rejected") {
+        expect(outcome.result.reason).toBe("intent-not-legal");
+      }
+    }
+
+    // Nothing was written: the attempt is still `verifying`, waiting for a
+    // host that is genuinely running the target. Reading the collision as
+    // `verified` instead would have completed this attempt falsely.
     const onDisk = await readUpdateAttemptRecord(hostHomeDir);
     expect(onDisk.kind).toBe("valid");
     if (onDisk.kind === "valid") expect(onDisk.value.phase).toBe("verifying");
@@ -1846,7 +3728,12 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     };
 
     await expect(
-      runToVerifyingThenComplete(hostHomeDir, "complete-fault-before", faults),
+      runToVerifyingThenComplete(
+        hostHomeDir,
+        "complete-fault-before",
+        faults,
+        "1.2.3",
+      ),
     ).rejects.toThrow("injected before-terminal-write fault");
 
     const onDisk = await readUpdateAttemptRecord(hostHomeDir);
@@ -1877,6 +3764,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
         hostHomeDir,
         "complete-fault-post-evidence",
         faults,
+        "1.2.3",
       ),
     ).rejects.toThrow("injected after-terminal-evidence-before-write fault");
 
@@ -1905,7 +3793,12 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     };
 
     await expect(
-      runToVerifyingThenComplete(hostHomeDir, "complete-fault-after", faults),
+      runToVerifyingThenComplete(
+        hostHomeDir,
+        "complete-fault-after",
+        faults,
+        "1.2.3",
+      ),
     ).rejects.toThrow("injected after-terminal-write fault");
 
     const onDisk = await readUpdateAttemptRecord(hostHomeDir);
@@ -2059,20 +3952,31 @@ describe("execute()'s complete() closure - fault points around the terminal writ
 // such owner - `host/update-verify.ts`, the post-restart verification claim -
 // so the authorized set is now an exact singleton rather than empty.
 //
+// The cutover adds the SECOND owner the same ruling anticipated:
+// `host/update-run.ts`, which is what `host update` now runs on. The
+// `commands/` half of the fence moves with it rather than being relaxed:
+// `commands/host-update.ts` reaches the executor transitively, through its
+// dedicated owner, and must still never import it DIRECTLY - that separation
+// is the admission fence the CLI wiring names, and it is what keeps every
+// claim decision inside `host/`.
+//
 // Three invariants, deliberately three separate loud failures:
 //
-//   1. `host/update-verify.ts` is the ONLY module that may import the executor
-//      directly. Against every other module this is exactly as strong as the
-//      empty set was.
-//   2. No command surface may REACH it, even transitively, except the thin
-//      dispatch caller `commands/host-update-verify.ts`. In particular the
-//      released `commands/host-update.ts` must have no path - that is the case
-//      this fence exists to stop.
+//   1. Only the dedicated host-layer owners may import the executor directly:
+//      `host/update-run.ts` and `host/update-verify.ts`, an exact set.
+//      Against every other module this is exactly as strong as the empty set
+//      was.
+//   2. No command surface may REACH it, even transitively, except the two thin
+//      shells that own a claim route: `commands/host-update.ts` and
+//      `commands/host-update-verify.ts`. Neither may import it directly, and
+//      `commands/host-update.ts` is stated separately because that direct
+//      import is the case this fence exists to stop.
 //   3. Rollout eligibility is NOT this gate's business. It belongs exclusively
-//      to `decideUpdateExecutorCohort` and Ticket 07's cutover. An authorized
-//      importer is reachable-but-INERT until then, because
-//      `runLocalAttemptExecutorSegment` refuses with `cohort-disabled` before
-//      performing any work. Do not re-encode rollout policy here.
+//      to `decideUpdateExecutorCohort`, which the cutover flipped to
+//      `eligible`: an authorized importer is now reachable AND live, where
+//      before it was reachable-but-inert. That change is deliberately
+//      invisible here - this gate answers "who may reach the executor", never
+//      "is the executor on". Do not re-encode rollout policy here.
 //
 // Mechanics are the shared architecture gate's, reused rather than reinvented:
 // a stat-based walker that deliberately follows repo-committed symlinks, and
@@ -2087,8 +3991,14 @@ describe("execute()'s complete() closure - fault points around the terminal writ
 const CLI_SRC_ROOT = join(__dirname, "..", "..");
 const FENCE_SOURCE_EXTENSIONS = new Set([".ts", ".js", ".cjs", ".mjs"]);
 const EXECUTOR_MODULE = join(CLI_SRC_ROOT, "host", "update-executor.ts");
-const AUTHORIZED_EXECUTOR_OWNER = "host/update-verify.ts";
-const AUTHORIZED_DISPATCH_COMMAND = "commands/host-update-verify.ts";
+const AUTHORIZED_EXECUTOR_OWNERS = [
+  "host/update-run.ts",
+  "host/update-verify.ts",
+];
+const AUTHORIZED_EXECUTOR_COMMANDS = [
+  "commands/host-update-verify.ts",
+  "commands/host-update.ts",
+];
 const RELEASED_UPDATE_COMMAND = "commands/host-update.ts";
 
 interface ExecutorProvenance {
@@ -2316,19 +4226,22 @@ async function executorProvenance(): Promise<ExecutorProvenance> {
 }
 
 describe("update-executor.ts - shadow fence source boundary (structural)", () => {
-  it("only the dedicated host-layer owner imports update-executor directly - folded over static, re-export, type, require and dynamic specifiers", async () => {
+  it("only the dedicated host-layer owners import update-executor directly - folded over static, re-export, type, require and dynamic specifiers", async () => {
     const provenance = await executorProvenance();
-    expect(provenance.directImporters).toEqual([AUTHORIZED_EXECUTOR_OWNER]);
+    expect(provenance.directImporters).toEqual(
+      [...AUTHORIZED_EXECUTOR_OWNERS].sort(),
+    );
   });
 
-  it("no command surface reaches update-executor except the thin dispatch caller - the RELEASED host-update command has no path, direct or transitive", async () => {
+  it("no command surface reaches update-executor except the two thin shells, and NEITHER imports it directly - the host-update command reaches it only through host/update-run.ts", async () => {
     const provenance = await executorProvenance();
     expect(
       provenance.reachers.filter((file) => file.startsWith("commands/")),
-    ).toEqual([AUTHORIZED_DISPATCH_COMMAND]);
+    ).toEqual([...AUTHORIZED_EXECUTOR_COMMANDS].sort());
     // Stated separately from the set equality above so that the case this
-    // fence exists to stop names itself in the failure output.
-    expect(provenance.reachers).not.toContain(RELEASED_UPDATE_COMMAND);
+    // fence exists to stop names itself in the failure output: the released
+    // command may reach the executor through its owner, never by importing it.
+    expect(provenance.directImporters).not.toContain(RELEASED_UPDATE_COMMAND);
   });
 
   // F9: the specifier-extension bypass, pinned per written form.

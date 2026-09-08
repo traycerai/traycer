@@ -35,8 +35,10 @@ import {
   isActivePhase,
   isTerminalRetentionExpired,
   sameAttemptIdentity,
+  type HostUpdateAttemptClaimBaseline,
   type HostUpdateAttemptContinuation,
   type HostUpdateAttemptError,
+  type HostUpdateAttemptVerification,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptPhase,
   type HostUpdateAttemptProgress,
@@ -50,6 +52,7 @@ import {
   decideAttemptClaim,
   decideAttemptRecovery,
   type AttemptAdvance,
+  type AttemptClaimRefresh,
   type AttemptClaimRequest,
   type AttemptRecoveryArtifactEvidence,
   type AttemptRecoveryEvidence,
@@ -410,6 +413,7 @@ const CLAIM_ACTIONS: ReadonlySet<string> = new Set([
   "resume-apply",
   "activate",
   "force",
+  "continue",
   "defer",
 ]);
 const TRIGGERS: ReadonlySet<string> = new Set(HOST_UPDATE_TRIGGERS);
@@ -518,6 +522,72 @@ function normalizeError(value: unknown): HostUpdateAttemptError | "invalid" {
   return { code, message, phase };
 }
 
+// The claim baseline and the park refresh are RECONSTRUCTED here, field by
+// field, for the same reason every other input is: the record this store
+// writes is derived from what these functions return, so a field the
+// allowlist does not name is a field the committed record silently loses.
+// `claim` in particular authorizes a later resume - losing it would turn an
+// authorized park into an unverifiable one at the next write.
+function normalizeClaimBaseline(
+  value: unknown,
+): HostUpdateAttemptClaimBaseline | null | "invalid" {
+  if (value === null) return null;
+  if (!isSerializableInputObject(value)) return "invalid";
+  const installedVersion = nonEmptyString(
+    dataProperty(value, "installedVersion"),
+  );
+  const installGeneration = nonEmptyString(
+    dataProperty(value, "installGeneration"),
+  );
+  const stageFingerprint = normalizeStageFingerprint(
+    dataProperty(value, "stageFingerprint"),
+  );
+  const allowDowngrade = dataProperty(value, "allowDowngrade");
+  if (
+    installedVersion === null ||
+    installGeneration === null ||
+    stageFingerprint === "invalid" ||
+    typeof allowDowngrade !== "boolean"
+  ) {
+    return "invalid";
+  }
+  return {
+    installedVersion,
+    installGeneration,
+    stageFingerprint,
+    allowDowngrade,
+  };
+}
+
+function normalizeStageFingerprint(value: unknown): string | null | "invalid" {
+  if (value === null) return null;
+  return nonEmptyString(value) ?? "invalid";
+}
+
+function normalizeClaimRefresh(
+  value: unknown,
+): AttemptClaimRefresh | null | "invalid" {
+  if (value === null) return null;
+  if (!isSerializableInputObject(value)) return "invalid";
+  const installedVersion = nonEmptyString(
+    dataProperty(value, "installedVersion"),
+  );
+  const installGeneration = nonEmptyString(
+    dataProperty(value, "installGeneration"),
+  );
+  const stageFingerprint = normalizeStageFingerprint(
+    dataProperty(value, "stageFingerprint"),
+  );
+  if (
+    installedVersion === null ||
+    installGeneration === null ||
+    stageFingerprint === "invalid"
+  ) {
+    return "invalid";
+  }
+  return { installedVersion, installGeneration, stageFingerprint };
+}
+
 function normalizeClaimRequest(value: unknown): AttemptClaimRequest | null {
   if (!isSerializableInputObject(value)) return null;
   const targetVersion = nonEmptyString(dataProperty(value, "targetVersion"));
@@ -525,6 +595,8 @@ function normalizeClaimRequest(value: unknown): AttemptClaimRequest | null {
   const action = dataProperty(value, "action");
   const newAttemptId = nonEmptyString(dataProperty(value, "newAttemptId"));
   const initialPhase = dataProperty(value, "initialPhase");
+  const initialContinuation = dataProperty(value, "initialContinuation");
+  const claim = normalizeClaimBaseline(dataProperty(value, "claim"));
   const nowIso = nonEmptyString(dataProperty(value, "nowIso"));
   const expected = dataProperty(value, "expected");
   if (
@@ -537,22 +609,41 @@ function normalizeClaimRequest(value: unknown): AttemptClaimRequest | null {
     !CLAIM_ACTIONS.has(action) ||
     typeof initialPhase !== "string" ||
     !PHASES.has(initialPhase) ||
-    !isActivePhase(initialPhase as HostUpdateAttemptPhase)
+    !isActivePhase(initialPhase as HostUpdateAttemptPhase) ||
+    (initialContinuation !== null && initialContinuation !== "activate") ||
+    claim === "invalid"
   ) {
     return null;
   }
   const normalizedExpected =
     expected === null ? null : normalizeIdentity(expected);
   if (normalizedExpected === null && expected !== null) return null;
-  return {
+  const phase = initialPhase as AttemptClaimRequest["initialPhase"];
+  const base = {
     targetVersion,
     trigger: trigger as HostUpdateTrigger,
     action: action as AttemptClaimRequest["action"],
     expected: normalizedExpected,
     newAttemptId,
-    initialPhase: initialPhase as AttemptClaimRequest["initialPhase"],
+    claim,
     nowIso,
   };
+  // The birth phase and the birth continuation are dependent, and this is the
+  // one entry where the type that says so has already disappeared - the
+  // intent arrives at `commitAttemptMutation` as a plain JavaScript value, so
+  // an `as` cast, a plugin, or plain JS could hand over a pair the type makes
+  // unconstructible. `createdRecord` writes both verbatim: `downloading` +
+  // `activate` is born durably ACTIVE and refused by
+  // `continuationPhaseOrderRejected` on every advance, and `applying` +
+  // `activate` can park `waiting-to-activate` over bytes that were never
+  // placed. Rejecting here is the decoder's ordinary answer for malformed
+  // input, not a new claim refusal: `decideAttemptClaim` gains no reason and
+  // no consumer switch changes.
+  if (initialContinuation === "activate") {
+    if (phase !== "preparing") return null;
+    return { ...base, initialPhase: phase, initialContinuation };
+  }
+  return { ...base, initialPhase: phase, initialContinuation };
 }
 
 function normalizeAdvance(value: unknown): AttemptAdvance | null {
@@ -562,6 +653,12 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
   const nowIso = nonEmptyString(dataProperty(value, "nowIso"));
   const progress = normalizeProgress(dataProperty(value, "progress"));
   const error = normalizeError(dataProperty(value, "error"));
+  const claimRefresh = normalizeClaimRefresh(
+    dataProperty(value, "claimRefresh"),
+  );
+  const verification = normalizeVerification(
+    dataProperty(value, "verification"),
+  );
   if (
     typeof phase !== "string" ||
     !PHASES.has(phase) ||
@@ -570,7 +667,9 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
       continuation !== "activate") ||
     nowIso === null ||
     progress === "invalid" ||
-    error === "invalid"
+    error === "invalid" ||
+    claimRefresh === "invalid" ||
+    verification === "invalid"
   ) {
     return null;
   }
@@ -579,8 +678,39 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
     continuation: continuation as HostUpdateAttemptContinuation,
     progress,
     error,
+    claimRefresh,
+    verification,
     nowIso,
   };
+}
+
+/**
+ * Normalize the completion verification an advance carries (Q1).
+ *
+ * `null` is the ordinary case - every advance except the terminal completion.
+ * Anything present must be exactly one of the two known shapes, on the same
+ * terms as `normalizeClaimRefresh`: this value lands on a durable record that
+ * a decoder validates, so accepting a half-shape here would push a CORRUPT
+ * record onto disk rather than reject the intent that asked for it.
+ *
+ * This normalizer is NOT what stops a caller fabricating a verification. Two
+ * other things do, and both are structural: a public intent cannot carry a
+ * `complete` phase at all (`PublicAttemptMutationIntent` excludes it by type),
+ * and `advanceAttempt` refuses a verification on any other phase. What reaches
+ * here from the executor came off a sealed, single-use proof.
+ */
+function normalizeVerification(
+  value: unknown,
+): HostUpdateAttemptVerification | null | "invalid" {
+  if (value === null || value === undefined) return null;
+  if (!isSerializableInputObject(value)) return "invalid";
+  const mode = dataProperty(value, "mode");
+  if (mode === "identity") return { mode: "identity" };
+  if (mode !== "version-only") return "invalid";
+  const reason = dataProperty(value, "reason");
+  const floor = nonEmptyString(dataProperty(value, "floor"));
+  if (reason !== "pid-start-stamp-missing" || floor === null) return "invalid";
+  return { mode: "version-only", reason: "pid-start-stamp-missing", floor };
 }
 
 function normalizeRecoveryArtifactEvidence(
@@ -600,6 +730,21 @@ function normalizeRecoveryRunningEvidence(
   if (!isSerializableInputObject(value)) return null;
   const kind = dataProperty(value, "kind");
   if (kind === "absent" || kind === "unreadable") return { kind };
+  // PRESERVED as `foreign`, never lowered to `unbound` here. This normalizer
+  // sanitizes LIVE recovery inputs for the recomputed `decideAttemptRecovery`
+  // below, and `foreign` vs `unbound` is a different DECISION, not a different
+  // encoding: at the record's own target version, `foreign` is activation debt
+  // (`resume-new-generation / activate`) while `unbound` is an evidence
+  // contradiction (`terminalize-failed`). Lowering here would leave the
+  // executor's chosen continuation and the record this store writes in
+  // disagreement about the same evidence. The lowering belongs to
+  // `recoverySummary`, which runs when a terminal record is PERSISTED.
+  if (kind === "foreign") {
+    const runtimeIdentity = nonEmptyString(
+      dataProperty(value, "runtimeIdentity"),
+    );
+    return runtimeIdentity === null ? null : { kind, runtimeIdentity };
+  }
   const version = nonEmptyString(dataProperty(value, "version"));
   if (version === null) return null;
   if (kind === "unbound") return { kind, version };
@@ -738,13 +883,83 @@ function sameRecovery(
     a.evidence.staged.version === b.evidence.staged.version &&
     a.evidence.running.kind === b.evidence.running.kind &&
     a.evidence.running.version === b.evidence.running.version &&
-    a.evidence.running.ownerBound === b.evidence.running.ownerBound
+    a.evidence.running.ownerBound === b.evidence.running.ownerBound &&
+    // Compared, not assumed: this equality is what the write-side round trip
+    // uses to prove the decoder read back exactly the record the transition
+    // authorized. Leaving the key out here would let a summary whose
+    // `runtimeIdentity` the decoder dropped still compare EQUAL, which is the
+    // one thing the round trip exists to catch.
+    a.evidence.running.runtimeIdentity === b.evidence.running.runtimeIdentity
   );
+}
+
+function sameClaimBaseline(
+  a: HostUpdateAttemptClaimBaseline | undefined,
+  b: HostUpdateAttemptClaimBaseline | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.installedVersion === b.installedVersion &&
+    a.installGeneration === b.installGeneration &&
+    a.stageFingerprint === b.stageFingerprint &&
+    a.allowDowngrade === b.allowDowngrade
+  );
+}
+
+/**
+ * Compared for the same reason `sameRecovery` compares `runtimeIdentity`: this
+ * equality is what proves the record handed back is the one on disk, and a key
+ * left out of it is a key whose divergence the check silently blesses.
+ *
+ * ### Which caller can actually make it differ, and which cannot
+ *
+ * NOT the write-side gate in `encodeValidatedRecord`. `normalizeVerification`
+ * (above) runs on every channel - `commitAttemptMutationInternal` normalizes
+ * the intent before `recomputeIntent`, executor callers included - and it
+ * RECONSTRUCTS the value from the keys it knows, exactly as the decoder's
+ * `parseVerification` does. An unknown mode is already rejected there as
+ * `intent-invalid`, and an extra property is already stripped there. By the
+ * time a record reaches the encode gate its verification is canonical on both
+ * sides, so no input any caller can present makes that comparison fail. This
+ * function does not defend that seam and must not be read as if it did.
+ *
+ * The seam it DOES defend is the post-write re-read: a foreign writer that
+ * lands between our rename and our read-back. Those bytes are not ours and
+ * were never normalized by us, so all three arms below are live there:
+ *
+ *  - a mode this build cannot read is DROPPED by the decoder ("a newer
+ *    writer's vocabulary. Drop the key, keep the record"), which is correct
+ *    for a reader and fatal here - `verification`'s absence is DEFINED to mean
+ *    "a writer that predates the key", so a dropped mode is indistinguishable
+ *    from a completion that was never verified;
+ *  - a different mode, or a `version-only` with a different `reason` or
+ *    `floor`, is a foreign conclusion about how the host was proved. Accepting
+ *    it would report `committed` on a record we did not write.
+ *
+ * Extra properties are deliberately NOT compared by key count: both sides of
+ * every live comparison are decoder or normalizer output, so a count check
+ * could never fire, and an unpinnable mechanism here would invite the next
+ * reader to trust it.
+ */
+function sameVerification(
+  a: HostUpdateAttemptVerification | undefined,
+  b: HostUpdateAttemptVerification | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.mode !== b.mode) return false;
+  if (a.mode === "version-only" && b.mode === "version-only") {
+    return a.reason === b.reason && a.floor === b.floor;
+  }
+  return true;
 }
 
 // Do not reduce this to a JSON-string comparison. We need to compare the
 // transition's semantic value to the decoder's canonical value, not merely
 // prove that a second serializer happens to emit the same representation.
+//
+// EVERY additive optional key belongs here. `recovery`, `claim` and
+// `verification` are each droppable or reshapeable by the decoder, and a key
+// left out is a key whose divergence this check silently blesses.
 function sameRecord(
   a: HostUpdateAttemptRecord,
   b: HostUpdateAttemptRecord,
@@ -762,7 +977,9 @@ function sameRecord(
     a.updatedAt === b.updatedAt &&
     a.completedAt === b.completedAt &&
     sameNullableError(a.error, b.error) &&
-    sameRecovery(a.recovery, b.recovery)
+    sameRecovery(a.recovery, b.recovery) &&
+    sameClaimBaseline(a.claim, b.claim) &&
+    sameVerification(a.verification, b.verification)
   );
 }
 

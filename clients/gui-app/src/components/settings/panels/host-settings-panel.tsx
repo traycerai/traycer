@@ -363,9 +363,11 @@ function useEmptyAccountLocalRecoveryZone(
 function doctorRepairIntentFor(
   fixAction: string | null,
 ): DoctorRepairIntent | null {
-  // Both spellings of "there is no usable host installed" converge.
+  // Both spellings of "there is no usable host installed" converge - and
+  // version-seeking, since "unusable" includes a host too old for this
+  // client, which the liveness-only `converge-ready` would keep.
   if (fixAction === "host-install" || fixAction === "host-install-latest") {
-    return "converge-ready";
+    return "converge-latest";
   }
   if (fixAction === "service-install") return "register-service";
   return null;

@@ -1,3 +1,4 @@
+import { useThemeRevision } from "@/providers/use-theme-revision";
 import {
   useCallback,
   useEffect,
@@ -91,6 +92,7 @@ export function WorkspaceFileRenderer(props: {
     revealNonce,
     wordWrap,
   } = props;
+  useThemeRevision();
   const { resolvedTheme } = useResolvedTheme();
   const themeName = resolveDiffThemeName(resolvedTheme);
   const [container, setContainer] = useState<HTMLElement | null>(null);

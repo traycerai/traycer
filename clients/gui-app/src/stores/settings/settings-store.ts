@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
@@ -465,7 +466,10 @@ export const useSettingsStore = create<SettingsState>()(
       workspaceFileWordWrap: null,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
       setTheme: makeSetter(set, "theme"),
-      setThemePreset: makeSetter(set, "themePreset"),
+      setThemePreset: (themePreset) => {
+        if (useThemeLibraryStore.getState().clearSelection())
+          set({ themePreset });
+      },
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
       setShowGlobalResourceMonitor: makeSetter(

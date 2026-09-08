@@ -12,6 +12,7 @@ import {
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
 import {
+  epicNodeRecency,
   epicNodeRefForNodeId,
   useEpicArtifactRecords,
   useEpicChatHarnessId,
@@ -651,3 +652,26 @@ function tuiAgent(id: string, harnessId: TuiHarnessId): TuiAgentProjection {
     terminalShellArgs: null,
   };
 }
+
+describe("epicNodeRecency", () => {
+  it("maps chats and terminal-agents to their projected updatedAt", () => {
+    const one = { ...chat("chat-1", "claude"), updatedAt: 100 };
+    const two = { ...tuiAgent("tui-1", "codex"), updatedAt: 200 };
+
+    const recency = epicNodeRecency({
+      chats: { allIds: [one.id], byId: { [one.id]: one } },
+      tuiAgents: { allIds: [two.id], byId: { [two.id]: two } },
+    });
+
+    expect(recency).toEqual({ "chat-1": 100, "tui-1": 200 });
+  });
+
+  it("answers an empty map when the projection holds no agent rows", () => {
+    const recency = epicNodeRecency({
+      chats: { allIds: [], byId: {} },
+      tuiAgents: { allIds: [], byId: {} },
+    });
+
+    expect(recency).toEqual({});
+  });
+});

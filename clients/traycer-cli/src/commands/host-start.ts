@@ -55,9 +55,10 @@ import {
 } from "../host/crash-telemetry";
 import { consumeHostStartAdoption } from "../host/host-start-adoption";
 import {
-  hasActionableStopIntent,
+  actionableStopIntentReason,
   readStopIntentIdentity,
   type StopIntentIdentity,
+  type StopIntentReason,
 } from "../host/stop-intent";
 import {
   attestLaunchdSupervisorPid,
@@ -80,9 +81,12 @@ import {
   type EnvOverrideValue,
 } from "../store/config-store";
 import {
-  withUpdateContender,
+  withSupervisorRelaunchContender,
+  type HostUpdateAttemptRecord,
   type UpdateContenderOutcome,
 } from "@traycer-clients/shared/host-update";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import { SUPERVISOR_ADMISSION_WAIT_MS } from "../host/update-budget";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
@@ -247,6 +251,25 @@ const FORWARDED_SHUTDOWN_SIGNALS = [
  * segment owns the restart boundary. See the `retryableServiceRefusal` branch
  * for why this arm alone must not exit 0.
  *
+ * A PARKED attempt used to reach that same clean exit and was the worse half
+ * of this problem: a reboot while an update waited for a busy host left the
+ * service manager told "finished successfully" with nothing left to bring the
+ * host back, and on a CLI-only install nothing to notice. That is no longer a
+ * refusal at all - `supervisor-relaunch-maintenance` admits the two parked
+ * shapes a relaunch legally continues - so what still exits 0 here is the set
+ * a retry genuinely cannot clear.
+ *
+ * "Cannot clear" is the honest claim; "somebody else will" is not. That is
+ * why the interrupted-ACTIVE records whose own next act is starting the host
+ * -`restarting`, `verifying`, and the `preparing`/`activate` a recovery
+ * resume normalizes to - are admitted here as well: on a headless CLI-only
+ * install nothing else would ever end them, because the reconciler that would
+ * is inside the host this exit keeps down.
+ *
+ * What still exits 0 is `applying` and the pre-placement phases, and for
+ * those "cannot clear" is literal: `applying` may be mid-swap, and starting a
+ * host from a directory a live segment is about to rename is not a recovery.
+ *
  * The value only has to be non-zero and unambiguous: launchd assigns no meaning
  * to particular codes, and with `KeepAlive.SuccessfulExit = false` any non-zero
  * exit is what triggers the relaunch. Distinct from the codes already in use
@@ -255,6 +278,54 @@ const FORWARDED_SHUTDOWN_SIGNALS = [
  * ends.
  */
 const SERVICE_RELAUNCH_BUSY_EXIT_CODE = 76;
+
+/**
+ * The supervisor exited because a RESTART was announced, and a restart is
+ * owed (Q13).
+ *
+ * `stop-requested` exits 0 so no manager brings the host back, and that is
+ * right for `stop` and `uninstall`. It was wrong for `restart`, which is what
+ * every update's pre-swap stop announces (`stopForRestart` ->
+ * `announceStop(env, "restart", ...)`) and which the protocol defines as the
+ * one reason that DOES promise a comeback. Exiting 0 there told the service
+ * manager the job had finished successfully; on a CLI-only install, if the
+ * CLI that promised the restart then died, nothing brought the host back and
+ * nothing was left that would.
+ *
+ * So the invariant narrows rather than bends: the record already says which
+ * stop this was, and only the one that promises a return re-arms the manager.
+ *
+ * Distinct from 76 (`SERVICE_RELAUNCH_BUSY_EXIT_CODE`) and 75
+ * (`EXIT_RESTART_INTO_REFRESHED_SLOT`) so a support pull can tell "a restart
+ * is owed and I am handing it back to the manager" apart from "deferred,
+ * retry me" and from every other way this supervisor ends.
+ */
+const RESTART_OWED_EXIT_CODE = 77;
+
+/**
+ * A stop announced itself while this supervisor sat in the admission wait.
+ *
+ * Thrown from INSIDE the admission callback, immediately before `spawn()`,
+ * rather than reported after `admitHostStartSpawn` returns - because the
+ * difference between the two is whether a host process exists at all. The
+ * unadmitted branch below has to kill a child it already created; this never
+ * creates one.
+ *
+ * Throwing out of that callback is an established path, not a new one: the
+ * `resolveHostStartTarget` inside it already throws `CliError` and the catch
+ * already documents preserving its contract. This rides the same unwind and is
+ * tested for FIRST, because a stop is not a spawn failure - it is the answer
+ * the supervisor was asked for, and it carries its own exit code.
+ */
+class StopAnnouncedDuringAdmission extends Error {
+  readonly reason: StopIntentReason | null;
+
+  constructor(reason: StopIntentReason | null) {
+    super("a stop was requested while the supervisor waited for admission");
+    this.name = "StopAnnouncedDuringAdmission";
+    this.reason = reason;
+  }
+}
 
 export interface ResolveHostStartTargetDeps {
   readonly readInstallRecord: (
@@ -355,6 +426,19 @@ export type SpawnImpl = (
 export type AdmitHostStartSpawn = (
   options: RunHostStartOptions,
   run: () => Promise<ChildProcess>,
+  /**
+   * Called, once, when the admission was granted while a durable attempt
+   * record stood - and never otherwise, so "no record" and "nothing to say"
+   * are the same silence rather than two.
+   *
+   * A parameter rather than a log statement inside the admission, because the
+   * admission runs in `defaultRunDeps` where the only logger available is a
+   * fresh `createCliLogger` writing to the real `~/.traycer/cli/cli.log`.
+   * `runHostStart` holds the INJECTED logger, so emitting from there is what
+   * makes this line both observable in tests and incapable of escaping a test
+   * sandbox - the same hazard `deps.logger`'s own comment names.
+   */
+  onAdmittedBeside: (record: HostUpdateAttemptRecord) => void,
 ) => Promise<UpdateContenderOutcome<ChildProcess>>;
 
 function describeHostStartAdmission(
@@ -364,8 +448,13 @@ function describeHostStartAdmission(
     case "busy":
     case "held-in-process":
       return "another update execution segment currently owns the restart boundary";
+    // Reached only for a record the parked exemption did NOT cover: an active
+    // or interrupted segment, or a park whose installed bytes no longer match
+    // what the attempt claimed. The two parked shapes a relaunch can legally
+    // continue - `waiting-for-work`, and `waiting-to-activate` at the claimed
+    // install - are admitted upstream and never produce this string.
     case "nonterminal-attempt":
-      return `attempt ${outcome.record.attemptId} is ${outcome.record.phase}/${outcome.record.execution}; supervisor relaunch is not a legal continuation`;
+      return `attempt ${outcome.record.attemptId} is ${outcome.record.phase}/${outcome.record.execution}; supervisor relaunch is not a legal continuation for it`;
     case "record-fail-closed":
       return `update attempt evidence is ${outcome.record.kind}; supervisor relaunch refused`;
     case "lock-not-live":
@@ -447,11 +536,15 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // supervisor refusing to start. See `host/stop-intent.ts`.
   // `servedAtStartup` is the clock-independent half: the record that existed
   // when this supervisor started, which it therefore has already answered.
+  // Returns WHY, not whether (Q13): the refusal and the exit code are two
+  // decisions that must come from one read of one record. A boolean here plus
+  // a second read for the reason could straddle a record that changed between
+  // them, and decide the refusal from one stop and the exit code from another.
   readonly hasStopIntent: (
     environment: Environment,
     nowMs: number,
     servedAtStartup: StopIntentIdentity | null,
-  ) => Promise<boolean>;
+  ) => Promise<StopIntentReason | null>;
   readonly readStopIntentIdentity: (
     environment: Environment,
   ) => Promise<StopIntentIdentity | null>;
@@ -473,7 +566,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
 
 const defaultRunDeps: RunHostStartDeps = {
   ...defaultDeps,
-  admitHostStartSpawn: async (options, run) => {
+  admitHostStartSpawn: async (options, run, onAdmittedBeside) => {
     // A service controller that already owns the outer attempt capability
     // publishes a one-shot, target-home-bound adoption proof immediately
     // before asking the OS manager to launch this supervisor. Reacquiring
@@ -516,15 +609,64 @@ const defaultRunDeps: RunHostStartDeps = {
         await adoption.grant.abandon();
       }
     }
-    return withUpdateContender(
+    return withSupervisorRelaunchContender(
       {
         hostHomeDir: hostHomeDir(options.environment),
         reason: "host-supervisor-spawn",
-        waitMs: 0,
+        // NOT zero (Q13). A relaunched supervisor now arrives while the
+        // update that stopped the host may still be running, and an instant
+        // `busy` refusal would exit, be restarted `RestartSec` later, and be
+        // refused again - about ten spurious starts per healthy update, which
+        // is also what makes a start-limit unusable. One start, one wait, one
+        // admission. See `host/update-budget.ts`.
+        //
+        // WAITING IS ONLY SAFE BECAUSE TARGET RESOLUTION IS INSIDE THIS
+        // CALLBACK. A supervisor that sleeps through a swap must not spawn the
+        // bytes it resolved before the swap - and it does not, because
+        // `resolveHostStartTarget` is called again below, after admission is
+        // granted. The earlier resolve above the loop is the pre-admission
+        // read, and its answer is deliberately not the one that gets spawned.
+        // Hoist that inner call out for a "cheap early read" and the waiting
+        // design breaks silently, with a supervisor launching the pre-swap
+        // install. (Cold review B, Q13-H3.)
+        waitMs: SUPERVISOR_ADMISSION_WAIT_MS,
         pollIntervalMs: 50,
-        admission: "runtime-repair-maintenance",
+        // Read UNDER the attempt lock, and only for a record whose phase could
+        // admit this relaunch. `resolveHostStartTarget` read the same record
+        // before we contended, and deliberately is not reused: an install
+        // that moved between that read and this lock is exactly the case the
+        // baseline comparison exists to catch. That reuse would be sharpest
+        // for the interrupted-active arm, whose window is exactly when a live
+        // holder is most likely to be moving.
+        readInstalledIdentity: async () => {
+          const record = await readHostInstallRecord(options.environment);
+          if (record === null) return null;
+          return {
+            installedVersion: record.version,
+            // The RECORD, never a rebuilt literal. This string is compared
+            // byte-for-byte against the baseline `installGenerationOf`
+            // (`host/update-run.ts`) wrote at park time, so a per-site field
+            // mapping is the one thing that could silently make the two
+            // disagree - and a disagreement here fails CLOSED: the exemption
+            // stops firing, this command exits 0 again while an update is
+            // parked, and the outage it exists to prevent comes back with
+            // nothing red anywhere.
+            installGeneration: encodeInstallGeneration(record),
+          };
+        },
       },
-      async () => run(),
+      async (_capability, context) => {
+        // Announced only when a record actually stood. An admitted relaunch
+        // over a durable attempt is invisible otherwise: the host simply comes
+        // up, and the record it came up beside stays open for a recovery this
+        // supervisor is not performing and holds no capability to perform.
+        // Whoever reads the log next has to be able to tell "the host is up
+        // and an update is still outstanding" from "the host is up".
+        if (context.activeAttempt !== null) {
+          onAdmittedBeside(context.activeAttempt);
+        }
+        return run();
+      },
     );
   },
   spawn: (cmd, args, options) => nodeSpawn(cmd, args.slice(), options),
@@ -576,7 +718,7 @@ const defaultRunDeps: RunHostStartDeps = {
       clearTimeout(timer);
     };
   },
-  hasStopIntent: hasActionableStopIntent,
+  hasStopIntent: actionableStopIntentReason,
   readStopIntentIdentity,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
@@ -816,6 +958,53 @@ export async function runHostStart(
   // crash and must not consume crash allowance, but it still needs a bound.
   let consecutiveImmediateRestarts = 0;
   let shuttingDown = false;
+  // WHICH stop latched `shuttingDown`, once a record has been read. A raced
+  // stop intent (below) keeps the reason it read; a forwarded signal reads no
+  // record at the moment it latches - the handler cannot await - so the
+  // reason is resolved LAZILY at the settlement sites through
+  // `resolveShutdownReason`. `restart` is the one reason that promises a
+  // comeback and has to exit `RESTART_OWED_EXIT_CODE` rather than 0: the
+  // latch alone was collapsing it to a plain stop, and the service manager
+  // then left the host down (Codex, traycerai/traycer#1773 round 8).
+  let shutdownReason: StopIntentReason | null = null;
+  // The signal path matters as much as the raced path, and for the same
+  // reason (CodeRabbit, #1773 round 9). On POSIX every `host restart` and
+  // every update's pre-swap stop writes the `restart` record FIRST and only
+  // then signals this process: `launchctl kill TERM` on macOS, `systemctl
+  // kill --signal=SIGTERM` on Linux - chosen over a stop JOB precisely so the
+  // manager's restart policy stays armed (`platforms/linux.ts`, "The restart
+  // half's stop"). That policy - `KeepAlive{SuccessfulExit:false}`,
+  // `Restart=on-failure` - relaunches on a NON-ZERO exit and nothing else. A
+  // signal-latched supervisor that answered the latch with 0 told the
+  // manager the job finished, and when the CLI that promised the comeback
+  // died between its kill and its start, nothing on a CLI-only install ever
+  // brought the host back - the E6L wedge, re-created by the exit code.
+  //
+  // ONE read, and the guarantee lives HERE rather than in the exit flow
+  // (CodeRabbit, round 9): a raced read (which sets `shutdownReason` before
+  // the ending can settle, while `shuttingDown` is still false) is preferred,
+  // and otherwise the first call takes the record read and every later call
+  // returns what it found - `null` included, which is why a separate
+  // resolved flag carries it (`??` cannot tell "not read yet" from "read, no
+  // record"). Today every consumer - the refusal in `decideRelaunch`, the
+  // child's own 87 - exits the supervisor with the answer, so a second call
+  // is not reachable; the memo keeps `hasStopIntent`'s contract (the refusal
+  // and the exit code from one read) true by construction rather than by the
+  // exit flow staying that shape. `servedStopIntentAtStartup` is honoured, so
+  // a supervisor relaunched to SERVE a restart does not read the same record
+  // as owing another.
+  let shutdownReasonResolved = false;
+  const resolveShutdownReason = async (): Promise<StopIntentReason | null> => {
+    if (shutdownReason !== null) return shutdownReason;
+    if (shutdownReasonResolved) return null;
+    shutdownReasonResolved = true;
+    shutdownReason = await deps.hasStopIntent(
+      opts.environment,
+      Date.now(),
+      servedStopIntentAtStartup,
+    );
+    return shutdownReason;
+  };
   let currentChild: ChildProcess | null = null;
   // Resolves the first time a shutdown signal arrives, so a backoff can be
   // ABANDONED rather than merely re-checked once it finishes.
@@ -987,6 +1176,7 @@ export async function runHostStart(
           reason: "target-resolution-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          shutdownReason: resolveShutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -999,6 +1189,8 @@ export async function runHostStart(
         // supervisor, which would resume this very retry - see
         // `RelaunchStopCause`.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
+        if (decision.cause === "restart-requested")
+          return exitSupervisor(RESTART_OWED_EXIT_CODE);
         return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
       }
       if (err instanceof CliError) {
@@ -1195,6 +1387,7 @@ export async function runHostStart(
           reason: "attempt-setup-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          shutdownReason: resolveShutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1205,6 +1398,8 @@ export async function runHostStart(
         // See `RelaunchStopCause`: a nonzero code here would be read as a crash
         // and answered with a fresh supervisor, undoing the stop just honoured.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
+        if (decision.cause === "restart-requested")
+          return exitSupervisor(RESTART_OWED_EXIT_CODE);
         return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
       }
       // First attempt with someone waiting: report now rather than after the
@@ -1269,20 +1464,35 @@ export async function runHostStart(
     // the spawn proceed, and the post-spawn guard could not catch it either:
     // that one is gated on `!shuttingDown`, which is true by then. The result
     // was a child created after a stop, never signalled, still serving.
-    // Reading the latch AFTER the await is what closes it; from here to
-    // `currentChild = child` is unbroken synchronous code, so no signal can
-    // land in between.
+    // Reading the latch AFTER the await is what closes it.
+    //
+    // This guard used to add "and from here to `currentChild = child` is
+    // unbroken synchronous code, so no signal can land in between". Q13
+    // falsified that in the same change that introduced it: the admission
+    // wait now sits between this read and the spawn, and it is bounded at
+    // `SUPERVISOR_ADMISSION_WAIT_MS` - a minute of real time in which a stop
+    // can arrive. What holds the window shut is the second read inside the
+    // admission callback, immediately before `spawn()`; this one only decides
+    // whether to enter the wait at all. Keep them in step: a check added here
+    // and not there covers the smaller half of the gap.
+    // The REASON, not a boolean: it decides this branch's exit code below,
+    // and `hasStopIntent` is bound to `actionableStopIntentReason` precisely
+    // so one read answers both questions (its docblock: "a boolean followed
+    // by a second read for the reason could straddle a record that changed in
+    // between, and decide the refusal from one stop and the exit code from
+    // another"). Reducing it here re-opened that in a single expression.
     const stopAnnounced = await deps.hasStopIntent(
       opts.environment,
       Date.now(),
       servedStopIntentAtStartup,
     );
-    if (shuttingDown || stopAnnounced) {
+    if (shuttingDown || stopAnnounced !== null) {
       logger.info("Host supervisor not spawning - a stop was requested", {
         environment: opts.environment,
         attemptId,
         attemptNumber,
         viaSignal: shuttingDown,
+        stopReason: stopAnnounced,
       });
       // This attempt already wrote its `starting` marker above. Returning
       // without a terminal one leaves `spawn-evidence.ts` pairing a
@@ -1309,7 +1519,20 @@ export async function runHostStart(
         ),
       );
       await deps.closeLogFd(logFd);
-      return exitSupervisor(0);
+      // Same mapping as every other site that exits on an announced stop (the
+      // ending path's `standing === "restart"` test, and `decideRelaunch`'s
+      // `refused`): `"restart"` is the one reason that PROMISES a comeback, so
+      // exiting 0 for it tells the service manager the job finished and, on a
+      // CLI-only install, nothing brings the host back if the CLI that
+      // promised the restart dies first. `stop`, `uninstall` and - despite its
+      // name - `install-swap` all mean "do not bring this back" and keep this
+      // branch's 0. This branch reads the record for the signal case too, and
+      // so do the settlement sites below (`resolveShutdownReason`): a forwarded
+      // POSIX signal is how the record's own writer delivers a restart, so a
+      // signal with no record standing is the only case that asks for nothing.
+      return exitSupervisor(
+        stopAnnounced === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+      );
     }
 
     // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
@@ -1347,71 +1570,124 @@ export async function runHostStart(
     // immediately for a stream that is already dead.
     let stderrErroredEarly = false;
     try {
-      const admission = await deps.admitHostStartSpawn(opts, async () => {
-        // Re-resolve the install record under the outer attempt boundary.
-        // This makes every initial, crash, and exit-87 relaunch choose its
-        // executable from a state the same contender just admitted.
-        target = await resolveHostStartTarget(opts, deps);
-        crashReportsDirPath = crashReportsDirFor(target.cwd);
-        preexistingReportNames = new Set(
-          await deps.prepareCrashReportsDir(crashReportsDirPath),
-        );
-        const hostArgs = [
-          ...target.args,
-          "--layer0-attempt-id",
-          attemptId,
-          ...(attemptProbeContext === null
-            ? []
-            : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
-        ] as const;
-        // The `make dev-desktop` host runtime is a `.cmd` wrapper. Resolve
-        // it only after the admitted install-record re-read so a Windows
-        // path with spaces and a just-promoted target stay one invocation.
-        const launch = resolveSpawnInvocation(target.executable, hostArgs);
-        childSpawnedAtMs = Date.now();
-        spawnedWhileAdmitting.child = deps.spawn(launch.command, launch.args, {
-          cwd: target.cwd,
-          env,
-          stdio:
-            attemptProbeContext === null
-              ? ["ignore", logFd, "pipe"]
-              : ["ignore", logFd, "pipe", "pipe"],
-          windowsHide: process.platform === "win32",
-          ...(launch.windowsVerbatimArguments
-            ? { windowsVerbatimArguments: true }
-            : {}),
-        });
-        // Attached SYNCHRONOUSLY, before this callback returns into
-        // admission's remaining awaits — see `recordEnding`'s doc for what an
-        // ending emitted during those awaits used to do.
-        spawnedWhileAdmitting.child.once("error", (cause: Error) =>
-          recordEnding({ kind: "spawn-error", cause }),
-        );
-        spawnedWhileAdmitting.child.once("exit", (code, signal) =>
-          recordEnding({ kind: "exit", code, signal }),
-        );
-        spawnedWhileAdmitting.child.stderr?.on("error", () => {
-          stderrErroredEarly = true;
-        });
-        // The layer0 probe pipe (fd 3, present when this attempt runs
-        // probed) is one more separate emitter with the same unhandled-
-        // `error`-is-a-crash semantics, and its consumer
-        // (`observeProbeStatus`) also attaches only after admission. Inert
-        // rather than recorded: an errored pipe simply never yields a frame,
-        // and `readLayer0Frame` is already bounded, so the observation
-        // degrades to `{ marker: null }` on its own.
-        // `Array.isArray` first: injected test doubles are partial
-        // `ChildProcess` shapes without a `stdio` array, and the type cannot
-        // see that.
-        const stdioStreams = spawnedWhileAdmitting.child.stdio;
-        const layer0Status = Array.isArray(stdioStreams)
-          ? stdioStreams[LAYER0_STATUS_FD]
-          : undefined;
-        if (isReadable(layer0Status)) {
-          layer0Status.on("error", () => undefined);
-        }
-        return spawnedWhileAdmitting.child;
-      });
+      const admission = await deps.admitHostStartSpawn(
+        opts,
+        async () => {
+          // Re-resolve the install record under the outer attempt boundary.
+          // This makes every initial, crash, and exit-87 relaunch choose its
+          // executable from a state the same contender just admitted.
+          target = await resolveHostStartTarget(opts, deps);
+          crashReportsDirPath = crashReportsDirFor(target.cwd);
+          preexistingReportNames = new Set(
+            await deps.prepareCrashReportsDir(crashReportsDirPath),
+          );
+          const hostArgs = [
+            ...target.args,
+            "--layer0-attempt-id",
+            attemptId,
+            ...(attemptProbeContext === null
+              ? []
+              : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
+          ] as const;
+          // The `make dev-desktop` host runtime is a `.cmd` wrapper. Resolve
+          // it only after the admitted install-record re-read so a Windows
+          // path with spaces and a just-promoted target stay one invocation.
+          const launch = resolveSpawnInvocation(target.executable, hostArgs);
+          // The stop window the pre-spawn guard cannot see. That guard runs
+          // BEFORE `admitHostStartSpawn`, whose wait is bounded at
+          // `SUPERVISOR_ADMISSION_WAIT_MS` (`host/update-budget.ts`) - so
+          // between the two sits up to a minute in which `host stop` writes
+          // its intent, scans for a host, finds no child to kill because this
+          // one does not exist yet, and returns successfully. The host then
+          // comes up after a stop that reported success, and nothing is
+          // watching: the stopper has already returned.
+          //
+          // Read here rather than after admission returns, and this is the
+          // whole point of the placement - the next statement is `spawn()`,
+          // so no child is created. The post-admission ownership branch below
+          // can only kill one that already exists.
+          //
+          // The latch is read the same way and for the same reason as in the
+          // pre-spawn guard: a forwarded POSIX signal writes no file, so an
+          // intent read alone would miss `launchctl bootout` and `systemctl
+          // stop` entirely.
+          const announcedDuringAdmission = await deps.hasStopIntent(
+            opts.environment,
+            Date.now(),
+            servedStopIntentAtStartup,
+          );
+          if (shuttingDown || announcedDuringAdmission !== null) {
+            throw new StopAnnouncedDuringAdmission(announcedDuringAdmission);
+          }
+          childSpawnedAtMs = Date.now();
+          spawnedWhileAdmitting.child = deps.spawn(
+            launch.command,
+            launch.args,
+            {
+              cwd: target.cwd,
+              env,
+              stdio:
+                attemptProbeContext === null
+                  ? ["ignore", logFd, "pipe"]
+                  : ["ignore", logFd, "pipe", "pipe"],
+              windowsHide: process.platform === "win32",
+              ...(launch.windowsVerbatimArguments
+                ? { windowsVerbatimArguments: true }
+                : {}),
+            },
+          );
+          // Attached SYNCHRONOUSLY, before this callback returns into
+          // admission's remaining awaits — see `recordEnding`'s doc for what an
+          // ending emitted during those awaits used to do.
+          spawnedWhileAdmitting.child.once("error", (cause: Error) =>
+            recordEnding({ kind: "spawn-error", cause }),
+          );
+          spawnedWhileAdmitting.child.once("exit", (code, signal) =>
+            recordEnding({ kind: "exit", code, signal }),
+          );
+          spawnedWhileAdmitting.child.stderr?.on("error", () => {
+            stderrErroredEarly = true;
+          });
+          // The layer0 probe pipe (fd 3, present when this attempt runs
+          // probed) is one more separate emitter with the same unhandled-
+          // `error`-is-a-crash semantics, and its consumer
+          // (`observeProbeStatus`) also attaches only after admission. Inert
+          // rather than recorded: an errored pipe simply never yields a frame,
+          // and `readLayer0Frame` is already bounded, so the observation
+          // degrades to `{ marker: null }` on its own.
+          // `Array.isArray` first: injected test doubles are partial
+          // `ChildProcess` shapes without a `stdio` array, and the type cannot
+          // see that.
+          const stdioStreams = spawnedWhileAdmitting.child.stdio;
+          const layer0Status = Array.isArray(stdioStreams)
+            ? stdioStreams[LAYER0_STATUS_FD]
+            : undefined;
+          if (isReadable(layer0Status)) {
+            layer0Status.on("error", () => undefined);
+          }
+          return spawnedWhileAdmitting.child;
+        },
+        (standing) => {
+          // The record is left EXACTLY as found - a supervisor holds no
+          // capability that could advance, terminalize or complete one - so this
+          // line is the only trace that the host came up beside an unfinished
+          // update. `leftForRecovery` says so in the payload rather than only in
+          // this comment, because the reader who needs it is a person reading
+          // `cli.log` after an outage, not a person reading this file.
+          logger.info(
+            "Host supervisor relaunched beside a durable update attempt",
+            {
+              environment: opts.environment,
+              attemptId: standing.attemptId,
+              phase: standing.phase,
+              execution: standing.execution,
+              continuation: standing.continuation,
+              targetVersion: standing.targetVersion,
+              leftForRecovery: true,
+            },
+          );
+        },
+      );
       if (admission.kind !== "ran") {
         // `withUpdateContender` performs a post-callback ownership check. If
         // it detects a loss after `spawn()` synchronously returned, terminate
@@ -1473,14 +1749,57 @@ export async function runHostStart(
         // only `busy` retries: `held-in-process`, `nonterminal-attempt`,
         // `record-fail-closed` and `lock-not-live` are all states a relaunch
         // cannot clear, so retrying them would be a crash-loop, not a recovery.
+        // `nonterminal-attempt` keeps that classification because a relaunch
+        // genuinely cannot clear the records that still reach here, and
+        // admitting one mid-`applying` would run half-placed bytes.
         //
-        // This bounds the outage to the transfer's length rather than removing
-        // it; `ThrottleInterval: 10` in the same plist paces the retries. The
-        // permanent wedge is what this fixes.
+        // The interrupted-ACTIVE records that used to reach it no longer do.
+        // `restarting`, `verifying` and the `preparing`/`activate` a recovery
+        // resume normalizes to are admitted upstream, because for those a
+        // supervisor start IS the record's own next act - the same reasoning
+        // that admits the two parked shapes, applied one phase over. That
+        // matters most exactly where it used to fail worst: such a record is
+        // otherwise cleared only by `recoverInterruptedAttempt` on the `host
+        // update` claim path, and the reconciler that would trigger one lives
+        // inside the host this refusal kept down.
+        //
+        // So this bounds the outage to the transfer's length for the `busy`
+        // case (`ThrottleInterval: 10` in the same plist paces the retries),
+        // and removes it for the parked shapes and for the interrupted ones
+        // whose next act is the start. What remains is `applying` and the
+        // pre-placement phases, where a relaunch is not a continuation of
+        // anything and refusing is the correct answer rather than a residue.
         const retryableServiceRefusal =
           serviceStarted && admission.kind === "busy";
         if (retryableServiceRefusal) {
-          logger.warn(
+          // INFO, not WARN. This is a routine, expected, self-healing
+          // condition: a supervisor arrived while an update segment held the
+          // attempt lock, and the exit code is how it hands itself back to the
+          // manager to try again. Nothing is wrong and nobody needs to act.
+          //
+          // The cadence this used to have is what made the level wrong. Under
+          // `waitMs: 0` a single healthy update produced roughly a dozen of
+          // these - one per `RestartSec` for the length of the segment - and a
+          // dozen WARN lines per update is a support-report problem on its
+          // own. The wait removed the volume rather than the line: a
+          // supervisor now sits out the segment and is refused only if the
+          // segment outlasts `SUPERVISOR_ADMISSION_WAIT_MS`, so an ordinary
+          // update logs none of these at all and a slow download logs about
+          // one a minute.
+          //
+          // Deliberately NOT deduplicated to DEBUG after the first line per
+          // attempt id. Each refusal is a separate short-lived process that
+          // logs once and exits, so "first for this attempt" is not
+          // in-process state - it would need a cross-process marker written on
+          // an error path purely to decide a log level, and the bootstrap
+          // markers cannot carry it (see the incumbent-decline comment above:
+          // their phases all describe a spawn attempt, and this is a refusal).
+          // Once the storm is gone the tier is not worth that.
+          //
+          // Keyed by attempt id and environment, and the `busy` reason string
+          // is a fixed literal - no account, user, or install identifiers
+          // reach an INFO+ line here.
+          logger.info(
             "Host supervisor exiting non-zero so the service manager retries",
             { environment: opts.environment, attemptId, reason },
           );
@@ -1491,6 +1810,51 @@ export async function runHostStart(
       }
       child = admission.result;
     } catch (cause) {
+      // FIRST, ahead of the `CliError` arm: a stop that landed during the
+      // admission wait is not a spawn failure. It is the answer this
+      // supervisor was asked for, it wrote nothing, and it carries its own
+      // exit code - so it must not reach the relaunch decision the
+      // target-resolution arm makes, which would treat it as a failure with
+      // budget left and start the whole attempt again.
+      if (cause instanceof StopAnnouncedDuringAdmission) {
+        logger.info(
+          "Host supervisor not spawning - a stop landed during admission",
+          {
+            environment: opts.environment,
+            attemptId,
+            attemptNumber,
+            viaSignal: shuttingDown,
+            stopReason: cause.reason,
+          },
+        );
+        // Same unpaired-marker obligation as the pre-spawn guard: this
+        // attempt's `starting` marker is already on disk, and returning
+        // without a terminal one leaves `spawn-evidence.ts` reading a cleanly
+        // stopped host as an attempt still in progress.
+        await writeMarkerBestEffort(
+          deps,
+          logger,
+          opts.environment,
+          "failed-to-spawn",
+          markerFields(
+            attemptId,
+            supervisorPid,
+            {
+              shell: undefined,
+              args: undefined,
+              bundle: target.executable,
+              exitCode: undefined,
+              signal: undefined,
+              error: "stop requested during admission",
+            },
+            null,
+          ),
+        );
+        await deps.closeLogFd(logFd);
+        return exitSupervisor(
+          cause.reason === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+        );
+      }
       // The fresh record resolution happens inside admission. Preserve the
       // supervisor's existing target-resolution contract if it fails there:
       // a missing/invalid record is not a generic OS spawn failure, and its
@@ -1524,6 +1888,7 @@ export async function runHostStart(
             reason: "target-resolution-failed-after-admission",
             consecutiveRelaunches,
             isShuttingDown: () => shuttingDown,
+            shutdownReason: resolveShutdownReason,
             servedStopIntentAtStartup,
             shutdownRequested,
           });
@@ -1532,6 +1897,8 @@ export async function runHostStart(
             continue;
           }
           if (decision.cause === "stop-requested") return exitSupervisor(0);
+          if (decision.cause === "restart-requested")
+            return exitSupervisor(RESTART_OWED_EXIT_CODE);
         }
         await writeProbeTerminalIfAttested({
           context: attemptProbeContext,
@@ -1598,6 +1965,7 @@ export async function runHostStart(
           reason: "spawn-threw",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          shutdownReason: resolveShutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1608,6 +1976,8 @@ export async function runHostStart(
         // See `RelaunchStopCause`: 66 would be read as a crash and answered
         // with a fresh supervisor, undoing the stop this branch just honoured.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
+        if (decision.cause === "restart-requested")
+          return exitSupervisor(RESTART_OWED_EXIT_CODE);
       }
       return exitSupervisor(66);
     }
@@ -1721,30 +2091,38 @@ export async function runHostStart(
     // once more, and undo the spawn if the answer changed. Latching
     // `shuttingDown` is what makes the death that follows read as requested
     // rather than as a crash to be recovered.
-    if (
-      !shuttingDown &&
-      (await deps.hasStopIntent(
-        opts.environment,
-        Date.now(),
-        servedStopIntentAtStartup,
-      ))
-    ) {
+    // The REASON is kept, not just the fact: the ending below goes through
+    // `decideRelaunch`, which answers a latched shutdown with the exit code
+    // the reason owes.
+    const racedStop = shuttingDown
+      ? null
+      : await deps.hasStopIntent(
+          opts.environment,
+          Date.now(),
+          servedStopIntentAtStartup,
+        );
+    if (racedStop !== null) {
       logger.info("Host supervisor stopping a child a stop raced", {
         environment: opts.environment,
         attemptId,
         childPidKnown: child.pid !== undefined,
+        stopReason: racedStop,
       });
       shuttingDown = true;
+      shutdownReason = racedStop;
       markShutdownRequested();
       try {
         child.kill("SIGTERM");
       } catch {
         // Already gone - the ending below still settles.
       }
-      // Bounded, because on THIS path nothing else escalates. The forwarded
-      // path is signalled by launchd/systemd, which follow up with SIGKILL
-      // against the job; here the stop announced itself on disk, `host stop`
-      // has already returned, and no one is watching this supervisor. A child
+      // Bounded, because on THIS path nothing else escalates. On the forwarded
+      // path the signaller owns the escalation - a stop job follows up with
+      // SIGKILL against the job, and the restart route's `systemctl kill` /
+      // `launchctl kill` runs the CLI's own ladder (`platforms/linux.ts`,
+      // "The ladder is now OURS"); here the stop announced itself on disk,
+      // `host stop` has already returned, and no one is watching this
+      // supervisor. A child
       // that never handles SIGTERM would leave `await childEnding` below
       // waiting forever, holding the job slot open while the host it was told
       // to stop keeps serving.
@@ -1805,6 +2183,7 @@ export async function runHostStart(
           reason: "spawn-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          shutdownReason: resolveShutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1815,6 +2194,8 @@ export async function runHostStart(
         // See `RelaunchStopCause`: 66 would be read as a crash and answered
         // with a fresh supervisor, undoing the stop this branch just honoured.
         if (decision.cause === "stop-requested") return exitSupervisor(0);
+        if (decision.cause === "restart-requested")
+          return exitSupervisor(RESTART_OWED_EXIT_CODE);
       }
       return exitSupervisor(66);
     }
@@ -1893,12 +2274,19 @@ export async function runHostStart(
       // replacement that the one-shot signal has already been spent on, so an
       // explicit stop leaves the service running.
       if (shuttingDown) {
+        // The same record read `decideRelaunch` settles from: a `restart`
+        // intent - raced, or delivered by the signal that latched - still
+        // owes the comeback it promised.
+        const latchedBy = await resolveShutdownReason();
         logger.info("Ignoring a requested restart during shutdown", {
           environment: opts.environment,
           exitCode: RESTART_EXIT_CODE,
           attemptId,
+          stopReason: latchedBy,
         });
-        return exitSupervisor(0);
+        return exitSupervisor(
+          latchedBy === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+        );
       }
       logger.info("Host child requested an intentional restart", {
         environment: opts.environment,
@@ -1944,7 +2332,39 @@ export async function runHostStart(
     // A clean exit is the host standing down on purpose - never relaunch it.
     // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure`
     // restated, which is the point: one semantic on all three platforms.
+    //
+    // ...with ONE reading of "on purpose" that was wrong, and it is the E6L
+    // outage (Q13). An update's pre-swap stop announces `restart` and then
+    // SIGTERMs the host, which exits 0 - so this branch reported success to
+    // the service manager and stood down. On a CLI-only install, if the CLI
+    // that promised the restart died before making it, nothing brought the
+    // host back and nothing was left that would: the reconciler that could
+    // lives inside the host this exit keeps down.
+    //
+    // A clean exit UNDER A STANDING `restart` INTENT is not the host standing
+    // down; it is the first half of a restart somebody still owes. Handing it
+    // back to the manager non-zero is what makes the manager the actor that
+    // finishes it - and the relaunched supervisor is not admitted blindly, it
+    // goes through the same attempt-record admission as any other start.
+    //
+    // The other reasons keep this branch's answer. `stop` and `uninstall`
+    // mean do not bring this back. `install-swap`, despite its name, is the
+    // reason that "deliberately promises no comeback, because a CLI swap's
+    // relaunch is unbounded" - it rides the RPC leg, not a service stop.
     if (!outcome.abnormal) {
+      const standing = await deps.hasStopIntent(
+        opts.environment,
+        Date.now(),
+        servedStopIntentAtStartup,
+      );
+      if (standing === "restart") {
+        logger.info("Host supervisor exiting with a restart still owed", {
+          environment: opts.environment,
+          attemptId,
+          exitCode: RESTART_OWED_EXIT_CODE,
+        });
+        return exitSupervisor(RESTART_OWED_EXIT_CODE);
+      }
       return exitSupervisor(outcome.exitCode);
     }
 
@@ -1972,6 +2392,7 @@ export async function runHostStart(
       reason: ending.signal !== null ? "fatal-signal" : "crashed",
       consecutiveRelaunches,
       isShuttingDown: () => shuttingDown,
+      shutdownReason: resolveShutdownReason,
       servedStopIntentAtStartup,
       shutdownRequested,
     });
@@ -1983,7 +2404,11 @@ export async function runHostStart(
       // reads the intent as already served and brings the host back. The
       // refusal and the exit code have to agree. See `RelaunchStopCause`.
       return exitSupervisor(
-        decision.cause === "stop-requested" ? 0 : outcome.exitCode,
+        decision.cause === "stop-requested"
+          ? 0
+          : decision.cause === "restart-requested"
+            ? RESTART_OWED_EXIT_CODE
+            : outcome.exitCode,
       );
     }
     consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -2016,7 +2441,10 @@ type RelaunchDecision =
  * five relaunches this supervisor stops guessing and hands the machine back to
  * the platform, whose throttling is the outer bound on the loop.
  */
-type RelaunchStopCause = "stop-requested" | "budget-exhausted";
+type RelaunchStopCause =
+  | "stop-requested"
+  | "restart-requested"
+  | "budget-exhausted";
 
 /**
  * The single place that answers "may this dead child be brought back?".
@@ -2054,39 +2482,60 @@ async function decideRelaunch(input: {
   readonly reason: string;
   readonly consecutiveRelaunches: number;
   readonly isShuttingDown: () => boolean;
+  /**
+   * The reason the shutdown was latched with, resolved from the record: the
+   * one a raced intent read, or - for a forwarded signal, which reads nothing
+   * when it latches - one record read, memoised by the resolver so every
+   * settlement site sees the same answer. `null` = no actionable record
+   * stands (a plain teardown).
+   */
+  readonly shutdownReason: () => Promise<StopIntentReason | null>;
   readonly servedStopIntentAtStartup: StopIntentIdentity | null;
   readonly shutdownRequested: Promise<void>;
 }): Promise<RelaunchDecision> {
   const { deps, logger, environment, reason } = input;
-  const refused = async (when: "before" | "after"): Promise<boolean> => {
+  // `null` = not refused. A non-null value is the CAUSE to stop with, and it
+  // carries which stop it was, because the two stops need opposite exit codes.
+  const refused = async (
+    when: "before" | "after",
+  ): Promise<RelaunchStopCause | null> => {
     if (input.isShuttingDown()) {
+      const latchedBy = await input.shutdownReason();
       logger.info("Host supervisor not relaunching - shutting down", {
         environment,
         reason,
         observed: when,
+        stopReason: latchedBy,
       });
-      return true;
+      // `restart` is the reason that owes a comeback, whichever way the latch
+      // was set: a raced intent read it, and a forwarded signal is how the
+      // record's own writer delivers it on POSIX (`launchctl kill TERM`,
+      // `systemctl kill`), so the record is consulted for the signal too. A
+      // signal with no record standing is this process being torn down, and
+      // takes the exit that asks for nothing.
+      return latchedBy === "restart" ? "restart-requested" : "stop-requested";
     }
-    if (
-      await deps.hasStopIntent(
-        environment,
-        Date.now(),
-        input.servedStopIntentAtStartup,
-      )
-    ) {
+    const announced = await deps.hasStopIntent(
+      environment,
+      Date.now(),
+      input.servedStopIntentAtStartup,
+    );
+    if (announced !== null) {
       logger.info("Host supervisor not relaunching - a stop was requested", {
         environment,
         reason,
         observed: when,
+        stopReason: announced,
       });
-      return true;
+      return announced === "restart" ? "restart-requested" : "stop-requested";
     }
-    return false;
+    return null;
   };
 
   // Checked before the sleep too - purely so an already-known stop does not
   // pay a minute of backoff before being honoured.
-  if (await refused("before")) return { kind: "stop", cause: "stop-requested" };
+  const refusedBefore = await refused("before");
+  if (refusedBefore !== null) return { kind: "stop", cause: refusedBefore };
   if (input.consecutiveRelaunches >= deps.maxRelaunches) {
     logger.error(
       "Host supervisor relaunch budget exhausted - leaving the host down",
@@ -2121,7 +2570,8 @@ async function decideRelaunch(input: {
   // re-read below; there the cost of waiting is latency, not a defeated stop.
   await Promise.race([deps.sleep(backoffMs), input.shutdownRequested]);
   // The load-bearing one: a stop that landed while we slept.
-  if (await refused("after")) return { kind: "stop", cause: "stop-requested" };
+  const refusedAfter = await refused("after");
+  if (refusedAfter !== null) return { kind: "stop", cause: refusedAfter };
   return {
     kind: "relaunch",
     consecutiveRelaunches: input.consecutiveRelaunches + 1,

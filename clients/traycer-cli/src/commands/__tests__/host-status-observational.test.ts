@@ -102,6 +102,7 @@ const runningPidMetadata: HostPidMetadata = {
   websocketUrl: "ws://127.0.0.1:9876",
   startedAt: "2026-08-01T00:00:00.000Z",
   processStartIdentity: null,
+  processStartIdentityRead: "absent",
   layer0: null,
   layer0Slot: null,
 };

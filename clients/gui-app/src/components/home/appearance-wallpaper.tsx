@@ -6,10 +6,8 @@ import {
   type AppearanceRamp,
   type AppearanceRampColor,
 } from "@/lib/appearance/appearance-image-processing";
-import {
-  useSettingsStore,
-  type StartPageWallpaper,
-} from "@/stores/settings/settings-store";
+import { type StartPageWallpaper } from "@/stores/settings/settings-store";
+import { useThemeRevision } from "@/providers/use-theme-revision";
 import "./appearance-wallpaper.css";
 
 /** One dither cell, in CSS px: the canvas is the element at 1/CELL scale. */
@@ -86,10 +84,10 @@ function DitheredWallpaper(props: {
   const { url, intensity, tint, tintWithAccent } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // The theme is not readable as a value here - it lives in CSS custom
-  // properties - so the mode/preset are subscribed to purely as a repaint
-  // trigger for the ramp the canvas bakes in.
-  const theme = useSettingsStore((state) => state.theme);
-  const themePreset = useSettingsStore((state) => state.themePreset);
+  // properties - so the revision is subscribed to purely as a repaint trigger
+  // for the ramp the canvas bakes in. It bumps after the palette has reached
+  // the cascade, and covers the OS flip under `theme: "system"` as well.
+  const themeRevision = useThemeRevision();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -116,21 +114,13 @@ function DitheredWallpaper(props: {
     image.src = url;
     const observer = new ResizeObserver(schedule);
     observer.observe(canvas);
-    // `theme: "system"` follows the OS, which flips the CSS tokens without
-    // touching the store, so the mode/preset subscriptions never fire.
-    const media =
-      typeof window.matchMedia === "function"
-        ? window.matchMedia("(prefers-color-scheme: dark)")
-        : null;
-    media?.addEventListener("change", schedule);
     return () => {
       controller.abort();
       observer.disconnect();
-      media?.removeEventListener("change", schedule);
       if (timer !== null) clearTimeout(timer);
       image.onload = null;
     };
-  }, [url, intensity, tint, tintWithAccent, theme, themePreset]);
+  }, [url, intensity, tint, tintWithAccent, themeRevision]);
 
   return (
     <canvas ref={canvasRef} className="appearance-wallpaper-canvas size-full" />

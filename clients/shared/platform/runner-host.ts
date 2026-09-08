@@ -31,6 +31,7 @@ import type {
 } from "@traycer/protocol/host/maintenance/index";
 import type {
   HostUpdateAttemptContinuation,
+  HostUpdateAttemptError,
   HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 import type { BrowserViewBridge } from "./browser-view";
@@ -1774,6 +1775,22 @@ export type HostActivationState =
   | "unavailable";
 
 /**
+ * What a READER can say about the durable attempt's holder while the host is
+ * down.
+ *
+ * Three values, not a boolean, for the reason the whole liveness layer exists:
+ * "we could not establish it" is not "nothing is running". `live` is positive
+ * proof (an active record whose lock is held by a running process, joined to
+ * that record across a re-read), `interrupted` is the shared derivation's
+ * positive proof of ABSENCE, and `unknown` covers everything else - a record
+ * that is not probed at all, a probe that could not answer, and the
+ * derivation's grace period for a young record with no holder, which is a
+ * window in which a crash has not yet had time to look like one rather than
+ * evidence of life.
+ */
+export type LocalAttemptLiveness = "live" | "interrupted" | "unknown";
+
+/**
  * The durable attempt record's facts, read from disk by desktop main.
  *
  * ## Why FACTS and not a projected view (Ticket 07 §5.2.7 / T6 Q1(b))
@@ -1804,6 +1821,44 @@ export interface LocalAttemptFacts {
   // `HostUpdateAttemptContinuation` already includes `null`.
   readonly continuation: HostUpdateAttemptContinuation;
   readonly updatedAt: string;
+  /**
+   * The record's terminal cause - the executor's own `error` field, `null` on
+   * every record that is not `failed`.
+   *
+   * Carried because the host-down window is exactly when it is needed: a
+   * post-swap failure (`service-start-failed`, a verify timeout) leaves the
+   * host DOWN, so no `host.status` RPC can ever report the reason, and the
+   * durable record is the only place it exists. Projecting the phase without
+   * it gave the banner and the Overview "Last seen: Update failed" with no
+   * cause precisely when nothing else could say one (Codex, traycerai/traycer#1773
+   * round 8). The renderer shows `error.message` beside the retained phase.
+   */
+  readonly error: HostUpdateAttemptError;
+  /**
+   * What Desktop's own PROBE established about the record's holder, flat
+   * beside the record's facts (D13).
+   *
+   * This is the one thing a record read cannot derive from the record: a file
+   * on disk saying `restarting` proves an executor once wrote that, never that
+   * one is still carrying it. So `live` is minted from evidence and nothing
+   * else - see `HostController.readLocalAttemptFacts` for the rule - and both
+   * the other arms are conclusions the renderer must keep OUTSIDE its
+   * lifecycle gate.
+   */
+  readonly liveness: LocalAttemptLiveness;
+  /**
+   * Desktop's clock at the holder probe that produced `liveness`, or `null`
+   * when no probe ran (a parked or terminal record is never probed).
+   *
+   * Carried because a positive proof must be allowed to EXPIRE. The renderer's
+   * controller query keeps its last value indefinitely (`staleTime: Infinity`)
+   * and Desktop stops publishing when a read fails, so `live` with no deadline
+   * would hold a lifecycle gate open forever on a payload nothing is
+   * refreshing. The renderer ages this against its OWN ticking clock - never
+   * against the last `host.status` success, which stops advancing exactly when
+   * the host is down.
+   */
+  readonly livenessObservedAtMs: number | null;
 }
 
 export interface HostControllerStatus {
@@ -1875,6 +1930,12 @@ export interface ConvergeReadyOk {
 export interface ApplyStagedOk {
   readonly appliedVersion: string;
   readonly runningActivated: boolean;
+  /**
+   * `false` when the CLI apply was a no-op (nothing staged, or the installed
+   * host is a deliberately-held instance the implicit launch apply kept);
+   * `appliedVersion` then names the version that stayed installed.
+   */
+  readonly applied: boolean;
 }
 
 export interface ActivateInstalledOk {
@@ -1980,8 +2041,24 @@ export interface CliInstallManifestSnapshot {
   } | null;
 }
 
-/** Which Doctor repair to run; both are controller lifecycle intents. */
-export type DoctorRepairIntent = "converge-ready" | "register-service";
+/**
+ * Which Doctor repair to run; all three are controller lifecycle intents.
+ *
+ *   - `converge-ready` — liveness only: install/register/start the host,
+ *     keeping WHATEVER non-yanked version is installed. It never moves the
+ *     version, so it can never revert a deliberate downgrade.
+ *   - `converge-latest` — the same converge, but version-seeking: it also
+ *     reinstalls a host BELOW this build's pinned host. This is the explicit
+ *     repair behind "Install host" (`host-install` / `host-install-latest`) —
+ *     a host whose protocol is too old for this client, a missing binary, an
+ *     unreadable record — where liveness alone would keep the unusable host
+ *     and report the repair applied.
+ *   - `register-service` — add the OS service registration.
+ */
+export type DoctorRepairIntent =
+  | "converge-ready"
+  | "converge-latest"
+  | "register-service";
 
 /**
  * The recovery console's repairs, which QUEUE rather than refusing.
@@ -2000,6 +2077,7 @@ export type DoctorRepairIntent = "converge-ready" | "register-service";
  */
 export type QueuedDoctorRepair =
   | "converge-ready"
+  | "converge-latest"
   | "register-service"
   | "restart";
 
