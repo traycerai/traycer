@@ -299,7 +299,7 @@ export function useDraftAppearance(args: {
   });
 }
 
-export function useEpicAppearance(args: {
+export function useEpicAppearanceSource(args: {
   readonly hostId: string | null;
   readonly epicId: string;
 }) {
@@ -310,10 +310,17 @@ export function useEpicAppearance(args: {
     enabled: args.hostId !== null && !isEpicCreateSeedPending(args.epicId),
   });
   const primary = bindings.data?.rows.find((row) => row.isPrimary);
-  return useWorkspaceAppearance({
+  return {
     hostId: primary?.hostId ?? args.hostId,
     workspacePath: primary?.workspacePath ?? null,
-  });
+  };
+}
+
+export function useEpicAppearance(args: {
+  readonly hostId: string | null;
+  readonly epicId: string;
+}) {
+  return useWorkspaceAppearance(useEpicAppearanceSource(args));
 }
 
 export function useWorkspaceSetAppearance(args: { readonly hostId: string }) {

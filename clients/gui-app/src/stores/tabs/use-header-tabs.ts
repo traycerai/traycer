@@ -20,7 +20,11 @@ import {
   isTabStructurallyLocked,
   subscribeTabStructuralLocks,
 } from "@/stores/tabs/tab-structural-lock";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  getOpenEpicRegistry,
+  getEpicSessionHostId,
+} from "@/lib/registries/epic-session-registry";
+import { useHeaderTabAppearance } from "@/hooks/appearance/use-header-tab-appearance";
 
 /**
  * Revision over "which host serves which open epic".
@@ -280,7 +284,31 @@ export function useHeaderStripItem(itemId: string): HeaderStripItem | null {
   }, [item, left, right, tab]);
 }
 
-function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
+export function useAppearanceHeaderStripItem(
+  itemId: string,
+): HeaderStripItem | null {
+  const item = useHeaderStripItem(itemId);
+  const single = item?.kind === "tab" ? item.tab : null;
+  const left =
+    item?.kind === "split" && item.left.kind === "tab" ? item.left.tab : null;
+  const first = useHeaderTabAppearance(single ?? left);
+  const second = useHeaderTabAppearance(
+    item?.kind === "split" && item.right.kind === "tab" ? item.right.tab : null,
+  );
+  return useMemo(() => {
+    if (item === null) return null;
+    if (item.kind === "tab") {
+      return first === null ? item : { ...item, tab: first };
+    }
+    return {
+      ...item,
+      left: first === null ? item.left : { kind: "tab", tab: first },
+      right: second === null ? item.right : { kind: "tab", tab: second },
+    } satisfies HeaderStripItem;
+  }, [item, first, second]);
+}
+
+export function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
   const epic = useEpicCanvasStore((state) =>
     ref?.kind === "epic" ? (state.tabsById[ref.id] ?? null) : null,
   );
@@ -294,42 +322,46 @@ function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
     if (ref?.kind === "settings") return state.systemTabs.settings;
     return null;
   });
+  // Subscribe to the value itself so compiler caching sees registry-only moves.
+  const hostId = useSyncExternalStore(
+    subscribeEpicSessionHosts,
+    () => (epic === null ? null : getEpicSessionHostId(epic.epicId)),
+    () => null,
+  );
   const lockSnapshot = useExactRefLockSnapshot(ref);
-  return useMemo(() => {
-    if (ref === null) return null;
-    if (ref.kind === "epic") {
-      if (epic === null || lockSnapshot === "none") return null;
-      return memoizedEpicHeaderTab(epic);
-    }
-    if (ref.kind === "draft") {
-      return draft === null
-        ? null
-        : memoizedHeaderTab(draftHeaderTabCache, draft, TAB_KINDS.draft.build);
-    }
-    if (ref.kind === "history") {
-      return system === null
-        ? null
-        : memoizedHeaderTab(
-            historyHeaderTabCache,
-            system,
-            TAB_KINDS.history.build,
-          );
-    }
+  if (ref === null) return null;
+  if (ref.kind === "epic") {
+    if (epic === null || lockSnapshot === "none") return null;
+    return memoizedEpicHeaderTab(epic, hostId, lockSnapshot);
+  }
+  if (ref.kind === "draft") {
+    return draft === null
+      ? null
+      : memoizedHeaderTab(draftHeaderTabCache, draft, TAB_KINDS.draft.build);
+  }
+  if (ref.kind === "history") {
     return system === null
       ? null
       : memoizedHeaderTab(
-          settingsHeaderTabCache,
+          historyHeaderTabCache,
           system,
-          TAB_KINDS.settings.build,
+          TAB_KINDS.history.build,
         );
-  }, [draft, epic, lockSnapshot, ref, system]);
+  }
+  return system === null
+    ? null
+    : memoizedHeaderTab(
+        settingsHeaderTabCache,
+        system,
+        TAB_KINDS.settings.build,
+      );
 }
 
-function useExactRefLockSnapshot(ref: TabRef | null): string {
-  const snapshot = (): string => {
-    if (ref === null) return "none";
-    return `${isTabStructurallyLocked(ref)}:${isTabCloseLocked(ref)}`;
-  };
+function useExactRefLockSnapshot(
+  ref: TabRef | null,
+): EpicHeaderTabLockState | "none" {
+  const snapshot = (): EpicHeaderTabLockState | "none" =>
+    ref === null ? "none" : headerTabLockState(ref);
   return useSyncExternalStore(subscribeTabStructuralLocks, snapshot, snapshot);
 }
 
@@ -409,25 +441,23 @@ interface HeaderTabSources {
   readonly epicSessionHostRevision: number;
 }
 
-function memoizedEpicHeaderTab(source: EpicViewTab): HeaderTab {
-  // Built FIRST, then keyed on what it turned out to be: the host is the
-  // projection's own output, so there is nothing to look it up by until the
-  // build has run. The build is a store read and an object literal; the cache
-  // exists to preserve referential identity for the header rows, not to avoid
-  // that cost.
-  const tab = TAB_KINDS.epic.build(source);
-  const key = epicHeaderTabCacheKey(epicHeaderTabLockState(source), tab.hostId);
+function memoizedEpicHeaderTab(
+  source: EpicViewTab,
+  hostId: string | null,
+  lockState: EpicHeaderTabLockState,
+): HeaderTab {
+  const key = epicHeaderTabCacheKey(lockState, hostId);
   const cached = epicHeaderTabCache.get(source);
   const cachedTab = cached?.get(key);
   if (cachedTab !== undefined) return cachedTab;
+  const tab = { ...TAB_KINDS.epic.build(source), hostId };
   const next = cached ?? new Map<EpicHeaderTabCacheKey, HeaderTab>();
   next.set(key, tab);
   epicHeaderTabCache.set(source, next);
   return tab;
 }
 
-function epicHeaderTabLockState(source: EpicViewTab): EpicHeaderTabLockState {
-  const ref = { kind: "epic" as const, id: source.tabId };
+function headerTabLockState(ref: TabRef): EpicHeaderTabLockState {
   const structurallyLocked = isTabStructurallyLocked(ref);
   const closeLocked = isTabCloseLocked(ref);
   if (structurallyLocked && closeLocked) {
@@ -446,7 +476,13 @@ function resolveRef(
   if (ref.kind === "epic") {
     const source = epicTabsById.get(ref.id);
     if (source === undefined) return [];
-    return [memoizedEpicHeaderTab(source)];
+    return [
+      memoizedEpicHeaderTab(
+        source,
+        getEpicSessionHostId(source.epicId),
+        headerTabLockState(ref),
+      ),
+    ];
   }
   if (ref.kind === "draft") {
     const source = draftTabsById.get(ref.id);

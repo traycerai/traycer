@@ -145,6 +145,11 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
   usePendingSetPinnedEpicIds: () => pinTestState.pendingEpicIds,
 }));
 
+// No host transport in this strip fixture; appearance queries remain disabled.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     success: (message: string, options: TestToastOptions) => {

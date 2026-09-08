@@ -211,6 +211,11 @@ export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
   return registry;
 }
 
+export function getEpicSessionHostId(epicId: string): string | null {
+  const handle = registry.peek(epicId);
+  return handle === null ? null : getEpicSessionHandleHostId(handle);
+}
+
 /**
  * True when the Epic session for `epicId` currently has unsynced edits
  * that the host has not yet proven coverage for. Called synchronously

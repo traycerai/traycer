@@ -24,6 +24,9 @@ import {
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { LandingAppearanceWallpaper } from "@/components/home/landing-appearance-wallpaper";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { cn } from "@/lib/utils";
 
 /**
  * Route-independent landing body. Its exact draft runtime remains the T6
@@ -33,6 +36,10 @@ export function LandingDraftSurface() {
   const draftId = useDraftSurfaceId();
   const { workspaceFolders, settings } = useLandingDraftShell(draftId);
   const activity = useTabSurfaceActivity();
+  const showGreeting = useSettingsStore((state) => state.showGreeting);
+  const showRecentHistory = useSettingsStore(
+    (state) => state.showRecentHistory,
+  );
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
   // Pre-mint the mount identity for the null-draft landing so the first
@@ -147,19 +154,27 @@ export function LandingDraftSurface() {
           stay fractional on purpose - an intrinsic row 3 would let a grown
           composer (attachments, several folders, keyboard open) squeeze row 2
           to zero and then clip against this container's overflow-hidden. */}
-      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)]">
-        <div className="mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
+      <div className="landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)]">
+        {activity.visible ? (
+          <LandingAppearanceWallpaper draftId={draftId} />
+        ) : null}
+        <div className="relative mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
         </div>
 
-        <section className="mx-auto flex w-full max-w-3xl items-end justify-center px-6 pb-10 pt-3 max-md:px-4 max-md:pb-6">
+        <section
+          className={cn(
+            "relative mx-auto flex w-full max-w-3xl items-end justify-center px-6 pb-10 pt-3 max-md:px-4 max-md:pb-6",
+            !showGreeting && "invisible",
+          )}
+        >
           <HomeHero workspaceFolders={workspaceFolders} />
         </section>
 
         {/* Composer + recent epics share one row so the composer is top-anchored:
             adding a folder grows it downward into the (scrollable) epics list
             below instead of recentering and shoving the hero up. */}
-        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 max-md:px-4">
+        <div className="relative mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 max-md:px-4">
           <div className="shrink-0">
             <SurfaceActivityProvider
               active={Boolean(activity.focused && !systemModalOpen)}
@@ -174,7 +189,7 @@ export function LandingDraftSurface() {
             </SurfaceActivityProvider>
           </div>
 
-          {isMobile ? (
+          {showRecentHistory && isMobile ? (
             /* Recent tasks live in the hamburger drawer at this width, which is
                not discoverable from a landing page that is otherwise empty
                below the composer. `mt-auto` drops this into that dead space at
@@ -190,7 +205,8 @@ export function LandingDraftSurface() {
             >
               View history
             </button>
-          ) : (
+          ) : null}
+          {showRecentHistory && !isMobile ? (
             <div className="mt-3 flex min-h-0 flex-1 flex-col pb-6">
               {!systemModalOpen && activity.visible ? (
                 <EpicsListPanel
@@ -204,7 +220,7 @@ export function LandingDraftSurface() {
                 />
               ) : null}
             </div>
-          )}
+          ) : null}
         </div>
       </div>
       {draftId === null ? null : (

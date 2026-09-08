@@ -19,8 +19,9 @@ const MAX_TEST_WORKERS = Math.min(
 // spinner). Only the compiled hook can regress that way, so only the compiled
 // hook can prove the fix. The `pr.*` shared-subscription trio had the same
 // shape (`registry.get(key)` and `entry.lastEvent` read at render).
+// Header projection likewise must follow registry-only host/lock changes.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-pr-(?:list|detail)-subscription)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop

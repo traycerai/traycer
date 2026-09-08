@@ -24,7 +24,7 @@ import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
-import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import { useHeaderTabForRef } from "@/stores/tabs/use-header-tabs";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -185,13 +185,10 @@ function HeaderTabOverlayChip(props: {
   readonly tab: HeaderTabDragData;
   readonly width: number | null;
 }) {
-  const allTabs = useHeaderTabs();
-  const tab =
-    allTabs.find(
-      (candidate) =>
-        candidate.kind === props.tab.tabKind &&
-        candidate.id === props.tab.tabId,
-    ) ?? null;
+  const tab = useHeaderTabForRef({
+    kind: props.tab.tabKind,
+    id: props.tab.tabId,
+  });
   if (tab === null) return null;
   return <HeaderTabDragOverlay tab={tab} width={props.width} />;
 }

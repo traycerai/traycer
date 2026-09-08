@@ -5,6 +5,8 @@ import type { TAB_KINDS } from "@/stores/tabs/registry";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
 import type { DraftNewWindowFlow } from "@/components/layout/hooks/use-draft-open-in-new-window";
 import type { EpicNewWindowFlow } from "@/components/layout/hooks/use-epic-open-in-new-window";
+import type { WorkspaceAppearance } from "@traycer/protocol/host/workspace/appearance-schemas";
+import type { AppearanceScope } from "@/lib/appearance/appearance-cache";
 
 /**
  * Type-only re-import so this file uses the SAME source-of-truth for kind
@@ -34,6 +36,14 @@ export interface SystemTab {
 
 export type TabIcon = ComponentType<{ className: string | undefined }>;
 
+export interface HeaderTabRepositoryIdentity {
+  readonly color: string | null;
+  readonly icon: NonNullable<WorkspaceAppearance["icon"]> | null;
+  readonly scope: AppearanceScope | null;
+  readonly assetRefreshKey: number;
+  readonly iconRejected: boolean;
+}
+
 /**
  * Canonical, render-ready tab projected by `useHeaderTabs`. The strip
  * iterates this. Each variant is fully self-contained - all display
@@ -43,7 +53,9 @@ export type TabIcon = ComponentType<{ className: string | undefined }>;
  * per-concern dispatch fns (`tabRequestClose`, `tabDuplicate`,
  * `tabResolveIntent`, `tabRouteOptions`, `tabActivate`) in the registry.
  */
-export type HeaderTab =
+export type HeaderTab = {
+  readonly repositoryIdentity?: HeaderTabRepositoryIdentity;
+} & (
   | {
       readonly kind: "epic";
       readonly id: string;
@@ -101,7 +113,8 @@ export type HeaderTab =
       readonly canDuplicate: boolean;
       readonly canOpenInNewWindow: boolean;
       readonly lastPath: string | null;
-    };
+    }
+);
 
 export interface TabContextMenuCtx {
   readonly tab: HeaderTab;

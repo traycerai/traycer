@@ -35,7 +35,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DropLine } from "@/components/ui/drop-line";
 import {
   useRegisteredEpicPermissionRole,
@@ -71,16 +70,13 @@ import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-contex
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
-import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
+import type { HeaderTab } from "@/stores/tabs/types";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
-import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
-import {
-  useEpicActivityStatus,
-  type EpicActivityStatus,
-} from "@/hooks/epic/use-epic-activity-status";
+import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
+import { TabLeadingIcon } from "./tab-leading-icon";
+import { repositoryTabFill } from "./repository-identity-presentation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
@@ -197,18 +193,11 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const modifier = useTabLeaderModifierForIndex(index);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const liveEpicTitle = useRegisteredEpicTitle(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
-  const titleGenerationPending = useRegisteredEpicTitleGenerating(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
-  const activityStatus = useEpicActivityStatus(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
-  const permissionRole = useRegisteredEpicPermissionRole(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
+  const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
+  const liveEpicTitle = useRegisteredEpicTitle(tabEpicId);
+  const titleGenerationPending = useRegisteredEpicTitleGenerating(tabEpicId);
+  const activityStatus = useEpicActivityStatus(tabEpicId);
+  const permissionRole = useRegisteredEpicPermissionRole(tabEpicId);
   const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
   const canClose = tab.kind !== "epic" || tab.canClose;
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
@@ -436,18 +425,25 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             side="left"
           />
           {chrome === "own" ? (
-            <TabChrome isActive={isActive} />
+            <TabChrome
+              isActive={isActive}
+              color={tab.repositoryIdentity?.color}
+            />
           ) : (
-            <SplitMemberChrome focused={isActive} />
+            <SplitMemberChrome
+              focused={isActive}
+              color={tab.repositoryIdentity?.color}
+            />
           )}
           <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
           <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
             <TabLeadingIcon
               icon={tab.icon}
+              identity={tab.repositoryIdentity}
               titleGenerationPending={titleGenerationPending}
               activityStatus={activityStatus}
               tabId={tab.id}
-              epicId={tab.kind === "epic" ? tab.epicId : null}
+              epicId={tabEpicId}
             />
             {rename.isEditing ? (
               <input
@@ -618,46 +614,6 @@ function HeaderTabDropIndicator(props: {
   );
 }
 
-function TabLeadingIcon(props: {
-  readonly icon: TabIcon | null;
-  readonly titleGenerationPending: boolean;
-  readonly activityStatus: EpicActivityStatus;
-  readonly tabId: string;
-  readonly epicId: string | null;
-}) {
-  const indicatorState = useSurfaceNotificationIndicatorState(
-    { epicId: props.epicId ?? props.tabId },
-    null,
-  );
-  let defaultIcon: React.ReactNode = null;
-  if (props.titleGenerationPending) {
-    defaultIcon = (
-      <AgentSpinningDots
-        className="size-3.5 text-muted-foreground"
-        testId={`header-tab-title-generating-${props.tabId}`}
-        variant="dots2"
-      />
-    );
-  } else if (props.icon !== null) {
-    const Icon = props.icon;
-    defaultIcon = <Icon className="size-3.5 shrink-0" />;
-  }
-  return (
-    <NotificationIndicatorIcon
-      state={indicatorState}
-      running={props.activityStatus === "idle" ? false : props.activityStatus}
-      subjectId={props.tabId}
-      testIdPrefix="header-tab"
-      className="text-muted-foreground"
-      style={undefined}
-      runningTitle="Task activity in progress"
-      defaultIcon={defaultIcon}
-      statusPresentation="message"
-      agentSurface="gui"
-    />
-  );
-}
-
 function HeaderTabMotionFrame(props: {
   readonly isDragging: boolean;
   readonly offsetX: number;
@@ -798,19 +754,31 @@ export function HeaderTabSeparator(props: { readonly visible: boolean }) {
   );
 }
 
-export function TabChrome(props: { readonly isActive: boolean }) {
+export function TabChrome(props: {
+  readonly isActive: boolean;
+  readonly color?: string | null;
+}) {
   if (!props.isActive) {
     return (
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md bg-accent/45 opacity-0 transition-opacity duration-150 ease-out group-focus-visible/tab:opacity-100 group-has-[:focus-visible]/tab:opacity-100 group-hover/tab:opacity-100"
-      />
+      <>
+        {props.color !== undefined && props.color !== null ? (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md"
+            style={{ backgroundColor: repositoryTabFill(props.color) }}
+          />
+        ) : null}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md bg-accent/45 opacity-0 transition-opacity duration-150 ease-out group-focus-visible/tab:opacity-100 group-has-[:focus-visible]/tab:opacity-100 group-hover/tab:opacity-100"
+        />
+      </>
     );
   }
 
   return (
     <TabChromeBackground
-      fill="var(--color-background)"
+      fill={repositoryTabFill(props.color)}
       borderColor="var(--color-border)"
       coversBaseline
       className="transition-opacity duration-300 ease-spring"
@@ -850,11 +818,14 @@ function StripPairPreview(props: {
  * the same raised silhouette as an ordinary selected tab; group membership is
  * communicated independently by the split group's accent underline.
  */
-export function SplitMemberChrome(props: { readonly focused: boolean }) {
+export function SplitMemberChrome(props: {
+  readonly focused: boolean;
+  readonly color?: string | null;
+}) {
   if (props.focused) {
     return (
       <TabChromeBackground
-        fill="var(--color-background)"
+        fill={repositoryTabFill(props.color)}
         borderColor="var(--color-primary)"
         coversBaseline
       />
@@ -862,10 +833,19 @@ export function SplitMemberChrome(props: { readonly focused: boolean }) {
   }
 
   return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
-    />
+    <>
+      {props.color !== undefined && props.color !== null ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm"
+          style={{ backgroundColor: repositoryTabFill(props.color) }}
+        />
+      ) : null}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
+      />
+    </>
   );
 }
 

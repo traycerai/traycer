@@ -1,0 +1,34 @@
+.appearance-wallpaper {
+  isolation: isolate;
+  contain: strict;
+}
+
+.landing-appearance-surface:has(.appearance-wallpaper) [data-composer-shell] {
+  background-color: color-mix(in srgb, var(--foreground) 3%, var(--background));
+}
+
+.appearance-wallpaper-texture {
+  background-image: radial-gradient(
+    circle,
+    var(--foreground) 0.6px,
+    transparent 0.8px
+  );
+  background-size: 4px 4px;
+}
+
+.appearance-wallpaper-mask {
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--background) 18%, transparent),
+      transparent 25%,
+      var(--background) 90%
+    ),
+    radial-gradient(
+      ellipse at 50% 56%,
+      var(--background) 12%,
+      color-mix(in srgb, var(--background) 92%, transparent) 30%,
+      color-mix(in srgb, var(--background) 35%, transparent) 70%
+    );
+  backdrop-filter: blur(0.5px);
+}

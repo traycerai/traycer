@@ -60,6 +60,7 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
     peek: () => null,
   }),
   getEpicSessionHandleHostId: () => null,
+  getEpicSessionHostId: () => null,
 }));
 
 function resetStores(): void {

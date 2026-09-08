@@ -2,7 +2,14 @@ import { type Transition } from "motion/react";
 import * as m from "motion/react-m";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { displayTitle } from "@/lib/display-title";
-import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
+import type { HeaderTab } from "@/stores/tabs/types";
+import { useHeaderTabAppearance } from "@/hooks/appearance/use-header-tab-appearance";
+import { repositoryTabFill } from "./repository-identity-presentation";
+import { TabLeadingIcon } from "./tab-leading-icon";
+import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
+import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 
 const HEADER_TAB_OVERLAY_TRANSITION = {
   type: "spring",
@@ -18,7 +25,16 @@ interface HeaderTabDragOverlayProps {
 }
 
 export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
-  const { tab } = props;
+  const tab = useHeaderTabAppearance(props.tab) ?? props.tab;
+  const epicId = tab.kind === "epic" ? tab.epicId : null;
+  const activityStatus = useEpicActivityStatus(epicId);
+  const titleGenerationPending = useRegisteredEpicTitleGenerating(epicId);
+  const indicators = useNotificationIndicators({
+    hostId: null,
+    epicIds: epicId === null ? [] : [epicId],
+    chatIds: [],
+    enabled: epicId !== null,
+  });
   // While a merge target is highlighted the overlay ghosts: the highlight sits
   // on the approach half of the target tab, which is exactly where this
   // overlay is - opaque, it would cover the one signal the gesture shows.
@@ -41,17 +57,23 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       initial={false}
       animate={{ opacity: mergeTargeted ? 0.45 : 1 }}
       transition={HEADER_TAB_OVERLAY_TRANSITION}
-      style={props.width === null ? undefined : { width: props.width }}
+      style={{
+        width: props.width ?? undefined,
+        backgroundColor: repositoryTabFill(tab.repositoryIdentity?.color),
+      }}
       className="pointer-events-none flex h-10 cursor-grabbing select-none items-center gap-2 rounded-t-md border border-b-0 border-border/80 bg-background px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm font-medium text-foreground shadow-lg"
     >
-      <TabLeadingIcon icon={tab.icon} />
+      <NotificationIndicatorsProvider indicators={indicators}>
+        <TabLeadingIcon
+          icon={tab.icon}
+          identity={tab.repositoryIdentity}
+          titleGenerationPending={titleGenerationPending}
+          activityStatus={activityStatus}
+          tabId={tab.id}
+          epicId={epicId}
+        />
+      </NotificationIndicatorsProvider>
       <span className="min-w-0 truncate">{displayName}</span>
     </m.div>
   );
-}
-
-function TabLeadingIcon(props: { readonly icon: TabIcon | null }) {
-  if (props.icon === null) return null;
-  const Icon = props.icon;
-  return <Icon className="size-3.5 shrink-0" />;
 }

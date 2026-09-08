@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import type { WorkspaceAppearance } from "@traycer/protocol/host/workspace/appearance-schemas";
-import {
-  useHostFileAsset,
-  type UseFileAssetResult,
-} from "@/hooks/assets/use-file-asset";
+import type {
+  AppearanceUpload,
+  WorkspaceAppearance,
+} from "@traycer/protocol/host/workspace/appearance-schemas";
+import { useHostFileAsset } from "@/hooks/assets/use-file-asset";
 import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
 import {
   useImageBlobUrlState,
@@ -15,7 +15,6 @@ import {
   readAppearanceBlob,
   writeAppearanceBlob,
   pinGlobalAppearanceBlob,
-  removeAppearanceBlob,
   captureAppearanceSession,
   isAppearanceSessionCurrent,
   type AppearanceScope,
@@ -56,31 +55,15 @@ function useStableAppearanceScope(
 function appearanceAssetStatus(args: {
   path: string | null;
   failed: boolean;
-  liveUrl: string | null;
-  live: UseFileAssetResult;
+  unavailable: boolean;
   cached: ImageBlobUrlState;
-  scope: AppearanceScope | null;
 }): AppearanceAssetState["status"] {
   if (args.path === null) return "empty";
   if (args.failed) return "unavailable";
-  if (args.liveUrl !== null || args.cached.status === "ready") return "ready";
-  if (
-    args.live.status === "fallback" ||
-    (args.scope === null && args.cached.status === "unavailable")
-  )
+  if (args.cached.status === "ready") return "ready";
+  if (args.unavailable && args.cached.status === "unavailable")
     return "unavailable";
   return "loading";
-}
-
-function failedAssetResolution(
-  failed: { identity: string; url: string | null } | null,
-  identity: string,
-  liveUrl: string | null,
-): boolean {
-  return (
-    failed?.identity === identity &&
-    (liveUrl === null || failed.url === liveUrl)
-  );
 }
 
 function appearanceImagePath(
@@ -89,13 +72,32 @@ function appearanceImagePath(
   return image?.kind === "image" ? image.path : null;
 }
 
+function appearanceAssetRequest(
+  scope: AppearanceScope | null,
+  path: string | null,
+  rejected: boolean,
+) {
+  if (scope === null || path === null || rejected) return null;
+  return {
+    method: "workspace" as const,
+    workspacePath: scope.canonicalSourceRoot,
+    filePath: `.traycer/${path}`,
+  };
+}
+
+function loadAppearanceAssetValidation() {
+  return import("@/lib/appearance/appearance-asset-validation");
+}
+
 export function useAppearanceAsset(args: {
   readonly scope: AppearanceScope | null;
   readonly path: string | null;
+  readonly target: AppearanceUpload["target"];
+  readonly rejected: boolean;
   readonly focused: boolean;
   readonly refreshKey: number;
 }): AppearanceAssetState {
-  const { path, focused } = args;
+  const { path, focused, target, rejected } = args;
   const scope = useStableAppearanceScope(args.scope);
   const accountId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
@@ -104,18 +106,15 @@ export function useAppearanceAsset(args: {
     scope !== null && scope.accountId !== accountId ? null : path;
   const live = useHostFileAsset({
     hostId: scope?.hostId ?? null,
-    request:
-      scope === null || accessiblePath === null
-        ? null
-        : {
-            method: "workspace",
-            workspacePath: scope.canonicalSourceRoot,
-            filePath: `.traycer/${accessiblePath}`,
-          },
+    request: appearanceAssetRequest(scope, accessiblePath, rejected),
     focused,
     refreshKey: args.refreshKey,
   });
-  const identity = appearanceAssetKey(scope, accessiblePath ?? "");
+  const identity = appearanceAssetKey(
+    scope,
+    JSON.stringify([accessiblePath, target]),
+  );
+  const [rejectedUrl, setRejectedUrl] = useState<string | null>(null);
   const [failedResolution, setFailedResolution] = useState<{
     identity: string;
     url: string | null;
@@ -129,19 +128,28 @@ export function useAppearanceAsset(args: {
   const cachedFetcher = useMemo(
     () => ({
       scopeKey: JSON.stringify([identity, latest?.sourceUrl ?? null]),
-      fetch: async () => {
+      fetch: async (_key: string, signal: AbortSignal) => {
+        const session = captureAppearanceSession();
         if (accessiblePath === null)
           throw new Error("No appearance image selected.");
         const blob =
           latest?.blob ?? (await readAppearanceBlob(scope, accessiblePath));
         if (blob === null) throw new Error("Appearance image is not cached.");
+        if (latest === null) {
+          const { validateAppearanceAssetBlob } =
+            await loadAppearanceAssetValidation();
+          await validateAppearanceAssetBlob(blob, target);
+        }
+        signal.throwIfAborted();
+        if (!isAppearanceSessionCurrent(scope?.accountId ?? null, session))
+          throw new Error("Appearance session changed.");
         return {
           bytes: new Uint8Array(await blob.arrayBuffer()),
           mediaType: blob.type,
         };
       },
     }),
-    [identity, scope, accessiblePath, latest],
+    [identity, scope, accessiblePath, latest, target],
   );
   const cached = useImageBlobUrlState(
     accessiblePath,
@@ -150,35 +158,42 @@ export function useAppearanceAsset(args: {
     null,
   );
   const liveUrl = live.status === "ready" ? live.url : null;
-  const latestLive = useRef<{ identity: string; url: string } | null>(null);
-  useEffect(
-    () => () => {
-      latestLive.current = null;
-    },
-    [identity],
-  );
   useEffect(() => {
-    if (liveUrl === null || accessiblePath === null || scope === null) return;
-    latestLive.current = { identity, url: liveUrl };
+    if (
+      liveUrl === null ||
+      accessiblePath === null ||
+      scope === null ||
+      rejected
+    )
+      return;
+    const controller = new AbortController();
     const session = captureAppearanceSession();
-    void fetch(liveUrl)
-      .then((response) => response.blob())
-      .then(async (blob) => {
-        if (
-          latestLive.current?.identity !== identity ||
-          latestLive.current.url !== liveUrl ||
-          !isAppearanceSessionCurrent(scope.accountId, session)
-        )
-          return;
-        // Give the newest bytes their own shared lease before the stream's URL
-        // is released. A later offline refresh must not revive an older lease.
-        setRetained({ identity, sourceUrl: liveUrl, blob });
-        await writeAppearanceBlob(scope, accessiblePath, blob);
-      })
-      .catch(() => {});
-  }, [liveUrl, accessiblePath, scope, identity]);
-  const url = liveUrl ?? cached.url;
-  const failed = failedAssetResolution(failedResolution, identity, liveUrl);
+    const accept = async () => {
+      const response = await fetch(liveUrl, { signal: controller.signal });
+      if (!response.ok) throw new Error("Appearance image is unavailable.");
+      const blob = await response.blob();
+      controller.signal.throwIfAborted();
+      const { validateAppearanceAssetBlob } =
+        await loadAppearanceAssetValidation();
+      controller.signal.throwIfAborted();
+      await validateAppearanceAssetBlob(blob, target);
+      if (
+        controller.signal.aborted ||
+        !isAppearanceSessionCurrent(scope.accountId, session)
+      )
+        return;
+      // Never expose the generic stream URL: only this admitted blob gets a display lease.
+      setRetained({ identity, sourceUrl: liveUrl, blob });
+      await writeAppearanceBlob(scope, accessiblePath, blob);
+    };
+    void accept().catch(() => {
+      if (!controller.signal.aborted) setRejectedUrl(liveUrl);
+    });
+    return () => controller.abort();
+  }, [liveUrl, accessiblePath, scope, identity, target, rejected]);
+  const url = cached.url;
+  const failed =
+    failedResolution?.identity === identity && failedResolution.url === url;
   const displayed = useRef<{ identity: string; url: string | null } | null>(
     null,
   );
@@ -193,10 +208,12 @@ export function useAppearanceAsset(args: {
     status: appearanceAssetStatus({
       path: accessiblePath,
       failed,
-      liveUrl,
-      live,
+      unavailable:
+        rejected ||
+        rejectedUrl === liveUrl ||
+        live.status === "fallback" ||
+        scope === null,
       cached,
-      scope,
     }),
     reason: live.reason,
     reportDecodeFailure: () => {
@@ -206,11 +223,10 @@ export function useAppearanceAsset(args: {
         displayed.current.url !== url
       )
         return;
-      live.reportDecodeFailure();
-      if (latestLive.current?.url === url) latestLive.current = null;
+      if (latest?.sourceUrl === liveUrl) live.reportDecodeFailure();
       imageBlobCache.discard(cachedFetcher.scopeKey, accessiblePath);
       setFailedResolution({ identity, url });
-      void removeAppearanceBlob(scope, accessiblePath).catch(() => {});
+      // Keep persistence untouched: this failed lease may predate a newer accepted write.
     },
   };
 }
@@ -218,6 +234,7 @@ export function useAppearanceAsset(args: {
 export function useResolvedAppearanceAssets(args: {
   readonly scope: AppearanceScope | null;
   readonly appearance: WorkspaceAppearance | null;
+  readonly issues: readonly string[];
   readonly focused: boolean;
   readonly refreshKey: number;
 }) {
@@ -230,6 +247,8 @@ export function useResolvedAppearanceAssets(args: {
   const project = useAppearanceAsset({
     scope: args.scope,
     path: projectPath,
+    target: "wallpaper",
+    rejected: args.issues.includes("wallpaper"),
     focused: args.focused,
     refreshKey: args.refreshKey,
   });
@@ -238,6 +257,8 @@ export function useResolvedAppearanceAssets(args: {
   const global = useAppearanceAsset({
     scope: null,
     path: globalPath,
+    target: "wallpaper",
+    rejected: false,
     focused: args.focused,
     refreshKey: args.refreshKey,
   });
@@ -245,6 +266,8 @@ export function useResolvedAppearanceAssets(args: {
     scope: args.scope,
     path:
       args.scope === null ? null : appearanceImagePath(args.appearance?.icon),
+    target: "icon",
+    rejected: args.issues.includes("icon"),
     focused: args.focused,
     refreshKey: args.refreshKey,
   });

@@ -29,7 +29,7 @@ import {
 } from "@/stores/tabs/use-system-tab-modal";
 import {
   getHeaderTabs,
-  useHeaderStripItem,
+  useAppearanceHeaderStripItem,
   useHeaderStripItemIds,
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
@@ -366,7 +366,7 @@ interface HeaderStripItemRendererProps {
 const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
   props: HeaderStripItemRendererProps,
 ): ReactNode {
-  const item = useHeaderStripItem(props.itemId);
+  const item = useAppearanceHeaderStripItem(props.itemId);
   const {
     isActive,
     isNextActive,
