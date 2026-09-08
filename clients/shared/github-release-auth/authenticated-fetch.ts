@@ -50,14 +50,14 @@ export async function fetchWithGitHubReleaseAuth(
       (response.status === 401 ||
         (response.status === 403 && !isRateLimited(response)))
     ) {
-      await cancelBody(response);
+      await cancelResponseBody(response);
       resolver.discardLease();
       throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
     }
     if (!isRedirect(response.status)) return response;
     const location = response.headers.get("location");
     if (location === null) return response;
-    await cancelBody(response);
+    await cancelResponseBody(response);
     currentUrl = new URL(location, currentUrl).toString();
     // Browser redirect semantics: 301/302 turn only a POST into a GET, 303
     // turns everything but GET/HEAD into a GET, 307/308 preserve the request.
@@ -100,6 +100,16 @@ function isRedirect(status: number): boolean {
   return [301, 302, 303, 307, 308].includes(status);
 }
 
-async function cancelBody(response: Response): Promise<void> {
+/**
+ * Release the socket a response is still holding.
+ *
+ * Exported because every caller that reaches a verdict WITHOUT reading the body
+ * owes this, and there are such callers outside this module - the desktop
+ * updater's own repository probe answers on `status` alone. An unread body in a
+ * long-lived process keeps its undici request active and occupies a connection
+ * until the peer or a timeout ends it, so a path that runs once per failed
+ * update check leaks one connection per failure.
+ */
+export async function cancelResponseBody(response: Response): Promise<void> {
   if (response.body !== null) await response.body.cancel();
 }

@@ -1,5 +1,6 @@
 import {
   AUTHENTICATION_REQUIRED_MESSAGE,
+  cancelResponseBody,
   createStagingGitHubReleaseAuthPolicy,
   fetchWithGitHubReleaseAuth,
   GitHubReleaseCredentialResolver,
@@ -53,4 +54,4 @@ export function stagingAuthLogMessage(
   return sanitizeCredentialTextWithSecrets(message, releaseTokens);
 }
 
-export { AUTHENTICATION_REQUIRED_MESSAGE };
+export { AUTHENTICATION_REQUIRED_MESSAGE, cancelResponseBody };

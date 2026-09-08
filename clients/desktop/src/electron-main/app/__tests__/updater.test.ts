@@ -3214,6 +3214,137 @@ describe("staging updater release authentication and channel", () => {
     expect(authorizations[0]).toBe("token first-token");
   });
 
+  // GitHub answers 403 for BOTH "your token is no good" and "slow down", and
+  // reading the second as the first discards a WORKING credential and puts a
+  // re-authentication prompt in front of a user whose only problem was making
+  // too many requests. The shared `fetchWithGitHubReleaseAuth` splits them on
+  // `retry-after` / `x-ratelimit-remaining: 0`; errors raised by
+  // electron-updater's own downloader never pass through it, but
+  // `createHttpError` appends the serialized response headers to every message
+  // unconditionally, so the same two signals survive as text.
+  it.each([
+    ['"retry-after": "60"', "a secondary limit"],
+    ['"x-ratelimit-remaining": "0"', "a primary limit"],
+  ])("keeps the lease when a 403 carries %s (%s)", async (header) => {
+    const token = "staging-token-ratelimited";
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = token;
+    const { autoUpdater, updater } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.3.gabcdef2";
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter([macReleaseFixture(tag, true)], {
+        [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
+      }),
+    );
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0-staging.3" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+
+    updater.startUpdateDownload();
+    autoUpdater.emit(
+      "error",
+      new Error(`403 Forbidden\nHeaders: { ${header} }`),
+    );
+
+    // A service failure, not a credential verdict.
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+    expect(updater.getAppUpdateSnapshot().errorMessage).toBe(
+      "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    );
+
+    // And the lease survives: changing the env token has no effect, because
+    // nothing rejected the one already held.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe(`token ${token}`);
+  });
+
+  it("still treats a 403 with no rate-limit headers as a credential verdict", async () => {
+    // The negative control for the pair above. Without it the fix could have
+    // been "never treat 403 as auth" and both rows would still be green.
+    const token = "staging-token-forbidden";
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = token;
+    const { autoUpdater, updater } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.4.gabcdef3";
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter([macReleaseFixture(tag, true)], {
+        [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
+      }),
+    );
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0-staging.4" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    updater.startUpdateDownload();
+    autoUpdater.emit(
+      "error",
+      new Error(
+        '403 Forbidden\nHeaders: { "content-type": "application/json" }',
+      ),
+    );
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "unavailable",
+      errorMessage: "Updates are not available for this build.",
+    });
+  });
+
+  it("releases the repository probe's body on the visible-repository arm", async () => {
+    // The arm that returns without reading anything. This probe runs once per
+    // failed update check in a process that lives for days, so an unread body
+    // holds one undici connection per failure until the peer gives up.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater } = await loadStagingUpdater();
+    //
+    // Two of the three unread sites are exercised here: the listing walk, whose
+    // every non-2xx arm throws or probes without reading, and the probe itself.
+    // The third is the channel-manifest fetch, which takes the same helper at
+    // the same position but needs a candidate to reach.
+    const probes: Response[] = [];
+    const listings: Response[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
+          // A real body, so "was it released?" is a question with an answer.
+          const probe = new Response(JSON.stringify({ private: true }), {
+            status: 200,
+          });
+          probes.push(probe);
+          return probe;
+        }
+        const listing = new Response("Not Found", { status: 404 });
+        listings.push(listing);
+        return listing;
+      }),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    // The listing 404 sent exactly one probe, and it answered "visible".
+    expect(probes).toHaveLength(1);
+    expect(probes[0].bodyUsed).toBe(true);
+    expect(listings).toHaveLength(1);
+    expect(listings[0].bodyUsed).toBe(true);
+  });
+
   // `settleMasked404` is the only path in this module that emits AFTER the
   // check that produced its error has finished. `handleUpdaterError` is a
   // synchronous listener, so it starts the visibility probe without awaiting

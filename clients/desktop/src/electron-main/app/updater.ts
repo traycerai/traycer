@@ -48,6 +48,7 @@ import {
 import {
   AUTHENTICATION_REQUIRED_MESSAGE,
   discardStagingUpdateToken,
+  cancelResponseBody,
   fetchStagingGitHubRelease,
   prepareStagingUpdateToken,
   stagingAuthLogMessage,
@@ -879,7 +880,37 @@ function isStagingAuthFailure(error: unknown): boolean {
   return (
     /\b401\b/.test(message) ||
     (/\b403\b/.test(message) &&
+      !isRenderedRateLimit(message) &&
       (message.includes("forbidden") || message.includes("credentials")))
+  );
+}
+
+/**
+ * The 403-is-a-rate-limit exception, read off a RENDERED error instead of a
+ * `Response`.
+ *
+ * GitHub answers 403 for both "your token is no good" and "slow down", and
+ * `isRateLimited` in `github-release-auth/authenticated-fetch.ts` splits them
+ * on two headers - `retry-after`, or `x-ratelimit-remaining: 0`. Errors that
+ * arrive here never passed through that helper: electron-updater's own
+ * downloader raises them, so there is no `Response` left to read.
+ *
+ * The headers survive anyway. `createHttpError` in `builder-util-runtime`
+ * builds every message as `<status> <statusMessage>` + the description + a
+ * literal `"\nHeaders: "` and the serialized response headers, unconditionally
+ * - so the same two signals the shared rule uses are present as text, already
+ * lowercased by the caller. This reads them there rather than inventing a
+ * second definition of "rate limited".
+ *
+ * The direction matters: reading a rate limit as a permission failure discards
+ * a WORKING credential and tells the user to re-authenticate over what was
+ * only too many requests. A rate-limited 403 falls through to the ordinary
+ * error path instead, which keeps the lease and retries.
+ */
+function isRenderedRateLimit(lowercasedMessage: string): boolean {
+  return (
+    lowercasedMessage.includes('"retry-after"') ||
+    /"x-ratelimit-remaining"\s*:\s*\[?\s*"?0"?/u.test(lowercasedMessage)
   );
 }
 
@@ -1933,6 +1964,9 @@ async function collectDesktopReleaseCandidates(
     const url = `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases?per_page=100&page=${page}`;
     const response = await fetchStagingGitHubRelease(url, { headers, signal });
     if (!response.ok) {
+      // Every arm below this point either throws or probes; none reads the
+      // body. Release the socket first - see `cancelResponseBody`.
+      await cancelResponseBody(response);
       // A 404 here is AMBIGUOUS, and the ambiguity is GitHub's: rather than
       // 403, it masks "this credential cannot see this repository" as "this
       // repository does not exist". A syntactically valid token without access
@@ -1990,6 +2024,12 @@ async function assertStagingRepositoryVisible(
     `https://api.github.com/repos/${encodeURIComponent(coordinate.owner)}/${encodeURIComponent(coordinate.repo)}`,
     { headers, signal },
   );
+  // Before the status check, not after: the visible-repository arm returns
+  // without reading the body, and this probe runs once per failed update check
+  // in a process that lives for days. The shared `assertRepositoryVisible` in
+  // `github-release-auth/release-asset.ts` cancels in exactly this position;
+  // this is the same helper, not a second copy of the idea.
+  await cancelResponseBody(probe);
   if (probe.status !== 404) return;
   throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
 }
@@ -2013,6 +2053,7 @@ async function fetchDesktopReleaseManifest(
     signal,
   });
   if (!response.ok) {
+    await cancelResponseBody(response);
     // The THIRD masked-404 site, and the last one: `fetchStagingGitHubRelease`
     // has exactly three call sites in this file - the release listing (guarded
     // above), the visibility probe itself (which must not recurse), and this.
