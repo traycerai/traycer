@@ -59,31 +59,24 @@ describe("requiresPreReleaseListing", () => {
     expect(
       requiresPreReleaseListing({
         mode: "implicit-rc-line",
-        installedVersion: "1.8.0",
         stagedVersion: null,
       }),
     ).toBe(true);
     expect(
       requiresPreReleaseListing({
         mode: "explicit-prerelease",
-        installedVersion: "1.8.0",
         stagedVersion: null,
       }),
     ).toBe(true);
   });
 
-  it("stays stable-only for a stable-only Host with a stable install and nothing staged", () => {
+  it("stays stable-only for a stable-only Host with nothing staged", () => {
     expect(
-      requiresPreReleaseListing({
-        mode: "stable-only",
-        installedVersion: "2.0.0",
-        stagedVersion: null,
-      }),
+      requiresPreReleaseListing({ mode: "stable-only", stagedVersion: null }),
     ).toBe(false);
     expect(
       requiresPreReleaseListing({
         mode: "stable-only",
-        installedVersion: "1.8.0",
         stagedVersion: "1.9.0",
       }),
     ).toBe(false);
@@ -96,26 +89,7 @@ describe("requiresPreReleaseListing", () => {
       // RC staged before an opt-out is revalidated rather than purged, without
       // putting the Host back on RC selection.
       expect(
-        requiresPreReleaseListing({
-          mode: "stable-only",
-          installedVersion: "1.8.0",
-          stagedVersion,
-        }),
-      ).toBe(true);
-    },
-  );
-
-  it.each(["1.9.0-beta.1", "2.0.0-rc.1+build.5"])(
-    "widens the query to revalidate an installed %s even in stable-only mode with nothing staged",
-    (installedVersion) => {
-      // The catalog filter would otherwise hide this row forever, so
-      // `installedYanked` could never observe a later yank of it.
-      expect(
-        requiresPreReleaseListing({
-          mode: "stable-only",
-          installedVersion,
-          stagedVersion: null,
-        }),
+        requiresPreReleaseListing({ mode: "stable-only", stagedVersion }),
       ).toBe(true);
     },
   );
@@ -131,20 +105,6 @@ describe("resolveHostStageTarget", () => {
 
   it("never pins in stable-only mode - `--automatic` already follows latest", () => {
     expect(resolveHostStageTarget(stableOnlyInput)).toBeNull();
-  });
-
-  it("never pins in stable-only mode even when the installed version is itself a pre-release", () => {
-    // `requiresPreReleaseListing` widens the QUERY for a case like this one -
-    // it never widens the persisted selection, so `--automatic` still keeps
-    // following the stable pointer.
-    expect(
-      resolveHostStageTarget({
-        mode: "stable-only",
-        installedVersion: "1.9.0-beta.1",
-        availableVersions: ["1.8.0", "1.9.0", "1.9.0-beta.1", "2.0.0-rc.1"],
-        stableLatest: "1.9.0",
-      }),
-    ).toBeNull();
   });
 
   it("never pins without a readable installed version", () => {

@@ -107,34 +107,6 @@ export async function readDesktopHostStagedRecord(
   };
 }
 
-export interface DesktopHeldHostVersion {
-  readonly version: string;
-  readonly installId: string;
-}
-
-/**
- * Reads the CLI-owned `held-host-version.json` (its `{ version, installId }`),
- * or `null` when nothing is held. Tolerant (missing OR malformed - including a
- * legacy record without `installId` => `null`), the same desktop-local
- * mirror-reader pattern as the two records above: the hold must always fail
- * safe toward the normal update path rather than wedge a converge on a corrupt
- * sidecar. The `installId` binds the hold to a specific install instance, so a
- * later reinstall of the same version cannot inherit it.
- */
-export async function readDesktopHeldHostVersion(
-  layout: HostFsLayout,
-): Promise<DesktopHeldHostVersion | null> {
-  const parsed = await readJsonFile(layout.heldVersionRecordFile);
-  if (!isPlainObject(parsed)) return null;
-  if (typeof parsed.version !== "string" || parsed.version.length === 0) {
-    return null;
-  }
-  if (typeof parsed.installId !== "string" || parsed.installId.length === 0) {
-    return null;
-  }
-  return { version: parsed.version, installId: parsed.installId };
-}
-
 /**
  * Desktop interpretation of the host's Layer 0 single-writer (I1) verdict
  * from `pid.json`. The known degraded cause is owned by `@traycer/protocol`;

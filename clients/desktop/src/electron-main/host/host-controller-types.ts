@@ -116,45 +116,17 @@ export interface HostControllerStatus {
   readonly download: DownloadLaneStatus | null;
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;
-  /**
-   * The installed host's per-install `installId` (the record's UUID), or `null`
-   * for a legacy record without one. Paired with {@link heldInstall} to gate
-   * the implicit staged-apply on the install INSTANCE, not merely its version.
-   */
-  readonly installedInstallId: string | null;
   readonly latestVersion: string | null;
+  /**
+   * The staged (pre-downloaded) host version, if any. Whether the launch-time
+   * apply of that stage may proceed is NOT a status question: the version hold
+   * (CLI-owned `held-host-version.json`) is decided by the CLI under its own
+   * mutation lock - `host apply --respect-hold`, which the implicit launch
+   * apply always reaches - never from a desktop-side snapshot that a terminal
+   * downgrade could race. `updateReady` therefore keeps advertising the stage
+   * for a held host too, and an explicit apply still moves forward.
+   */
   readonly stagedVersion: string | null;
-  /**
-   * The install the user deliberately downgraded to (CLI-owned
-   * `held-host-version.json`: its `{ version, installId }`), or `null` when
-   * nothing is held. Consulted ONLY to make the implicit staged-apply stand
-   * down while `heldInstall.installId === installedInstallId` (the SAME install
-   * instance, so a later reinstall of the same version never matches) AND the
-   * installed host is still viable (`!installedYanked`); it never changes
-   * `updateReady`, so the GUI still advertises an available update and an
-   * explicit apply still moves forward.
-   */
-  readonly heldInstall: {
-    readonly version: string;
-    readonly installId: string;
-  } | null;
-  /**
-   * `true` when the registry listing most recently parsed this session
-   * (`stageLatest`'s `host available` probe, which the launch reconcile joins
-   * before sampling status) marks the INSTALLED version as yanked. A yanked
-   * host is not viable, so it is the one thing that voids a matching
-   * {@link heldInstall}: the hold protects a deliberate choice from client
-   * preference, never from curation, and the launch-time apply of the eligible
-   * stage proceeds. `false` until a listing has been parsed this session, and
-   * a probe that fails afterwards retains the previous parsed answer - so an
-   * unknown state keeps the hold in force, the same fail-open bias as the
-   * CLI's own viability yank check (which `host apply --respect-hold` re-asks
-   * under the CLI lock, and which no-ops again if the registry has un-yanked
-   * the build since). The listing is widened to pre-releases whenever the
-   * installed version is one (`requiresPreReleaseListing`), so a withdrawn
-   * beta the catalog filter would otherwise hide is still seen.
-   */
-  readonly installedYanked: boolean;
   readonly installedRuntimeVersion: string | null;
   readonly runningRuntimeVersion: string | null;
   readonly updateReady: boolean;
@@ -322,6 +294,20 @@ export interface ConvergeReadyOk {
 export interface ApplyStagedOk {
   readonly appliedVersion: string;
   readonly runningActivated: boolean;
+  /**
+   * `false` when the CLI apply was a NO-OP - nothing was staged by the time it
+   * ran, or (for the implicit launch trigger, `host apply --respect-hold`) the
+   * installed host is the deliberately-held install instance and still viable,
+   * so the CLI kept it. `appliedVersion` then names the version that stayed
+   * installed. Only a REACHABLE host reports it: a no-op against an
+   * unreachable host is an `installedNotConverged` failure instead (the
+   * controller's `noOpApplyOutcome`), which the launch reconcile's
+   * `recoverAfterFailedApply` turns into a keep-installed converge - so a held
+   * host that is DOWN is started that way. The `ok`/`applied: false` shape is
+   * what lets the reconcile fall through to its activation arm for a held host
+   * that is up but carries activation debt.
+   */
+  readonly applied: boolean;
 }
 
 export interface ActivateInstalledOk {

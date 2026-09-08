@@ -551,19 +551,6 @@ function writeStagedRecord(
   );
 }
 
-function writeHeldVersion(
-  environment: "production" | "dev",
-  version: string,
-  installId: string,
-): void {
-  const layout = getHostFsLayout(environment);
-  mkdirSync(layout.rootDir, { recursive: true });
-  writeFileSync(
-    layout.heldVersionRecordFile,
-    JSON.stringify({ version, installId }),
-  );
-}
-
 function writePidMetadata(
   environment: "production" | "dev",
   fields: {
@@ -2479,338 +2466,6 @@ describe("canonical status: activation-state derivation", () => {
   });
 });
 
-// Ticket 4 (installId-bound): `getStatus().heldInstall` is a straight
-// passthrough of `readDesktopHeldHostVersion` over the controller's own
-// layout, and `installedInstallId` is the installed record's own id - the
-// read side the launch-converge gate and the menu/renderer both consult. The
-// two are reported separately rather than pre-compared, since the GATE
-// (`isStagedApplyHeldBack`) is what decides installId equality.
-describe("canonical status: heldInstall / installedInstallId", () => {
-  it("heldInstall is null when nothing is held", async () => {
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-      installId: "install-a",
-    });
-
-    const status = await newController("production").getStatus();
-
-    expect(status.heldInstall).toBeNull();
-    expect(status.installedInstallId).toBe("install-a");
-  });
-
-  it("reflects the held-host-version record when present", async () => {
-    writeInstallRecord("production", {
-      version: "1.2.0",
-      runtimeVersion: "1.2.0",
-      installId: "install-a",
-    });
-    writeHeldVersion("production", "1.2.0", "install-a");
-
-    const status = await newController("production").getStatus();
-
-    expect(status.heldInstall).toEqual({
-      version: "1.2.0",
-      installId: "install-a",
-    });
-    expect(status.installedInstallId).toBe("install-a");
-  });
-
-  // installId-binding: a held record naming a DIFFERENT installId than the
-  // currently installed record (a reinstall of the same version got a fresh
-  // instance) is reported as-is - the mismatch is a fact for the gate to act
-  // on, not something `getStatus` resolves itself.
-  it("reports a mismatched installId as-is (a reinstall does not inherit the prior hold's identity)", async () => {
-    writeInstallRecord("production", {
-      version: "1.2.0",
-      runtimeVersion: "1.2.0",
-      installId: "install-b",
-    });
-    writeHeldVersion("production", "1.2.0", "install-a");
-
-    const status = await newController("production").getStatus();
-
-    expect(status.heldInstall).toEqual({
-      version: "1.2.0",
-      installId: "install-a",
-    });
-    expect(status.installedInstallId).toBe("install-b");
-  });
-});
-
-// Variant of `availableSnapshotFixture` above that lets a caller mark
-// specific versions withdrawn - the fixed-shape original always emits
-// `yanked: false`, which cannot exercise `HostControllerStatus.installedYanked`.
-function availableSnapshotFixtureWithYanked(
-  latest: string,
-  availableVersions: readonly string[],
-  yankedVersions: readonly string[],
-): unknown {
-  return {
-    manifest: {
-      schemaVersion: 1,
-      generatedAt: "2026-01-01T00:00:00.000Z",
-      latest,
-      versions: availableVersions.map((version) => ({
-        version,
-        releasedAt: "2026-01-01T00:00:00.000Z",
-        releaseNotesUrl: `https://github.com/traycerai/traycer/releases/tag/host-v${version}`,
-        yanked: yankedVersions.includes(version),
-        deprecationReason: null,
-        requiredCliVersion: null,
-        platforms: {
-          "darwin-arm64": {
-            available: true,
-            unavailableReason: null,
-            url: `https://example.com/host-${version}.tar.gz`,
-            sizeBytes: 1,
-            sha256: "a".repeat(64),
-            signatureUrl: `https://example.com/host-${version}.tar.gz.minisig`,
-            signatureAlgorithm: "minisign",
-            publicKeyId: "test-key",
-          },
-        },
-      })),
-    },
-    manifestUrl: "https://example.com/versions.json",
-    platformKey: "darwin-arm64",
-    includePreReleases: false,
-  };
-}
-
-describe("canonical status: installedYanked", () => {
-  it("is false before any registry listing has been parsed", async () => {
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-
-    const status = await newController("production").getStatus();
-
-    expect(status.installedYanked).toBe(false);
-  });
-
-  it("is true once a parsed listing marks the installed version yanked", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("available")) {
-        return availableSnapshotFixtureWithYanked(
-          "1.8.0",
-          ["1.7.0", "1.8.0"],
-          ["1.7.0"],
-        );
-      }
-      return {};
-    });
-
-    await controller.stageLatest();
-    const status = await controller.getStatus();
-
-    expect(status.installedYanked).toBe(true);
-  });
-
-  it("is false when a parsed listing carries the installed version without yanking it", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("available")) {
-        return availableSnapshotFixtureWithYanked(
-          "1.8.0",
-          ["1.7.0", "1.8.0"],
-          [],
-        );
-      }
-      return {};
-    });
-
-    await controller.stageLatest();
-    const status = await controller.getStatus();
-
-    expect(status.installedYanked).toBe(false);
-  });
-
-  // Cold-review follow-up: `host available` filters out non-RC prereleases
-  // unless asked with `--include-pre-releases`. An installed beta that the
-  // catalog would otherwise hide can never be observed as yanked, so a hold
-  // on it (`heldInstall.installId === installedInstallId`) would keep a
-  // withdrawn build forever - `requiresPreReleaseListing` must widen the
-  // QUERY for an installed prerelease even in stable-only mode.
-  it("widens the available query to observe a yank on an installed, held prerelease in stable-only mode", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.9.0-beta.1",
-      runtimeVersion: "1.9.0-beta.1",
-      installId: "install-held",
-    });
-    writeHeldVersion("production", "1.9.0-beta.1", "install-held");
-    writeStagedRecord("production", "1.9.0", "1.9.0");
-    let requestedArgs: readonly string[] | null = null;
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("available")) {
-        requestedArgs = args;
-        return availableSnapshotFixtureWithYanked(
-          "1.9.0",
-          ["1.9.0-beta.1", "1.9.0"],
-          ["1.9.0-beta.1"],
-        );
-      }
-      return {};
-    });
-
-    await controller.stageLatest();
-    const status = await controller.getStatus();
-
-    expect(requestedArgs).not.toBeNull();
-    expect(requestedArgs).toContain("--include-pre-releases");
-    expect(status.installedYanked).toBe(true);
-  });
-
-  it("does not widen the available query for a stable install with nothing staged, and probes the registry exactly once when the install is unchanged", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "2.0.0",
-      runtimeVersion: "2.0.0",
-    });
-    let requestedArgs: readonly string[] | null = null;
-    let availableCalls = 0;
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("available")) {
-        availableCalls += 1;
-        requestedArgs = args;
-        return availableSnapshotFixtureWithYanked("2.0.0", ["2.0.0"], []);
-      }
-      return {};
-    });
-
-    await controller.stageLatest();
-
-    expect(requestedArgs).not.toBeNull();
-    expect(requestedArgs).not.toContain("--include-pre-releases");
-    expect(availableCalls).toBe(1);
-  });
-
-  // Cold-review follow-up (Codex P2 on afc39760d): a terminal downgrade can
-  // land BETWEEN the install-record read and the `host available` round-trip.
-  // A listing fetched for the OLD install may omit the new one entirely (a
-  // beta hidden from a stable-only listing), so the reconcile must notice the
-  // change once the listing is back and restart from the top - exactly once.
-  it("re-queries the registry when the installed host changes during the probe, and observes a yank on the new install", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "2.0.0",
-      runtimeVersion: "2.0.0",
-      installId: "install-held",
-    });
-    let availableCalls = 0;
-    const requestedArgsByCall: (readonly string[])[] = [];
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("available")) {
-        availableCalls += 1;
-        requestedArgsByCall.push(args);
-        if (availableCalls === 1) {
-          // The downgrade lands while the first request is in flight - the
-          // hold is rewritten to match, so the retried pass's decision is
-          // exercised for a genuinely held install.
-          writeInstallRecord("production", {
-            version: "1.9.0-beta.1",
-            runtimeVersion: "1.9.0-beta.1",
-            installId: "install-held",
-          });
-          writeHeldVersion("production", "1.9.0-beta.1", "install-held");
-          return availableSnapshotFixtureWithYanked("2.0.0", ["2.0.0"], []);
-        }
-        return availableSnapshotFixtureWithYanked(
-          "2.0.0",
-          ["2.0.0", "1.9.0-beta.1"],
-          ["1.9.0-beta.1"],
-        );
-      }
-      return {};
-    });
-
-    await controller.stageLatest();
-    const status = await controller.getStatus();
-
-    expect(availableCalls).toBe(2);
-    expect(requestedArgsByCall[0]).not.toContain("--include-pre-releases");
-    expect(requestedArgsByCall[1]).toContain("--include-pre-releases");
-    expect(status.installedYanked).toBe(true);
-  });
-
-  it("retries the registry probe at most once even when the install keeps changing, discarding the exhausted pass's stale listing", async () => {
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "2.0.0",
-      runtimeVersion: "2.0.0",
-    });
-    // Seed the caches with a known-good answer from a CLEAN pass, before the
-    // keeps-changing scenario below runs: a `latest` that is NOT the
-    // (yanked) installed version, so `latestVersionFromSnapshot` still
-    // resolves it (an entry the listing marks yanked is never "available").
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("available")) {
-        return availableSnapshotFixtureWithYanked(
-          "2.1.0",
-          ["2.0.0", "2.1.0"],
-          ["2.0.0"],
-        );
-      }
-      return {};
-    });
-    await controller.stageLatest();
-    const seededStatus = await controller.getStatus();
-    expect(seededStatus.latestVersion).toBe("2.1.0");
-    expect(seededStatus.installedYanked).toBe(true);
-
-    let availableCalls = 0;
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("available")) {
-        availableCalls += 1;
-        // Every pass observes a DIFFERENT install than it queried for, which
-        // would spin forever without the single-retry cap. The exhausted
-        // (second) pass's listing carries an obviously different `latest` and
-        // marks nothing yanked, so either leaking into the caches is
-        // observable below.
-        writeInstallRecord("production", {
-          version: `1.9.0-beta.${availableCalls}`,
-          runtimeVersion: `1.9.0-beta.${availableCalls}`,
-        });
-        return availableSnapshotFixtureWithYanked(
-          "9.9.9",
-          [`1.9.0-beta.${availableCalls}`],
-          [],
-        );
-      }
-      return {};
-    });
-
-    await expect(controller.stageLatest()).resolves.toBeUndefined();
-
-    expect(availableCalls).toBe(2);
-    // The exhausted pass's `latest` ("9.9.9") never overwrote the seeded
-    // cache.
-    const statusAfterExhaustedRetry = await controller.getStatus();
-    expect(statusAfterExhaustedRetry.latestVersion).toBe("2.1.0");
-
-    // The exhausted pass's listing (which marked nothing yanked) did not
-    // replace the yank cache either: re-installing the version the SEEDED
-    // listing marked yanked still reads as yanked.
-    writeInstallRecord("production", {
-      version: "2.0.0",
-      runtimeVersion: "2.0.0",
-    });
-    const statusAfterRewrite = await controller.getStatus();
-    expect(statusAfterRewrite.installedYanked).toBe(true);
-  });
-});
-
 // Ticket 07 §5.2.7 / retention (`isTerminalRetentionExpired`): `getStatus()`'s
 // `localAttempt` is the host-DOWN window's only observation, so an aged-out
 // terminal record must not resurface a week-old failure as the freshest
@@ -3316,7 +2971,7 @@ describe("yank/apply ordering", () => {
       controller.applyStaged("manual", false),
     ).resolves.toMatchObject({
       kind: "ok",
-      value: { appliedVersion: "1.8.0", runningActivated: true },
+      value: { appliedVersion: "1.8.0", runningActivated: true, applied: true },
     });
     expect(downloadCalls).toBe(1);
     expect(applyCalls).toBe(1);
@@ -4988,13 +4643,13 @@ describe("platform matrix", () => {
   });
   // Finding (final hold model): `convergeReady` is now UNCONDITIONALLY
   // liveness-only - `isInstalledVersionHeld()` is gone, and both a
-  // background and a user-repair converge always pass `--keep-installed`
-  // regardless of whether anything is held. Version movement is never this
-  // path's job (an explicit update or `host ensure --release` owns that),
-  // so a held OR unheld install alike stays exactly where it is; the
-  // version-hold record is consulted only at the launch-activation gate
-  // (`host-launch-converge.test.ts`), not here.
-  it("a user-repair over an unheld install still passes --keep-installed (liveness-only, unconditionally)", async () => {
+  // background and a user-repair converge always pass `--keep-installed`.
+  // Version movement is never this path's job (an explicit update or `host
+  // ensure --release` owns that); the version-hold record is consulted only
+  // by the CLI's own `host apply --respect-hold`, under its mutation lock -
+  // never from a desktop-side snapshot here (see `host-launch-converge.ts`
+  // and `host-apply.ts` in the CLI).
+  it("a user-repair converge always passes --keep-installed (liveness-only, unconditionally)", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -5019,70 +4674,13 @@ describe("platform matrix", () => {
     );
   });
 
-  it("a user-repair over a held install also passes --keep-installed, keeping the held version", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.2.0",
-      runtimeVersion: "1.2.0",
-    });
-    writeHeldVersion("production", "1.2.0", "install-1");
-
-    await controller.convergeReady(
-      false,
-      {
-        kind: "user-repair",
-        targetHostId: "local-host",
-        guard: () => Promise.resolve({ kind: "proceed" }),
-      },
-      "keep-installed",
-    );
-
-    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: expect.arrayContaining(["--keep-installed"]),
-      }),
-    );
-  });
-
-  // A "stale" hold (the record names a version that has since moved past it)
-  // is no longer a distinct case for `convergeReady`: with the hold read
-  // removed from this path entirely, a stale record has exactly the same
-  // (unconditional) `--keep-installed` outcome as no record at all.
-  it("a user-repair with a stale hold (no longer matching the installed version) still passes --keep-installed", async () => {
-    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
-    const controller = newController("production");
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writeHeldVersion("production", "1.2.0", "install-1");
-
-    await controller.convergeReady(
-      false,
-      {
-        kind: "user-repair",
-        targetHostId: "local-host",
-        guard: () => Promise.resolve({ kind: "proceed" }),
-      },
-      "keep-installed",
-    );
-
-    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: expect.arrayContaining(["--keep-installed"]),
-      }),
-    );
-  });
-
-  it("a user-repair over a held install on packaged macOS also passes --keep-installed", async () => {
+  it("a user-repair converge on packaged macOS also passes --keep-installed", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.2.0",
       runtimeVersion: "1.2.0",
     });
-    writeHeldVersion("production", "1.2.0", "install-1");
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { running: true, version: "1.2.0", action: "noop" },
     });
@@ -7729,6 +7327,87 @@ describe("Class B no-op liveness", () => {
       controller.applyStaged("manual", false),
     ).resolves.toMatchObject({
       kind: "installed-not-converged",
+    });
+  });
+
+  // Final hold model (Codex P2 series): `host apply --respect-hold`'s no-op
+  // outcome (nothing to apply, or the CLI kept a held-and-viable install) is
+  // what `applyStaged("launch", ...)` reaches - the CLI-owned route, under
+  // the same "trust nothing without a live endpoint" rule as the `manual`
+  // no-op tests above.
+  it("--respect-hold no-op with a live endpoint reports ok/applied:false, never a real apply", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    writePidMetadata("production", { version: "1.2.0", pid: process.pid });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.2.0" },
+    });
+
+    await expect(controller.applyStaged("launch", false)).resolves.toEqual({
+      kind: "ok",
+      value: {
+        appliedVersion: "1.2.0",
+        runningActivated: true,
+        applied: false,
+      },
+    });
+  });
+
+  it("--respect-hold no-op without a live endpoint reports installed-not-converged, naming the install left unchanged", async () => {
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.2.0" },
+    });
+
+    await expect(
+      controller.applyStaged("launch", false),
+    ).resolves.toMatchObject({
+      kind: "installed-not-converged",
+      message: expect.stringContaining("The installed host was left unchanged"),
+    });
+  });
+
+  it("--respect-hold no-op on packaged macOS with a live endpoint also reports ok/applied:false", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    writePidMetadata("production", { version: "1.2.0", pid: process.pid });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.2.0" },
+    });
+
+    await expect(controller.applyStaged("launch", false)).resolves.toEqual({
+      kind: "ok",
+      value: {
+        appliedVersion: "1.2.0",
+        runningActivated: true,
+        applied: false,
+      },
     });
   });
 });

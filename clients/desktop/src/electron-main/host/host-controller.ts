@@ -86,7 +86,6 @@ import {
   deriveUpdateReady,
   isStrictlyNewerHostVersion,
   probeHostBusyVerdict,
-  readDesktopHeldHostVersion,
   readDesktopHostInstallRecord,
   readDesktopHostStagedRecord,
   readReachableHostIdentity,
@@ -575,12 +574,6 @@ interface AvailableSnapshotShape {
   readonly versions: ReadonlyArray<{
     readonly version: string;
     readonly available: boolean;
-    // Withdrawn by curation, independent of whether a platform asset still
-    // physically exists. Kept apart from `available` (which also folds in
-    // platform availability) because a yanked INSTALLED version is the one
-    // condition that voids the launch-time version hold - see
-    // `HostControllerStatus.installedYanked`.
-    readonly yanked: boolean;
   }>;
 }
 
@@ -642,7 +635,6 @@ function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
           entry.yanked !== true &&
           isPlainObject(asset) &&
           asset.available === true,
-        yanked: entry.yanked === true,
       },
     ];
   });
@@ -968,10 +960,6 @@ export class HostController {
   private eligibleStage: EligibleStage | null = null;
 
   private latestVersionCache: string | null = null;
-  // Versions the last parsed registry listing marked withdrawn. Empty until a
-  // listing has been parsed this session, which reads as "nothing known to be
-  // yanked" - the same fail-open bias as the CLI's viability yank check.
-  private yankedVersionsCache: ReadonlySet<string> = new Set();
 
   // Session quarantine for the pending-LaunchAgent-revision fast-path
   // refresh (see `applyPendingLoginItemRevisionIfIdle` below). Instance-
@@ -1154,13 +1142,8 @@ export class HostController {
       download: this.downloadStatus,
       mutation: this.mutationStatus,
       installedVersion,
-      installedInstallId: installed?.installId ?? null,
       latestVersion: this.latestVersionCache,
       stagedVersion: staged?.version ?? null,
-      heldInstall: await readDesktopHeldHostVersion(this.layout),
-      installedYanked:
-        installedVersion !== null &&
-        this.yankedVersionsCache.has(installedVersion),
       installedRuntimeVersion,
       runningRuntimeVersion,
       updateReady: deriveUpdateReady(installedVersion, staged?.version ?? null),
@@ -3194,24 +3177,10 @@ export class HostController {
       await this.runStageLatest();
       return;
     }
-    await this.reconcileEligibleStage(true);
+    await this.reconcileEligibleStage();
   }
 
-  // `retryOnInstallChange` (callers pass `true`; only the internal retry
-  // passes `false`): the install record is an INPUT to the registry request
-  // below (it decides the channel mode and whether the listing is widened to
-  // pre-releases), and the request is a WAN round-trip a terminal
-  // `host update --allow-downgrade` can land inside. A listing fetched for the
-  // OLD install may then omit the new one entirely - a beta is hidden from a
-  // stable-only listing - so `yankedVersionsCache` would silently record a
-  // withdrawn build as viable and the launch gate would park on it without
-  // ever reaching the CLI's authoritative lookup. So the record is re-read
-  // once the listing is back, and a changed version restarts the reconcile
-  // from the top - exactly once, so two back-to-back changes cannot spin it;
-  // a second change discards that listing instead (see below).
-  private async reconcileEligibleStage(
-    retryOnInstallChange: boolean,
-  ): Promise<void> {
+  private async reconcileEligibleStage(): Promise<void> {
     if (await isHostRemovedByUser()) return;
     this.eligibleStage = null;
     let staged = await readDesktopHostStagedRecord(this.layout);
@@ -3250,7 +3219,6 @@ export class HostController {
           "--json",
           ...(requiresPreReleaseListing({
             mode,
-            installedVersion,
             stagedVersion: staged?.version ?? null,
           })
             ? ["--include-pre-releases"]
@@ -3269,49 +3237,7 @@ export class HostController {
       }
       return;
     }
-    // The listing answers for the install it was queried FOR. If that install
-    // changed underneath the request, neither the yank set nor the stage
-    // decision below may be drawn from it - see `retryOnInstallChange`.
-    const installedAfterListing = await readDesktopHostInstallRecord(
-      this.layout,
-    );
-    const installedVersionAfterListing = installedAfterListing?.version ?? null;
-    if (installedVersionAfterListing !== installedVersion) {
-      log.info(
-        "[host-controller] installed host changed during the registry probe",
-        {
-          queriedFor: installedVersion,
-          installedNow: installedVersionAfterListing,
-          retrying: retryOnInstallChange,
-        },
-      );
-      if (retryOnInstallChange) {
-        return this.reconcileEligibleStage(false);
-      }
-      // Retry exhausted and the install moved AGAIN: this listing still
-      // answers for a different install, so it is discarded exactly like a
-      // failed probe - the caches keep their previous answers, and a
-      // fingerprinted stage already on disk stays eligible as it was. The
-      // next reconcile (periodic, resume, or launch) starts clean.
-      if (staged?.stageId !== null && staged?.stageId !== undefined) {
-        this.eligibleStage = {
-          version: staged.version,
-          fingerprint: encodeStageFingerprint(staged.stageId),
-        };
-      }
-      return;
-    }
     this.latestVersionCache = latestVersionFromSnapshot(snapshot);
-    // Remembered beside `latestVersionCache` for the same reason: `getStatus`
-    // must answer "is the INSTALLED version withdrawn?" without a registry
-    // round-trip of its own. Only a parsed listing may replace the set - a
-    // failed probe (caught above) keeps the previous answer, and an invalid
-    // one, which lists nothing, reads as "nothing known to be yanked".
-    this.yankedVersionsCache = new Set(
-      snapshot.versions
-        .filter((entry) => entry.yanked)
-        .map((entry) => entry.version),
-    );
     if (!snapshot.valid) {
       if (staged?.stageId !== null && staged?.stageId !== undefined) {
         this.eligibleStage = {
@@ -3624,6 +3550,15 @@ export class HostController {
     await this.downloadTail;
   }
 
+  /**
+   * The outcome of a CLI `host apply` that changed nothing - nothing was
+   * staged by the time it ran, or `--respect-hold` kept the deliberately-held
+   * install instance. Reachable host => `ok` with `applied: false`, so the
+   * launch reconcile can fall through to its activation arm. Unreachable host
+   * => `installedNotConverged` (a failure), so the reconcile's ordinary
+   * failed-apply recovery starts the installed bytes via a keep-installed
+   * converge; that is how a held host that is DOWN gets started.
+   */
   private async noOpApplyOutcome(
     appliedVersion: string,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
@@ -3633,12 +3568,12 @@ export class HostController {
     );
     if (runningRuntimeVersion === null) {
       return this.installedNotConverged(
-        "No staged host update was available, but the current host is not reachable. Open Doctor or run 'traycer host doctor' to recover.",
+        "The installed host was left unchanged (nothing to apply, or the installed version is deliberately held), but it is not reachable. Open Doctor or run 'traycer host doctor' to recover.",
       );
     }
     return {
       kind: "ok",
-      value: { appliedVersion, runningActivated: true },
+      value: { appliedVersion, runningActivated: true, applied: false },
     };
   }
 
@@ -3776,6 +3711,7 @@ export class HostController {
       value: {
         appliedVersion: result.version ?? "",
         runningActivated: result.runningActivated,
+        applied: true,
       },
     };
   }
@@ -3824,6 +3760,7 @@ export class HostController {
       value: {
         appliedVersion: result.version ?? "",
         runningActivated: activation.value.activated,
+        applied: true,
       },
     };
   }

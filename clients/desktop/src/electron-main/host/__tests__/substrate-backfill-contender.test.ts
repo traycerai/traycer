@@ -44,7 +44,6 @@ async function freshLayout(): Promise<HostFsLayout> {
     installRecordFile: join(rootDir, "install", "install.json"),
     stagedDir: join(rootDir, "staged"),
     stagedRecordFile: join(rootDir, "staged", "staged.json"),
-    heldVersionRecordFile: join(rootDir, "held-host-version.json"),
     pendingLoginItemRevisionFile: join(
       rootDir,
       "pending-login-item-revision.json",

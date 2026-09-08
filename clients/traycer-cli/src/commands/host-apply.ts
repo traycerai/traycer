@@ -57,11 +57,12 @@ export interface HostApplyArgs {
    * instead of applying when the installed host IS the deliberately-held
    * instance (`installId` match) and is still viable - a held host the
    * registry has yanked voids its hold and is applied over (fail-open: an
-   * unreachable registry keeps the hold). The desktop passes it for its launch-time
-   * (implicit) apply, whose preflight decision can be stale: a terminal
-   * downgrade that lands during the stage's download/eligibility window would
-   * otherwise be reverted by a launch apply that decided to run before the hold
-   * existed. An explicit "Update now" apply leaves this false and always
+   * unreachable registry keeps the hold). This is the ONLY place the hold is
+   * decided: the desktop's launch-time (implicit) apply always passes it and
+   * never pre-judges the hold from its own snapshot, because a terminal
+   * downgrade can commit between any sample it takes and this lock - a
+   * snapshot that suppressed the call would let that race revert a fresh
+   * downgrade, or park a withdrawn one. An explicit "Update now" apply leaves this false and always
    * applies; it needs no hold write, since moving forward installs a new
    * instance whose id no longer matches the held one.
    */

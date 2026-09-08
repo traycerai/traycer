@@ -276,6 +276,7 @@ export async function provisionHost(
       opts.satisfaction,
       opts.registerService,
       yankLookup,
+      opts.recordVersionOverride,
     ))
   ) {
     opts.runtime.logger.debug("Host provisioning fast-path satisfied", {
@@ -306,7 +307,12 @@ export async function provisionHost(
     const predictedInstall =
       opts.force ||
       !fast.installed ||
-      !(await versionSatisfied(fast, opts.satisfaction, yankLookup));
+      !(await versionSatisfied(
+        fast,
+        opts.satisfaction,
+        yankLookup,
+        opts.recordVersionOverride,
+      ));
     const preStaged = predictedInstall
       ? await prepareInstallStage(opts, progress, capability, contenderOptions)
       : null;
@@ -385,6 +391,7 @@ async function provisionUnderLock(
             opts.satisfaction,
             opts.registerService,
             yankLookup,
+            opts.recordVersionOverride,
           ))
         ) {
           opts.runtime.logger.debug(
@@ -413,7 +420,12 @@ async function provisionUnderLock(
         if (
           !opts.force &&
           state.installed &&
-          (await versionSatisfied(state, opts.satisfaction, yankLookup)) &&
+          (await versionSatisfied(
+            state,
+            opts.satisfaction,
+            yankLookup,
+            opts.recordVersionOverride,
+          )) &&
           !opts.registerService
         ) {
           opts.runtime.logger.debug(
@@ -460,6 +472,7 @@ async function provisionUnderLock(
           state,
           opts.satisfaction,
           yankLookup,
+          opts.recordVersionOverride,
         );
         if (opts.force || !state.installed || !reinstallVersionSatisfied) {
           if (preStaged === null) {
@@ -1073,8 +1086,23 @@ async function versionSatisfied(
   state: ProvisionState,
   satisfaction: HostSatisfactionPolicy,
   yankLookup: RegistryYankLookup,
+  ownBuildVersion: string | null,
 ): Promise<boolean> {
   if (!state.installed) return false;
+  // THE SOURCE IS THIS SAME BUILD: `ownBuildVersion` is what a local-file
+  // (bundled / `--from`) install would record, so an installed host already
+  // carrying it can only be "unsatisfied" here through a registry yank - and
+  // reinstalling identical withdrawn bytes with a fresh `installId` neither
+  // heals the yank nor changes what runs; it just restarts the host and, on
+  // the next liveness converge, does it again. Keep the install and let the
+  // channel's own replacement (a different, non-yanked version) move it. A
+  // `--force` bypasses satisfaction altogether (every caller ORs it in ahead
+  // of this predicate), so an operator can still redo the bytes on purpose.
+  // Registry sources pass `null`: their target is resolved from the manifest,
+  // which never points at a withdrawn release.
+  if (ownBuildVersion !== null && state.version === ownBuildVersion) {
+    return true;
+  }
   if (satisfaction.kind === "presence") return true;
   if (satisfaction.kind === "exact") {
     return state.version === satisfaction.version;
@@ -1132,8 +1160,11 @@ async function isSatisfied(
   satisfaction: HostSatisfactionPolicy,
   registerService: boolean,
   yankLookup: RegistryYankLookup,
+  ownBuildVersion: string | null,
 ): Promise<boolean> {
-  if (!(await versionSatisfied(state, satisfaction, yankLookup))) {
+  if (
+    !(await versionSatisfied(state, satisfaction, yankLookup, ownBuildVersion))
+  ) {
     return false;
   }
   // Host-owned registration: only the bytes are the CLI's concern.

@@ -1162,6 +1162,66 @@ describe("provisionHost - Ticket 1: viability satisfaction (downgrade-revert RCA
     expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
   });
 
+  // `ownBuildVersion` (`recordVersionOverride`) is what a local-file
+  // (bundled / `--from`) install would record: an installed host already
+  // carrying THIS build can only be "unsatisfied" via a yank, and
+  // reinstalling identical withdrawn bytes heals nothing - it just restarts
+  // the host and repeats on the next liveness converge. Kept, not replaced.
+  it("a local-file source that IS the installed (yanked) build is a no-op under viability - reinstalling it heals nothing", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.3.0"));
+    isVersionYankedMock.mockResolvedValue(true);
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "viability" },
+        recordVersionOverride: "1.3.0",
+      }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    // The same-build short-circuit runs BEFORE the satisfaction-kind branch
+    // that would otherwise consult the yank lookup.
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+
+  it("a local-file source that IS the installed (yanked) build is a no-op under own-build-minimum too", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.3.0"));
+    isVersionYankedMock.mockResolvedValue(true);
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "own-build-minimum", version: "1.3.0" },
+        recordVersionOverride: "1.3.0",
+      }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+
+  it("a local-file source that is a DIFFERENT build than the installed, yanked version still replaces it", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.3.0"));
+    isVersionYankedMock.mockResolvedValue(true);
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "viability" },
+        recordVersionOverride: "1.4.0",
+      }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    expect(isVersionYankedMock).toHaveBeenCalledWith("1.3.0");
+  });
+
   it("installs the resolved pin when nothing is installed (viability cannot bootstrap)", async () => {
     createServiceControllerMock.mockReturnValue(notInstalledController());
     readHostInstallRecordMock.mockResolvedValue(null);

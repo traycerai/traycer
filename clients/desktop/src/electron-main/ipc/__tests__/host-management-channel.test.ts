@@ -177,7 +177,7 @@ class FakeHostController implements IpcHostController {
   };
   applyStagedResult: MutationOutcome<ApplyStagedOk> = {
     kind: "ok",
-    value: { appliedVersion: "1.7.0", runningActivated: true },
+    value: { appliedVersion: "1.7.0", runningActivated: true, applied: true },
   };
   activateInstalledResult: MutationOutcome<ActivateInstalledOk> = {
     kind: "ok",
@@ -230,9 +230,6 @@ class FakeHostController implements IpcHostController {
     installedVersion: null,
     latestVersion: null,
     stagedVersion: null,
-    heldInstall: null,
-    installedInstallId: null,
-    installedYanked: false,
     installedRuntimeVersion: null,
     runningRuntimeVersion: null,
     updateReady: false,
@@ -670,7 +667,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     );
     bridge.options.hostController.applyStagedResult = {
       kind: "ok",
-      value: { appliedVersion: "2.0.0", runningActivated: true },
+      value: { appliedVersion: "2.0.0", runningActivated: true, applied: true },
     };
     mgmt.registerHostManagementIpc(bridge as never);
 

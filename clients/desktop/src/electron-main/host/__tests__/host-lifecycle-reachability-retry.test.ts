@@ -94,7 +94,6 @@ function layoutIn(dir: string): HostFsLayout {
     installRecordFile: join(dir, "install", "install.json"),
     stagedDir: join(dir, "staged"),
     stagedRecordFile: join(dir, "staged", "staged.json"),
-    heldVersionRecordFile: join(dir, "held-host-version.json"),
     pendingLoginItemRevisionFile: join(dir, "pending-login-item-revision.json"),
     substrateFile: join(dir, "substrate.json"),
     transitionJournalFile: join(dir, "transition.json"),

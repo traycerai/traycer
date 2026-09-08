@@ -34,9 +34,6 @@ export const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
   installedVersion: "1.0.0",
   latestVersion: "1.0.0",
   stagedVersion: null,
-  heldInstall: null,
-  installedInstallId: null,
-  installedYanked: false,
   installedRuntimeVersion: "1.0.0",
   runningRuntimeVersion: "1.0.0",
   updateReady: false,
@@ -70,7 +67,7 @@ export class FakeHostController implements IpcHostController {
   ): Promise<MutationOutcome<ApplyStagedOk>> {
     return {
       kind: "ok",
-      value: { appliedVersion: "1.0.0", runningActivated: true },
+      value: { appliedVersion: "1.0.0", runningActivated: true, applied: true },
     };
   }
   async activateInstalled(

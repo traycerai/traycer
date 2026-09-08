@@ -24,12 +24,18 @@ import { createCliLogger } from "../logger";
 //     seeking converge, and like any explicit forward move it is not gated:
 //     it simply leaves a new install whose id no longer matches); and
 //   - the desktop's launch-time staged-apply stands down while the installed
-//     host is the held instance - the launch reconcile via the status gate,
-//     and `host apply --respect-hold` re-checking under the CLI lock. Both
-//     void the hold for a held host the registry has since YANKED: the hold
-//     protects a deliberate choice from client preference, never from
-//     curation, and a yanked host is not viable (fail-open on a registry
-//     miss, exactly like the `viability` yank check).
+//     host is the held instance. That decision is made in ONE place: `host
+//     apply --respect-hold`, under the CLI mutation lock, keyed on the install
+//     record as it is at that moment. The desktop never consults this record
+//     itself - its launch apply always reaches the CLI (a desktop snapshot a
+//     terminal downgrade could race must not be able to suppress the call);
+//     when the CLI answers `no-op` the desktop discharges any activation debt
+//     on a reachable held host, and starts a held host that is DOWN through
+//     its ordinary failed-apply recovery (a keep-installed converge). The
+//     hold is void for a held host the registry has since YANKED:
+//     it protects a deliberate choice from client preference, never from
+//     curation, and a yanked host is not viable (fail-open on a registry miss,
+//     exactly like the `viability` yank check).
 //
 // WRITTEN ONLY AT A COMMITTED DOWNGRADE, and only under the same CLI mutation
 // lock that wrote the install record, keyed on the ACTUAL committed vs previous

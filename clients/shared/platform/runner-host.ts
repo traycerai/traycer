@@ -1930,6 +1930,12 @@ export interface ConvergeReadyOk {
 export interface ApplyStagedOk {
   readonly appliedVersion: string;
   readonly runningActivated: boolean;
+  /**
+   * `false` when the CLI apply was a no-op (nothing staged, or the installed
+   * host is a deliberately-held instance the implicit launch apply kept);
+   * `appliedVersion` then names the version that stayed installed.
+   */
+  readonly applied: boolean;
 }
 
 export interface ActivateInstalledOk {
