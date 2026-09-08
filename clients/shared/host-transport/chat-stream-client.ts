@@ -644,10 +644,13 @@ export class ChatStreamClient {
       // refuses, through the door beside it. Snapshots return above and are
       // neutralized by their frozen parse; every other kind is untouched.
       normalizeV16BrowserPayloadsInFrame(frame);
-      // The third door: every remaining pre-`1.7` carrier of an interview.
-      // `1.0`-`1.5` snapshots match NEITHER fast path above and reach here
-      // whole; `messageAccepted` can hold an assistant message; `blockDelta`
-      // carries questions and answer selection on its two arms.
+      // The third door: every remaining pre-`1.7` carrier of an interview -
+      // `1.0`-`1.5` snapshots (which match NEITHER fast path above and reach
+      // here whole), `messageAccepted`, the durable event log on both the
+      // frames that carry it, the two interview lifecycle frames, and
+      // `blockDelta`'s two arms. The set is the outbound projector's own case
+      // list; the function's comment says why that is the completeness
+      // argument.
       normalizeV16InterviewFieldsInFrame(frame);
     }
     switch (frame.kind) {

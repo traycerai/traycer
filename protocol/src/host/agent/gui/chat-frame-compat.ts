@@ -286,19 +286,51 @@ export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
  *
  * EVERY carrier of an interview, because a pass written for one of them
  * silently leaves the rest open - which is the exact defect the outbound
- * projector's `blockDelta` case was fixed for, and this is its inbound mirror:
+ * projector's `blockDelta` case was fixed for, and this is its inbound mirror.
+ *
+ * "Mirror" is the completeness argument, not a figure of speech.
+ * `projectChatServerFrameForVersion` is the authoritative list of server
+ * frames whose live shape differs from a pre-`1.7` line's - a frame missing
+ * from it has no `1.7` field to arrive with - so the enumeration below is its
+ * INTERVIEW-bearing cases, one for one. Adding a case there without one here
+ * reopens a door. Its three remaining cases are accounted for and are not
+ * silence: `queueChanged` carries browser payloads, owned by
+ * `normalizeV16BrowserPayloadsInFrame` beside this; `managedCommandsChanged`
+ * has no interview surface at all; and `actionAck` differs only by the
+ * `interviewDeliveryRetry` value in its `action` enum, which no consumer
+ * dispatches on - the GUI matches an ack to its OWN `pendingActions` by
+ * `clientActionId`, and a client on this line cannot have queued that action
+ * to match. That one the projector refuses outright rather than projecting,
+ * which is why it has no field to neutralize here.
+ *
+ * Only this direction needs a pass at all. The host parses a client frame with
+ * the negotiated contract's OWN `clientFrameSchema` - `chatSubscribeV14` and
+ * its siblings each carry one - so a pre-`1.7` client's `1.7` field is dropped
+ * as an unknown key before any resolver sees it. A client has no such luxury:
+ * it parses every server frame with the live union whatever line it negotiated,
+ * which is precisely the asymmetry these passes exist to cover.
  *
  * - `snapshot` on `1.0`-`1.5`. Those minors match NEITHER snapshot fast path
  *   (one is exact-current, the other exact-`1.6`), so their snapshots reach the
- *   generic parse with every interview block intact.
+ *   generic parse with every interview block intact. BOTH histories it carries:
+ *   `chat.messages` holds the blocks, and `chat.events` is the second place
+ *   settlement reaches a subscriber - the one the outbound `projectSnapshot`
+ *   calls "the easier to miss", and it was missed here.
  * - `messageAccepted`, whose `message` is the live message union - an assistant
  *   message with interview blocks is well-formed there even though the frame
  *   means "your send was accepted".
+ * - `eventAppended`, the single-event door onto the same durable log.
+ * - `interviewAnswered` and `interviewErrored`, the dedicated lifecycle frames.
+ *   Both gained `1.7` fields of their own (`delivery`, `settlementId`,
+ *   `settlementSource`, plus `outcome`/`draftAnswers` on the errored one), and
+ *   `interviewAnswered.answers` is a live answer array - so selection evidence
+ *   has a straight path in that no message-level pass can see.
  * - `blockDelta`, on BOTH its arms: questions ride `interview.requested`,
  *   answer selection rides `interview.resolved`.
  *
- * `eventAppended` needs nothing: a durable chat event carries interview
- * SETTLEMENT metadata (`INTERVIEW_SETTLEMENT_METADATA_KEY`) and no questions.
+ * `interviewRequested` alone needs nothing, and this is a fact about the frame
+ * rather than an omission: its live shape is `blockId` + `requestedAt`, byte
+ * for byte its pre-`1.7` shape. The questions live on the block, never on it.
  *
  * The message cases delegate to the pass above, so all seven message-level
  * fields are neutralized together rather than by two rules that could drift.
@@ -312,27 +344,69 @@ export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
  */
 export function normalizeV16InterviewFieldsInFrame(frame: unknown): void {
   if (!isRecord(frame)) return;
-  if (frame.kind === "snapshot") {
-    const snapshot = frame.snapshot;
-    if (!isRecord(snapshot)) return;
-    const chat = snapshot.chat;
-    if (!isRecord(chat) || !Array.isArray(chat.messages)) return;
-    normalizeV16MessagesInShallowSnapshot(chat.messages);
-    return;
+  switch (frame.kind) {
+    case "snapshot": {
+      const snapshot = frame.snapshot;
+      if (!isRecord(snapshot)) return;
+      const chat = snapshot.chat;
+      if (!isRecord(chat)) return;
+      // Independently guarded, not `&&`-chained: a snapshot whose `messages`
+      // is not an array must still have its `events` neutralized, and vice
+      // versa. Chaining them made a malformed half suppress the other.
+      if (Array.isArray(chat.messages)) {
+        normalizeV16MessagesInShallowSnapshot(chat.messages);
+      }
+      if (Array.isArray(chat.events)) {
+        for (const event of chat.events) {
+          neutralizeChatEventInterviewMetadata(event);
+        }
+      }
+      return;
+    }
+    case "messageAccepted": {
+      normalizeV16MessagesInShallowSnapshot([frame.message]);
+      return;
+    }
+    case "eventAppended": {
+      neutralizeChatEventInterviewMetadata(frame.event);
+      return;
+    }
+    case "interviewAnswered": {
+      neutralizeAnswerSelection(frame.answers);
+      frame.settlementId = null;
+      frame.settlementSource = null;
+      frame.delivery = null;
+      return;
+    }
+    case "interviewErrored": {
+      // `draftAnswers` is emptied rather than selection-neutralized: the whole
+      // array is `1.7`-only, so on this line there are no drafts to keep. It
+      // is cleared BESIDE `outcome` because the live frame's own refinement
+      // ties them together - drafts are only meaningful under `skipped`, so
+      // nulling `outcome` while leaving drafts would manufacture exactly the
+      // combination that schema rejects.
+      frame.outcome = null;
+      frame.draftAnswers = [];
+      frame.settlementId = null;
+      frame.settlementSource = null;
+      frame.delivery = null;
+      return;
+    }
+    case "blockDelta": {
+      const event = frame.event;
+      if (!isRecord(event)) return;
+      if (event.type === "interview.requested") {
+        neutralizeQuestionCustomAnswer(event.questions);
+        return;
+      }
+      if (event.type !== "interview.resolved") return;
+      neutralizeAnswerSelection(event.answers);
+      return;
+    }
+    default: {
+      return;
+    }
   }
-  if (frame.kind === "messageAccepted") {
-    normalizeV16MessagesInShallowSnapshot([frame.message]);
-    return;
-  }
-  if (frame.kind !== "blockDelta") return;
-  const event = frame.event;
-  if (!isRecord(event)) return;
-  if (event.type === "interview.requested") {
-    neutralizeQuestionCustomAnswer(event.questions);
-    return;
-  }
-  if (event.type !== "interview.resolved") return;
-  neutralizeAnswerSelection(event.answers);
 }
 
 // ─── Outbound SERVER-frame projection (`1.4`–`1.6`) ────────────────────────
@@ -628,7 +702,13 @@ export function projectChatServerFrameForVersion(
   }
 }
 
-// ─── Chat-event metadata projection ────────────────────────────────────────
+// ─── Chat-event interview metadata (BOTH directions) ───────────────────────
+//
+// The outbound projector and the inbound normalizer bind the same vocabulary,
+// so they live together: the keys below, the projection that removes them for
+// a pre-`1.7` peer, and the neutralizer that refuses them from one. Splitting
+// the pair across the file is what let the inbound half ship without the
+// event-log door at all.
 
 /**
  * The ONE metadata key a `1.7`+ host may use to attach interview settlement
@@ -711,6 +791,46 @@ function projectChatEvent(event: unknown): unknown {
     projectedMetadata[key] = stripAnswerSelection(metadata[key]);
   }
   return { ...event, metadata: projectedMetadata };
+}
+
+/**
+ * The inbound mirror of `projectChatEvent`: neutralize the `1.7`-only
+ * interview metadata on ONE durable chat event that arrived on a pre-`1.7`
+ * line and was parsed with the LIVE union.
+ *
+ * Deliberately adjacent to the projector, gated on the same event types and
+ * the same enumerated keys. The event log reaches a subscriber through two
+ * frames - a `snapshot`'s `chat.events` and `eventAppended` - and both call
+ * this, so the projector's own claim ("selection evidence reaches a `1.4`-`1.6`
+ * peer through `snapshot.chat.events` and `eventAppended` unless it is
+ * stripped here") is now true in both directions.
+ *
+ * The settlement and delivery keys are DELETED, where every other field this
+ * pass touches is nulled. The difference is the carrier, not the intent:
+ * `metadata` is an open record, so no consumer type promises those keys and
+ * ABSENT is exactly the state a conforming pre-`1.7` peer produces - the same
+ * state `projectChatEvent` hands one. A block field, by contrast, is declared
+ * present on the live type, so "unstated" there has to be spelled `null`.
+ *
+ * `selection` inside `metadata.answers` goes through the shared answer helper
+ * for that reason: `runtimeInterviewAnswerSchema` defaults it to `null`, so
+ * wherever those answers are parsed, null is what a stripped answer becomes.
+ *
+ * Mutates in place, matching the rest of the receive-side passes. The
+ * projector rebuilds because it must not touch the host's own frame; a
+ * received frame is this client's alone.
+ */
+function neutralizeChatEventInterviewMetadata(event: unknown): void {
+  if (!isRecord(event)) return;
+  if (typeof event.type !== "string") return;
+  if (!INTERVIEW_CHAT_EVENT_TYPES.includes(event.type)) return;
+  const metadata = event.metadata;
+  if (!isRecord(metadata)) return;
+  delete metadata[INTERVIEW_SETTLEMENT_METADATA_KEY];
+  delete metadata[INTERVIEW_DELIVERY_METADATA_KEY];
+  for (const key of INTERVIEW_ANSWER_METADATA_KEYS) {
+    neutralizeAnswerSelection(metadata[key]);
+  }
 }
 
 const CHAT_SUBSCRIBE_V18_MINOR = 8;

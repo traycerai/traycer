@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
+  INTERVIEW_DELIVERY_METADATA_KEY,
   INTERVIEW_SETTLEMENT_METADATA_KEY,
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
@@ -852,6 +853,181 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
     const normalized = block.questions;
     if (!Array.isArray(normalized)) throw new Error("expected questions array");
     expect(asRecord(normalized[0], "q").allowsCustomAnswer).toBeNull();
+  });
+
+  it("neutralizes the interviewAnswered lifecycle frame's OWN 1.7 fields", () => {
+    // The dedicated lifecycle frames are their own carriers - not a message,
+    // not a blockDelta - so no pass beside this one can see them, and
+    // `answers` here is a live answer array with a straight path for selection
+    // evidence. The outbound projector has had a case for this frame all
+    // along; that asymmetry is what proves the inbound gap was a gap.
+    //
+    // FALSIFICATION: delete the `interviewAnswered` arm and every expectation
+    // below reddens while the blockDelta arms above stay green.
+    const frame: Record<string, unknown> = {
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      blockId: "iv-1",
+      answers: [{ ...ENHANCED_ANSWER }],
+      resolvedAt: 20,
+      settlementId: "gui-1",
+      settlementSource: "gui",
+      delivery: { state: "delivering", attempts: 2 },
+    };
+
+    normalizeV16InterviewFieldsInFrame(frame);
+
+    const answers = recordAnswers(frame.answers);
+    expect(answers[0].selection).toBeNull();
+    // The answer itself is what this line has always carried.
+    expect(answers[0].values).toEqual(["date-fns"]);
+    expect(frame.settlementId).toBeNull();
+    expect(frame.settlementSource).toBeNull();
+    // Null rather than a synthesised "pending": a pre-1.7 host has no outbox
+    // to project from, so inventing one would make the card claim a delivery
+    // state nobody recorded - the same reading the message-level pass takes.
+    expect(frame.delivery).toBeNull();
+    // Everything the frame has always meant survives untouched.
+    expect(frame.blockId).toBe("iv-1");
+    expect(frame.resolvedAt).toBe(20);
+  });
+
+  it("empties draftAnswers ALONGSIDE outcome on interviewErrored", () => {
+    // The live frame refines these two against each other: drafts are only
+    // meaningful under `outcome: "skipped"`. Neutralizing `outcome` alone
+    // would leave behind the one combination that schema rejects - drafts
+    // under a null outcome - so the pass clears the pair together.
+    //
+    // FALSIFICATION: drop `frame.draftAnswers = []` and the drafts survive to
+    // a renderer that would show the user saved work this line never had.
+    const frame: Record<string, unknown> = {
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      blockId: "iv-1",
+      reason: "Interview skipped",
+      resolvedAt: 20,
+      outcome: "skipped",
+      draftAnswers: [{ ...ENHANCED_ANSWER }],
+      settlementId: "gui-1",
+      settlementSource: "gui",
+      delivery: { state: "failed", attempts: 3 },
+    };
+
+    normalizeV16InterviewFieldsInFrame(frame);
+
+    expect(frame.outcome).toBeNull();
+    expect(frame.draftAnswers).toEqual([]);
+    expect(frame.settlementId).toBeNull();
+    expect(frame.settlementSource).toBeNull();
+    expect(frame.delivery).toBeNull();
+    // `reason` is the user-visible text this frame has carried since 1.4 and
+    // is not a settlement fact; it must come through byte for byte.
+    expect(frame.reason).toBe("Interview skipped");
+  });
+
+  it("neutralizes the durable event log on BOTH frames that carry it", () => {
+    // The event log reaches a subscriber twice - `eventAppended` and a
+    // snapshot's `chat.events` - and the outbound projector names exactly
+    // those two doors in its own comment. Before this arm the inbound side
+    // closed neither: settlement facts and answer selection rode a chat
+    // event's metadata straight past the pass.
+    //
+    // FALSIFICATION: drop `neutralizeChatEventInterviewMetadata` from either
+    // arm and that arm's expectations redden on their own.
+    const appended = eventAppendedFrame(
+      chatEventWith("e-resolved", 20, "interview.resolved", {
+        ...resolvedAnswersMetadata(),
+        source: "traycer_a2a",
+        [INTERVIEW_SETTLEMENT_METADATA_KEY]: nestedSettlementFacts(),
+        [INTERVIEW_DELIVERY_METADATA_KEY]: { outboxId: "ob-1" },
+      }),
+    );
+    const inSnapshot = chatEventWith("e-resolved", 20, "interview.resolved", {
+      ...resolvedAnswersMetadata(),
+      [INTERVIEW_SETTLEMENT_METADATA_KEY]: nestedSettlementFacts(),
+    });
+
+    normalizeV16InterviewFieldsInFrame(appended);
+    normalizeV16InterviewFieldsInFrame({
+      kind: "snapshot",
+      snapshot: { chat: { messages: [], events: [inSnapshot] } },
+    });
+
+    for (const event of [eventFromProjected(appended), inSnapshot]) {
+      const metadata = asRecord(event.metadata, "metadata");
+      // Deleted, not nulled: `metadata` is an open record, so absence is the
+      // state a conforming pre-1.7 peer produces and the state the outbound
+      // projector hands one.
+      expect(Object.hasOwn(metadata, INTERVIEW_SETTLEMENT_METADATA_KEY)).toBe(
+        false,
+      );
+      expect(Object.hasOwn(metadata, INTERVIEW_DELIVERY_METADATA_KEY)).toBe(
+        false,
+      );
+      const answers = recordAnswers(metadata.answers);
+      expect(answers[0].selection).toBeNull();
+      expect(answers[0].values).toEqual(["date-fns"]);
+    }
+    // The colliding pre-1.7 key survives: today's host writes `source` on
+    // interview events, and the settlement envelope has a `source` of its own.
+    // Removing settlement facts by flat name would have taken this with it.
+    expect(
+      asRecord(eventFromProjected(appended).metadata, "metadata").source,
+    ).toBe("traycer_a2a");
+  });
+
+  it("normalizes a snapshot's events even when its messages are malformed", () => {
+    // The two histories are guarded independently. Chained behind one `&&`,
+    // a `messages` the live union would have rejected silently suppressed the
+    // event-log pass beside it - a malformed half disarming the other.
+    //
+    // FALSIFICATION: re-chain the guards and this reddens while the
+    // well-formed snapshot arms stay green.
+    const event = chatEventWith("e-resolved", 20, "interview.resolved", {
+      [INTERVIEW_SETTLEMENT_METADATA_KEY]: nestedSettlementFacts(),
+    });
+
+    normalizeV16InterviewFieldsInFrame({
+      kind: "snapshot",
+      snapshot: { chat: { messages: "nope", events: [event] } },
+    });
+
+    expect(
+      Object.hasOwn(
+        asRecord(event.metadata, "metadata"),
+        INTERVIEW_SETTLEMENT_METADATA_KEY,
+      ),
+    ).toBe(false);
+  });
+
+  it("has nothing to neutralize on interviewRequested, and the schemas agree", () => {
+    // The one interview frame with no arm, and that is a fact about the frame
+    // rather than an omission: its live shape is `blockId` + `requestedAt`,
+    // identical to its pre-1.7 shape, because questions live on the block.
+    // Pinned against the frozen contracts, which is what keeps that fact from
+    // going stale: a future field added to the live frame with a value on the
+    // wire - required, or defaulted like every settlement field on the sibling
+    // frames - survives the live parse and is stripped by the frozen one, so
+    // it reddens here instead of arriving on a 1.4-1.6 line.
+    const frame = {
+      kind: "interviewRequested",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      blockId: "iv-1",
+      requestedAt: 10,
+    };
+    const live = asRecord(
+      chatSubscribeServerFrameSchema.parse(frame),
+      "live interviewRequested",
+    );
+    for (const contract of frozenServerContracts()) {
+      expect(contract.parse(frame)).toEqual(live);
+    }
   });
 
   it("leaves every other frame kind, event type and malformed shape alone", () => {
