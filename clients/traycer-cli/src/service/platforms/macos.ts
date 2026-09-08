@@ -1431,6 +1431,96 @@ function classifyLaunchdPrintOutput(printOutput: string): LaunchdOwnership {
   };
 }
 
+/**
+ * Whether launchd could start a host for this label on its own before a swap
+ * lands - i.e. whether "no host process right now" is a promise about the next
+ * few seconds or merely a snapshot.
+ *
+ * The store-format floor's post-stop quiescence check needs this and cannot
+ * get it from `statusService`, which reports from `pid.json` and so calls a
+ * LOADED, crash-throttled job `stopped`. That is the epic's headline shape: a
+ * 1.2.0 host crash-looping on v9 data while an install lands underneath it.
+ *
+ * BOTH labels are asked - the CLI's own and Desktop's SMAppService `.agent` -
+ * because either can be the loaded job on a given machine, and
+ * `stopDesktopManagedHost` can return `no-host` on missing metadata without
+ * suppressing the agent's next launch. Whichever is loaded answers; if neither
+ * is, nothing can start a writer.
+ */
+export async function macosServiceMayRespawn(
+  label: ServiceLabel,
+  runner: ProcessRunner | null,
+): Promise<boolean> {
+  const run = runner ?? runCommand;
+  const targets = [
+    `${guiDomain()}/${label.id}`,
+    `${guiDomain()}/${smAppServiceAgentLabelId(label)}`,
+  ];
+  for (const target of targets) {
+    if (await launchdJobMayRespawn(target, run)) return true;
+  }
+  return false;
+}
+
+/**
+ * One launchd job's respawn risk, read straight off `launchctl print`.
+ *
+ * Deliberately NOT routed through `inspectLaunchdOwnership`: that classifies
+ * WHO owns the job and drops the two fields this needs for an SMAppService
+ * one. The question here is the same whoever owns it.
+ *
+ * A LIVE `pid` means MAY RESPAWN, which reads backwards until you know whose
+ * pid it is. `launchctl`'s `pid` is the JOB's process - the supervisor - while
+ * the floor's other evidence (`publishedHostProcessGone`) probes the HOST
+ * CHILD from `pid.json`. Reaching this function at all means that child is
+ * gone or was never published, so a live supervisor is one sitting BETWEEN
+ * children: the internal crash-relaunch loop, which can spawn the next writer
+ * without launchd being involved at all.
+ *
+ * With no supervisor either, the decision falls to launchd's own policy, and
+ * only a CLEAN last exit clears - `KeepAlive{SuccessfulExit:false}` does not
+ * respawn one, which is what keeps a deliberate `host stop` safe to downgrade
+ * over.
+ */
+async function launchdJobMayRespawn(
+  serviceTarget: string,
+  run: ProcessRunner,
+): Promise<boolean> {
+  const result = await run("launchctl", ["print", serviceTarget], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: 10_000,
+    tolerateNonZeroExit: true,
+  });
+  // Not loaded. Nothing holds a definition, so nothing can start it.
+  if (result.exitCode !== 0) return false;
+  const fields = parseLaunchctlPrintFields(
+    `${result.stdout}\n${result.stderr}`,
+  );
+  const pidField = fields.get("pid");
+  const pid =
+    pidField === undefined ? Number.NaN : Number.parseInt(pidField, 10);
+  if (Number.isInteger(pid) && pid > 0) return true;
+  return !lastExitWasClean(fields);
+}
+
+/**
+ * Whether `launchctl print`'s exit fields describe a CLEAN last exit.
+ *
+ * `(never exited)` counts: a job that has never run has not crashed, so
+ * nothing is scheduled to bring it back. A `last exit reason` means the
+ * process was signalled or jetsammed, which is never clean. An absent code
+ * field is UNKNOWN and answers false - the format is not stable across macOS
+ * releases (this file has been broken by that once already), and the safe
+ * direction for the caller is "may respawn".
+ */
+function lastExitWasClean(fields: ReadonlyMap<string, string>): boolean {
+  if (fields.get("last exit reason") !== undefined) return false;
+  const code = fields.get("last exit code");
+  if (code === undefined) return false;
+  return code === "0" || code === "(never exited)";
+}
+
 // launchctl returns "Service is already loaded" / "Bootstrap failed:
 // 37: ... (already loaded)" when the agent is already registered. We
 // classify these as *recoverable races* (not success): the caller must

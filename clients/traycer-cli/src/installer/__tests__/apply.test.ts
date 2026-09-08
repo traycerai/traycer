@@ -64,6 +64,8 @@ const mocks = vi.hoisted(() => ({
   // and a direct `applyHost` call does not.
   hostStartAdoptionPublisher: null as HostStartAdoptionPublisher | null,
   assertHostStoreFormatFloorMock: vi.fn(),
+  macosServiceMayRespawnMock: vi.fn(),
+  linuxServiceMayRespawnMock: vi.fn(),
 }));
 
 // `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
@@ -80,6 +82,35 @@ vi.mock("node:os", async (importOriginal) => {
     homedir: () => mocks.sandboxHome || actual.tmpdir(),
   };
 });
+
+// `observeSwapQuiescence`'s post-stop check shells out to `launchctl print` /
+// `systemctl --user is-active` for real when it reaches the "no process right
+// now" arms - unmocked, this suite reads the developer's OWN launchd/systemd
+// state, and on a machine with a loaded, crash-throttled Traycer agent that
+// refuses every commit this file drives. `false` keeps the existing fixtures
+// clearing as an ordinary quiescent machine would.
+vi.mock("../../service/platforms/macos", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/macos")>();
+  return {
+    ...actual,
+    macosServiceMayRespawn: (
+      ...callArgs: Parameters<typeof actual.macosServiceMayRespawn>
+    ) => mocks.macosServiceMayRespawnMock(...callArgs),
+  };
+});
+vi.mock("../../service/platforms/linux", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/linux")>();
+  return {
+    ...actual,
+    linuxServiceMayRespawn: (
+      ...callArgs: Parameters<typeof actual.linuxServiceMayRespawn>
+    ) => mocks.linuxServiceMayRespawnMock(...callArgs),
+  };
+});
+mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
+mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
 
 vi.mock("../../host/busy-check", () => ({
   assertHostNotBusy: async () => {
@@ -465,15 +496,21 @@ describe("applyHost", () => {
     });
 
     it("applies when the staged tree's own version.json declares a storeFormats that clears the chat store on disk", async () => {
-      // `staged.version` ("1.2.0") is newer than the installed "1.0.0" so
-      // reconcile's stale-or-equal deletion rule leaves the stage in place;
-      // read alone it would still name chatDb 8 from the fixed table and
-      // block against the v9 fixture below, but the sidecar declaration
-      // overrides that table lookup outright (`resolveHostStoreFormats`
-      // prefers a non-null declaration unconditionally) - the same
-      // precedence the commit tail gives it.
-      await writeInstall("1.0.0", {});
-      await writeStaged("1.2.0", {});
+      // Deliberately the SAME fixture as the negative test right above -
+      // installed 1.3.0-rc.4, staged 1.4.0 with runtimeVersion 1.2.0, a v9
+      // store on disk - so the target genuinely resolves to 1.2.0 (chatDb 8
+      // from the fixed table) and the gate genuinely runs. The declared
+      // storeFormats sidecar is the ONLY variable between the two tests.
+      //
+      // An earlier version of this test used installed "1.0.0" staged
+      // "1.2.0" (no runtimeVersion) to dodge reconcile's stale-or-equal
+      // deletion rule - and that fixture is an UPGRADE
+      // (`storeFloorApplicability` returns `target-not-older`), so neither
+      // gate ever ran. Deleting the sidecar entirely still passed. Reusing
+      // the adjacent refusal's fixture is what keeps this test in the
+      // branch its comment claims to cover.
+      await writeInstall("1.3.0-rc.4", {});
+      await writeStaged("1.4.0", { runtimeVersion: "1.2.0" });
       writeFileSync(
         join(stagedDirFor(ENV), "version.json"),
         JSON.stringify({ version: "1.2.0", storeFormats: { chatDb: 9 } }),
@@ -491,7 +528,11 @@ describe("applyHost", () => {
       expect(result.outcome).toBe("applied");
       expect(
         mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
-      ).toMatchObject({ targetVersion: "1.2.0", site: "host apply" });
+      ).toMatchObject({
+        targetVersion: "1.2.0",
+        declaredStoreFormats: { chatDb: 9 },
+        site: "host apply",
+      });
     });
   });
 

@@ -28,17 +28,35 @@
  *
  * ## The one arm that looks permissive and is not
  *
- * `absent` is ESTABLISHED. A host publishes `pid.json` when it starts and the
- * whole CLI reads that file as the host's identity - `assertHostNotBusy` and
- * the cooperative shutdown both treat its absence as "no host". Nothing has
- * claimed to be running, so there is no writer to quiesce, and refusing there
- * would refuse every install onto a machine that has never run a host.
+ * `absent` does not by itself refuse. A host publishes `pid.json` when it
+ * starts and the whole CLI reads that file as the host's identity -
+ * `assertHostNotBusy` and the cooperative shutdown both treat its absence as
+ * "no host". Nothing has claimed to be running, so refusing there would refuse
+ * every install onto a machine that has never run a host.
+ *
+ * ## "Not running" is not "cannot start"
+ *
+ * Both arms that would otherwise clear - an absent record, and a record whose
+ * process is provably gone - then ask one more question, because the pid is a
+ * SNAPSHOT and the swap takes time. A launchd job inside
+ * `KeepAlive{SuccessfulExit:false}`'s throttle window, or a systemd unit in
+ * `Restart=on-failure`'s relaunch window, has no process right now and is
+ * about to have one; `statusService` reports both as `stopped` (it reads
+ * `pid.json` too), so the lifecycle never stopped them either. That is the
+ * epic's headline shape - a 1.2.0 host crash-looping on v9 data while an
+ * install lands underneath it - and it is the one case where every earlier
+ * signal says "quiet". A deliberate stop is not affected: neither manager
+ * respawns a clean exit.
  */
 import {
   publishedHostProcessGone,
   readHostPidMetadataEvidence,
 } from "./pid-metadata";
 import type { ChatStoreSurveyRoots } from "./chat-store-survey-roots";
+import { serviceLabelFor } from "../service";
+import { isStopIntentFresh, readStopIntent } from "./stop-intent";
+import { linuxServiceMayRespawn } from "../service/platforms/linux";
+import { macosServiceMayRespawn } from "../service/platforms/macos";
 import type { ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 
@@ -62,7 +80,23 @@ export type SwapQuiescenceGap =
    * enumerate. So a second dev slot can be live and migrating one of the very
    * stores the survey just read.
    */
-  | "unseen-writers";
+  | "unseen-writers"
+  /**
+   * No host is running RIGHT NOW, but a service manager has the job loaded
+   * after a crash and is about to restart it.
+   *
+   * `statusService` reports a CLI-owned label purely from `pid.json` on both
+   * darwin and linux, so a launchd job inside `KeepAlive{SuccessfulExit:
+   * false}`'s throttle window - or a systemd unit in `Restart=on-failure`'s
+   * relaunch window - reads `stopped`, the lifecycle skips stopping it, and
+   * the pid probe below then finds nothing and calls it quiescent. That is
+   * precisely the epic's headline shape: a 1.2.0 host crash-looping on v9
+   * data while an install lands underneath it.
+   *
+   * A DELIBERATE stop is not this. Neither manager respawns a clean exit, so
+   * "I stopped my host, then downgraded" still clears.
+   */
+  | "service-may-respawn";
 
 export type SwapQuiescence =
   | { readonly established: true }
@@ -97,7 +131,9 @@ export async function observeSwapQuiescence(
     return { established: false, reason: "unseen-writers" };
   }
   const evidence = await readHostPidMetadataEvidence(environment);
-  if (evidence.kind === "absent") return QUIESCED;
+  if (evidence.kind === "absent") {
+    return await quiescenceUnlessServiceMayRespawn(environment, logger);
+  }
   if (evidence.kind === "unreadable") {
     logger.warn(
       "Host pid metadata could not be read, so the swap cannot be shown to be quiescent",
@@ -105,14 +141,93 @@ export async function observeSwapQuiescence(
     );
     return { established: false, reason: "writer-unknown" };
   }
-  if (publishedHostProcessGone(evidence.metadata)) return QUIESCED;
-  return { established: false, reason: "writer-still-running" };
+  if (!publishedHostProcessGone(evidence.metadata)) {
+    return { established: false, reason: "writer-still-running" };
+  }
+  return await quiescenceUnlessServiceMayRespawn(environment, logger);
+}
+
+/**
+ * No process is running - but "running" is not the same question as "cannot
+ * start". Asked LAST, only once the pid evidence would otherwise clear, so the
+ * ordinary machine pays one extra probe and only on a downgrade.
+ */
+async function quiescenceUnlessServiceMayRespawn(
+  environment: Environment,
+  logger: ILogger,
+): Promise<SwapQuiescence> {
+  if (!(await serviceManagerMayRespawn(environment))) return QUIESCED;
+  // A live supervisor with a DELIBERATE stop on record is winding down, not
+  // between children. This is the ordinary running-host downgrade and it must
+  // clear: `beforeSwap` stops the host child, the clean stop purges
+  // `pid.json`, and `stopService` returns while launchd still considers the
+  // job running - the supervisor outlives its child by the whole post-mortem
+  // (`relaunchServiceAfterRestart`'s own rationale). Without this the headline
+  // Settings > Update-now downgrade would be refused by its own stop.
+  //
+  // The marker read is the SAME file the supervisor reads at SIGTERM to tell a
+  // deliberate stop from a crash, so this cannot drift from what the
+  // supervisor will actually do - it is that decision's input, not a second
+  // guess at it. It survives a successful stop (`retireIntentIfHostSurvived`
+  // clears it only when the host SURVIVED) and expires on its own, so a stop
+  // that died halfway through stops vouching for anything.
+  if (await deliberateStopInFlight(environment)) {
+    logger.debug(
+      "Host store-format floor: a supervisor is live but a deliberate stop is on record, so it is winding down",
+      { environment },
+    );
+    return QUIESCED;
+  }
+  logger.info(
+    "Host store-format floor cannot establish quiescence: no host is running, but the service manager is set to restart one",
+    { environment },
+  );
+  return { established: false, reason: "service-may-respawn" };
+}
+
+/**
+ * Whether a deliberate stop is in flight for this environment.
+ *
+ * `readStopIntent` + `isStopIntentFresh` are the CLI's existing readers for
+ * the record the stop path writes BEFORE anything is killed. A stale record
+ * deliberately does not count: past its expiry the supervisor itself resumes
+ * normal crash recovery, so it would be vouching for a stop nobody is running.
+ */
+async function deliberateStopInFlight(
+  environment: Environment,
+): Promise<boolean> {
+  const intent = await readStopIntent(environment);
+  if (intent === null) return false;
+  return isStopIntentFresh(intent, Date.now());
+}
+
+/**
+ * The per-platform half, kept out of the caller so neither reads as a nested
+ * conditional.
+ *
+ * Windows is deliberately absent rather than forgotten: its registration is a
+ * Scheduled Task whose `/Run` IS the recovery launch, with no crash-restart
+ * policy configured (no `RestartCount`/`RestartInterval`), so nothing there
+ * brings a dead host back on its own.
+ */
+async function serviceManagerMayRespawn(
+  environment: Environment,
+): Promise<boolean> {
+  const label = serviceLabelFor(environment);
+  if (process.platform === "darwin")
+    return await macosServiceMayRespawn(label, null);
+  if (process.platform === "linux")
+    return await linuxServiceMayRespawn(label, null);
+  return false;
 }
 
 /** The gap, as a sentence fragment for the refusal. */
 export function describeQuiescenceGap(reason: SwapQuiescenceGap): string {
   if (reason === "writer-still-running") {
     return "the host that writes them is still running, so it can stamp a store after this check and before the swap";
+  }
+  if (reason === "service-may-respawn") {
+    return "no host is running, but the service manager is set to restart one after its recent crash, so it can stamp a store before the swap lands";
   }
   if (reason === "unseen-writers") {
     return "they span more than one host data root on this machine and only one publishes a process record here, so another host could still be writing them";

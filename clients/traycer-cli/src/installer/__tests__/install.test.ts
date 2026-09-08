@@ -65,6 +65,8 @@ const mocks = vi.hoisted(() => ({
   registryClient: null as RegistryClient | null,
   assertStoreFormatFloorAtCommitMock: vi.fn(),
   assertStoreFormatFloorAfterStopMock: vi.fn(),
+  macosServiceMayRespawnMock: vi.fn(),
+  linuxServiceMayRespawnMock: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -130,6 +132,39 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
+
+// `observeSwapQuiescence`'s post-stop check shells out to `launchctl print` /
+// `systemctl --user is-active` for real when it reaches the "no process right
+// now" arms. Left unmocked, this suite reads the developer's OWN machine
+// state - on a machine with a loaded, crash-throttled Traycer agent, that is
+// load-bearing rather than benign: every test driving `commitInstallFromSource`
+// past the pre-commit gate gets refused by the operator's real launchd/systemd
+// state. Default to "cannot respawn" so the existing fixtures (which assume an
+// ordinary quiescent machine) keep clearing as before.
+vi.mock("../../service/platforms/macos", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/macos")>();
+  return {
+    ...actual,
+    macosServiceMayRespawn: (
+      ...callArgs: Parameters<typeof actual.macosServiceMayRespawn>
+    ) => mocks.macosServiceMayRespawnMock(...callArgs),
+  };
+});
+vi.mock("../../service/platforms/linux", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/linux")>();
+  return {
+    ...actual,
+    linuxServiceMayRespawn: (
+      ...callArgs: Parameters<typeof actual.linuxServiceMayRespawn>
+    ) => mocks.linuxServiceMayRespawnMock(...callArgs),
+  };
+});
+// Nothing in this file resets these two - set once, module scope, and every
+// test that never mentions respawn risk inherits "cannot respawn" silently.
+mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
+mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
 
 // Only `createDefaultRegistryClient` is replaced - `releaseDownloadSlot` and
 // the rest stay real, so the registry pin below exercises the same

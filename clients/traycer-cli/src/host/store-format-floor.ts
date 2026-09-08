@@ -601,9 +601,10 @@ export async function assertStoreFormatFloorAtCommit(args: {
     environment: args.environment,
     surveyRoots: args.surveyRoots,
     targetVersion,
-    publishedStoreFormats: sameBytesAsGated
-      ? args.evidence.publishedStoreFormats
-      : null,
+    publishedStoreFormats: publishedStoreFormatsForTarget(
+      args.evidence,
+      targetVersion,
+    ),
     // NOT dropped when the bytes differ from what was gated: a declaration is
     // read off the tree being committed, so it describes those exact bytes
     // whatever the early gate looked at.
@@ -614,6 +615,24 @@ export async function assertStoreFormatFloorAtCommit(args: {
     site: args.evidence.site,
     logger: args.logger,
   });
+}
+
+/**
+ * The published formats that still describe the bytes being committed, or
+ * `null`.
+ *
+ * Both post-stage checks resolve this the SAME way and must keep doing so: the
+ * published field was fetched for the manifest entry the early gate named, so
+ * it only speaks for a tree that still calls itself that version. Shared
+ * rather than written twice because the two checks disagreeing about which
+ * build is landing is precisely the bug class this file keeps producing.
+ */
+export function publishedStoreFormatsForTarget(
+  evidence: StoreFormatFloorEvidence,
+  targetVersion: string,
+): HostStoreFormats | null {
+  if (evidence.clearedVersion !== targetVersion) return null;
+  return evidence.publishedStoreFormats;
 }
 
 /**
@@ -655,6 +674,8 @@ export async function assertStoreFormatFloorAfterStop(args: {
   readonly declaredStoreFormats: HostStoreFormats | null;
   readonly installedVersion: string | null;
   readonly installedStoreFormats: HostStoreFormats | null;
+  /** See `publishedStoreFormatsForTarget` - the same value the tail check used. */
+  readonly publishedStoreFormats: HostStoreFormats | null;
   readonly quiescence: SwapQuiescence;
   readonly acceptStoreFormatLoss: boolean;
   readonly site: StoreFormatFloorSite;
@@ -674,6 +695,37 @@ export async function assertStoreFormatFloorAfterStop(args: {
       reason: applicability.reason,
       logger: args.logger,
     });
+    return;
+  }
+  // FORMATS FIRST, and the ordering is the whole point. Quiescence only
+  // matters when the formats cannot settle the move on their own: if the
+  // target writes a stamp at least as new as the installed build's, nothing
+  // any writer could do in the swap window makes a store unreadable to it.
+  // Demanding quiescence ahead of this refused a routine `0.0.0-dev` ->
+  // `0.0.0-dev` dev convergence - both declaring chatDb 9 - because a slotted
+  // dev machine always spans more than one survey root, and the refusal then
+  // claimed the target read an OLDER format with both sides at 9.
+  const target = resolveHostStoreFormats(
+    args.targetVersion,
+    args.publishedStoreFormats ?? args.declaredStoreFormats,
+  );
+  const installed =
+    args.installedVersion === null
+      ? null
+      : resolveHostStoreFormats(
+          args.installedVersion,
+          args.installedStoreFormats,
+        );
+  if (storeFloorClearedByFormats(target, installed)) {
+    args.logger.debug(
+      "Host store-format floor cleared after the stop without a disk walk",
+      {
+        environment: args.environment,
+        site: args.site,
+        targetVersion: args.targetVersion,
+        installedVersion: args.installedVersion,
+      },
+    );
     return;
   }
   if (!args.quiescence.established) {
@@ -700,14 +752,14 @@ export async function assertStoreFormatFloorAfterStop(args: {
     throw refusal;
   }
   // Quiesced, so this survey describes the machine as the target will find it.
-  // The published formats are deliberately NOT carried here: the tail check
-  // above already applied them, and re-reading a manifest with the host
-  // stopped would put a network round trip inside the swap window.
+  // The published formats are the ones the tail check already resolved - never
+  // re-fetched, because a manifest read with the host stopped would put a
+  // network round trip inside the swap window.
   await assertHostStoreFormatFloor({
     environment: args.environment,
     surveyRoots: args.surveyRoots,
     targetVersion: args.targetVersion,
-    publishedStoreFormats: null,
+    publishedStoreFormats: args.publishedStoreFormats,
     declaredStoreFormats: args.declaredStoreFormats,
     installedVersion: args.installedVersion,
     installedStoreFormats: args.installedStoreFormats,

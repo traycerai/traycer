@@ -759,6 +759,48 @@ async function probeUnitSettled(
   return state === "inactive" || state === "failed" || state === "unknown";
 }
 
+/**
+ * Whether systemd could start this unit's host on its own before a swap lands.
+ *
+ * The same hazard as macOS's `macosServiceMayRespawn`, through the same seam:
+ * `statusService` here also reports purely from `pid.json`, so a unit sitting
+ * in `Restart=on-failure`'s relaunch window reads `stopped` while systemd is
+ * about to bring it back.
+ *
+ * `systemctl is-active` names that state directly. `activating` is systemd
+ * bringing the unit UP - which for a crashed unit is the `auto-restart`
+ * sub-state - so it is the one answer that means "a writer is coming". Its
+ * settled answers do not: `inactive` is a deliberate stop (`Restart=` does not
+ * apply to a unit stopped that way, which this file already relies on in
+ * `cancelScheduledAutoRestart`), `failed` is a unit whose restart budget is
+ * exhausted, and `unknown` is not loaded at all.
+ *
+ * Anything else - `deactivating`, an unrecognized word, or the empty output a
+ * probe that could not reach the user manager produces - is UNPROVEN and reads
+ * as "may respawn". That is the same positive-confirmation-only discipline the
+ * settle probe above uses, pointed the other way.
+ */
+export async function linuxServiceMayRespawn(
+  label: ServiceLabel,
+  runner: ProcessRunner | null,
+): Promise<boolean> {
+  const run = runner ?? runCommand;
+  let result: RunResult;
+  try {
+    result = await run("systemctl", ["--user", "is-active", unitName(label)], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: true,
+    });
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return true;
+  }
+  const state = result.stdout.trim();
+  return !(state === "inactive" || state === "failed" || state === "unknown");
+}
+
 async function startService(
   label: ServiceLabel,
   run: ProcessRunner,

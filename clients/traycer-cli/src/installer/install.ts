@@ -37,6 +37,7 @@ import {
 import {
   assertStoreFormatFloorAfterStop,
   assertStoreFormatFloorAtCommit,
+  publishedStoreFormatsForTarget,
   storeFormatFloorTargetVersion,
   type StoreFormatFloorEvidence,
 } from "../host/store-format-floor";
@@ -833,6 +834,12 @@ async function assertFloorAfterStopOrRestore(
       declaredStoreFormats: operands.declaredStoreFormats,
       installedVersion: operands.installedVersion,
       installedStoreFormats: operands.installedStoreFormats,
+      // The same published formats the check above resolved, through the same
+      // rule - the two must not disagree about which build is landing.
+      publishedStoreFormats: publishedStoreFormatsForTarget(
+        opts.storeFormatFloor,
+        storeFormatFloorTargetVersion(opts.runtimeVersion, opts.version),
+      ),
       quiescence,
       acceptStoreFormatLoss: opts.storeFormatFloor.acceptStoreFormatLoss,
       site: opts.storeFormatFloor.site,

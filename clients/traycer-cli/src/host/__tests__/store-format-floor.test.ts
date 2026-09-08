@@ -1009,6 +1009,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         declaredStoreFormats: null,
+        publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
         quiescence: NOT_ESTABLISHED,
@@ -1045,6 +1046,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         declaredStoreFormats: null,
+        publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
         quiescence: NOT_ESTABLISHED,
@@ -1074,6 +1076,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         declaredStoreFormats: null,
+        publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
         quiescence: ESTABLISHED,
@@ -1084,7 +1087,11 @@ describe("assertStoreFormatFloorAfterStop", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("refuses with the ordinary blocked message when quiescence is established but a store reads newer than the target", async () => {
+  it("refuses with the ordinary blocked message when quiescence is established but a store reads newer than the target - single root, guards the formats-first clearance from swallowing a real refusal", async () => {
+    // Undeclared on both sides, so `storeFloorClearedByFormats` cannot
+    // settle this from the table alone (target 1.2.0 -> chatDb 8, installed
+    // 1.3.0-rc.4 -> chatDb 9, 8 < 9) and the check must fall through to the
+    // survey exactly as it did before the formats-first reordering.
     await writeStampedChatDb("epic-newer-store", 9);
     const logger = fakeLogger();
 
@@ -1095,6 +1102,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         declaredStoreFormats: null,
+        publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
         quiescence: ESTABLISHED,
@@ -1115,6 +1123,88 @@ describe("assertStoreFormatFloorAfterStop", () => {
     expect(err.message).toContain("format 8");
   });
 
+  it("clears on formats alone across a MULTI-root survey WITHOUT ever consulting quiescence - the ordering fix (P1)", async () => {
+    // The exact regression: a routine `0.0.0-dev` -> `0.0.0-dev` dev
+    // convergence, both declaring chatDb 9. A slotted dev machine always
+    // spans more than one survey root, so quiescence there is never
+    // `established` - demanding it BEFORE the formats short-circuit refused
+    // this move and claimed the target read an OLDER format with both sides
+    // at 9. Passing an unestablished quiescence here makes the test fail
+    // loudly if the ordering regresses - that is the whole point, not an
+    // incidental fixture choice.
+    const logger = fakeLogger();
+    const multiRootSurvey = {
+      roots: [
+        { path: join(hostHome, "slot"), label: "host" },
+        { path: join(hostHome, "identity-a"), label: "identity-a" },
+      ],
+      enumerationFailed: false,
+    };
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        surveyRoots: multiRootSurvey,
+        targetVersion: "0.0.0-dev",
+        declaredStoreFormats: { chatDb: 9 },
+        publishedStoreFormats: null,
+        installedVersion: "0.0.0-dev",
+        installedStoreFormats: { chatDb: 9 },
+        quiescence: { established: false, reason: "unseen-writers" },
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+
+    const clearedCall = logger.calls.find(
+      (call) =>
+        call.message ===
+        "Host store-format floor cleared after the stop without a disk walk",
+    );
+    expect(clearedCall).toBeDefined();
+  });
+
+  it("refuses with the quiescence gap across a MULTI-root survey when formats do NOT settle it (target older)", async () => {
+    const logger = fakeLogger();
+    const multiRootSurvey = {
+      roots: [
+        { path: join(hostHome, "slot"), label: "host" },
+        { path: join(hostHome, "identity-a"), label: "identity-a" },
+      ],
+      enumerationFailed: false,
+    };
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        surveyRoots: multiRootSurvey,
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        quiescence: { established: false, reason: "unseen-writers" },
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    const details = err.details as {
+      readonly verdict: string;
+      readonly quiescenceGap: string;
+    };
+    expect(details.verdict).toBe("quiescence-unproven");
+    expect(details.quiescenceGap).toBe("unseen-writers");
+  });
+
   it("resolves without consulting quiescence at all when the floor does not apply (an upgrade) - the ordering guard", async () => {
     // The regression this pins: if the arms ran in the wrong order, every
     // ordinary upgrade on a machine with a running host would start
@@ -1130,6 +1220,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.4.0",
         declaredStoreFormats: null,
+        publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
         quiescence: NOT_ESTABLISHED,

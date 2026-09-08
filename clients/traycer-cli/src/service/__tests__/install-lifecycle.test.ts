@@ -1296,6 +1296,73 @@ describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
       expect(harness.start).not.toHaveBeenCalled();
       expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
     });
+
+    it("a degraded Desktop-managed stop still counts as DISPATCHED - relaunchAfterRestart runs on a post-stop refusal even though controller.stop rejected", async () => {
+      // `state.stoppedBeforeSwap` is assigned only after `controller.stop`
+      // RESOLVES. A Desktop-managed stop that degrades - the claim commits
+      // on the host but its acknowledgement is lost, so this route reports
+      // `unreachable`/`hung` and the `externally-managed` + darwin branch
+      // swallows it - used to leave that flag false, no-opping the restore
+      // and finishing the shutdown the host had already committed to: a
+      // machine left hostless with the old install never touched. Gating on
+      // DISPATCH (`onWillStopHost` firing) instead of success is the fix.
+      const harness = makeController("externally-managed");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      harness.stop.mockRejectedValue(
+        Object.assign(new Error("simulated degraded stop"), {
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        }),
+      );
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+      // The degrade is swallowed - `beforeSwap` itself does not throw - and
+      // `stoppedBeforeSwap` stays false because the stop never resolved.
+      expect(handle.state.stoppedBeforeSwap).toBe(false);
+
+      await handle.lifecycle.restartAfterAbortedSwap();
+
+      expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+      expect(harness.relaunchAfterRestart).toHaveBeenCalledWith(label, {
+        forcedRecycle: true,
+      });
+    });
+
+    it("the same degraded-stop configuration does NOT restore a service that was never running - keeps the hostWasRunningBefore gate honest", async () => {
+      // Same rejecting `controller.stop`, but a `stopped` prior state never
+      // reaches either stop branch at all on darwin/POSIX, so nothing is
+      // dispatched. This is the counterpart that proves DISPATCH alone
+      // is not sufficient either - `restartAfterAbortedSwap` still needs
+      // `hostWasRunningBefore(priorState)` to be true.
+      const harness = makeController("stopped");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      harness.stop.mockRejectedValue(
+        Object.assign(new Error("simulated degraded stop"), {
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        }),
+      );
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+      expect(harness.stop).not.toHaveBeenCalled();
+
+      await handle.lifecycle.restartAfterAbortedSwap();
+
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+      expect(harness.start).not.toHaveBeenCalled();
+    });
   });
 
   describe("bytes-only lifecycle", () => {

@@ -140,8 +140,20 @@ vi.mock("../../service/cli-binary", () => ({
 }));
 
 // Reads the invoking user's REAL LaunchAgent plist on darwin.
+// `macosServiceMayRespawn` shells out to `launchctl print` for real when
+// `observeSwapQuiescence`'s post-stop check reaches the "no process right
+// now" arm - on a machine with a loaded, crash-throttled Traycer agent, that
+// reads the developer's own launchd state and refuses the commit. `false`
+// keeps every existing fixture here clearing as an ordinary quiescent
+// machine would.
 vi.mock("../../service/platforms/macos", () => ({
   readRegisteredCliInvocation: async () => null,
+  macosServiceMayRespawn: async () => false,
+}));
+
+// Same hazard, systemd side: `systemctl --user is-active` for real.
+vi.mock("../../service/platforms/linux", () => ({
+  linuxServiceMayRespawn: async () => false,
 }));
 
 // Shell out to schtasks / powershell / taskkill.
