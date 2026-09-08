@@ -1,4 +1,5 @@
 import { useReducedMotion, type Transition } from "motion/react";
+import { cn } from "@/lib/utils";
 
 /**
  * Shared header-tab presentation tokens.
@@ -13,6 +14,28 @@ export const TAB_CLASS_BASE =
 export const SPLIT_MEMBER_CLASS = "gap-1 px-5";
 export const SPLIT_TAB_CONTROL_CLASS =
   "relative z-20 mr-1 flex h-7 w-10 shrink-0 items-center justify-center rounded-md";
+
+export function headerTabClassName(
+  chrome: "own" | "member",
+  isActive: boolean,
+): string {
+  return cn(
+    TAB_CLASS_BASE,
+    chrome === "member" && SPLIT_MEMBER_CLASS,
+    isActive
+      ? "z-10 font-medium text-foreground"
+      : "text-muted-foreground hover:text-foreground",
+  );
+}
+
+export function splitFillableMemberClassName(focused: boolean): string {
+  return cn(
+    TAB_CLASS_BASE,
+    SPLIT_MEMBER_CLASS,
+    "text-muted-foreground",
+    focused && "text-foreground",
+  );
+}
 
 /**
  * Neighbour displacement while a tab is being dragged past it.

@@ -1,20 +1,20 @@
+import { splitSlotLabel } from "./header-tab-presentation";
 import { useLayoutEffect, useRef } from "react";
-import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
 import type {
   HeaderStripItem,
   HeaderStripMember,
 } from "@/stores/tabs/use-header-tabs";
+import { SplitFocusIcon, SplitTabLayout } from "./split-tab-chrome";
 import {
-  SplitFocusIcon,
-  SplitMemberChrome,
-  SplitTabLayout,
-} from "./split-tab-chrome";
-import {
-  SPLIT_MEMBER_CLASS,
+  headerTabClassName,
+  splitFillableMemberClassName,
   SPLIT_TAB_CONTROL_CLASS,
-  TAB_CLASS_BASE,
 } from "./tab-chrome-tokens";
+import {
+  HeaderTabPreview,
+  SplitFillableMemberVisual,
+} from "./header-tab-visual";
 import type { HeaderTabDragData } from "./header-tab-dnd";
 
 interface SplitTabDragOverlayProps {
@@ -85,43 +85,19 @@ function SplitMemberOverlay(props: {
   readonly focused: boolean;
 }) {
   const { member, focused } = props;
-  const tab = member.kind === "tab" ? member.tab : null;
-  const Icon = tab?.icon ?? null;
-  const name = splitMemberTitle(member);
+  if (member.kind === "fillable") {
+    return (
+      <div className={splitFillableMemberClassName(focused)}>
+        <SplitFillableMemberVisual
+          focused={focused}
+          label={splitSlotLabel(member.slot)}
+        />
+      </div>
+    );
+  }
   return (
-    <div
-      className={cn(
-        TAB_CLASS_BASE,
-        SPLIT_MEMBER_CLASS,
-        focused ? "z-10 text-foreground" : "text-muted-foreground",
-        focused && tab !== null && "font-medium",
-      )}
-    >
-      <SplitMemberChrome focused={focused} />
-      <span className="relative z-20 flex min-w-0 flex-1 items-center gap-1.5">
-        {Icon === null ? null : (
-          <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-left",
-            member.kind === "fillable" && "italic",
-          )}
-        >
-          {name}
-        </span>
-      </span>
+    <div className={headerTabClassName("member", focused)}>
+      <HeaderTabPreview tab={member.tab} chrome="member" isActive={focused} />
     </div>
   );
-}
-
-function splitMemberTitle(member: HeaderStripMember): string {
-  if (member.kind === "fillable") {
-    return member.slot.kind === "unavailable"
-      ? member.slot.label
-      : "Choose view";
-  }
-  return member.tab.kind === "epic"
-    ? displayTitle(member.tab.name, "epic")
-    : member.tab.name;
 }

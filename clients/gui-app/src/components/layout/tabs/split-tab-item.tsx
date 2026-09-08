@@ -1,3 +1,4 @@
+import { splitSlotLabel } from "./header-tab-presentation";
 import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import * as m from "motion/react-m";
@@ -15,11 +16,8 @@ import {
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { useHeaderTabDisplacement } from "./use-header-tab-displacement";
 import { cn } from "@/lib/utils";
-import {
-  SplitTabLayout,
-  SplitFocusIcon,
-  SplitMemberChrome,
-} from "./split-tab-chrome";
+import { SplitTabLayout, SplitFocusIcon } from "./split-tab-chrome";
+import { SplitFillableMemberVisual } from "./header-tab-visual";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type {
   HeaderStripItem,
@@ -34,9 +32,8 @@ import {
 } from "@/components/layout/tabs/tab-strip-item";
 import {
   useHeaderTabDisplacementTransition,
-  TAB_CLASS_BASE,
+  splitFillableMemberClassName,
   SPLIT_TAB_CONTROL_CLASS,
-  SPLIT_MEMBER_CLASS,
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import {
   SplitQuickActionsMenuContent,
@@ -357,7 +354,7 @@ function SplitFillableMember(props: {
     tabCommandCoordinator.focusSplitSide({ splitId: stripItemId, side });
   }, [side, stripItemId]);
   const unavailable = props.slot.kind === "unavailable";
-  const label = unavailable ? props.slot.label : "Choose view";
+  const label = splitSlotLabel(props.slot);
   const control = (
     <div
       role="tab"
@@ -373,17 +370,11 @@ function SplitFillableMember(props: {
         focusSide();
       }}
       className={cn(
-        TAB_CLASS_BASE,
-        "cursor-pointer gap-1 text-muted-foreground",
-        SPLIT_MEMBER_CLASS,
-        "[-webkit-app-region:no-drag]",
-        props.focused && "text-foreground",
+        splitFillableMemberClassName(props.focused),
+        "cursor-pointer [-webkit-app-region:no-drag]",
       )}
     >
-      <SplitMemberChrome focused={props.focused} />
-      <span className="relative z-20 min-w-0 flex-1 truncate text-left italic">
-        {label}
-      </span>
+      <SplitFillableMemberVisual focused={props.focused} label={label} />
     </div>
   );
   if (props.partner === null) {

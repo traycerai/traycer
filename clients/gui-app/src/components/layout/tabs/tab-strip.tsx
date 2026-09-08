@@ -46,7 +46,7 @@ import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useHeaderTabIndicators } from "./header-tab-presentation";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   executeTabSplitCommand,
@@ -102,18 +102,8 @@ function TabStripBody() {
   });
 
   const isLandingPage = activePathname === "/";
-  const indicatorEpicIds = useMemo(
-    () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
-    [allTabs],
-  );
-  const notificationIndicators = useNotificationIndicators({
-    // Epic ids only, so the app-wide active host is the right one to ask: an
-    // Epic is a shared cloud entity, not a host-owned record.
-    hostId: null,
-    epicIds: indicatorEpicIds,
-    chatIds: [],
-    enabled: indicatorEpicIds.length > 0,
-  });
+  const { epicIds: indicatorEpicIds, indicators: notificationIndicators } =
+    useHeaderTabIndicators(allTabs);
   const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const { mutate: setEpicPinned } = useEpicSetPinned();

@@ -1,11 +1,10 @@
 import { type Transition } from "motion/react";
 import * as m from "motion/react-m";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
-import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
-import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
-import { TabChromeBackground } from "./tab-chrome-background";
-import { TAB_CLASS_BASE } from "./tab-chrome-tokens";
+import type { HeaderTab } from "@/stores/tabs/types";
+import { HeaderTabPreview } from "./header-tab-visual";
+import { headerTabClassName } from "./tab-chrome-tokens";
 
 const HEADER_TAB_OVERLAY_TRANSITION = {
   type: "spring",
@@ -28,10 +27,6 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
   const mergeTargeted = useEpicDndStore(
     (state) => state.topLevelStripPairPreview !== null,
   );
-  // Epic tabs can carry an empty name; render through `displayTitle`. Render
-  // only - never mutate the tab.
-  const displayName =
-    tab.kind === "epic" ? displayTitle(tab.name, "epic") : tab.name;
   return (
     <m.div
       // Named so an instrument can find it by identity rather than by a
@@ -46,26 +41,11 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       transition={HEADER_TAB_OVERLAY_TRANSITION}
       style={props.width === null ? undefined : { width: props.width }}
       className={cn(
-        TAB_CLASS_BASE,
-        "pointer-events-none cursor-grabbing select-none font-medium text-foreground",
+        headerTabClassName("own", true),
+        "pointer-events-none cursor-grabbing select-none",
       )}
     >
-      <TabChromeBackground
-        fill="var(--color-background)"
-        borderColor="var(--color-border)"
-        coversBaseline
-        className={undefined}
-      />
-      <span className="relative z-20 flex min-w-0 flex-1 items-center gap-1.5">
-        <TabLeadingIcon icon={tab.icon} />
-        <span className="min-w-0 flex-1 truncate text-left">{displayName}</span>
-      </span>
+      <HeaderTabPreview tab={tab} chrome="own" isActive />
     </m.div>
   );
-}
-
-function TabLeadingIcon(props: { readonly icon: TabIcon | null }) {
-  if (props.icon === null) return null;
-  const Icon = props.icon;
-  return <Icon className="size-3.5 shrink-0" />;
 }

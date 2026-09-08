@@ -1632,6 +1632,19 @@
     pointer-events: none;
   }
 
+  /* Mask only the text so the fade follows its available width without
+     fading the icon, close button or tooltip. */
+  .header-tab-title-text {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - 1.25rem),
+      transparent
+    );
+  }
+
   /* Only the title's text box shrinks. Its full-width tooltip anchor stays
      fixed so revealing the close control cannot reposition the tooltip. */
   .header-tab-label[data-leader-visible="true"] .header-tab-title {

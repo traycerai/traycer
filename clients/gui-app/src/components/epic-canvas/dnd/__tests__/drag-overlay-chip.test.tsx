@@ -1,9 +1,27 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { EpicRootDragOverlayContent } from "@/components/epic-canvas/dnd/drag-overlay-chip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicRuntimeBinding,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
+import { createRecordingAccountingPort } from "@/stores/epics/open-epic/test-support/accounting-port-fixture";
+import {
+  publishAgentActivity,
+  resetAgentActivity,
+} from "@/__tests__/agent-activity-harness";
 import type {
   EpicCanvasArtifactTabDragData,
   EpicCanvasGitDiffTileDragData,
@@ -38,6 +56,23 @@ import {
   installManagedCommandChatSession,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+
+/** Stub host RPC data while keeping indicator selection and the overlay provider real. */
+const hostIndicatorTestState = vi.hoisted(
+  (): { data: HostNotificationsIndicatorStateResponse } => ({
+    data: { epics: {}, chats: {} },
+  }),
+);
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: hostIndicatorTestState.data,
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
 
 describe("<EpicRootDragOverlayContent />", () => {
   beforeEach(() => {
@@ -340,7 +375,24 @@ describe("<EpicRootDragOverlayContent />", () => {
       });
     }
 
+    let queryClient: QueryClient;
+
+    // The shared visual reaches the notification-indicator hook, so every
+    // header-tab overlay needs a QueryClient, even tests unrelated to it.
+    function renderOverlay(): void {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <EpicRootDragOverlayContent />
+        </QueryClientProvider>,
+      );
+    }
+
+    beforeEach(() => {
+      queryClient = new QueryClient();
+    });
+
     afterEach(() => {
+      queryClient.clear();
       useTabsStore.setState(useTabsStore.getInitialState(), true);
       useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     });
@@ -357,7 +409,7 @@ describe("<EpicRootDragOverlayContent />", () => {
         },
         480,
       );
-      render(<EpicRootDragOverlayContent />);
+      renderOverlay();
 
       const overlay = screen.getByTestId("header-tab-drag-overlay");
       expect(within(overlay).getByText("Left Epic")).toBeTruthy();
@@ -377,7 +429,7 @@ describe("<EpicRootDragOverlayContent />", () => {
         },
         480,
       );
-      render(<EpicRootDragOverlayContent />);
+      renderOverlay();
 
       const overlay = screen.getByTestId("header-tab-drag-overlay");
       const indicator = within(overlay).getByTestId(
@@ -388,6 +440,10 @@ describe("<EpicRootDragOverlayContent />", () => {
         "split-tab-group-underline-right-split-1",
       );
       expect(underline.className).not.toContain("bg-primary");
+      const leftUnderline = within(overlay).getByTestId(
+        "split-tab-group-underline-left-split-1",
+      );
+      expect(leftUnderline.className).toContain("bg-primary");
     });
 
     it("preserves an unavailable placeholder member instead of collapsing it", () => {
@@ -402,7 +458,7 @@ describe("<EpicRootDragOverlayContent />", () => {
         },
         480,
       );
-      render(<EpicRootDragOverlayContent />);
+      renderOverlay();
 
       const overlay = screen.getByTestId("header-tab-drag-overlay");
       expect(within(overlay).getByText("Left Epic")).toBeTruthy();
@@ -452,7 +508,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           },
           480,
         );
-        render(<EpicRootDragOverlayContent />);
+        renderOverlay();
 
         const overlay = screen.getByTestId("header-tab-drag-overlay");
         // frame.left (100) - member.left (340): the preview paints back at the
@@ -495,12 +551,287 @@ describe("<EpicRootDragOverlayContent />", () => {
         },
         220,
       );
-      render(<EpicRootDragOverlayContent />);
+      renderOverlay();
 
       const overlay = screen.getByTestId("header-tab-drag-overlay");
       expect(within(overlay).getByText("Solo Epic")).toBeTruthy();
-      expect(screen.queryByTestId("split-focus-indicator-split-1")).toBeNull();
+      // Regex, not the literal "split-1" id: an accidental split render under
+      // any other id would still be a defect and must still fail this.
+      expect(screen.queryByTestId(/^split-focus-indicator-/)).toBeNull();
       expect(overlay.style.width).toBe("220px");
+    });
+  });
+
+  describe("header-tab overlay shares the strip's live visual", () => {
+    const EPIC_ID = "epic-under-test";
+    const PARTNER_ID = "epic-partner";
+
+    function seedEpicTab(name: string): void {
+      useEpicCanvasStore
+        .getState()
+        .seedEpic(EPIC_ID, { tabId: EPIC_ID, name }, []);
+    }
+
+    /** No inbound call is expected: these tests only ever write via `setState`. */
+    const INERT_RUNTIME: EpicRuntimeBinding = {
+      port: {
+        call: () => {
+          throw new Error("Unexpected runtime call");
+        },
+      },
+      command: () => {},
+      awarenessOut: () => {},
+      currentUser: () => {},
+      detach: () => {},
+      dispose: () => {},
+    };
+
+    function liveChatsFor(
+      liveAgentIds: ReadonlyArray<string>,
+    ): Record<string, ChatProjection> {
+      return Object.fromEntries(
+        liveAgentIds.map((id) => [
+          id,
+          {
+            id,
+            title: id,
+            parentId: null,
+            createdAt: 1,
+            updatedAt: 1,
+            userId: null,
+            hostId: "host-a",
+            isTitleEditedByUser: false,
+            docResident: null,
+            settings: null,
+            archivedAt: null,
+          } satisfies ChatProjection,
+        ]),
+      );
+    }
+
+    /** Registers (or reuses) a real store for EPIC_ID and pushes live state onto it. */
+    function registerLiveEpic(
+      title: string,
+      liveAgentIds: ReadonlyArray<string>,
+    ): OpenEpicStoreHandle {
+      const handle = __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
+        createOpenEpicStore({
+          epicId: EPIC_ID,
+          hostId: "test-host",
+          userId: null,
+          onRetryTransport: () => {},
+          runtime: INERT_RUNTIME,
+          accounting: createRecordingAccountingPort().port,
+        }),
+      );
+      handle.store.setState({
+        epic: { title, updatedAt: 1 },
+        chats: { byId: liveChatsFor(liveAgentIds), allIds: liveAgentIds },
+      });
+      return handle;
+    }
+
+    interface Scenario {
+      readonly label: string;
+      readonly stripItemId: string;
+      readonly seedTabs: (name: string) => void;
+    }
+
+    const scenarios: ReadonlyArray<Scenario> = [
+      {
+        label: "ordinary",
+        stripItemId: `tab:epic:${EPIC_ID}`,
+        seedTabs: (name) => {
+          seedEpicTab(name);
+          useTabsStore.setState({
+            version: 2,
+            items: [
+              {
+                kind: "tab",
+                id: `tab:epic:${EPIC_ID}`,
+                ref: { kind: "epic", id: EPIC_ID },
+              },
+            ],
+            activeItemId: `tab:epic:${EPIC_ID}`,
+            stripOrder: [{ kind: "epic", id: EPIC_ID }],
+            systemTabs: { history: null, settings: null },
+          });
+        },
+      },
+      {
+        label: "split",
+        stripItemId: "split-under-test",
+        seedTabs: (name) => {
+          seedEpicTab(name);
+          useEpicCanvasStore
+            .getState()
+            .seedEpic(PARTNER_ID, { tabId: PARTNER_ID, name: "Partner" }, []);
+          useTabsStore.setState({
+            version: 2,
+            items: [
+              {
+                kind: "split",
+                id: "split-under-test",
+                left: { kind: "tab", ref: { kind: "epic", id: EPIC_ID } },
+                right: { kind: "tab", ref: { kind: "epic", id: PARTNER_ID } },
+                focusedSide: "left",
+                routeBackingSide: "left",
+                leftRatio: 0.5,
+              },
+            ],
+            activeItemId: "split-under-test",
+            stripOrder: [
+              { kind: "epic", id: EPIC_ID },
+              { kind: "epic", id: PARTNER_ID },
+            ],
+            systemTabs: { history: null, settings: null },
+          });
+        },
+      },
+    ];
+
+    let queryClient: QueryClient;
+
+    function renderOverlay(): void {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <EpicRootDragOverlayContent />
+        </QueryClientProvider>,
+      );
+    }
+
+    function startDrag(scenario: Scenario): void {
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: scenario.stripItemId,
+          tabKind: "epic",
+          tabId: EPIC_ID,
+          index: 0,
+        },
+        400,
+      );
+    }
+
+    beforeEach(() => {
+      queryClient = new QueryClient();
+    });
+
+    afterEach(() => {
+      cleanup();
+      queryClient.clear();
+      hostIndicatorTestState.data = { epics: {}, chats: {} };
+      useTabsStore.setState(useTabsStore.getInitialState(), true);
+      useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+      useEpicCanvasStore.getState().clearAllTitleGenerationPending();
+      __getOpenEpicRegistryForTests().disposeAll();
+      __resetAppLocalNotificationsStoreForTests();
+      resetAgentActivity();
+    });
+
+    scenarios.forEach((scenario) => {
+      describe(scenario.label, () => {
+        it("shows the live registered title, not the stale projected one, and follows a live rename", () => {
+          scenario.seedTabs("Stale Title");
+          const handle = registerLiveEpic("Live Title", []);
+          startDrag(scenario);
+          renderOverlay();
+
+          const overlay = screen.getByTestId("header-tab-drag-overlay");
+          expect(within(overlay).getByText("Live Title")).toBeTruthy();
+          expect(within(overlay).queryByText("Stale Title")).toBeNull();
+
+          act(() => {
+            handle.store.setState({
+              epic: { title: "Renamed Title", updatedAt: 2 },
+            });
+          });
+          expect(within(overlay).getByText("Renamed Title")).toBeTruthy();
+          expect(within(overlay).queryByText("Live Title")).toBeNull();
+        });
+
+        it("shows the title-generating spinner while a title is pending", () => {
+          scenario.seedTabs("Draft Title");
+          useEpicCanvasStore
+            .getState()
+            .markEpicTitlePending(EPIC_ID, "Draft Title");
+          startDrag(scenario);
+          renderOverlay();
+
+          const overlay = screen.getByTestId("header-tab-drag-overlay");
+          expect(
+            within(overlay).getByTestId(
+              `header-tab-title-generating-${EPIC_ID}`,
+            ),
+          ).toBeTruthy();
+        });
+
+        it("shows the activity glyph while a chat is active", () => {
+          scenario.seedTabs("Active Epic");
+          registerLiveEpic("Active Epic", ["chat-active"]);
+          publishAgentActivity([
+            {
+              hostId: "host-a",
+              byEpic: {
+                [EPIC_ID]: { working: ["chat-active"], turn: ["chat-active"] },
+              },
+            },
+          ]);
+          startDrag(scenario);
+          renderOverlay();
+
+          const overlay = screen.getByTestId("header-tab-drag-overlay");
+          expect(
+            within(overlay).getByTestId(`header-tab-activity-${EPIC_ID}`),
+          ).toBeTruthy();
+        });
+
+        it("shows the app-local failure glyph", () => {
+          scenario.seedTabs("Failing Epic");
+          useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+          useAppLocalNotificationsStore.getState().upsert({
+            id: "chat-failure",
+            updatedAt: 1,
+            readAt: null,
+            kind: "stream.transport.error",
+            sourceRef: "chat-1",
+            payload: { kind: "chat", epicId: EPIC_ID, chatId: "chat-1" },
+            message: "Chat failed",
+            detail: null,
+          });
+          startDrag(scenario);
+          renderOverlay();
+
+          const overlay = screen.getByTestId("header-tab-drag-overlay");
+          expect(
+            within(overlay).getByTestId(`header-tab-failure-${EPIC_ID}`),
+          ).toBeTruthy();
+        });
+      });
+    });
+
+    it("shows a host-driven indicator through the provider", () => {
+      const ordinary = scenarios[0];
+      ordinary.seedTabs("Host Indicator Epic");
+      hostIndicatorTestState.data = {
+        epics: {
+          [EPIC_ID]: {
+            pendingApproval: false,
+            pendingInterview: false,
+            unreadFailure: false,
+            unreadDone: true,
+            pendingFork: false,
+          },
+        },
+        chats: {},
+      };
+      startDrag(ordinary);
+      renderOverlay();
+
+      const overlay = screen.getByTestId("header-tab-drag-overlay");
+      expect(
+        within(overlay).getByTestId(`header-tab-done-${EPIC_ID}`),
+      ).toBeTruthy();
     });
   });
 });

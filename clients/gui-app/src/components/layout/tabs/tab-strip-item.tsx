@@ -29,20 +29,9 @@ import {
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DropLine } from "@/components/ui/drop-line";
-import {
-  useRegisteredEpicPermissionRole,
-  useRegisteredEpicTitle,
-  useRegisteredEpicTitleGenerating,
-} from "@/lib/epic-selectors";
-import { displayTitle } from "@/lib/display-title";
+import { useRegisteredEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getAppHostClientSnapshot } from "@/lib/host/runtime";
@@ -62,28 +51,21 @@ import {
   leaderHint,
 } from "@/components/ui/leader-digit-shortcuts";
 import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
-import { TabChromeBackground } from "@/components/layout/tabs/tab-chrome-background";
-import { SplitMemberChrome } from "./split-tab-chrome";
+import { HeaderTabVisual } from "./header-tab-visual";
+import { useHeaderTabTitle } from "./header-tab-presentation";
 import {
   useHeaderTabDisplacementTransition,
-  TAB_CLASS_BASE,
-  SPLIT_MEMBER_CLASS,
+  headerTabClassName,
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
-import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
+import type { HeaderTab } from "@/stores/tabs/types";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
-import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
-import {
-  useEpicActivityStatus,
-  type EpicActivityStatus,
-} from "@/hooks/epic/use-epic-activity-status";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
@@ -200,27 +182,12 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const modifier = useTabLeaderModifierForIndex(index);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const liveEpicTitle = useRegisteredEpicTitle(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
-  const titleGenerationPending = useRegisteredEpicTitleGenerating(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
-  const activityStatus = useEpicActivityStatus(
-    tab.kind === "epic" ? tab.epicId : null,
-  );
+  const { resolvedTabName, displayName } = useHeaderTabTitle(tab);
   const permissionRole = useRegisteredEpicPermissionRole(
     tab.kind === "epic" ? tab.epicId : null,
   );
   const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
   const canClose = tab.kind !== "epic" || tab.canClose;
-  // Epic tabs can carry an empty name; render through `displayTitle` so it falls
-  // back to "Untitled task". Other kinds render their name verbatim.
-  const resolvedTabName = liveEpicTitle ?? tab.name;
-  const displayName =
-    tab.kind === "epic"
-      ? displayTitle(resolvedTabName, "epic")
-      : resolvedTabName;
   const displayTab = useMemo(
     () =>
       resolvedTabName === tab.name
@@ -424,12 +391,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           onTouchMove={cancelLongPress}
           onTouchStart={handleTouchStart}
           className={cn(
-            TAB_CLASS_BASE,
-            // A split half shares the group's silhouette and only has half the
-            // width, so it trades the tab's generous side padding for enough
-            // room to still show an icon plus a readable title.
-            chrome === "member" && SPLIT_MEMBER_CLASS,
-            tabStateClass(isActive),
+            headerTabClassName(chrome, isActive),
             NO_DRAG_CLASS,
             "cursor-pointer",
           )}
@@ -438,56 +400,34 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             visible={showDropIndicatorBefore}
             side="left"
           />
-          {chrome === "own" ? (
-            <TabChrome isActive={isActive} />
-          ) : (
-            <SplitMemberChrome focused={isActive} />
-          )}
-          <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
-          <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
-            <TabLeadingIcon
-              icon={tab.icon}
-              titleGenerationPending={titleGenerationPending}
-              activityStatus={activityStatus}
-              tabId={tab.id}
-              epicId={tab.kind === "epic" ? tab.epicId : null}
-            />
-            {rename.isEditing ? (
-              <input
-                {...rename.inputProps}
-                aria-label="Edit epic title"
-                data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
-                className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-left text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
-              />
-            ) : (
-              <span
-                className="header-tab-label relative min-w-0 flex-1 text-left"
-                data-leader-visible={leaderBadge !== null}
-              >
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="block w-full">
-                      <span
-                        data-testid={`tab-title-${tab.kind}-${tab.id}`}
-                        className="header-tab-title block truncate"
-                      >
-                        {displayName}
-                      </span>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>{displayName}</TooltipContent>
-                </Tooltip>
-                <TabTrailingSlot
-                  label={`Close ${displayName}`}
-                  testId={`tab-close-${tab.kind}-${tab.id}`}
-                  onClose={() => onClose(displayTab)}
-                  leaderBadge={leaderBadge}
-                  active={isActive}
-                  disabled={!canClose}
+          <HeaderTabVisual
+            tab={tab}
+            displayName={displayName}
+            chrome={chrome}
+            isActive={isActive}
+            titleControl={
+              rename.isEditing ? (
+                <input
+                  {...rename.inputProps}
+                  aria-label="Edit epic title"
+                  data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
+                  className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-left text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
                 />
-              </span>
-            )}
-          </span>
+              ) : null
+            }
+            trailingControl={
+              <TabTrailingSlot
+                label={`Close ${displayName}`}
+                testId={`tab-close-${tab.kind}-${tab.id}`}
+                onClose={() => onClose(displayTab)}
+                leaderBadge={leaderBadge}
+                active={isActive}
+                disabled={!canClose}
+              />
+            }
+            leaderVisible={leaderBadge !== null}
+          />
+          <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
           <HeaderTabSeparator visible={showSeparatorAfter} />
           <HeaderTabDropIndicator
             visible={showDropIndicatorAfter}
@@ -624,46 +564,6 @@ function HeaderTabDropIndicator(props: {
   );
 }
 
-function TabLeadingIcon(props: {
-  readonly icon: TabIcon | null;
-  readonly titleGenerationPending: boolean;
-  readonly activityStatus: EpicActivityStatus;
-  readonly tabId: string;
-  readonly epicId: string | null;
-}) {
-  const indicatorState = useSurfaceNotificationIndicatorState(
-    { epicId: props.epicId ?? props.tabId },
-    null,
-  );
-  let defaultIcon: React.ReactNode = null;
-  if (props.titleGenerationPending) {
-    defaultIcon = (
-      <AgentSpinningDots
-        className="size-3.5 text-muted-foreground"
-        testId={`header-tab-title-generating-${props.tabId}`}
-        variant="dots2"
-      />
-    );
-  } else if (props.icon !== null) {
-    const Icon = props.icon;
-    defaultIcon = <Icon className="size-3.5 shrink-0" />;
-  }
-  return (
-    <NotificationIndicatorIcon
-      state={indicatorState}
-      running={props.activityStatus === "idle" ? false : props.activityStatus}
-      subjectId={props.tabId}
-      testIdPrefix="header-tab"
-      className="text-muted-foreground"
-      style={undefined}
-      runningTitle="Task activity in progress"
-      defaultIcon={defaultIcon}
-      statusPresentation="message"
-      agentSurface="gui"
-    />
-  );
-}
-
 function HeaderTabMotionFrame(props: {
   readonly isDragging: boolean;
   readonly offsetX: number;
@@ -703,12 +603,6 @@ function HeaderTabMotionFrame(props: {
       {props.children}
     </m.div>
   );
-}
-
-function tabStateClass(isActive: boolean): string {
-  return isActive
-    ? "z-10 font-medium text-foreground"
-    : "text-muted-foreground hover:text-foreground";
 }
 
 interface LeaderBadge {
@@ -792,26 +686,6 @@ export function HeaderTabSeparator(props: { readonly visible: boolean }) {
       // (`tab-<kind>-<id>` or `split-tab-group-<id>`).
       data-testid="header-tab-separator"
       className="pointer-events-none absolute right-0 top-1/2 z-10 h-5 w-px -translate-y-1/2 bg-border/80"
-    />
-  );
-}
-
-export function TabChrome(props: { readonly isActive: boolean }) {
-  if (!props.isActive) {
-    return (
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md bg-accent/45 opacity-0 transition-opacity duration-150 ease-out group-focus-visible/tab:opacity-100 group-has-[:focus-visible]/tab:opacity-100 group-hover/tab:opacity-100"
-      />
-    );
-  }
-
-  return (
-    <TabChromeBackground
-      fill="var(--color-background)"
-      borderColor="var(--color-border)"
-      coversBaseline
-      className="transition-opacity duration-300 ease-spring"
     />
   );
 }
