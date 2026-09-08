@@ -8,6 +8,8 @@
 // can be wired up end-to-end against local-file sources. NP-4 fills in
 // the actual HTTP fetch + minisign verifier.
 
+import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
+
 export type HostPlatformKey =
   | "darwin-arm64"
   | "darwin-x64"
@@ -34,6 +36,14 @@ export interface HostVersionEntry {
   readonly yanked: boolean;
   readonly deprecationReason: string | null;
   readonly requiredCliVersion: string | null;
+  /**
+   * The on-disk store formats this host build writes, or `null` when the entry
+   * predates the field. Published from 1.3.0 on; earlier entries are covered by
+   * the fixed table in `@traycer/protocol/host/store-formats`, and an entry
+   * above that table's ceiling with no field is treated as UNKNOWN, which the
+   * downgrade floor refuses.
+   */
+  readonly storeFormats: HostStoreFormats | null;
   /**
    * The client-compatibility EPOCH this host build baked, or `null` when it
    * baked none.

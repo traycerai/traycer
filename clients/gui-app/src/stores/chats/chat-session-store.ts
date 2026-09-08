@@ -660,6 +660,64 @@ function chatRecordWithoutTranscript(chat: Chat): ChatSessionRecord {
   return record;
 }
 
+/**
+ * What the connection attempts BEFORE the first snapshot have produced - the
+ * evidence the chat tile's bounded loading gate reads.
+ *
+ * It exists because a stream can fail forever without ever going terminal. A
+ * host that refuses `chat.subscribe` with a RETRYABLE fatal (host 1.2.0 on a
+ * chat store a 1.3 host migrated answers `CHAT_OPEN_FAILED` that way, per open
+ * attempt, indefinitely) is handled inside the transport as an ordinary drop:
+ * it reconnects on its own backoff, so `fatalClose` stays `null` and
+ * `snapshotLoaded` stays `false` with nothing to end the spinner. Counting the
+ * attempts here - where they are already observed - is what lets the tile say
+ * so.
+ */
+export interface PreSnapshotRetryEvidence {
+  /** Failed attempts observed while this session had no snapshot. */
+  readonly count: number;
+  /** When the first of them was observed (epoch ms). */
+  readonly firstAt: number;
+  /**
+   * The host's own code and reason from the most recent attempt that carried
+   * them - an attempt that carries none leaves the last pair standing rather
+   * than erasing it.
+   *
+   * `null` in the case this evidence exists for, and that is not an oversight:
+   * `WsStreamClient.handleFatalErrorFrame` consumes a retryable fatal and
+   * reports the drop as `reconnecting` with no reason at all (the remote
+   * transport re-keys the stream just as silently), so the host's sentence
+   * never leaves the transport. They are kept on the shape because a close
+   * that DOES arrive with details should be recorded rather than counted
+   * anonymously, and because an additive transport change that surfaces the
+   * retryable reason later then needs nothing here.
+   */
+  readonly code: string | null;
+  readonly reason: string | null;
+}
+
+/**
+ * The streak after one more failed pre-snapshot attempt.
+ *
+ * `now` is passed in rather than read here so the fold stays pure - the clock
+ * read belongs to the caller that observed the failure.
+ */
+function countPreSnapshotRetry(
+  previous: PreSnapshotRetryEvidence | null,
+  details: FatalErrorDetails | null,
+  now: number,
+): PreSnapshotRetryEvidence {
+  return {
+    count: (previous?.count ?? 0) + 1,
+    // Stamped by the FIRST failure and never moved: it anchors the elapsed
+    // arm of the tile's gate, which asks how long this load has been failing,
+    // not how long ago the newest attempt died.
+    firstAt: previous?.firstAt ?? now,
+    code: details?.code ?? previous?.code ?? null,
+    reason: details?.reason ?? previous?.reason ?? null,
+  };
+}
+
 export interface ChatSessionState {
   readonly epicId: string;
   readonly chatId: string;
@@ -673,6 +731,11 @@ export interface ChatSessionState {
    */
   readonly fatalClose: FatalErrorDetails | null;
   readonly snapshotLoaded: boolean;
+  /**
+   * See {@link PreSnapshotRetryEvidence}. `null` while nothing has failed -
+   * a fresh session, or one whose snapshot has landed.
+   */
+  readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
   /**
    * The connection whose authoritative snapshot established the CURRENT
    * transcript, or `NO_TRANSCRIPT_BASELINE` before the first one lands.
@@ -2606,6 +2669,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           ),
           restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
           snapshotLoaded: true,
+          // The load this session was waiting on has arrived, so whatever it
+          // took to get here is no longer evidence of anything - the next
+          // stalled load has to accumulate its own. Cleared HERE rather than
+          // on the `open` status because a connection that opens and then
+          // never delivers is precisely the failure the gate exists for.
+          preSnapshotRetries: null,
           // Stamped with the CONNECTION, not a per-snapshot counter: a
           // reconnect's backfill re-baselines transcript consumers, while a
           // steady-state refresh on this same connection does not.
@@ -5939,6 +6008,34 @@ export function createChatSessionStoreWithNotificationDependencies(
             }
             return false;
           };
+          // One attempt that failed before delivering a snapshot, counted for
+          // the tile's bounded loading gate (see `PreSnapshotRetryEvidence`).
+          //
+          // `reconnecting` is the whole trigger because it is what every such
+          // failure looks like from here: the transport publishes it once per
+          // dropped socket, failed dial and swallowed retryable fatal, and
+          // then re-dials. The two statuses that are NOT counted each already
+          // have their own surface - a terminal `closed` carries
+          // `fatalClose`, and `open`/`connecting` are attempts still in
+          // flight.
+          //
+          // Only before the first snapshot: after one has landed the tile is
+          // rendering the transcript and an ordinary reconnect is not a
+          // stalled load. `retry()` clears `snapshotLoaded`, so a session the
+          // user re-dials is counted again - and it deliberately does NOT
+          // clear the streak, because the failures are evidence about the host
+          // and dropping them on a click would put the reader back on the
+          // spinner they just escaped.
+          const resolvePreSnapshotRetries = () => {
+            if (state.snapshotLoaded || status !== "reconnecting") {
+              return state.preSnapshotRetries;
+            }
+            return countPreSnapshotRetry(
+              state.preSnapshotRetries,
+              reason?.kind === "fatalError" ? reason.details : null,
+              Date.now(),
+            );
+          };
           return {
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
@@ -5947,6 +6044,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewDeliveryRetryProtocolSupported:
               resolveInterviewDeliveryRetryProtocolSupported(),
             fatalClose: resolveFatalClose(),
+            preSnapshotRetries: resolvePreSnapshotRetries(),
           };
         });
         if (
@@ -6102,6 +6200,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       connectionStatus: "connecting",
       fatalClose: null,
       snapshotLoaded: false,
+      preSnapshotRetries: null,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
       transcriptHydrationSequence: 0,
       transcriptRowContext: {},

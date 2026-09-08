@@ -245,6 +245,7 @@ function statusWith(
     busyBreakdown: null,
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
   };
 }
 

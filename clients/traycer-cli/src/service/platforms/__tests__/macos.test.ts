@@ -73,6 +73,16 @@ const MOCKS = vi.hoisted(() => ({
 vi.mock("../desktop-agent-shutdown", () => ({
   requestCooperativeShutdown: MOCKS.requestCooperativeShutdown,
   forceStopHostProcess: MOCKS.forceStopHostProcess,
+  // The `onHostAddressed` variants the stop routes call. The report itself is
+  // the engine's to make and is pinned in its own suite; here the callback is
+  // routed through to the same seams so the controller tests see one mock.
+  requestCooperativeShutdownReporting: (
+    environment: unknown,
+    operation: unknown,
+    intent: unknown,
+  ) => MOCKS.requestCooperativeShutdown(environment, operation, intent),
+  forceStopHostProcessReporting: (environment: unknown, operation: unknown) =>
+    MOCKS.forceStopHostProcess(environment, operation),
 }));
 
 // `uninstallService` warns through the real CLI logger when it boots out an
@@ -107,6 +117,10 @@ const HOST_PID_METADATA = {
 vi.mock("../../../host/pid-metadata", () => ({
   readHostPidMetadata: MOCKS.readHostPidMetadata,
   readHostPidMetadataEvidence: MOCKS.readHostPidMetadataEvidence,
+  // Read by the CLI-owned stop route for its `onHostAddressed` report only.
+  // Constant rather than derived from `MOCKS.isProcessAlive`, whose call
+  // counts the exit-wait tests pin; no test here asserts the report.
+  publishedHostProcessGone: () => false,
 }));
 
 vi.mock("../../../store/cli-lock", async (importOriginal) => {
