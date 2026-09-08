@@ -134,6 +134,24 @@ export function WindowsBridgeAuthSessionBridge(
       });
     });
 
+    // The INBOUND half of the same edge: another window lost its verdict and
+    // main has fanned that out here. Without this the demotion was strictly
+    // window-local - main's own verification went, but this renderer's store
+    // stayed `signed-in` and kept dispatching cloud work on the refused
+    // bearer until it happened to revalidate on its own. `onChange` cannot
+    // carry it: main republishes the SAME snapshot, which `ingestInbound`
+    // above discards as an echo by design.
+    //
+    // The service fences on the bearer and no-ops when this window holds a
+    // different (or already-unverified) session, so an unordered revoke that
+    // lands after a fresh sign-in here leaves that session alone. A desktop
+    // shell built before the channel existed has no `onVerificationRevoked`;
+    // it keeps the pre-channel behaviour.
+    const verdictLossSubscription =
+      bridge.authSession.onVerificationRevoked?.((rejectedToken) => {
+        auth.ingestCloudAuthorizationRevoked(rejectedToken);
+      }) ?? null;
+
     // HostRuntimeProvider has already awaited auth.start(), restoring the
     // shared credentials file. Subscribing synchronously replays that session
     // to main. Do not read main's initial projection back: its signed-in write
@@ -146,6 +164,7 @@ export function WindowsBridgeAuthSessionBridge(
       sessionSubscription.dispose();
       inboundSubscription.dispose();
       revokeSubscription.dispose();
+      verdictLossSubscription?.dispose();
     };
   }, [auth, bridge]);
 

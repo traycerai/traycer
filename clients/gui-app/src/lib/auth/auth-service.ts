@@ -529,6 +529,17 @@ export class AuthService {
   private readonly cloudAuthorizationRevokedListeners = new Set<
     (revoked: RevokedCloudAuthorization) => void
   >();
+  /**
+   * Set only while {@link ingestCloudAuthorizationRevoked} is demoting.
+   *
+   * The listeners exist to tell copies of this session held OUTSIDE the
+   * renderer. When the demotion was CAUSED by one of those copies telling us,
+   * re-announcing it sends the fact back where it came from - main revokes
+   * again and fans the edge out again. Re-entry terminates on its own (the
+   * second pass holds no verified session), but a loop that stops because a
+   * later guard happens to catch it is not the same as one that never runs.
+   */
+  private suppressCloudAuthorizationRevokedFanOut = false;
   private readonly sessionSnapshotListeners =
     new Set<AuthSessionSnapshotListener>();
   private readonly authStoreUnsubscribe: () => void;
@@ -2232,6 +2243,46 @@ export class AuthService {
         this.cloudAuthorizationRevokedListeners.delete(handler);
       },
     };
+  }
+
+  /**
+   * The INBOUND half of {@link onCloudAuthorizationRevoked}: another window
+   * lost its cloud verdict, and this one holds the same bearer.
+   *
+   * Without it a demotion was strictly window-local. Main withdrew its own
+   * verification and republished an unchanged snapshot, so every sibling's
+   * store stayed `signed-in` and kept spending the refused bearer on cloud
+   * work until it happened to revalidate. The demotion is the same act the
+   * originating window performed, so it runs through the same method - the
+   * local plane is kept, the proactive scheduler is stopped, and on a shell
+   * with no local plane it lands signed-out rather than admitted-but-empty.
+   *
+   * FENCED to the bearer, for the reason main fences its own copy: windows'
+   * IPC is unordered, so this can arrive after a sibling's fresh sign-in, and
+   * a revoke naming a bearer this window no longer holds must not touch the
+   * new session.
+   *
+   * Re-entry terminates on its own and is additionally suppressed. The
+   * demotion fires `cloudAuthorizationRevokedListeners`, whose desktop
+   * subscriber invokes main's revoke again; the flag stops that echo at the
+   * source rather than relying on the idempotence guard downstream to absorb
+   * a loop it never intended to run.
+   */
+  ingestCloudAuthorizationRevoked(rejectedToken: string): void {
+    if (this.disposed) return;
+    if (rejectedToken.length === 0) return;
+    if (this.currentBearer !== rejectedToken) return;
+    if (!this.hasVerifiedSession()) return;
+    this.suppressCloudAuthorizationRevokedFanOut = true;
+    try {
+      // The same entry point the local terminal-verdict paths use, so an
+      // inbound revoke and a locally-observed one cannot drift: it builds the
+      // session from `currentProfile` and returns false when there is no
+      // identity to demote, rather than inventing one.
+      this.demoteLiveSessionOnTerminalVerdict(rejectedToken);
+    } finally {
+      this.suppressCloudAuthorizationRevokedFanOut = false;
+    }
   }
 
   /**
@@ -4716,7 +4767,41 @@ export class AuthService {
     if (this.hasVerifiedSession()) {
       return false;
     }
+    // `unverified` is a claim that there is a LOCAL PLANE worth holding the
+    // app open for. On a shell with no local host there is none, and the
+    // remote alternative is closed by the same state: `cloudAuthorized` gates
+    // the attach-grant mint (`host-messenger.ts`), so an unverified session
+    // cannot attach a remote host either. Admitting here would mount and route
+    // into an app with neither plane - `admitsLocalPlane` says yes on status
+    // alone, and every one of its ~24 consumers would inherit that yes.
+    //
+    // Refused at the PRODUCER rather than at those consumers, so the
+    // invariant `admitsLocalPlane` already documents - an admitted session has
+    // something to serve - is true by construction rather than re-derived 24
+    // times. The caller arms recovery either way, so authn returning still
+    // upgrades this to a real `signed-in` through `applySignedIn`.
+    if (!this.shellServesLocalPlane()) {
+      appLogger.info(
+        "[auth] declining the unverified projection: this shell has no local plane",
+        {},
+      );
+      return false;
+    }
     return this.projectUnverifiedSession(session);
+  }
+
+  /**
+   * Whether this shell has a local plane an unverified session could serve.
+   *
+   * Desktop bundles a host and answers `true`; the mobile shell explicitly
+   * declares `hasLocalHost = false` and is served entirely by a remote
+   * directory entry (`clients/mobile/AGENTS.md`, "No bundled local host").
+   * Read live rather than captured: the runner host is fixed for the life of
+   * the shell, but reading it at the decision keeps this a statement about
+   * the shell rather than about construction order.
+   */
+  private shellServesLocalPlane(): boolean {
+    return this.runnerHost.hasLocalHost;
   }
 
   /**
@@ -4822,7 +4907,21 @@ export class AuthService {
     // states are distinguishable, and only a session that HELD a verdict is
     // losing one.
     const heldVerdict = this.hasVerifiedSession();
-    const projected = this.projectUnverifiedSession(session);
+    // Same rule as `applyUnverifiedSession`, reached by the opposite claim.
+    // Holding the app open under `unverified` is only defensible when there is
+    // a local plane to hold it open FOR; a shell without one lands in an app
+    // with neither plane, which is worse than the auth surface.
+    //
+    // `attempt-failed`, deliberately NOT the `retired` that `clearUiSession`
+    // projects: `retired` means the identity is gone and PURGES account-scoped
+    // state (reading positions are deleted from disk). Nothing about a refused
+    // refresh token says the account is gone, and the person may sign straight
+    // back in. This keeps cold-review P1-4's ruling - a server verdict must not
+    // destroy local state - on the shell where the rest of that fix (holding
+    // the plane) has nothing to act on.
+    const projected = this.shellServesLocalPlane()
+      ? this.projectUnverifiedSession(session)
+      : this.projectSignedOutOnVerdictLossWithoutLocalPlane();
     if (!projected || !heldVerdict) {
       return projected;
     }
@@ -4857,18 +4956,40 @@ export class AuthService {
     // process above all, whose jar plane keeps speaking for the account on
     // the bearer it verified until told otherwise. See
     // `onCloudAuthorizationRevoked`.
-    for (const listener of Array.from(
-      this.cloudAuthorizationRevokedListeners,
-    )) {
-      try {
-        listener({ token: session.token });
-      } catch (error) {
-        appLogger.warn("[auth] a cloud-authorization-revoked listener failed", {
-          cause: error instanceof Error ? error.message : String(error),
-        });
+    if (!this.suppressCloudAuthorizationRevokedFanOut) {
+      for (const listener of Array.from(
+        this.cloudAuthorizationRevokedListeners,
+      )) {
+        try {
+          listener({ token: session.token });
+        } catch (error) {
+          appLogger.warn(
+            "[auth] a cloud-authorization-revoked listener failed",
+            { cause: error instanceof Error ? error.message : String(error) },
+          );
+        }
       }
     }
     return projected;
+  }
+
+  /**
+   * The no-local-plane counterpart of {@link projectUnverifiedSession}: a
+   * verdict loss on a shell that has nothing to serve locally ends at the auth
+   * surface rather than in an admitted-but-empty app.
+   *
+   * Returns `true` unconditionally - a state WAS projected - so the caller's
+   * verdict-loss enforcement (retiring remote sessions, notifying the
+   * revocation listeners) still runs. That enforcement is about credentials
+   * held outside this store and is owed whichever state we land in.
+   */
+  private projectSignedOutOnVerdictLossWithoutLocalPlane(): boolean {
+    appLogger.info(
+      "[auth] verdict lost on a shell with no local plane: projecting signed-out",
+      {},
+    );
+    this.applySignedOut("attempt-failed");
+    return true;
   }
 
   private projectUnverifiedSession(session: {

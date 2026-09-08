@@ -63,6 +63,7 @@ import {
   type ServerClockState,
 } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
@@ -1948,7 +1949,7 @@ describe("RemoteSession host_detached readiness evidence", () => {
         expect(session.isClosed()).toBe(false);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false)
+          .sendUnary("host.status", {}, null, null, undefined, false, null)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2531,7 +2532,7 @@ describe("RemoteSession dial-failure logging", () => {
     expect(session.isClosed()).toBe(true);
 
     const error: unknown = await session
-      .sendUnary("host.status", {}, null, null, undefined, false)
+      .sendUnary("host.status", {}, null, null, undefined, false, null)
       .then(
         () => null,
         (reason: unknown) => reason,
@@ -2589,6 +2590,7 @@ describe("RemoteSession dial-failure logging", () => {
           null,
           undefined,
           false,
+          null,
         );
         // Still not ready when the call is issued - the await-ready path must
         // hold rather than reject.
@@ -2641,7 +2643,7 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false)
+          .sendUnary("host.status", {}, null, null, undefined, false, null)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2673,7 +2675,7 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false)
+          .sendUnary("host.status", {}, null, null, undefined, false, null)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2712,6 +2714,7 @@ describe("RemoteSession dial-failure logging", () => {
           controller.signal,
           undefined,
           false,
+          null,
         );
         controller.abort();
 
@@ -2760,6 +2763,7 @@ describe("RemoteSession dial-failure logging", () => {
             controller.signal,
             undefined,
             false,
+            null,
           )
           .then(
             () => null,
@@ -2806,6 +2810,85 @@ describe("RemoteSession negotiated-manifest publication", () => {
           new Set(["host.usage.summary", "workspace.writeFile"]),
         );
         expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  /**
+   * The remote half of the dispatch-time version floor. Both transports carry
+   * `HostRequestOptions.requiredHostMethodVersion`, and a guard implemented on
+   * one leg only is worse than none: a surface that trusts the refusal would
+   * silently lose it for every consumer whose host happens to be remote.
+   *
+   * The publication tests above are also why the floor cannot be read from the
+   * registry instead - it is refreshed by re-attach, so between a read and a
+   * send it names whichever host most recently handshook, not the one that
+   * will answer.
+   */
+  it(
+    "refuses a unary pre-send when this session's own manifest is below the caller's floor",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.optionalRpcManifest = {
+        "epic.listTasks": { major: 1, minor: 5 },
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null, null, undefined, false, {
+            method: "epic.listTasks",
+            version: { major: 1, minor: 6 },
+          })
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+        // Pre-send is the whole claim: nothing reached the relay.
+        expect(relay.unaryRequests).toHaveLength(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "lets a unary through when the same session's manifest MEETS the floor",
+    async () => {
+      // The control. It settles on the registry's declared degrade for a
+      // method this client's (empty) registry does not know, which is the
+      // pre-existing behaviour - what matters is that the floor is no longer
+      // what stopped it.
+      const relay = new FakeRelayHost();
+      relay.optionalRpcManifest = {
+        "epic.listTasks": { major: 1, minor: 6 },
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null, null, undefined, false, {
+            method: "epic.listTasks",
+            version: { major: 1, minor: 6 },
+          })
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        expect(error).not.toBeInstanceOf(HostMethodVersionUnsatisfiedError);
       } finally {
         session.close();
       }
@@ -2934,6 +3017,7 @@ describe("RemoteSession absent optional method", () => {
             null,
             undefined,
             false,
+            null,
           )
           .then(
             () => null,
@@ -3056,6 +3140,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
           null,
           undefined,
           false,
+          null,
         );
         // adaptResponse ran over the DECLARED 1.0 response shape: no `detail`
         // key, i.e. no canonical-version upgrade was applied on the way back.
@@ -3597,6 +3682,7 @@ describe("RemoteSession wake", () => {
         null,
         undefined,
         false,
+        null,
       );
       await new Promise((resolve) => setTimeout(resolve, 1_200));
       // A collapse would have dialed by now (its draw tops out at 1s); the
@@ -3634,7 +3720,15 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
       await expect(
-        session.sendUnary("host.status", {}, null, null, undefined, false),
+        session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          undefined,
+          false,
+          null,
+        ),
       ).rejects.toBeInstanceOf(RetryableTransportError);
       // Still pre-send, so the caller keeps its retry license - and the
       // failure it just proved has accelerated the NEXT redial rather than
@@ -3680,6 +3774,7 @@ describe("RemoteSession wake", () => {
         controller.signal,
         undefined,
         false,
+        null,
       );
       controller.abort();
       // An abandoned read is not evidence anybody is waiting, so its
@@ -4472,6 +4567,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
           null,
           10_000,
           false,
+          null,
         );
         const outcome = pending.then(
           () => null,
@@ -4517,7 +4613,15 @@ describe("RemoteSession unary idempotency negotiation", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, "requested-key", null, 10_000, true)
+          .sendUnary(
+            "host.status",
+            {},
+            "requested-key",
+            null,
+            10_000,
+            true,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5746,7 +5850,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false)
+          .sendUnary("host.status", {}, null, null, undefined, false, null)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5779,7 +5883,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false)
+          .sendUnary("host.status", {}, null, null, undefined, false, null)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5812,7 +5916,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false)
+          .sendUnary("host.status", {}, null, null, undefined, false, null)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5850,7 +5954,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false)
+          .sendUnary("host.status", {}, null, null, undefined, false, null)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -5927,6 +6031,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           null,
           60,
           false,
+          null,
         );
         // The positive control: same request, no budget. If the argument were
         // still ignored, both would behave identically - and this one must NOT
@@ -5938,6 +6043,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           null,
           undefined,
           false,
+          null,
         );
         let defaultedSettled = false;
         void defaulted.then(
@@ -5997,6 +6103,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           null,
           undefined,
           false,
+          null,
         );
         await vi.waitFor(
           () => expect(relay.unaryRequests).toHaveLength(1),
@@ -7623,6 +7730,7 @@ describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H1
           null,
           60,
           false,
+          null,
         );
         await expect(pending).rejects.toBeInstanceOf(HostRpcError);
         await vi.waitFor(

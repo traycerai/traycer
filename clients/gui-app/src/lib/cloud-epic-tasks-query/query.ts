@@ -14,13 +14,14 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { getCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
-import { liveHostServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import { LIST_TASKS_LOCAL_FIRST_MINOR } from "@/lib/cloud-epic-tasks-query/local-first-admission";
 import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { beginLocalFirstRevalidationEpisode } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { admitCloudEpicTasksFirstPage } from "@/lib/cloud-epic-tasks-query/cache";
 import type { HistorySearchState } from "@/lib/history-search";
@@ -373,7 +374,8 @@ async function dispatchScopedPageWithCurrentRequestContext(
       "Cloud epic tasks request context no longer matches its cache user.",
     );
   }
-  if (!(await cloudLegAdmittedAtDispatch(client, options))) {
+  const admission = cloudLegAdmittedAtDispatch(client, options);
+  if (admission === "refused") {
     throw new CloudEpicTasksVerdictWithdrawnError();
   }
   const request = buildListTasksRequest(options.request, options.cursor);
@@ -384,17 +386,49 @@ async function dispatchScopedPageWithCurrentRequestContext(
       options.abortSignal,
     );
   }
-  return client.requestWithSignal(
-    "epic.listTasks",
-    {
-      ...request,
-      // On a pre-1.6 host the same-major transport downgrade parses against
-      // its frozen request schema and strips this additive field. Its response
-      // therefore remains exactly the released one-shot list request.
-      localFirstPhase: options.localFirstPhase,
-    },
-    options.abortSignal,
-  );
+  const params = {
+    ...request,
+    // On a pre-1.6 host the same-major transport downgrade parses against
+    // its frozen request schema and strips this additive field. Its response
+    // therefore remains exactly the released one-shot list request.
+    localFirstPhase: options.localFirstPhase,
+  };
+  if (admission === "authorized") {
+    return client.requestWithSignal(
+      "epic.listTasks",
+      params,
+      options.abortSignal,
+    );
+  }
+  // `admission === "local-first-only"`: an unverified session, whose one
+  // permitted page is the local-first initial leg. Nothing above this line can
+  // establish that the host answering THIS request serves it - every local
+  // unary dials and handshakes afresh - so the floor rides along and the
+  // transport answers it from the connection carrying the frame. A host that
+  // restarted below `@1.6` in the meantime refuses here instead of stripping
+  // `localFirstPhase` and running the released cloud-backed list on the
+  // retained credential.
+  return client
+    .requestWithSignalRequiringHostMethodVersion(
+      "epic.listTasks",
+      params,
+      options.abortSignal,
+      {
+        method: "epic.listTasks",
+        version: { major: 1, minor: LIST_TASKS_LOCAL_FIRST_MINOR },
+      },
+    )
+    .catch((cause: unknown) => {
+      // Re-shaped into the caller's own refusal so this arrives exactly where
+      // a render-time or wait-boundary refusal does: `query-client.ts`
+      // suppresses retries and the error toast for this type specifically, and
+      // a raw transport error would instead retry into the same downgraded
+      // host and surface as a failure the user cannot act on.
+      if (cause instanceof HostMethodVersionUnsatisfiedError) {
+        throw new CloudEpicTasksVerdictWithdrawnError();
+      }
+      throw cause;
+    });
 }
 
 function hasMatchingRequestContext(
@@ -423,20 +457,31 @@ function hasMatchingRequestContext(
  * verdict is withdrawn mid-run, and its combiner reads any error as "do not
  * close anything": the refusal is the fail-closed outcome that path wants.
  */
-async function cloudLegAdmittedAtDispatch(
+function cloudLegAdmittedAtDispatch(
   client: HostClient<HostRpcRegistry>,
   options: FetchCloudEpicTasksScopedPageOptions,
-): Promise<boolean> {
-  if (authorizesCloudCapability(useAuthStore.getState().status)) return true;
-  if (options.localFirstPhase === undefined) return false;
-  const hostId = client.getActiveHostId();
-  if (hostId === null) return false;
-  // The live host's answer, not the registry's memory of it: the initial leg
-  // is the one page an unverified session may send, and a stale `1.6` from a
-  // host since rolled back under the same id would send it to that older
-  // process's cloud-backed list. See `liveHostServesLocalFirst`.
-  return liveHostServesLocalFirst(client, hostId);
+): DispatchAdmission {
+  if (authorizesCloudCapability(useAuthStore.getState().status)) {
+    return "authorized";
+  }
+  if (options.localFirstPhase === undefined) return "refused";
+  if (client.getActiveHostId() === null) return "refused";
+  // Deliberately NOT a version read here. The version this page depends on is
+  // a fact about the connection that will carry it, and no read taken on this
+  // side of the dispatch is that - see the requirement attached at the send.
+  return "local-first-only";
 }
+
+/**
+ * What this dispatch is allowed to send.
+ *
+ * - `authorized` - a live cloud verdict; any page, no floor.
+ * - `local-first-only` - an unverified session sending the one page it may,
+ *   which is admissible only on a host that honours the local-first directive.
+ *   The dispatch carries that requirement rather than pre-checking it.
+ * - `refused` - not admissible at all.
+ */
+type DispatchAdmission = "authorized" | "local-first-only" | "refused";
 
 function createAbortError(): Error {
   if (typeof DOMException !== "undefined") {

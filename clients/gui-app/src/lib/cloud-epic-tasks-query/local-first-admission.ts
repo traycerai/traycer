@@ -1,7 +1,4 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
-import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 
 /**
  * The minor at which `epic.listTasks` gained `localFirstPhase` - the directive
@@ -25,14 +22,29 @@ export const LIST_TASKS_LOCAL_FIRST_MINOR = 6;
  * this spend is never consulted. The spend happens on the FIRST leg, under a
  * flag the host silently discarded.
  *
- * So an unverified session must decide before it constructs the request, from
- * the negotiated version rather than from anything in the response. Three
- * callers make that decision and share this one predicate so they cannot
- * drift: `useCloudEpicTasksQuery` (the component's own leg), the `/epics` and
- * epic-tab route loaders (the prefetch of that same leg), and the landing
- * composer (whether an unverified session may CREATE on this host at all - a
- * host on the local-first `listTasks` line is the host on the local-first
- * create line, and `epic.create` itself advertises no version to ask).
+ * So the decision is made from the negotiated version rather than from
+ * anything in the response. Four surfaces make it and share this one predicate
+ * so they cannot drift: `useCloudEpicTasksQuery` (the component's own leg), the
+ * `/epics` and epic-tab route loaders (the prefetch of that same leg), and the
+ * landing composer (whether an unverified session may CREATE on this host at
+ * all - a host on the local-first `listTasks` line is the host on the
+ * local-first create line, and `epic.create` itself advertises no version to
+ * ask).
+ *
+ * All four are UI gates: what to enable, what to prefetch, what to refuse
+ * inline before a submit. NONE of them is the safety boundary, and reading
+ * this predicate as one is the mistake to avoid. It answers from the
+ * negotiated-manifest registry, which retains a host's last handshake until
+ * traffic replaces it - so between this read and the request it authorizes,
+ * that host can restart or roll back under the same id, and the older process
+ * then serves the call. Closing that requires a fact about the connection
+ * carrying the frame, which nothing on this side of the dispatch can be: the
+ * floor travels ON the request instead
+ * (`HostRequestOptions.requiredHostMethodVersion`), and both transports refuse
+ * pre-send against their own handshake. A probe RPC that forces a handshake
+ * and re-reads this registry is NOT an alternative - that was the previous
+ * shape, and it narrows the window without closing it, since the probe and the
+ * request are themselves two different connections.
  *
  * FAILS CLOSED on both non-version answers, and they are different facts that
  * happen to warrant the same refusal here:
@@ -53,42 +65,4 @@ export function negotiatedListTasksServesLocalFirst(
 ): boolean {
   if (version === null || version === false) return false;
   return version.major === 1 && version.minor >= LIST_TASKS_LOCAL_FIRST_MINOR;
-}
-
-/**
- * The DISPATCH-time form of {@link negotiatedListTasksServesLocalFirst}: the
- * same question, answered by the host process that is live right now rather
- * than by what the registry remembers about `hostId`.
- *
- * The registry retains a host's last handshake indefinitely and is refreshed
- * by traffic alone (`negotiated-manifest-registry.ts`). So a host that
- * advertised `@1.6`, then restarted or rolled back to an older release under
- * the SAME id, still reads as local-first from the moment it went away until
- * the next handshake lands - and the request an unverified session is about
- * to send is what would produce that handshake. Read at submit, the stale
- * `1.6` admits a create that the older process then serves on its
- * cloud-backed path, on the retained credential. A render-time read cannot
- * close that window; only a handshake can.
- *
- * So this forces one: a bounded read of a released-floor method, on the
- * caller's own client, whose `openAck` re-records the manifest as a side
- * effect (the response is unused - the handshake is the point, as
- * `use-host-capability-probe.ts` documents for the parked-surface case).
- * Then the predicate is re-derived from the registry that handshake just
- * wrote. A probe that fails - unreachable host, refused dial - answers
- * `false`: no live evidence, no admission. Only an unverified session pays
- * the round trip; a `signed-in` session never asks.
- */
-export async function liveHostServesLocalFirst(
-  client: HostClient<HostRpcRegistry>,
-  hostId: string,
-): Promise<boolean> {
-  try {
-    await client.request("host.status", {});
-  } catch {
-    return false;
-  }
-  return negotiatedListTasksServesLocalFirst(
-    readNegotiatedMethodVersion(hostId, "epic.listTasks"),
-  );
 }

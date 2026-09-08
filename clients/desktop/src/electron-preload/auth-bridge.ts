@@ -265,6 +265,15 @@ export interface AuthSessionBridgeSurface {
    */
   revoke(rejectedToken: string): Promise<void>;
   onChange(handler: Listener<DesktopAuthSessionSnapshot>): Disposable;
+  /**
+   * The verdict-loss edge, fanned to every window - including the one that
+   * raised it. Separate from `onChange` because main answers a revoke by
+   * republishing the SAME snapshot, which every window's latch reads as an
+   * echo; a sibling that only listens to `onChange` therefore never learns
+   * its bearer was refused. Carries that bearer so each window fences the
+   * demotion to the session it actually holds.
+   */
+  onVerificationRevoked(handler: Listener<string>): Disposable;
 }
 
 export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
@@ -288,5 +297,7 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         RunnerHostEvent.authSessionChange,
         handler,
       ),
+    onVerificationRevoked: (handler) =>
+      subscribe<string>(RunnerHostEvent.authVerificationRevoked, handler),
   };
 }

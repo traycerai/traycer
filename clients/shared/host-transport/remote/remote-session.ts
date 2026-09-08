@@ -41,11 +41,14 @@ import type {
 } from "../i-stream-session";
 import type { TimerHandle } from "../timer-handle";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  negotiatedVersionMeetsRequirement,
   RetryableTransportError,
   type RequestOfMethod,
+  type RequiredHostMethodVersion,
   type ResponseOfMethod,
 } from "../host-messenger";
 import {
@@ -391,6 +394,15 @@ export interface IRemoteSession<
      * one, so a stripped key here refuses instead of dispatching.
      */
     replayMustBeKeyed: boolean,
+    /**
+     * A version floor this send's own connection must clear
+     * (`HostRequestOptions.requiredHostMethodVersion` in `host-messenger.ts`,
+     * which documents why the check cannot live above the transport). Checked
+     * against the manifest this session negotiated, so a caller's requirement
+     * is answered by the host actually carrying the frame. `null` for the
+     * ordinary case.
+     */
+    requiredHostMethodVersion: RequiredHostMethodVersion | null,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -1062,6 +1074,7 @@ export class RemoteSession<
     abortSignal: AbortSignal | null,
     responseTimeoutMs: number | undefined,
     replayMustBeKeyed: boolean,
+    requiredHostMethodVersion: RequiredHostMethodVersion | null,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     this.start();
     const requestId = this.options.requestId();
@@ -1145,6 +1158,29 @@ export class RemoteSession<
           fatalDetails: null,
           // Pre-send, same as the detached case above.
           replaySafetyFromKey: false,
+        }),
+      );
+    }
+
+    // The caller's version floor, answered by the connection about to carry
+    // the frame rather than by an earlier read. Checked before the
+    // availability degrade below, because an unmet floor is a refusal and the
+    // degrade is a dispatch.
+    if (
+      requiredHostMethodVersion !== null &&
+      !negotiatedVersionMeetsRequirement(
+        connection.hostRpcMerged?.[requiredHostMethodVersion.method],
+        requiredHostMethodVersion,
+      )
+    ) {
+      return Promise.reject(
+        new HostMethodVersionUnsatisfiedError({
+          requirement: requiredHostMethodVersion,
+          negotiated:
+            connection.hostRpcMerged?.[requiredHostMethodVersion.method],
+          requestId,
+          method,
+          hostId: this.options.hostId,
         }),
       );
     }

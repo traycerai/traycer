@@ -616,6 +616,7 @@ export function acquireRemoteSession<
       abortSignal,
       responseTimeoutMs,
       replayMustBeKeyed,
+      requiredHostMethodVersion,
     ) =>
       session.sendUnary(
         method,
@@ -624,6 +625,7 @@ export function acquireRemoteSession<
         abortSignal,
         responseTimeoutMs,
         replayMustBeKeyed,
+        requiredHostMethodVersion,
       ),
     subscribe: (method, params) => session.subscribe(method, params),
     subscribeAtVersion: (method, schemaVersion, params) =>
@@ -1112,6 +1114,9 @@ export function tryAcquireReadyRemoteSession<
           // A borrowed status poll carries no key and is never a replay: the
           // caller re-polls on the next tick rather than retrying this one.
           false,
+          // ...and it names no version floor: the borrowed view exists for
+          // `host.getUpdateStatus`, a released-floor method.
+          null,
         )
         .then((result) => {
           if (entry.superseded) {

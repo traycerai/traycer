@@ -5,6 +5,7 @@ import type {
   HostRequestAuthority,
   IHostMessenger,
   RequestOfMethod,
+  RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
@@ -104,6 +105,22 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     signal: AbortSignal | undefined,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
+  /**
+   * `requestWithSignal` under a version floor the dispatch's own handshake
+   * must clear, refused pre-send otherwise. On the narrow surface rather than
+   * only on the class because the callers that need it reach their host
+   * through a requester, and a floor a routed facade cannot express is a floor
+   * that silently is not applied. See the implementation for why it is a
+   * separate entry point.
+   */
+  requestWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
   ): Promise<ResponseOfMethod<Registry, Method>>;
   requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
@@ -342,7 +359,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           return readActiveHostId;
         }
         if (property === "request") {
-          // The entry is captured HERE, at property access, so all four
+          // The entry is captured HERE, at property access, so all five
           // request members resolve at the same instant.
           const entry = resolveEntry();
           return <Method extends keyof Registry & string>(
@@ -366,6 +383,12 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         }
         if (property === "requestWithSignal") {
           return target.requestForWithSignal.bind(target, resolveEntry());
+        }
+        if (property === "requestWithSignalRequiringHostMethodVersion") {
+          return target.requestForWithSignalRequiringHostMethodVersion.bind(
+            target,
+            resolveEntry(),
+          );
         }
         if (property === "requestWithResponseTimeout") {
           return target.requestForWithResponseTimeout.bind(
@@ -714,6 +737,59 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         // `createRetryingMessenger`, and only for the attempts that follow a
         // failure whose retryability a negotiated key earned.
         replayMustBeKeyed: false,
+        // No floor: an ordinary caller dispatches whatever the handshake
+        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+        // opt-in.
+        requiredHostMethodVersion: null,
+      }),
+    );
+  }
+
+  /**
+   * `requestWithSignal`, with a version floor the DISPATCH's own handshake
+   * must clear or the request is refused pre-send
+   * (`HostRequestOptions.requiredHostMethodVersion`, which documents the
+   * window this closes).
+   *
+   * A separate entry point rather than a parameter on the existing ones
+   * because the requirement is not a default any caller should acquire by
+   * accident: it makes a call REFUSABLE on a host that would otherwise serve
+   * it, and only a caller that knows why - one relying on an additive request
+   * field an older peer would silently strip - should opt in.
+   */
+  requestWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.requestForWithSignalRequiringHostMethodVersion(
+      // ∅ — see `request`.
+      null,
+      method,
+      params,
+      signal,
+      requiredHostMethodVersion,
+    );
+  }
+
+  requestForWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.scheduleRequest(entry, method, params, signal, (authority) =>
+      this.messenger.request(method, params, {
+        idempotencyKey: null,
+        authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion,
       }),
     );
   }
@@ -731,6 +807,10 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         // A key the CALLER supplied, which is not the same as a replay that
         // requires one - see the sibling above.
         replayMustBeKeyed: false,
+        // No floor: an ordinary caller dispatches whatever the handshake
+        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+        // opt-in.
+        requiredHostMethodVersion: null,
       }),
     );
   }
@@ -758,6 +838,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           idempotencyKey: null,
           authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     );

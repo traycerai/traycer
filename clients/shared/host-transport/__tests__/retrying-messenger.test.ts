@@ -168,6 +168,7 @@ describe("createRetryingMessenger", () => {
         idempotencyKey: null,
         authority: authority(),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
 
@@ -187,6 +188,7 @@ describe("createRetryingMessenger", () => {
         idempotencyKey: null,
         authority: authority(),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
 
@@ -214,6 +216,7 @@ describe("createRetryingMessenger", () => {
           idempotencyKey: null,
           authority: authority(),
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
@@ -235,6 +238,7 @@ describe("createRetryingMessenger", () => {
           idempotencyKey: null,
           authority: authority(),
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     ).rejects.toSatisfy(
@@ -257,6 +261,7 @@ describe("createRetryingMessenger", () => {
           idempotencyKey: null,
           authority: authority(),
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
@@ -283,6 +288,7 @@ describe("createRetryingMessenger", () => {
         idempotencyKey: "k-1",
         authority: authority(),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
 
@@ -309,6 +315,7 @@ describe("createRetryingMessenger", () => {
         idempotencyKey: "k-1",
         authority: authority(),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
 
@@ -329,6 +336,7 @@ describe("createRetryingMessenger", () => {
         idempotencyKey: null,
         authority: authority(),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
 

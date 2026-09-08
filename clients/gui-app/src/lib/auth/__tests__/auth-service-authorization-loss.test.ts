@@ -210,6 +210,21 @@ async function deviceSignIn(
 }
 
 function makeService(): { service: AuthService; host: MockRunnerHost } {
+  return makeServiceOnShell(undefined);
+}
+
+/**
+ * `makeService` with the shell's local-host capability spelled out.
+ *
+ * `undefined` takes `MockRunnerHost`'s default (`true`) - a desktop-shaped
+ * shell that bundles a host. `false` is the MOBILE shape: `clients/mobile`
+ * declares `hasLocalHost = false` and is served entirely by a remote
+ * directory entry.
+ */
+function makeServiceOnShell(hasLocalHost: boolean | undefined): {
+  service: AuthService;
+  host: MockRunnerHost;
+} {
   const host = new MockRunnerHost({
     signInUrl:
       "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
@@ -217,7 +232,7 @@ function makeService(): { service: AuthService; host: MockRunnerHost } {
     localHost: null,
     hosts: [],
     workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
+    hasLocalHost,
     traycerCli: undefined,
   });
   const service = new AuthService({ runnerHost: host });
@@ -722,5 +737,149 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     const contextAfter = provider.current();
     expect(contextAfter).toBe(contextBefore);
     expect(contextAfter?.cloudAuthorized).toBe(false);
+  });
+
+  /**
+   * `unverified` is a claim that there is a LOCAL PLANE worth holding the app
+   * open for. A shell with no local host has none - and cannot substitute a
+   * remote one, because `cloudAuthorized` gates the attach-grant mint, so an
+   * unverified session cannot attach a remote host either.
+   *
+   * Admitting there mounts and routes into an app with NEITHER plane:
+   * `admitsLocalPlane` answers on status alone, so all ~24 of its consumers
+   * inherit that yes. Refused at the producer instead, which is the only place
+   * the invariant those consumers already assume can be made true once.
+   */
+  describe("the unverified projection requires a local plane to serve", () => {
+    it("declines the startup projection on a shell with no local host", async () => {
+      // The exact path Codex named (`auth-service.ts`, the startup
+      // `network-error` arm): stored credentials on disk, authn unreachable.
+      // On desktop this is the whole point of `unverified` - hold the app open
+      // around local epics. Here there are none to hold it open for.
+      const { service, host } = makeServiceOnShell(false);
+      trackedServices.push(service);
+      await host.tokenStore.signIn(
+        { token: "mobile-stored", refreshToken: "mobile-stored-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        Promise.reject(new TypeError("fetch failed")),
+      );
+
+      await service.start();
+
+      // Not admitted: `admitsLocalPlane` would have said yes on status alone,
+      // and every consumer of it would have mounted around a plane that does
+      // not exist and cannot be substituted (the attach-grant mint an
+      // unverified session would need is gated by `cloudAuthorized`).
+      expect(useAuthStore.getState().status).not.toBe("unverified");
+      expect(useAuthStore.getState().status).toBe("signed-out");
+    });
+
+    it("still projects unverified on a shell that HAS a local host (non-vacuity)", async () => {
+      // The control, and it is what makes the assertion above mean anything:
+      // same stored credentials, same unreachable authn, same code path - one
+      // property different. Without it, a service that simply never reached
+      // the projection would pass the test above just as well.
+      const { service, host } = makeServiceOnShell(true);
+      trackedServices.push(service);
+      await host.tokenStore.signIn(
+        { token: "desktop-stored", refreshToken: "desktop-stored-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        Promise.reject(new TypeError("fetch failed")),
+      );
+
+      await service.start();
+
+      expect(useAuthStore.getState().status).toBe("unverified");
+      expect(service.getCurrentSessionSnapshot().token).toBe("desktop-stored");
+    });
+
+    it("lands a terminal verdict loss on signed-out when there is no local plane", async () => {
+      const { service, host } = makeServiceOnShell(false);
+      trackedServices.push(service);
+      await service.start();
+      await deviceSignIn(service, host, "mobile-dead-token");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      restoreFetch();
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL || url === REFRESH_URL) {
+          return status(401);
+        }
+        return status(500);
+      });
+
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("rejected");
+      // Demoting to `unverified` here would leave an admitted app with neither
+      // plane; the auth surface is the honest destination.
+      expect(useAuthStore.getState().status).toBe("signed-out");
+    });
+  });
+
+  /**
+   * A verdict loss in ONE window has to reach the others.
+   *
+   * Main answers a revoke by dropping its own verification and republishing the
+   * SAME snapshot, which every window's latch discards as an echo - so a sibling
+   * kept reading `signed-in` and spending the refused bearer on cloud work until
+   * it happened to revalidate. `ingestCloudAuthorizationRevoked` is the inbound
+   * half of that edge.
+   */
+  describe("an inbound cloud-authorization revoke demotes this window", () => {
+    it("demotes a window holding the rejected bearer", async () => {
+      const { service, host } = makeService();
+      trackedServices.push(service);
+      await service.start();
+      await deviceSignIn(service, host, "sibling-token");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      service.ingestCloudAuthorizationRevoked("sibling-token");
+
+      expect(useAuthStore.getState().status).toBe("unverified");
+    });
+
+    it("leaves a window holding a DIFFERENT bearer alone", async () => {
+      // The fence, and it is not theoretical: windows' IPC is unordered, so a
+      // revoke raised before a sibling's fresh sign-in can arrive after it. An
+      // unfenced ingest would strip the verification of a session the cloud
+      // still vouches for.
+      const { service, host } = makeService();
+      trackedServices.push(service);
+      await service.start();
+      await deviceSignIn(service, host, "current-token");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      service.ingestCloudAuthorizationRevoked("a-bearer-this-window-replaced");
+
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+
+    it("does not re-announce the revoke it was told about", async () => {
+      // The listeners exist to tell copies of this session held OUTSIDE the
+      // renderer - which is where this edge CAME from. Re-firing sends it back
+      // to main, which revokes and fans out again.
+      const { service, host } = makeService();
+      trackedServices.push(service);
+      await service.start();
+      await deviceSignIn(service, host, "echo-token");
+
+      let announcements = 0;
+      const subscription = service.onCloudAuthorizationRevoked(() => {
+        announcements += 1;
+      });
+
+      service.ingestCloudAuthorizationRevoked("echo-token");
+
+      expect(useAuthStore.getState().status).toBe("unverified");
+      expect(announcements).toBe(0);
+      subscription.dispose();
+    });
   });
 });

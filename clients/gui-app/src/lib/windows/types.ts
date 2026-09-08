@@ -797,5 +797,24 @@ export interface DesktopWindowsBridge {
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose(): void;
     };
+    /**
+     * The verdict-loss edge fanned to EVERY window, including the one that
+     * raised it.
+     *
+     * `onChange` structurally cannot deliver this: main answers a revoke by
+     * dropping its own verification and republishing the SAME snapshot, which
+     * every window's latch discards as an echo - so a sibling never learned
+     * its bearer had been refused and kept spending it on cloud work until it
+     * revalidated on its own schedule.
+     *
+     * Optional and capability-probed for the same reason as `revoke`: a
+     * desktop shell built before the channel existed does not have it, and
+     * the bridge degrades to the pre-channel behaviour rather than failing
+     * the `isDesktopWindowsBridge` guard. Carries the rejected bearer so each
+     * window fences the demotion to the session it actually holds.
+     */
+    onVerificationRevoked?(handler: (rejectedToken: string) => void): {
+      dispose(): void;
+    };
   };
 }

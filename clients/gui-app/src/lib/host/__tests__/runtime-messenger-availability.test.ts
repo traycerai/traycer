@@ -283,6 +283,7 @@ function harness(): {
           {},
           {
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
             idempotencyKey: null,
             authority: authorityFor(
               REMOTE_HOST_ID,
@@ -298,6 +299,7 @@ function harness(): {
         {},
         {
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
           idempotencyKey: null,
           authority: authorityFor(
             REMOTE_HOST_ID,
@@ -311,6 +313,7 @@ function harness(): {
         {},
         {
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
           idempotencyKey: null,
           authority: {
             ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
@@ -321,6 +324,7 @@ function harness(): {
     requestRemoteWithTimeoutAndSignal: (abortSignal: AbortSignal) =>
       binding.messenger.requestWithResponseTimeout("host.status", {}, 5_000, {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: {
           ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
@@ -333,6 +337,7 @@ function harness(): {
         {},
         {
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
           idempotencyKey: null,
           authority: {
             ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
@@ -355,6 +360,7 @@ function harness(): {
           {},
           {
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
             idempotencyKey: null,
             authority: authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
           },
@@ -869,6 +875,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
         {},
         {
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
           idempotencyKey: null,
           authority: authorityFor(
             REMOTE_HOST_ID,

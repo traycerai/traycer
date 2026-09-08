@@ -378,6 +378,16 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     (_event, rejectedToken: unknown) => {
       if (typeof rejectedToken !== "string") return;
       bridge.authSession.revokeVerification(rejectedToken);
+      // Withdrawing main's verification protects what MAIN speaks for. It
+      // does nothing for the other renderers: the fan-out above republishes
+      // the same snapshot, every window's latch discards it as an echo, and
+      // their auth stores keep reading `signed-in` and dispatching cloud work
+      // on the bearer authn has already refused - until each happens to
+      // revalidate on its own. This is the edge that tells them, on its own
+      // channel and naming the bearer so each can fence it. The originating
+      // window included: its own demotion has already run, and re-ingesting a
+      // bearer it no longer holds verified is a no-op there.
+      bridge.fanOut(RunnerHostEvent.authVerificationRevoked, rejectedToken);
     },
   );
 

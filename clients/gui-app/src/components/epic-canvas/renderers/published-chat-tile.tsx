@@ -266,6 +266,12 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const boundedLoad = useBoundedHostLoad({
     hostId: servingHostId,
     hostLabel: resolvedHostLabel(servingReachability),
+    // `unauthorized` is deliberately NOT pending. It is the one non-ready
+    // state that is not waiting on anything: the reads were withheld before
+    // dispatch, so no answer is in flight and no deadline can expire into
+    // useful news. Counting it here is what made an unverified session's
+    // published tile accuse the serving host of failing to answer a question
+    // nobody asked it. It falls through to `PublishedChatNotice` below.
     pending:
       state.kind === "loading" || (cloudUnpublished && replicaQuery.isPending),
   });

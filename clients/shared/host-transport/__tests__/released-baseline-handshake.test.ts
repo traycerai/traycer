@@ -334,7 +334,12 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         workspace: null,
         profileSelection: { kind: "ambient" },
       },
-      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority: authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     const stub = sockets[0];
@@ -380,7 +385,12 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         fastMode: false,
         permissionMode: "full_access",
       },
-      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority: authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     const stub = sockets[0];
@@ -441,6 +451,7 @@ describe.skipIf(baselines.length === 0)(
             idempotencyKey: null,
             authority: authorityForContext(ctx),
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
           },
         );
         await flush();
@@ -551,6 +562,7 @@ describe.skipIf(baselines.length === 0)(
             idempotencyKey: null,
             authority: authorityForContext(ctx),
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
           },
         );
         await flush();
@@ -625,6 +637,7 @@ describe.skipIf(baselines.length === 0)(
             idempotencyKey: null,
             authority: authorityForContext(ctx),
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
           },
         );
         await flush();
