@@ -44,8 +44,12 @@ const SENSITIVE_TEXT_PATTERNS: ReadonlyArray<{
   readonly replacement: string;
 }> = [
   {
-    pattern: /Bearer\s+[A-Za-z0-9._~+/-]+=*/gi,
-    replacement: "Bearer [redacted]",
+    // `Basic` beside `Bearer`: a base64 `user:password` is a credential as
+    // much as a token is, and the second pattern below stops at the scheme
+    // word, leaving the credential after it in place. Newly reachable once
+    // error messages and stacks are written rather than counted.
+    pattern: /(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi,
+    replacement: "$1 [redacted]",
   },
   {
     pattern:
@@ -161,8 +165,11 @@ function serializeError(error: Error): {
 export function describeErrorOrigin(error: Error): string {
   const frame = firstStackFrame(error.stack);
   const origin = frame === null ? error.name : `${error.name} at ${frame}`;
+  // Every control character, not only CR/LF: the line goes to a terminal, and
+  // an escape sequence in an attacker-set `error.name` would otherwise be
+  // interpreted by it rather than displayed.
   return redactAndTruncate(
-    origin.replace(/[\r\n]+/g, " "),
+    origin.replace(/\p{Cc}+/gu, " "),
     MAX_ERROR_ORIGIN_LENGTH,
   );
 }

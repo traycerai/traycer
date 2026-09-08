@@ -91,6 +91,21 @@ describe("serializeError", () => {
     expect(serialized.stack).toContain("Bearer [redacted]");
   });
 
+  it("redacts a Basic credential too - the base64 after the scheme word is the secret", async () => {
+    const { createCliLogger } = await import("../logger");
+    // Bare scheme, no `Authorization:` header name in front: the header-name
+    // form is already caught by the field pattern (which then rewrites the
+    // scheme word too), so this is the input only the scheme pattern owns.
+    const error = new Error("proxy rejected: Basic dXNlcjpwYXNz");
+
+    createCliLogger("dev").error("failed", {}, error);
+
+    const serialized = loggedError();
+    expect(serialized.message).not.toContain("dXNlcjpwYXNz");
+    expect(serialized.message).toBe("proxy rejected: Basic [redacted]");
+    expect(serialized.stack).not.toContain("dXNlcjpwYXNz");
+  });
+
   it("bounds a pathological stack", async () => {
     const { createCliLogger } = await import("../logger");
     const error = new Error("deep");

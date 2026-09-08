@@ -45,7 +45,10 @@ import { flushStdio } from "./std-write";
 
 // Total backstop for the whole terminator. Must exceed the sum of the bounds
 // below it (10s stdio + 2s Sentry + 1s dispatcher = 13s), or those bounds are
-// unreachable and only this one ever fires. Still far below the desktop
+// unreachable and only this one ever fires. On the process-fatal path the
+// dispatcher step is skipped (see `closeNetworkClients`), so there this is
+// the bound that retires any keep-alive socket still holding the loop open -
+// the fatal exit may take up to this long instead of ~1s. Still far below the desktop
 // wrapper's 45s `CLI_JSON_TIMEOUT_MS`, so a wedged CLI answers its caller
 // rather than being killed by it.
 const DRAIN_WATCHDOG_MS = 15_000;
@@ -211,7 +214,13 @@ async function closeNetworkClients(): Promise<void> {
   // reads and reports, not the real fault. Giving the sockets up unclosed costs
   // nothing here - the process is ending with a failure code either way, and
   // `DRAIN_WATCHDOG_MS` above already bounds a loop that will not end on its
-  // own. The normal path is unchanged.
+  // own. A normal exit - one that never marked the process fatal - is
+  // unchanged. Note the reach of the skip: `finishAndExit` memoizes this
+  // teardown, so once the fatal call has taken this early return, the
+  // interrupted command's own later `finishAndExit` reuses the settled
+  // promise and the dispatcher is never closed for the rest of that process.
+  // That is the intent (the process is ending on the watchdog either way),
+  // stated so nobody reads "skipped once" into it.
   if (processFatal) return;
 
   const dispatcher = getGlobalDispatcher();
