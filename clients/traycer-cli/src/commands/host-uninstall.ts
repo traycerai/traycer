@@ -75,8 +75,8 @@ export interface RunHostUninstallDeps {
   /**
    * The host process this environment last published, read BEFORE the
    * teardown - because the teardown destroys it. On Windows the uninstall
-   * removes pid metadata even when its `taskkill` calls failed, so a probe
-   * that runs afterwards has nothing left to look at.
+   * removes pid metadata once its confirming process scan finds the slot
+   * empty, so a probe that runs afterwards has nothing left to look at.
    */
   readPublishedHost(environment: Environment): Promise<PublishedHost | null>;
   /**
@@ -248,9 +248,10 @@ async function runHostUninstallWithActuators(
   let retainedAfterAll: ServiceStatus | null = null;
   let registrationClear = false;
   // Captured FIRST, before anything is torn down. The teardown destroys this
-  // evidence: on Windows `uninstallService` removes pid metadata even when its
-  // `taskkill` calls failed or timed out, so a probe that runs afterwards is
-  // guaranteed to find nothing and would read a surviving host as gone.
+  // evidence: on Windows `uninstallService` removes pid metadata once its
+  // confirming process scan finds the slot empty, so a probe that runs
+  // afterwards is guaranteed to find nothing and would read a surviving host
+  // as gone.
   //
   // Only `--all` needs the pre-teardown capture; the default path tears
   // nothing down and reads at the boundary instead, so reading here too was

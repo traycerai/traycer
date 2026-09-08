@@ -259,6 +259,9 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     // Dev-web flavoured, matching `fileSave` above: a browser tab honours an
     // image clipboard write.
     canCopyImages: true,
+    // The Android back adapter has its own suite (`system-back.test.ts`);
+    // `null` is every other platform's answer.
+    systemBack: null,
   });
 }
 
@@ -328,6 +331,7 @@ function phoneRunner(input: {
     linkLoginDeepLinks: null,
     fileSave: null,
     canCopyImages: true,
+    systemBack: null,
   });
 }
 

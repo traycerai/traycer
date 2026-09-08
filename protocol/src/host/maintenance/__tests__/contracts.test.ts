@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   hostUpdateInstallUpgradeV10ToV11,
+  hostUpdateInstallUpgradeV11ToV12,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
+  hostUpdateInstallV12,
 } from "../contracts";
 
 // `host.update.install@1.1` (Ticket 06): the same dispatch, additionally
@@ -225,15 +227,31 @@ describe("hostUpdateInstallUpgradeV10ToV11", () => {
 });
 
 describe("host.update.install registry membership", () => {
-  it("installs @1.0 and @1.1 on the unary registry at major 1, with @1.1 wired to the v10->v11 upgrade", () => {
+  it("installs @1.0, @1.1, and @1.2 on the unary registry with identity v1.1->v1.2 bridging", () => {
     const entry = hostRpcRegistry["host.update.install"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(1);
+    expect(entry[1].latestMinor).toBe(2);
     expect(entry[1].versions[0].contract).toBe(hostUpdateInstallV10);
     expect(entry[1].versions[0].upgradeFromPreviousVersion).toBeNull();
     expect(entry[1].versions[1].contract).toBe(hostUpdateInstallV11);
     expect(entry[1].versions[1].upgradeFromPreviousVersion).toBe(
       hostUpdateInstallUpgradeV10ToV11,
+    );
+    expect(entry[1].versions[2].contract).toBe(hostUpdateInstallV12);
+    expect(entry[1].versions[2].upgradeFromPreviousVersion).toBe(
+      hostUpdateInstallUpgradeV11ToV12,
+    );
+
+    const request = { version: "1.2.0", force: false };
+    const response = hostUpdateInstallV11.responseSchema.parse({
+      outcome: "accepted",
+      attemptId: null,
+    });
+    expect(hostUpdateInstallUpgradeV11ToV12.upgradeRequest(request)).toEqual(
+      request,
+    );
+    expect(hostUpdateInstallUpgradeV11ToV12.upgradeResponse(response)).toEqual(
+      response,
     );
   });
 });

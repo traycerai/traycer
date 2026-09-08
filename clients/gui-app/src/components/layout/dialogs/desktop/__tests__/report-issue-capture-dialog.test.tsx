@@ -299,6 +299,7 @@ function createBaseRunnerHost(): IRunnerHost {
     hostTray: null,
     zoom: null,
     pushPermission: null,
+    systemBack: null,
   };
 }
 

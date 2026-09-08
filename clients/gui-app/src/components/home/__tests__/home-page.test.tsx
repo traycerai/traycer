@@ -26,6 +26,7 @@ import {
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
   focusActiveComposer,
@@ -38,7 +39,7 @@ import {
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 import { isMobileApp, setMobileApp } from "@/lib/mobile-app";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
-import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import {
@@ -151,10 +152,12 @@ vi.mock("@/lib/host/runtime", () => ({
   // read, not through a hook. A whole-module mock missing one leaves the
   // import `undefined` and throws on the very first call.
   //
-  // `activeHostIdOrNull` is that read now: the spine stopped carrying an
-  // identity at P4.2/D17, so it resolves the authority projection instead.
-  // Same knob as the spine below, so a test that moves the host moves both.
-  activeHostIdOrNull: () => homeMocks.getActiveHostId(),
+  // `createDraft`'s own host resolution no longer goes through this module at
+  // all - it reads `readComposerHostIdSnapshot()` (real, unmocked), which
+  // falls through to the app-wide effective host since this suite pins no
+  // composer surface. `useSelectionAuthorityStore` below is seeded to the
+  // same `TEST_HOST_ID` this mock's `getActiveHostId()` returns, so the two
+  // cannot drift apart.
   getHostBindingSnapshot: () => ({
     hostClient: {
       request: homeMocks.request,
@@ -221,6 +224,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           isEligible: () => composer.isConnected,
         },
         activityEnabled,
+        () => true,
       );
     }, [activityEnabled, delayComposerRegistration, instanceId]);
     useEffect(() => {
@@ -431,7 +435,7 @@ describe("<HomePage />", () => {
     });
     homeMocks.composerCommits.length = 0;
     homeMocks.nextInstanceId = 0;
-    useLandingPanelStore.getState().resetForTests();
+    useLandingTerminalStore.getState().resetForTests();
     useTabsStore.setState(INITIAL_TAB_LAYOUT);
     useAuthStore.setState({
       status: "signed-in",
@@ -451,13 +455,24 @@ describe("<HomePage />", () => {
       mostRecentTabIdByEpicId: {},
     });
     useWorkspaceFoldersStore.setState({ byHost: {} });
+    // `createDraft`'s workspace/settings seed falls through to this (no
+    // composer surface pin is set in this suite) - keep it in lockstep with
+    // `homeMocks.getActiveHostId()` above.
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: TEST_HOST_ID,
+    });
   });
 
   afterEach(() => {
     cleanup();
+    useSelectionAuthorityStore.setState({
+      attached: false,
+      effectiveHostId: null,
+    });
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
-    useLandingPanelStore.getState().resetForTests();
+    useLandingTerminalStore.getState().resetForTests();
     useTabsStore.setState(INITIAL_TAB_LAYOUT);
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useEpicCanvasStore.setState({
@@ -815,9 +830,8 @@ describe("<HomePage />", () => {
         ],
         activeItemId: "item-draft-a",
       });
-      const terminalStore = useLandingPanelStore.getState();
+      const terminalStore = useLandingTerminalStore.getState();
       terminalStore.addTab({
-        kind: "terminal",
         instanceId: "landing-terminal-focus-test",
         sessionId: "terminal-session-test",
         hostId: TEST_HOST_ID,
@@ -898,6 +912,7 @@ describe("<HomePage />", () => {
           isEligible: () => inactiveComposer.isConnected,
         },
         false,
+        () => true,
       );
 
       const { queryClient, tree, view } =

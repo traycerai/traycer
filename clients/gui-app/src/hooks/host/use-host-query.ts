@@ -270,7 +270,11 @@ export interface UseHostMutationOptions<
   TContext = unknown,
   TVariables = RequestOfMethod<Registry, Method>,
 > {
-  readonly client: HostRequester<Registry> | null;
+  /** Resolve per mutation when a batch contains targets on different hosts. */
+  readonly client:
+    | HostRequester<Registry>
+    | null
+    | ((variables: TVariables) => HostRequester<Registry> | null);
   readonly method: Method;
   readonly options: Omit<
     UseMutationOptions<
@@ -328,13 +332,17 @@ export function useHostMutation<
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
     mutationFn: (variables) =>
       withHostQueryErrorBoundary(args.method, async () => {
-        if (args.client === null) {
+        const client =
+          typeof args.client === "function"
+            ? args.client(variables)
+            : args.client;
+        if (client === null) {
           return Promise.reject<ResponseOfMethod<Registry, Method>>(
             hostClientUnavailableError(args.method),
           );
         }
         await args.preflight?.(variables);
-        const response = await args.client.request(
+        const response = await client.request(
           args.method,
           args.mapVariables(variables),
         );
@@ -377,13 +385,17 @@ export function useHostMutationWithResponseTimeout<
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     mutationFn: (variables) =>
       withHostQueryErrorBoundary(args.method, async () => {
-        if (args.client === null) {
+        const client =
+          typeof args.client === "function"
+            ? args.client(variables)
+            : args.client;
+        if (client === null) {
           return Promise.reject<ResponseOfMethod<Registry, Method>>(
             hostClientUnavailableError(args.method),
           );
         }
         await args.preflight?.(variables);
-        const response = await args.client.requestWithResponseTimeout(
+        const response = await client.requestWithResponseTimeout(
           args.method,
           args.mapVariables(variables),
           args.responseTimeoutMs,

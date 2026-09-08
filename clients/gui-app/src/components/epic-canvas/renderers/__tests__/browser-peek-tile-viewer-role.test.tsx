@@ -12,9 +12,10 @@ import {
   runnerOpenExternalLinkModule,
   streamAuthRevalidatorModule,
   tabHostIdModule,
+  tileBodyVisibleModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
-import { BrowserPeekTile } from "@/components/browser-tile/browser-peek-tile";
+import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
 
 const toast = vi.hoisted(() => vi.fn());
 
@@ -38,6 +39,10 @@ vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
+);
+
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
 );
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
@@ -70,9 +75,9 @@ const PASSIVE_FRAME_KINDS = [
 function renderTile(): void {
   renderPeekTile(
     <BrowserPeekTile
-      scope={{ kind: "epic", epicId: "epic-1" }}
-      visible={hookState.visible}
-      onConvertToPip={() => {}}
+      viewTabId="view-tab-1"
+      paneId="pane-1"
+      epicId="epic-1"
       node={PEEK_NODE}
       completeMeans="ended"
     />,

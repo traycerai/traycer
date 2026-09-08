@@ -13,31 +13,27 @@
  */
 import { z } from "zod";
 import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
-import {
-  epicHostResourceScopeSchema,
-  hostResourceScopeSchema,
-  independentHostResourceScopeSchema,
-  type EpicHostResourceScope,
-  type HostResourceScope,
-  type IndependentHostResourceScope,
-} from "@traycer/protocol/host/resource-scope";
 
-/*
- * Plain-terminal names for the shared host-resource scope
- * (`host/resource-scope.ts`), which browser sessions and the local-servers
- * request address themselves by too. These are aliases, not a parallel
- * definition: the shape is identical, and one definition is what lets the
- * host type a single scope-match predicate against both domains.
- */
-export const epicPlainTerminalScopeSchema = epicHostResourceScopeSchema;
-export type EpicPlainTerminalScope = EpicHostResourceScope;
+export const epicPlainTerminalScopeSchema = z.strictObject({
+  kind: z.literal("epic"),
+  epicId: z.string().min(1),
+});
+export type EpicPlainTerminalScope = z.infer<
+  typeof epicPlainTerminalScopeSchema
+>;
 
-export const independentPlainTerminalScopeSchema =
-  independentHostResourceScopeSchema;
-export type IndependentPlainTerminalScope = IndependentHostResourceScope;
+export const independentPlainTerminalScopeSchema = z.strictObject({
+  kind: z.literal("independent"),
+});
+export type IndependentPlainTerminalScope = z.infer<
+  typeof independentPlainTerminalScopeSchema
+>;
 
-export const plainTerminalScopeSchema = hostResourceScopeSchema;
-export type PlainTerminalScope = HostResourceScope;
+export const plainTerminalScopeSchema = z.discriminatedUnion("kind", [
+  epicPlainTerminalScopeSchema,
+  independentPlainTerminalScopeSchema,
+]);
+export type PlainTerminalScope = z.infer<typeof plainTerminalScopeSchema>;
 
 /** Host-resolved launch definition. It is output-only on the public surface. */
 export const plainTerminalLaunchSchema = z.strictObject({

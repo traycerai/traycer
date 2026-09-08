@@ -4,11 +4,7 @@ import type {
   ImportLegacyPlainTerminalRequest,
   ImportLegacyPlainTerminalResponse,
 } from "@traycer/protocol/host/terminal/plain-schemas";
-import {
-  landingTerminalPendingKills,
-  landingTerminalTabs,
-  useLandingPanelStore,
-} from "@/stores/home/landing-panel-store";
+import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 import {
   providerLoginTerminalProviderId,
   useProviderLoginTerminalsStore,
@@ -49,8 +45,8 @@ function LandingTerminalBoundHostReconciliation(props: {
 }): ReactNode {
   const { entry, hostId, landingPageId } = props;
   const queryClient = useQueryClient();
-  const tabs = useLandingPanelStore((state) => state.tabs);
-  const pendingKills = useLandingPanelStore((state) => state.pendingKills);
+  const tabs = useLandingTerminalStore((state) => state.tabs);
+  const pendingKills = useLandingTerminalStore((state) => state.pendingKills);
   // Same wake as the selected host's pass: provenance is read imperatively
   // inside `reconcileCapableLandingTerminals`, so a record that lands after
   // the pass has to re-key it.
@@ -59,11 +55,7 @@ function LandingTerminalBoundHostReconciliation(props: {
   );
   const reconciliationRef = useRef<string | null>(null);
 
-  // Terminals only, on both fingerprints. This reconciliation drives the plain
-  // terminal authority, so a browser tab moving is not a change it can act on -
-  // and including one would re-run the whole pass every time a page title
-  // changed in one of the panel's browser tabs.
-  const hostTabsFingerprint = landingTerminalTabs(tabs)
+  const hostTabsFingerprint = tabs
     .filter((tab) => tab.hostId === hostId)
     .map((tab) =>
       [
@@ -78,7 +70,7 @@ function LandingTerminalBoundHostReconciliation(props: {
       ].join("\u0001"),
     )
     .join("\u0002");
-  const pendingKillsFingerprint = landingTerminalPendingKills(pendingKills)
+  const pendingKillsFingerprint = pendingKills
     .filter((pending) => pending.hostId === hostId)
     .map((pending) => pending.sessionId)
     .join("\u0001");
@@ -114,6 +106,7 @@ function LandingTerminalBoundHostReconciliation(props: {
 
     void reconcileCapableLandingTerminals({
       activeHostId: hostId,
+      landingPageId,
       capability: authority.capability,
       canMutate: authority.canMutate,
       closeTerminal: (request) =>

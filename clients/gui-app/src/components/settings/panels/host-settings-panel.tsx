@@ -13,6 +13,7 @@ import {
 import { LocalRecoveryDangerZone } from "@/components/settings/host-scope/host-danger-zone";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
 import {
   fixActionLabel,
@@ -20,7 +21,8 @@ import {
   runFixAction,
 } from "@/components/settings/panels/host-doctor-actions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { HostRuntimeContext } from "@/lib/host";
+import { HostRuntimeContext, useHostBinding } from "@/lib/host";
+import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
@@ -40,7 +42,7 @@ import type {
   IHostManagement,
   DoctorRepairIntent,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { ReactNode } from "react";
+import { use, type ReactNode } from "react";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
 /**
@@ -85,6 +87,22 @@ function HostSettingsPanelInner() {
   // "ready"` guard. `null` for `following` (the ambient binding already IS this
   // host's) and for every non-ready status.
   const scopedBinding = useScopedHostBinding(scope);
+
+  // The STREAMING half of the same swap. Import and migration are the only
+  // things on this page that ride a stream, and both move ONE machine's local
+  // data - so a page naming host B while its `sessionImport.*` frames run over
+  // host A's socket is the exact substitution the scope model exists to
+  // prevent. Nothing here is a composer, so the microphone rule in
+  // `use-scoped-host-binding`'s roster is satisfied.
+  //
+  // `useScopedStreamBinding` is null while a pick has not resolved to its own
+  // transport, and null on purpose for `following` (the ambient stream ALREADY
+  // is this host's) - so the ambient binding is the fallback in both cases, and
+  // the section below refuses to render its rows until the stream names the
+  // host this page names.
+  const scopedStreamBinding = useScopedStreamBinding(scope);
+  const ambientStreamBinding = use(StreamRuntimeContext);
+  const ambientBinding = useHostBinding();
 
   // The scoped host is the SUBJECT of this page.
   //
@@ -156,10 +174,20 @@ function HostSettingsPanelInner() {
     </SettingsPanelShell>
   );
 
-  if (scopedBinding === null) return shell;
+  // BOTH providers are rendered UNCONDITIONALLY, which is load-bearing rather
+  // than tidy: mounting either only once a scoped binding exists would change
+  // the element type at this position the moment a pick resolves (or a host
+  // went from connecting to ready), and React would unmount everything below -
+  // taking an open rename draft, a restart confirmation or a half-filled
+  // import wizard with it. A null scoped binding falls back to the ambient one,
+  // which is what the subtree read before there was a scope at all.
   return (
-    <HostRuntimeContext.Provider value={scopedBinding}>
-      {shell}
+    <HostRuntimeContext.Provider value={scopedBinding ?? ambientBinding}>
+      <StreamRuntimeContext.Provider
+        value={scopedStreamBinding ?? ambientStreamBinding}
+      >
+        {shell}
+      </StreamRuntimeContext.Provider>
     </HostRuntimeContext.Provider>
   );
 }

@@ -1,3 +1,15 @@
+// This file is the maintenance entrypoint clients import by name
+// (`@traycer/protocol/host/maintenance/index`), and `../index` re-exports it
+// wholesale as `@traycer/protocol/host` - so a name absent here is absent from
+// both. Until now the BOUND dispatch surface was the one thing missing: 13
+// names, reachable only by importing `./contracts` or `./schemas` directly,
+// which is why the P1 wire change's consumers each hit the wall.
+//
+// The invariant these two blocks now hold, and the reason to add a name here
+// with every one added there: this barrel re-exports EVERY export of both
+// files. Prefer that over adding one name at a time - a barrel that offers
+// `HostUpdateBoundDispatchExpectedIdentity` but not the request schema the
+// field lives on just moves the wall one import along.
 export {
   hostDoctorV10,
   hostGetInstallationInfoUpgradeV10ToV11,
@@ -6,11 +18,19 @@ export {
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
+  hostUpdateActivateUpgradeV10ToV11,
+  hostUpdateActivateV10,
+  hostUpdateActivateV11,
   hostUpdateCheckUpgradeV10ToV11,
   hostUpdateCheckV10,
   hostUpdateCheckV11,
+  hostUpdateContinueUpgradeV10ToV11,
+  hostUpdateContinueV10,
+  hostUpdateContinueV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
+  hostUpdateInstallV12,
+  hostUpdateInstallUpgradeV11ToV12,
   hostUpdateInstallUpgradeV10ToV11,
 } from "./contracts";
 
@@ -33,6 +53,10 @@ export {
   hostServiceStatusRequestSchema,
   hostServiceStatusResponseSchema,
   hostIncludePreReleasesSourceSchema,
+  hostUpdateBoundDispatchExpectedIdentitySchema,
+  hostUpdateBoundDispatchRequestSchema,
+  hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity,
+  hostUpdateBoundDispatchResponseSchema,
   hostUpdateCheckRequestSchema,
   hostUpdateCheckRequestSchemaV11,
   hostUpdateCheckResponseSchema,
@@ -55,6 +79,9 @@ export {
   type HostServiceStatusRequest,
   type HostServiceStatusResponse,
   type HostIncludePreReleasesSource,
+  type HostUpdateBoundDispatchExpectedIdentity,
+  type HostUpdateBoundDispatchRequest,
+  type HostUpdateBoundDispatchResponse,
   type HostUpdateCheckRequest,
   type HostUpdateCheckRequestV11,
   type HostUpdateCheckResponse,

@@ -53,10 +53,7 @@ import {
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import {
-  landingTerminalTabs,
-  useLandingPanelStore,
-} from "@/stores/home/landing-panel-store";
+import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 
 vi.mock("@/hooks/host/use-host-capability-probe", () => ({
   useHostCapabilityProbe: () => ({ data: undefined }),
@@ -466,9 +463,8 @@ function seedPresentationRefs(): void {
       },
     },
   });
-  useLandingPanelStore.getState().resetForTests();
-  useLandingPanelStore.getState().addTab({
-    kind: "terminal",
+  useLandingTerminalStore.getState().resetForTests();
+  useLandingTerminalStore.getState().addTab({
     instanceId: "landing-ref",
     sessionId: "terminal-1",
     hostId: HOST_ID,
@@ -484,7 +480,7 @@ function presentationRefsRemain(): boolean {
     useEpicCanvasStore.getState().canvasByTabId["tab-1"]?.tilesByInstanceId ??
       {},
   ).filter((ref) => ref?.id === "terminal-1");
-  const landingRefs = useLandingPanelStore
+  const landingRefs = useLandingTerminalStore
     .getState()
     .tabs.filter((tab) => tab.sessionId === "terminal-1");
   return epicRefs.length === 2 && landingRefs.length === 1;
@@ -522,9 +518,8 @@ function seedDeferredDeletionRefs(): void {
       },
     },
   }));
-  useLandingPanelStore.getState().resetForTests();
-  useLandingPanelStore.getState().addTab({
-    kind: "terminal",
+  useLandingTerminalStore.getState().resetForTests();
+  useLandingTerminalStore.getState().addTab({
     instanceId: "landing-legacy",
     sessionId: "terminal-1",
     hostId: HOST_ID,
@@ -533,14 +528,22 @@ function seedDeferredDeletionRefs(): void {
     titleSource: "manual",
     hostAuthorityAcknowledged: false,
   });
-  // One landing tab, deliberately: `addTab` dedupes on `landingTabRefKey`
-  // (kind, host, session), so a second ref for `terminal-1` seeds nothing.
+  useLandingTerminalStore.getState().addTab({
+    instanceId: "landing-pending",
+    sessionId: "terminal-1",
+    hostId: HOST_ID,
+    cwd: "/pending",
+    name: "Pending",
+    titleSource: "default",
+    hostAuthorityAcknowledged: false,
+    pendingCreate: true,
+  });
 }
 
 function deferredDeletionRefsRemain(): boolean {
   return (
     epicTerminalIds().has("terminal-1") &&
-    useLandingPanelStore
+    useLandingTerminalStore
       .getState()
       .tabs.some((tab) => tab.sessionId === "terminal-1")
   );
@@ -630,7 +633,7 @@ describe("usePlainTerminalAuthority integration", () => {
     vi.restoreAllMocks();
     resetNegotiatedManifests();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    useLandingPanelStore.getState().resetForTests();
+    useLandingTerminalStore.getState().resetForTests();
   });
 
   it("settles each production LogicalStream replacement after its open transition", async () => {
@@ -700,7 +703,7 @@ describe("usePlainTerminalAuthority integration", () => {
       "removeHostTerminalRefs",
     );
     const landingRemove = vi.spyOn(
-      useLandingPanelStore.getState(),
+      useLandingTerminalStore.getState(),
       "removeHostTerminal",
     );
     epicRemove.mockClear();
@@ -919,8 +922,7 @@ describe("usePlainTerminalAuthority integration", () => {
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
 
-    useLandingPanelStore.getState().addTab({
-      kind: "terminal",
+    useLandingTerminalStore.getState().addTab({
       instanceId: "landing-acknowledged",
       sessionId: "landing-acknowledged",
       hostId: HOST_ID,
@@ -929,8 +931,7 @@ describe("usePlainTerminalAuthority integration", () => {
       titleSource: "manual",
       hostAuthorityAcknowledged: true,
     });
-    useLandingPanelStore.getState().addTab({
-      kind: "terminal",
+    useLandingTerminalStore.getState().addTab({
       instanceId: "landing-legacy",
       sessionId: "landing-legacy",
       hostId: HOST_ID,
@@ -939,8 +940,7 @@ describe("usePlainTerminalAuthority integration", () => {
       titleSource: "manual",
       hostAuthorityAcknowledged: false,
     });
-    useLandingPanelStore.getState().addTab({
-      kind: "terminal",
+    useLandingTerminalStore.getState().addTab({
       instanceId: "landing-pending",
       sessionId: "landing-pending",
       hostId: HOST_ID,
@@ -959,7 +959,7 @@ describe("usePlainTerminalAuthority integration", () => {
     });
     await waitFor(() =>
       expect(
-        useLandingPanelStore.getState().tabs.map((tab) => tab.sessionId),
+        useLandingTerminalStore.getState().tabs.map((tab) => tab.sessionId),
       ).toEqual(["landing-legacy", "landing-pending"]),
     );
 
@@ -981,6 +981,7 @@ describe("usePlainTerminalAuthority integration", () => {
     await act(() =>
       reconcileCapableLandingTerminals({
         activeHostId: HOST_ID,
+        landingPageId: "landing-page",
         capability: {
           status: "capable",
           schemaVersion: { major: 2, minor: 1 },
@@ -1007,10 +1008,8 @@ describe("usePlainTerminalAuthority integration", () => {
       return Promise.resolve(pendingWinner);
     });
     const bootstrap = renderHook(() => {
-      const pending = useLandingPanelStore((state) =>
-        landingTerminalTabs(state.tabs).find(
-          (tab) => tab.instanceId === "landing-pending",
-        ),
+      const pending = useLandingTerminalStore((state) =>
+        state.tabs.find((tab) => tab.instanceId === "landing-pending"),
       );
       return useLandingTerminalDurableLifecycle({
         projectionStatus: "missing",
@@ -1020,14 +1019,14 @@ describe("usePlainTerminalAuthority integration", () => {
         gridReady: true,
         dispatch: createPending,
         adopt: (winner) =>
-          useLandingPanelStore
+          useLandingTerminalStore
             .getState()
             .adoptHostTerminal("landing-pending", winner),
       });
     });
     await waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     expect(
-      useLandingPanelStore
+      useLandingTerminalStore
         .getState()
         .tabs.find((tab) => tab.instanceId === "landing-pending"),
     ).toMatchObject({
@@ -1040,7 +1039,7 @@ describe("usePlainTerminalAuthority integration", () => {
       stream.session.emitFrame(scopedStateFrame([], "complete-local"));
     });
     expect(
-      useLandingPanelStore.getState().tabs.map((tab) => tab.sessionId),
+      useLandingTerminalStore.getState().tabs.map((tab) => tab.sessionId),
     ).toEqual([]);
   });
 
@@ -1128,7 +1127,7 @@ describe("usePlainTerminalAuthority integration", () => {
         "removeHostTerminalRefs",
       );
       const landingRemove = vi.spyOn(
-        useLandingPanelStore.getState(),
+        useLandingTerminalStore.getState(),
         "removeHostTerminal",
       );
       epicRemove.mockClear();

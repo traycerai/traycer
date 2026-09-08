@@ -277,6 +277,12 @@ function canonicalObservation(input: {
     // observation came from a Settings-scoped host over its own live
     // connection. `local` belongs to the landing banner's runner leg.
     source: "selected",
+    // A cache ENTRY for `host.status` alone: this leg reads no installation
+    // info, so it derives no park. The picker rows therefore show a parked
+    // legacy update as quiet while the Overview shows the park - the same
+    // asymmetry the coarse marker already has for a host whose status this
+    // leg cannot read at all.
+    legacyFacts: null,
   });
   // An errored or paused entry is EXPIRED, not absent. Discarding it here would
   // leave this host's picker row with a bare `unknown` and no retained phase,

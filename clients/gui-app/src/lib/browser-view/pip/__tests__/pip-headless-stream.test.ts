@@ -114,9 +114,7 @@ describe("openPipHeadlessStream", () => {
       {
         method: "browser.screencast",
         params: {
-          // The hook still takes a bare `epicId`; the scope is built at the
-          // wire edge, so this assertion is what pins the translation.
-          scope: { kind: "epic", epicId: "epic-1" },
+          epicId: "epic-1",
           sessionId: "session-1",
           tabId: "tab-1",
           maxWidth: 480,

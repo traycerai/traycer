@@ -90,6 +90,14 @@ const HOST_PID_FILENAME = "pid.json";
 // out here rather than imported: the host owns these names, and this repo has
 // no import path to it - the same arrangement as every other host-written
 // contract read below.
+//
+// The shared subdir is a FACT, not a coincidence: the host declares the same
+// two names under the same directory in one file
+// (`traycer-host/src/auth/host-credential-store.ts:28-29`, `:195`, with
+// `hostNeedsReauthPath` at `:221` joining them exactly as below). Splitting
+// them here would let the CLI's two halves drift from a host that keeps them
+// together. Verified 2026-09-07 against the host source, after Q21 proposed
+// the opposite and was withdrawn - see the credential docblock.
 const HOST_CREDENTIAL_SUBDIR = "auth";
 const HOST_CREDENTIAL_FILENAME = "credentials.json";
 const HOST_NEEDS_REAUTH_FILENAME = "needs-reauth.json";
@@ -224,6 +232,24 @@ export function hostLogBackupPath(
  * Read here by string path, like every other host-written on-disk contract in
  * this module: the host is an external component, and its store module is not
  * importable from this repo at all.
+ *
+ * THE HOST HAS TWO CREDENTIAL LINEAGES AND THIS IS THE SECOND ONE. Naming the
+ * other explicitly, because the omission cost a round: `host-enroll`'s
+ * registration-time, device-bound credential lives at
+ * `identity/device-credentials.json`
+ * (`traycer-host/src/coordination/on-box-credentials.ts:38-50`) and serves the
+ * coordination CONTROL plane - heartbeat, relay attach grants, update
+ * reconciliation, self-deprovision. It is a separate refresh family in a
+ * separate file with its own loop, and the CLI deliberately does not read it.
+ * This function resolves the `host-delegate` credential above, for the DATA
+ * plane. Q21 was filed against this path on a filename match with that other
+ * lineage and withdrawn once the host source was read.
+ *
+ * Note also what an ABSENT file means here, since that is the other half of
+ * the same mistake: a box whose `auth/` holds only `jwks.json` has simply
+ * never had a connected owner client provision a delegated credential - which
+ * is the expected state for an unprovisioned host. Absence is not evidence of
+ * a wrong path.
  */
 export function hostCredentialPath(
   environment: Environment | undefined,
@@ -242,6 +268,46 @@ export function hostCredentialPath(
  * adopt/refresh, so its PRESENCE is the whole verdict; the contents are
  * diagnostics. Doctor reads only whether it is there and, when it is, the
  * `reason`/`recordedAt` it carries.
+ *
+ * ABSENCE IS A REAL VERDICT HERE, and that is now proven rather than assumed
+ * (Q25, dc84fa8b's host-writer column at
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`,
+ * read at internal `2f7b56435d`).
+ * The host's AUTH plane is slot-scoped - it resolves this marker under its own
+ * host home - and the string that host home is built from is the one THIS
+ * MODULE computed: `commands/host-start.ts` spawns the host with
+ * `--host-data-dir <hostHomeDir(environment)>`.
+ *
+ * NOT taken verbatim, and the difference is the premise of the verdict rather
+ * than a detail (cold review B). `main-bootstrap.ts`'s
+ * `applyHostDataDirOverride` receives that string, `resolve()`s it, and
+ * validates it before any `setHostHomeDirOverride`: it can throw
+ * (`aliasesCanonicalTree`) or - the branch that matters here - fail
+ * `lexicallyWithinHostRoot`, log to `console.error` and SILENTLY fall back to
+ * the baked env home. Take that branch and this row inverts with nothing red:
+ * the CLI probes a directory the host never wrote to, finds no marker, and
+ * reports a clean auth plane. Exactly the false-clean that
+ * {@link hostIdentityNeedsReauthPath} refuses to produce on the other plane.
+ *
+ * So the verdict rests on the guard being unreachable from here, not on the
+ * value surviving untouched, and it is unreachable for a reason worth stating
+ * as two constants. `HOST_HOME = join(TRAYCER_HOME, "host")` above is not
+ * env-configurable, and every arm of this module's `hostHomeDir` roots there -
+ * `dev-runs/<slot>` included. The host computes its `hostRoot` as
+ * `hostHomeDir("production")` over its own `traycerHomeDir()`. Both sides
+ * therefore root at the same constant, and a path this module produced cannot
+ * fail the host's lexical containment check.
+ *
+ * WHAT WOULD BREAK IT, named so the dependency is visible to whoever makes the
+ * change: giving `HOST_HOME` an environment override, or moving the host's
+ * root off `traycerHomeDir()`. Either makes the two roots independently
+ * configurable, at which point the silent-fallback branch becomes reachable
+ * and this row's absence stops being evidence of anything.
+ *
+ * Note also WHY the two agree at all, because it is not the reassuring reason.
+ * The host's own `hostHomeDir` has no concept of a dev-run slot; they agree
+ * because of the flag, not because anyone keeps them in step. See
+ * {@link hostIdentityNeedsReauthPath} for the plane where that stops holding.
  */
 export function hostNeedsReauthPath(
   environment: Environment | undefined,
@@ -264,6 +330,18 @@ export function hostNeedsReauthPath(
  * participant and simply looks elsewhere for one that is - which is why the
  * probe reading it is never allowed to report the identity plane "clean", and
  * defers to the host's own `host.doctor` (see `doctor/engine.ts`).
+ *
+ * THE ASYMMETRY WITH {@link hostNeedsReauthPath} IS PROVEN, not cautious, and
+ * the comment used to understate it as something the CLI "cannot verify". Read
+ * at the host source (Q25, dc84fa8b's host-writer column at
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`,
+ * read at internal `2f7b56435d`):
+ * the host's AUTH plane is SLOT-scoped and its IDENTITY plane is
+ * IDENTITY-scoped. For a dev-pool participant those are two different
+ * directories on disk. So clean-on-absence for the auth marker and
+ * never-clean for this one is not a pair of conservative choices that could
+ * be tightened later - it is the only correct pair, and matching the two
+ * planes' treatment in either direction would be a defect.
  *
  * Distinct from {@link hostNeedsReauthPath}, which is the AUTH plane's marker
  * of the same filename under `auth/`. Different plane, different recovery.
@@ -288,6 +366,23 @@ export function hostIdentityNeedsReauthPath(
  * the slot-aware helper would look for the pool inside a single run's tree and
  * conclude there is none - the failure direction that turns "cannot verify"
  * back into a false "clean".
+ *
+ * The other half, which is why this is worth a paragraph rather than a line:
+ * THE HOST'S OWN `hostHomeDir` IS NOT SLOT-AWARE - it has no `dev-runs`
+ * concept at all - and the host's `identityPoolRoot()` depends on exactly
+ * that. So the same literal expression is correct on the host for the reason
+ * it is WRONG here, and the two comments arrive at the same path from opposite
+ * premises. The host side now says so too (`3d68c298c5` on
+ * `traycer/q18-rollback-provisioning`), so the pair is symmetric.
+ *
+ * The exposure this closes is a plausible edit, not a hypothetical: the host's
+ * module docblock describes itself as mirroring this file. Anyone who acts on
+ * that sentence and teaches the host about `dev-runs` moves its
+ * `identityPoolRoot()` to `~/.traycer/host/dev-runs/<slot>/identities` with no
+ * other change, and the pool silently becomes per-slot. Q25, dc84fa8b's
+ * host-writer column at
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`,
+ * read at internal `2f7b56435d`.
  *
  * Read for EXISTENCE only. What it can establish is narrow and negative: with
  * no pool on this machine, no host here can have an overridden identity home,
@@ -392,10 +487,28 @@ export function hostInstallRecordPath(environment: Environment): string {
 // Cross-process handoff marker `traycer host update` writes before it
 // touches anything and clears/rewrites on outcome - see
 // `host/update-progress-marker.ts`. Deliberately mirrored (by contract, not
-// by import) at `traycer-host/src/paths.ts::hostHomeDir` so the daemon
-// polls the exact same path this CLI writes.
+// by import) at `traycer-host/src/domain/update/update-progress-marker.ts:14`,
+// where the host's reader and its copy of the filename both live, so the
+// daemon polls the exact same path this CLI writes. The host is a pure READER
+// here - it never writes this file (Q25, dc84fa8b's host-writer column).
+//
+// The pointer used to name `traycer-host/src/paths.ts::hostHomeDir`, which is
+// the wrong file: that is where the host resolves the DIRECTORY, not this
+// filename. Worth a line because this is the last cross-process filename in
+// this module still hand-mirrored - stop-intent and cli-invocation, above,
+// both went through `@traycer/protocol` instead. Single-sourcing this one is
+// deliberately NOT being done at freeze.
 export function hostUpdateProgressMarkerPath(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_UPDATE_PROGRESS_FILENAME);
+}
+// The short cross-process lock `host update` holds around each conditional
+// write of the marker above (`host/update-progress-marker.ts`), beside the
+// file it guards. Named here so `host doctor` reads the same path the writer
+// locks.
+export function hostUpdateProgressMarkerLockPath(
+  environment: Environment,
+): string {
+  return `${hostUpdateProgressMarkerPath(environment)}.lock`;
 }
 
 export function hostDownloadCacheDir(environment: Environment): string {

@@ -7,10 +7,6 @@ import {
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import type { BrowserTabMentionAttachment } from "@/lib/composer/types";
-import {
-  sessionInfo as buildSessionInfo,
-  tabInfo,
-} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 const TILE_HOST_ID = "host-remote";
 const CANVAS_HOST_ID = "host-canvas";
@@ -44,19 +40,25 @@ function sessionInfo(seed: {
   readonly title: string;
   readonly url: string;
 }): BrowserSessionInfo {
-  return buildSessionInfo({
+  return {
     sessionId: seed.sessionId,
+    epicId: "epic-1",
     hostId: seed.hostId,
     profile: "isolated",
     lastActivityAt: 0,
+    runtime: { kind: "headless", revision: 0 },
     tabs: [
-      tabInfo({
+      {
         tabId: seed.tabId,
         url: seed.url,
         title: seed.title,
-      }),
+        originTier: "dev",
+        status: "ready",
+        viewed: false,
+        drivenBy: [],
+      },
     ],
-  });
+  };
 }
 
 function mention(seed: {
@@ -104,8 +106,6 @@ function tileHostSessionsState(): BrowserSessionsState {
     retry: vi.fn(),
     openTab: vi.fn(() => Promise.reject(new Error("not used"))),
     closeTab: vi.fn(() => Promise.resolve()),
-    attachTab: vi.fn(() => Promise.reject(new Error("not used"))),
-    moveTab: vi.fn(() => Promise.reject(new Error("not used"))),
   };
 }
 

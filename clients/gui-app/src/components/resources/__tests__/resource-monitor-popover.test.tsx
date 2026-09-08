@@ -741,7 +741,7 @@ function fakeScopedStreamBinding(): StreamRuntimeBinding {
     onClosed: () => () => undefined,
     instanceId: "fake-scoped-stream-client",
   };
-  return { wsStreamClient: client, hostId: "host-b" };
+  return { wsStreamClient: client, hostId: "host-b", retain: null };
 }
 
 /**

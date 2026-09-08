@@ -1,5 +1,7 @@
 /**
- * Whether a chat's registry-backed mutation may be sent on THIS connection.
+ * Whether a chat has a record-plane home for a registry-backed mutation.
+ * This does not select its destination: a foreign replica also has
+ * `docResident: false`. Mutations must still address the chat's owning host.
  *
  * `epic.renameChat` / `epic.reparentChat` / `epic.setChatArchived` /
  * `epic.deleteChat` reach `ChatRegistryWriter` and through it the host's chat

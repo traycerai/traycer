@@ -5,10 +5,6 @@ import type {
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
 import { useLiveBrowserSession } from "@/lib/browser-view/sessions/use-live-browser-session";
-import {
-  sessionInfo,
-  tabInfo,
-} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 /**
  * The registry stands in, but its SUBSCRIBE is real: listeners are held and
@@ -36,14 +32,16 @@ function emit(): void {
 }
 
 function tab(overrides: Partial<BrowserTabInfo>): BrowserTabInfo {
-  return tabInfo({
+  return {
     tabId: "tab-1",
     title: "Login",
     url: "https://example.test/login",
     originTier: "external",
     status: "ready",
+    viewed: false,
+    drivenBy: [],
     ...overrides,
-  });
+  };
 }
 
 /**
@@ -55,11 +53,15 @@ function session(input: {
   readonly lastActivityAt: number;
   readonly tabs: readonly BrowserTabInfo[];
 }): BrowserSessionInfo {
-  return sessionInfo({
+  return {
+    sessionId: "session-1",
+    hostId: "host-1",
+    epicId: "epic-1",
     profile: "isolated",
     lastActivityAt: input.lastActivityAt,
+    runtime: { kind: "headless", revision: 1 },
     tabs: [...input.tabs],
-  });
+  };
 }
 
 const seen: Array<BrowserSessionInfo | null> = [];

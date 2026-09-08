@@ -267,11 +267,19 @@ import {
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
+  hostUpdateActivateUpgradeV10ToV11,
+  hostUpdateActivateV10,
+  hostUpdateActivateV11,
   hostUpdateCheckUpgradeV10ToV11,
   hostUpdateCheckV10,
   hostUpdateCheckV11,
+  hostUpdateContinueUpgradeV10ToV11,
+  hostUpdateContinueV10,
+  hostUpdateContinueV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
+  hostUpdateInstallV12,
+  hostUpdateInstallUpgradeV11ToV12,
   hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
@@ -607,7 +615,10 @@ import {
   migrationRunV10,
   phaseMigrateToEpicV10,
 } from "@traycer/protocol/host/migration/contracts";
-import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
+import {
+  sessionImportScanV10,
+  sessionImportScanV11,
+} from "@traycer/protocol/host/session-import/scan";
 import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import {
@@ -4437,7 +4448,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
@@ -4463,6 +4474,66 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // and neither is "we only call it from new clients": the validator
           // cannot check this, which is exactly why it is written down here.
           responseGrowthProjectionGated: true,
+        },
+        2: {
+          contract: hostUpdateInstallV12,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The two BOUND update dispatches: brand-new v1.0, outside
+  // `RELEASED_FLOOR_METHOD_NAMES`, `unsupported` degrade — the same shape as
+  // the OS-service methods below, and here the degrade arm is the whole
+  // authorization story. A host that predates these simply lacks them, the
+  // client feature-detects at handshake and keeps the legacy Restart / Force
+  // update routes, and no request is ever projected onto an older shape that
+  // would drop the intent and run a plain install instead.
+  //
+  // Registered as two methods rather than one taking an intent verb for the
+  // reason the OS-service trio is: they are two different authorizations
+  // ("restart into bytes already placed" vs "carry on with whatever this
+  // attempt was authorized to do"), and one capability answer over both would
+  // make a host's support for either indistinguishable from support for both.
+  //
+  // `@1.1` adds the OPTIONAL `expected {generation, sequence}` to both, so the
+  // caller can say which position of the attempt it observed. A minor, on
+  // `host.update.check@1.1`'s reasoning: the request only grows an optional
+  // key and the response is untouched, so `upgradeFromPreviousVersion` is the
+  // whole bridge (and here it is the identity) and no
+  // `downgradePathsFromLatest` entry is warranted — those cross majors. `@1.0`
+  // binds the FROZEN request shape, which is what makes the key structurally
+  // absent for a released peer rather than filtered out after the fact.
+  "host.update.activate": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: hostUpdateActivateV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateActivateV11,
+          upgradeFromPreviousVersion: hostUpdateActivateUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.update.continue": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: hostUpdateContinueV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateContinueV11,
+          upgradeFromPreviousVersion: hostUpdateContinueUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -9514,12 +9585,21 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // to `unsupported` and the client hides the "Import sessions" entry
   // entirely - the feature is de-emphasised by design (spec §5), so there is
   // nothing to fall back to and nothing lost by its absence.
+  // @1.0 and @1.1 share all three schemas by design, so nothing here or in the
+  // payloads enforces the boundary between them: the NEGOTIATED MINOR is the
+  // capability signal, and a host must gate `already_in_traycer` rows on it.
+  // The reasoning lives with the contract (`./session-import/scan.ts`) and the
+  // row (`./session-import/candidate.ts`); this note only keeps a reader who
+  // arrives at the registry first from concluding the schemas differ.
   "sessionImport.scan": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: sessionImportScanV10,
+        },
+        1: {
+          contract: sessionImportScanV11,
         },
       },
     },

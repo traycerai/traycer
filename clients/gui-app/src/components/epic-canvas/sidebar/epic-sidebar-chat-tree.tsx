@@ -1,3 +1,4 @@
+import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
  * with expansion, rename, delete, and drag-drop behaviors.
@@ -22,7 +23,11 @@ import {
   useEpicDeleteChat,
   useEpicRenameChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
-import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
+import {
+  useChatArchiveSupported,
+  SET_CHAT_ARCHIVED_METHOD,
+} from "@/hooks/epic/use-chat-archive-support";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import {
   CHAT_NOT_ADOPTED_COPY,
@@ -316,16 +321,6 @@ type TreeFilterFn = (type: string | null | undefined) => boolean;
  */
 const SidebarViewerContext = createContext<boolean>(false);
 
-/**
- * Whether the epic's host advertises `epic.setChatArchived`. Resolved ONCE in
- * `ChatTreePanelBody` and read by the rows, for the same reason
- * {@link SidebarViewerContext} exists: it is a per-host fact, identical for
- * every row, and re-subscribing each row to the manifest registry would buy
- * nothing. `false` is the fail-closed default - every archive affordance stays
- * hidden until a handshake proves the method present.
- */
-const SidebarArchiveSupportedContext = createContext<boolean>(false);
-
 interface SidebarChatSharingValue {
   readonly visibilitySupported: boolean;
   readonly ownCloudChatByLocalId: ReadonlyMap<string, CloudChatSummary>;
@@ -337,8 +332,7 @@ const EMPTY_OWN_CLOUD_CHATS: ReadonlyMap<string, CloudChatSummary> = new Map();
 /**
  * Per-chat sharing facts that are identical for every row (capability, the
  * fold of local ids onto cloud rows, whether this task has an audience).
- * Resolved once in `ChatTreePanelBody` and read by the rows, matching
- * {@link SidebarArchiveSupportedContext}.
+ * Resolved once in `ChatTreePanelBody` and read by the rows.
  */
 const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
   visibilitySupported: false,
@@ -1321,33 +1315,31 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       chatEpicIds={indicatorChatEpicIds}
     >
       <NotificationIndicatorSnapshot onChange={setNotificationIndicators} />
-      <SidebarArchiveSupportedContext.Provider value={canArchive}>
-        <SidebarChatSharingContext.Provider value={chatSharingValue}>
-          <SidebarViewerContext.Provider value={isViewer}>
-            <SidebarSortContext.Provider value={comparator}>
-              <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                {searchOpen && !selectionMode && surfaceSearchQuery === null ? (
-                  <ChatSearchHeaderInput
-                    tabId={tabId}
-                    resultCount={searchResultCount}
-                  />
-                ) : null}
-                <SidebarContent className="gap-0">
-                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-                    <SidebarGroupContent
-                      ref={treeRegionRef}
-                      className="flex min-h-0 flex-1 flex-col"
-                      data-testid="epic-chat-tree-region"
-                    >
-                      {panelContent}
-                    </SidebarGroupContent>
-                  </SidebarGroup>
-                </SidebarContent>
-              </SidebarFilterVisibilityContext.Provider>
-            </SidebarSortContext.Provider>
-          </SidebarViewerContext.Provider>
-        </SidebarChatSharingContext.Provider>
-      </SidebarArchiveSupportedContext.Provider>
+      <SidebarChatSharingContext.Provider value={chatSharingValue}>
+        <SidebarViewerContext.Provider value={isViewer}>
+          <SidebarSortContext.Provider value={comparator}>
+            <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+              {searchOpen && !selectionMode && surfaceSearchQuery === null ? (
+                <ChatSearchHeaderInput
+                  tabId={tabId}
+                  resultCount={searchResultCount}
+                />
+              ) : null}
+              <SidebarContent className="gap-0">
+                <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                  <SidebarGroupContent
+                    ref={treeRegionRef}
+                    className="flex min-h-0 flex-1 flex-col"
+                    data-testid="epic-chat-tree-region"
+                  >
+                    {panelContent}
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              </SidebarContent>
+            </SidebarFilterVisibilityContext.Provider>
+          </SidebarSortContext.Provider>
+        </SidebarViewerContext.Provider>
+      </SidebarChatSharingContext.Provider>
     </ChatIndicatorHostScopes>
   );
 }
@@ -1548,13 +1540,32 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     deleteTerminalAgent.isPending,
   ]);
 
-  const archiveSupported = useContext(SidebarArchiveSupportedContext);
+  const ownerHostId = useEpicNodeHostId(nodeId);
+  const sessionHostId = useEpicSessionHostId();
+  const mutationHostId = ownerHostId ?? sessionHostId;
+  const archiveSupported = useHostSupportsMethod(
+    mutationHostId,
+    SET_CHAT_ARCHIVED_METHOD,
+  );
   const isArchived = useEpicNodeArchived(nodeId);
   const archiveChat = useEpicArchiveChat();
   const toggleArchive = useCallback(() => {
     if (!canMutate || !archiveSupported) return;
-    archiveChat.mutate({ epicId, chatId: nodeId, archived: !isArchived });
-  }, [archiveChat, archiveSupported, canMutate, epicId, isArchived, nodeId]);
+    archiveChat.mutate({
+      epicId,
+      chatId: nodeId,
+      hostId: mutationHostId,
+      archived: !isArchived,
+    });
+  }, [
+    archiveChat,
+    archiveSupported,
+    canMutate,
+    epicId,
+    isArchived,
+    nodeId,
+    mutationHostId,
+  ]);
   const archivePending = archiveChat.isPending;
   const archiveRow = useMemo<ChatRowArchiveInputs>(
     () => ({
@@ -1575,8 +1586,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // for a row that carries no owner is the Epic SESSION's host - the host
   // that projected the row - never the app-wide one, which during a re-point
   // is a different machine from the one this tree is showing.
-  const ownerHostId = useEpicNodeHostId(nodeId);
-  const sessionHostId = useEpicSessionHostId();
   // Own-host rows read the chat store's real activity timestamp. A row owned
   // elsewhere is a metadata replica, so its matching cloud publication head
   // supplies the content clock instead. Terminal agents have no cloud content
@@ -1869,7 +1878,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     };
     if (artifactType === "chat") {
       deleteChat.mutate(
-        { epicId, chatId: nodeId },
+        { epicId, chatId: nodeId, hostId: mutationHostId },
         { onSuccess: handleDeleteSuccess, onError: handleDeleteError },
       );
     } else if (artifactType === "terminal-agent") {
@@ -2150,7 +2159,9 @@ function ChatNodeShellBody(
     writeRoute === "unavailable" && props.decision.showButton
       ? { ...props.decision, showButton: false }
       : props.decision;
+  const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const rowMenuEntries = chatRowMenuEntries({
+    copyIdEntry,
     nodeId,
     canMutate,
     writeRoute,
@@ -2178,7 +2189,7 @@ function ChatNodeShellBody(
         nodeId={nodeId}
         panelId="chats"
         contextMenu={
-          canEdit && !isRenaming && !selectionMode ? (
+          !isRenaming && !selectionMode ? (
             <ContextMenuContent>
               <SidebarContextMenuItems entries={rowMenuEntries} />
             </ContextMenuContent>
@@ -2209,7 +2220,6 @@ function ChatNodeShellBody(
             artifactType={artifactType}
             depth={depth}
             isActive={isActive}
-            canEdit={canEdit}
             updatedAt={updatedAt}
             hasChildren={hasChildren}
             expanded={expanded}
@@ -2220,12 +2230,12 @@ function ChatNodeShellBody(
             isSelected={isSelected}
             onToggleSelection={onToggleSelection}
             isArchived={archiveRow.isArchived}
-            reserveArchiveSlot={decision.showButton}
+            reserveArchiveSlot={decision.showButton || archiveRow.pending}
             showSharedIndicator={sharing.showIndicator}
           />
         )}
 
-        {decision.showButton ? (
+        {decision.showButton || archiveRow.pending ? (
           <ChatRowArchiveButton
             nodeId={nodeId}
             nodeName={nodeName}
@@ -2235,7 +2245,7 @@ function ChatNodeShellBody(
           />
         ) : null}
 
-        {canEdit && !isRenaming && !selectionMode ? (
+        {!isRenaming && !selectionMode ? (
           <ChatMoreMenu
             nodeId={nodeId}
             nodeName={nodeName}
@@ -2766,7 +2776,6 @@ interface ChatRowButtonProps {
   readonly artifactType: EpicNodeKind;
   readonly depth: number;
   readonly isActive: boolean;
-  readonly canEdit: boolean;
   readonly updatedAt: number;
   readonly hasChildren: boolean;
   readonly expanded: boolean;
@@ -2919,7 +2928,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
     artifactType,
     depth,
     isActive,
-    canEdit,
     updatedAt,
     hasChildren,
     expanded,
@@ -3016,10 +3024,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
-  // Only the "⋯" more menu now reveals on hover (the standalone "+" moved into
-  // that menu as "New child agent"), so the single-control pad-right reserve is
-  // claimed whenever the row is editable and not bulk-selecting.
-  const showRowControls = selectionMode ? false : canEdit;
+  const showRowControls = !selectionMode;
   const revealRowControls = useRevealRowControls();
   const rowClassName = chatRowClassName({
     isDragging,
@@ -3612,6 +3617,7 @@ function chatRowArchiveState(args: {
 }
 
 interface ChatRowMenuEntriesProps {
+  readonly copyIdEntry: SidebarRowMenuEntry;
   readonly nodeId: string;
   readonly canMutate: boolean;
   /**
@@ -3815,6 +3821,7 @@ function chatRowMenuEntries(
     },
     ...archiveMenuEntries(props),
     ...sharingMenuEntries(props),
+    props.copyIdEntry,
     { kind: "separator", id: "before-delete" },
     {
       kind: "item",
@@ -3918,8 +3925,8 @@ function useChatRowOwnStatusKind(args: {
  * in the same absolutely-positioned control strip, which is why the row
  * reserves pad-right for two controls while this is mounted.
  *
- * Rendered only for idle rows, so it never covers a status the user needs. No
- * confirm dialog, unlike delete - archiving is reversible.
+ * Idle rows expose the shortcut; a pending menu action also keeps it visible.
+ * Archiving is reversible and needs no confirmation dialog.
  */
 function ChatRowArchiveButton(props: {
   readonly nodeId: string;
@@ -3932,6 +3939,7 @@ function ChatRowArchiveButton(props: {
     ? `Unarchive ${props.nodeName}`
     : `Archive ${props.nodeName}`;
   const revealed = useRevealRowControls();
+  const ArchiveIcon = props.isArchived ? ArchiveRestore : Archive;
   return (
     <TooltipWrapper
       label={label}
@@ -3945,10 +3953,11 @@ function ChatRowArchiveButton(props: {
         size="icon-xs"
         aria-label={label}
         disabled={props.pending}
+        aria-busy={props.pending}
         data-testid={`epic-sidebar-archive-${props.nodeId}`}
         className={cn(
           "absolute right-7 top-1/2 -translate-y-1/2 transition-opacity",
-          revealed
+          revealed || props.pending
             ? "opacity-100"
             : "opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100",
         )}
@@ -3957,10 +3966,14 @@ function ChatRowArchiveButton(props: {
           props.onToggle();
         }}
       >
-        {props.isArchived ? (
-          <ArchiveRestore className="size-3" />
+        {props.pending ? (
+          <AgentSpinningDots
+            className="text-current"
+            testId={`epic-sidebar-archive-pending-${props.nodeId}`}
+            variant={undefined}
+          />
         ) : (
-          <Archive className="size-3" />
+          <ArchiveIcon className="size-3" />
         )}
       </Button>
     </TooltipWrapper>
@@ -3996,7 +4009,7 @@ function ChatMoreMenu(props: {
           <MoreHorizontal className="size-3" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className="w-max">
         <SidebarDropdownMenuItems entries={entries} />
       </DropdownMenuContent>
     </DropdownMenu>

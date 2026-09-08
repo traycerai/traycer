@@ -240,7 +240,11 @@ function mountBell(
   // directly alongside the stream runtime the rest of the tree still reads.
   render(
     <StreamRuntimeContext.Provider
-      value={{ wsStreamClient: options.wsStreamClient, hostId: null }}
+      value={{
+        wsStreamClient: options.wsStreamClient,
+        hostId: null,
+        retain: null,
+      }}
     >
       <NotificationFeedModeContext.Provider value={options.feedMode}>
         {bell}
@@ -284,8 +288,8 @@ const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
  * hits, untested. */
 function pressNotificationsChord(): void {
   fireEvent.keyDown(window, {
-    key: "N",
-    code: "KeyN",
+    key: "B",
+    code: "KeyB",
     ...(isMac() ? { metaKey: true } : { ctrlKey: true }),
     shiftKey: true,
   });

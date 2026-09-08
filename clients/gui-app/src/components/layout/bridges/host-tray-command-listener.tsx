@@ -260,7 +260,11 @@ export function HostTrayCommandListener() {
         }}
       />
       <HostBusyForceDeferDialog
+        // The UPDATE commands' busy verdict (`runApply` / `runActivate`);
+        // the restart command's lives in `LocalHostRestartFlow` above.
+        purpose="update"
         open={busy !== null}
+        title="Host is busy"
         message={busy?.message ?? ""}
         isForcing={
           applyStagedMutation.isPending || activateInstalledMutation.isPending

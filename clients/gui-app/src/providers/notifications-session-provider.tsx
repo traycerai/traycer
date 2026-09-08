@@ -85,7 +85,8 @@ import {
 import {
   notificationEntitiesMatch,
   notificationEntityFromHostEntry,
-  notificationPayloadBelongsToEntity,
+  notificationEntityFromPayload,
+  notificationEntityMatchesPresence,
   type NotificationNavigate,
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -118,12 +119,18 @@ interface FocusedNotificationScope {
  * notification scope the user is LOOKING AT right now - the only case the
  * feed handler's terminal-severity auto-consume may fire for. A null origin
  * on the active scope means "not host-bound", which any host may match.
+ *
+ * Coverage, not equality: `notificationEntityMatchesPresence` mirrors the host
+ * emission service's suppression semantics, so an epic-level notification is
+ * covered by any focused tile inside that epic while a chat-level one still
+ * needs that chat in focus. A type predicate so the caller may read the scope
+ * it just proved present.
  */
 function upsertTargetsActiveEntity(
   activeEntity: FocusedNotificationScope | null,
   hostId: string,
   entity: HostNotificationsEntityRef,
-): boolean {
+): activeEntity is FocusedNotificationScope {
   if (activeEntity === null) return false;
   if (
     activeEntity.originHostId !== null &&
@@ -131,7 +138,7 @@ function upsertTargetsActiveEntity(
   ) {
     return false;
   }
-  return notificationEntitiesMatch(activeEntity.entity, entity);
+  return notificationEntityMatchesPresence(entity, activeEntity.entity);
 }
 
 /**
@@ -402,12 +409,21 @@ function NotificationsSessionBody(
     [],
   );
   const consumeEntity = useCallback(
-    (scope: FocusedNotificationScope): void => {
+    (
+      acknowledgementScope: FocusedNotificationScope,
+      presenceEntity: HostNotificationsEntityRef,
+    ): void => {
       // App-local rows are client-side state owned by neither feed, so this
-      // half runs identically in both modes.
+      // half runs identically in both modes. Match them against the focused
+      // presence, which can be narrower than an arriving Task-level row's
+      // acknowledgement target.
       useAppLocalNotificationsStore
         .getState()
-        .markEntityAsRead(scope.originHostId, scope.entity, Date.now());
+        .markEntityAsRead(
+          acknowledgementScope.originHostId,
+          presenceEntity,
+          Date.now(),
+        );
       // BOTH calls in mixed mode, and no early return between them. The host
       // feed is the exact local durable-home partition while the cloud fan-out
       // covers its complement, so each addresses rows the other cannot: an
@@ -426,16 +442,23 @@ function NotificationsSessionBody(
       // read as every other whole-origin host write
       // (`hostOriginWriteAuthorized` in `merged-notifications.ts`).
       if (
-        (scope.originHostId === null || scope.originHostId === servingHostId) &&
+        (acknowledgementScope.originHostId === null ||
+          acknowledgementScope.originHostId === servingHostId) &&
         authorizesCloudCapability(useAuthStore.getState().status)
       ) {
-        markEntityRead(scope.entity);
+        markEntityRead(acknowledgementScope.entity);
       }
       if (notificationFeedMode === "cloud") {
-        markCloudEntityRead(scope);
+        markCloudEntityRead(acknowledgementScope);
       }
     },
     [servingHostId, markEntityRead, markCloudEntityRead, notificationFeedMode],
+  );
+  const consumeFocusedEntity = useCallback(
+    (scope: FocusedNotificationScope): void => {
+      consumeEntity(scope, scope.entity);
+    },
+    [consumeEntity],
   );
   const onPresenceChanged = useCallback(
     (frame: HostNotificationPresenceFrame, hostId: string): void => {
@@ -452,9 +475,9 @@ function NotificationsSessionBody(
       )
         return;
       activeEntityRef.current = nextEntity;
-      if (nextEntity !== null) consumeEntity(nextEntity);
+      if (nextEntity !== null) consumeFocusedEntity(nextEntity);
     },
-    [servingHostId, consumeEntity],
+    [servingHostId, consumeFocusedEntity],
   );
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
@@ -537,13 +560,14 @@ function NotificationsSessionBody(
           semanticId: frame.entry.id,
         },
       ]);
-      if (!upsertTargetsActiveEntity(activeEntityRef.current, hostId, entity)) {
+      const activeEntity = activeEntityRef.current;
+      if (!upsertTargetsActiveEntity(activeEntity, hostId, entity)) {
         return;
       }
       const isTerminalSeverity =
         frame.entry.severity === "done" || frame.entry.severity === "failure";
       if (!isTerminalSeverity) return;
-      consumeEntity({ originHostId: hostId, entity });
+      consumeEntity({ originHostId: hostId, entity }, activeEntity.entity);
     },
     [
       servingHostId,
@@ -773,21 +797,20 @@ function NotificationsSessionBody(
             ? previous.byId[entry.id]
             : null;
           const isNewUnreadOccurrence = prior === null || prior.readAt !== null;
+          const entity = notificationEntityFromPayload(entry.payload);
           return (
             isNewUnreadOccurrence &&
             (entry.originHostId ?? null) === activeEntity.originHostId &&
-            notificationPayloadBelongsToEntity(
-              entry.payload,
-              activeEntity.entity,
-            )
+            entity !== null &&
+            notificationEntityMatchesPresence(entity, activeEntity.entity)
           );
         },
       );
       if (hasUnreadArrivalForActiveEntity) {
-        consumeEntity(activeEntity);
+        consumeFocusedEntity(activeEntity);
       }
     });
-  }, [consumeEntity]);
+  }, [consumeFocusedEntity]);
 
   // TRIGGER 1 (cloud) - presence change.
   //
@@ -814,11 +837,11 @@ function NotificationsSessionBody(
       )
         return;
       activeEntityRef.current = nextEntity;
-      if (nextEntity !== null) consumeEntity(nextEntity);
+      if (nextEntity !== null) consumeFocusedEntity(nextEntity);
     };
     evaluate();
     return subscribeHostNotificationPresence(evaluate);
-  }, [notificationFeedMode, consumeEntity]);
+  }, [notificationFeedMode, consumeFocusedEntity]);
 
   // TRIGGER 2 (cloud) - a row arriving for the entity already in view.
   //
@@ -1249,7 +1272,7 @@ function NotificationsSessionBody(
   }, [tearDown]);
 
   return (
-    <NotificationConsumptionContext.Provider value={consumeEntity}>
+    <NotificationConsumptionContext.Provider value={consumeFocusedEntity}>
       {props.children}
     </NotificationConsumptionContext.Provider>
   );

@@ -1,3 +1,4 @@
+import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Host-driven raw-terminal list rendered as a left-panel rail entry. Durable
  * rows come from the authoritative `terminal.plain.list` collection stream;
@@ -391,7 +392,9 @@ function TerminalRow(props: TerminalRowProps) {
     if (isRenaming || !actions.canRename) return;
     startRename();
   };
+  const copyIdEntry = useSidebarCopyIdMenuEntry(session.sessionId);
   const rowMenuEntries = terminalRowMenuEntries({
+    copyIdEntry,
     closeDisabled: actions.closeDisabled,
     onStartRename: startRename,
     renameDisabled: !actions.canRename,
@@ -495,7 +498,7 @@ function TerminalRow(props: TerminalRowProps) {
                         <MoreHorizontal className="size-3" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
+                    <DropdownMenuContent align="end" className="w-max">
                       <SidebarDropdownMenuItems entries={rowMenuEntries} />
                     </DropdownMenuContent>
                   </DropdownMenu>

@@ -162,6 +162,7 @@ beforeEach(() => {
     websocketUrl: "ws://127.0.0.1:9/rpc",
     startedAt: "2026-01-01T00:00:00.000Z",
     processStartIdentity: null,
+    processStartIdentityRead: "absent",
     // Mirrors the real reader, which now always reports the host's Layer 0
     // verdict. `null` = this fixture's host recorded no attempt.
     layer0: null,
@@ -273,6 +274,7 @@ describe("callHostRpc", () => {
       websocketUrl: "ws://attacker.example:9/rpc",
       startedAt: "2026-01-01T00:00:00.000Z",
       processStartIdentity: null,
+      processStartIdentityRead: "absent",
       layer0: null,
       layer0Slot: null,
     });

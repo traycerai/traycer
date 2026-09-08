@@ -145,6 +145,7 @@ describe("observationFromCanonicalRead", () => {
       status: status(op),
       nowMs: NOW_MS,
       source: "selected",
+      legacyFacts: null,
     });
     const actual = observationFromCanonicalRead({
       hostId: "host-a",
@@ -152,6 +153,7 @@ describe("observationFromCanonicalRead", () => {
       dataUpdatedAt: NOW_MS,
       health: healthyHealth(),
       source: "selected",
+      legacyFacts: null,
     });
     expect(actual).toEqual(expected);
   });
@@ -167,6 +169,7 @@ describe("observationFromCanonicalRead", () => {
       dataUpdatedAt: NOW_MS,
       health: { ...healthyHealth(), isError: true },
       source: "selected",
+      legacyFacts: null,
     });
     expect(observation.operation).toEqual(op);
     // Already expired — `EXPIRED_FRESH_UNTIL_MS` is `Number.NEGATIVE_INFINITY`,
@@ -193,6 +196,7 @@ describe("observationFromCanonicalRead", () => {
       dataUpdatedAt: NOW_MS,
       health: { ...healthyHealth(), isError: true },
       source: "selected",
+      legacyFacts: null,
     });
     // A finite, already-expired deadline is what lets `projectFleetUpdateView`
     // demote this to `unknown` — the ABLATION below shows what happens
@@ -231,6 +235,7 @@ describe("observationFromCanonicalRead", () => {
       dataUpdatedAt: NOW_MS,
       health: { ...healthyHealth(), isError: true },
       source: "selected",
+      legacyFacts: null,
     });
     const view = projectFleetUpdateView({
       observation,
@@ -243,5 +248,33 @@ describe("observationFromCanonicalRead", () => {
     expect(view.kind).toBe("unknown");
     expect(view.qualified).toBe(true);
     expect(view.lastKnownKind).toBe("downloading");
+  });
+
+  it("carries `status.updateProgress` through to `coarseProgress`, null and non-null alike", () => {
+    const withoutMarker = observationFromCanonicalRead({
+      hostId: "host-a",
+      status: { ...status({ kind: "none" }), updateProgress: null },
+      dataUpdatedAt: NOW_MS,
+      health: healthyHealth(),
+      source: "selected",
+      legacyFacts: null,
+    });
+    expect(withoutMarker.coarseProgress).toBeNull();
+
+    const withMarker = observationFromCanonicalRead({
+      hostId: "host-a",
+      status: {
+        ...status({ kind: "none" }),
+        updateProgress: { state: "failed", error: "disk full" },
+      },
+      dataUpdatedAt: NOW_MS,
+      health: healthyHealth(),
+      source: "selected",
+      legacyFacts: null,
+    });
+    expect(withMarker.coarseProgress).toEqual({
+      state: "failed",
+      error: "disk full",
+    });
   });
 });

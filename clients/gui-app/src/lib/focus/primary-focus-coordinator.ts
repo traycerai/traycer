@@ -93,6 +93,26 @@ export class PrimaryFocusCoordinator {
     return this.epoch;
   }
 
+  /**
+   * Requests focus only for a target that has a registered, currently eligible
+   * endpoint, reporting whether the request was taken up.
+   *
+   * `request` alone always parks an intent and reports an epoch, so a caller
+   * choosing BETWEEN candidates (the composer focus registry) could neither
+   * learn that its pick was unusable nor move on to the next one - it would
+   * strand an intent on a dead endpoint and report success. Eligibility is the
+   * only rejection worth reporting here: a request refused for document
+   * visibility or an in-flight pointer interaction stays parked and is
+   * fulfilled by the next `reconcile`, which is exactly the behavior a caller
+   * wants for a live endpoint.
+   */
+  requestIfEligible(target: PrimaryFocusTarget): boolean {
+    const endpoint = this.endpoints.get(targetKey(target));
+    if (endpoint === undefined || !endpoint.isEligible()) return false;
+    this.request(target);
+    return true;
+  }
+
   cancel(predicate: (target: PrimaryFocusTarget) => boolean): void {
     if (this.intent !== null && predicate(this.intent.target)) {
       this.clearIntent();
@@ -185,6 +205,12 @@ export function registerPrimaryFocusEndpoint(
 
 export function requestPrimaryFocus(target: PrimaryFocusTarget): number {
   return coordinator.request(target);
+}
+
+export function requestPrimaryFocusIfEligible(
+  target: PrimaryFocusTarget,
+): boolean {
+  return coordinator.requestIfEligible(target);
 }
 
 export function cancelPrimaryFocusIntent(

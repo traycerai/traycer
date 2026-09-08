@@ -238,7 +238,7 @@ function streamKeyId(windowId: string, key: BrowserSessionsStreamKey): string {
 
 /**
  * Every main-owned `browser.sessions` stream, keyed by
- * `{windowId, scope, hostId, identityKey}`.
+ * `{windowId, epicId, hostId, identityKey}`.
  *
  * NOT deduped across windows, deliberately: one subscriber is one Electron
  * lifecycle owner, so collapsing two windows onto one would put both windows'
@@ -671,7 +671,7 @@ class BrowserSessionsStream {
     try {
       this.client = new BrowserSessionsStreamClient({
         wsStreamClient: transport.wsStreamClient,
-        scope: this.key.scope,
+        epicId: this.key.epicId,
         callbacks: {
           onServerFrame: (frame) => {
             this.handleServerFrame(frame);
@@ -1102,10 +1102,6 @@ class BrowserSessionsStream {
       kind: "electronTabLifecycleReady",
       hasBinaryPayload: false,
       coLocatedHostId: localHostId,
-      // Which window this subscriber speaks for. Streams are keyed by window
-      // and never deduped across them, so this is the route identity the host
-      // elects per scope and echoes back on `BrowserTabInfo.boundWindowId`.
-      desktopWindowId: this.windowId,
     });
     this.pushForgetLedger("attach");
   }

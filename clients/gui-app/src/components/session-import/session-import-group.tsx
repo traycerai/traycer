@@ -1,6 +1,7 @@
-import { Check, ChevronRight, FolderX, Minus } from "lucide-react";
+import { Check, ChevronRight, Minus } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { SessionImportOpenTaskButton } from "@/components/session-import/session-import-open-task-button";
 import { cn } from "@/lib/utils";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import type {
@@ -9,9 +10,6 @@ import type {
   SessionImportRowView,
 } from "@/components/session-import/session-import-model";
 import type { SessionImportTone } from "@/components/session-import/session-import-tone";
-
-const MISSING_FOLDER_HINT =
-  "This folder no longer exists - this work imports without a workspace.";
 
 /**
  * Checkbox visual with no interactive element of its own: the row around it is
@@ -51,41 +49,87 @@ function SessionRowTimestamp(props: {
 }) {
   const { updatedAt, tone } = props;
   const when = useCompactRelativeTime(updatedAt);
+
   return (
     <span
-      className={cn(
-        "min-w-10 shrink-0 truncate text-right text-ui-xs",
-        tone.faint,
-      )}
+      className={cn("shrink-0 text-right text-ui-xs tabular-nums", tone.faint)}
     >
       {when}
     </span>
   );
 }
 
-/**
- * One number, not a fraction: a fully picked folder reads as its count alone.
- * "All" counts what is actually submitted (the selectable rows), because
- * unavailable rows never import; an untouched or cleared folder shows
- * everything it holds.
- */
-function groupCountLabel(group: SessionImportGroupView): string {
-  if (group.selectionState === "partial") {
-    return `${group.selectedCount.toLocaleString()} of ${group.selectableCount.toLocaleString()}`;
-  }
-  if (group.selectionState === "all") {
-    return group.selectableCount.toLocaleString();
-  }
-  return group.totalCount.toLocaleString();
+/** Selection detail is available without making the folder count change meaning. */
+function groupSelectionLabel(group: SessionImportGroupView): string {
+  const count = group.selectableCount.toLocaleString();
+  const noun = group.selectableCount === 1 ? "task" : "tasks";
+  if (group.selectionState === "none")
+    return `Select ${count} available ${noun}`;
+  if (group.selectionState === "all")
+    return `All ${count} available ${noun} selected`;
+  return `${group.selectedCount.toLocaleString()} of ${count} available ${noun} selected`;
 }
 
 function SessionRow(props: {
   readonly row: SessionImportRowView;
   readonly tone: SessionImportTone;
+  /**
+   * Whether to show the folder the session ran in under its title. Only the
+   * Deleted Folders group does: everywhere else the header names the folder.
+   */
+  readonly showFolder: boolean;
   readonly onToggle: (selectionKey: string) => void;
+  readonly onTaskOpened: () => void;
+  readonly onBeforeTaskOpen: (() => Promise<boolean>) | null;
 }) {
-  const { row, tone, onToggle } = props;
+  const { row, tone, showFolder, onToggle, onTaskOpened } = props;
   const { candidate } = row;
+
+  if (candidate.state.kind === "already_in_traycer") {
+    return (
+      <div
+        data-testid="session-import-row"
+        data-selectable={false}
+        className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left"
+      >
+        <span aria-hidden className="size-4 shrink-0" />
+        <HarnessIcon
+          harnessId={candidate.harness}
+          className={cn("size-3.5 opacity-75", tone.muted)}
+        />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span
+            className={cn(
+              "min-w-0 truncate text-ui-sm opacity-75",
+              tone.strong,
+            )}
+          >
+            {row.title}
+          </span>
+          {showFolder ? (
+            <span className={cn("truncate text-ui-xs", tone.faint)}>
+              {row.folderPath}
+            </span>
+          ) : null}
+        </span>
+        <span
+          className={cn(
+            "shrink-0 rounded px-1.5 py-0.5 text-ui-xs bg-foreground/8",
+            tone.muted,
+          )}
+        >
+          Imported
+        </span>
+        <SessionImportOpenTaskButton
+          target={candidate.state}
+          title={row.title}
+          onTaskOpened={onTaskOpened}
+          onBeforeTaskOpen={props.onBeforeTaskOpen}
+        />
+        <SessionRowTimestamp updatedAt={candidate.updatedAt} tone={tone} />
+      </div>
+    );
+  }
 
   return (
     <TooltipWrapper
@@ -103,7 +147,12 @@ function SessionRow(props: {
         // unavailable could never open - which is the only explanation the
         // user gets.
         aria-disabled={!row.selectable}
-        aria-label={row.title}
+        // Inside Deleted Folders the header names no folder, so the folder
+        // has to be part of the name: two "Fix the build" rows from different
+        // gone checkouts are otherwise indistinguishable to a screen reader.
+        aria-label={
+          showFolder ? `${row.title} in ${row.folderPath}` : row.title
+        }
         data-testid="session-import-row"
         data-selectable={row.selectable}
         onClick={() => {
@@ -127,8 +176,18 @@ function SessionRow(props: {
           harnessId={candidate.harness}
           className={cn("size-3.5", tone.muted)}
         />
-        <span className={cn("min-w-0 flex-1 truncate text-ui-sm", tone.strong)}>
-          {row.title}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className={cn("min-w-0 truncate text-ui-sm", tone.strong)}>
+            {row.title}
+          </span>
+          {showFolder ? (
+            <span
+              data-testid="session-import-row-folder"
+              className={cn("min-w-0 truncate text-ui-xs", tone.faint)}
+            >
+              {row.folderPath}
+            </span>
+          ) : null}
         </span>
         {row.unavailableLabel !== null ? (
           <span className={cn("shrink-0 text-ui-xs", tone.faint)}>
@@ -147,6 +206,8 @@ export function SessionImportGroupItem(props: {
   readonly onToggleExpanded: (groupKey: string) => void;
   readonly onSetGroupSelection: (groupKey: string, selected: boolean) => void;
   readonly onToggleSession: (selectionKey: string) => void;
+  readonly onTaskOpened: () => void;
+  readonly onBeforeTaskOpen: (() => Promise<boolean>) | null;
 }) {
   const {
     group,
@@ -169,36 +230,50 @@ export function SessionImportGroupItem(props: {
       <div
         className={cn("flex w-full min-w-0 items-center", tone.groupSurface)}
       >
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={
-            group.selectionState === "partial"
-              ? "mixed"
-              : group.selectionState === "all"
-          }
-          aria-label={`Select all work in ${group.name}`}
-          disabled={group.selectableCount === 0}
-          data-testid="session-import-group-select"
-          onClick={() =>
-            onSetGroupSelection(group.groupKey, group.selectionState !== "all")
-          }
-          // ring-inset on both header controls: the card clips at its rounded
-          // border, so an outset ring would render cut off. p-2.5 all round
-          // keeps this checkbox on the same left edge - and the same distance
-          // from what follows it - as the row checkboxes below (4px list
-          // padding + 6px row padding = the same 10px).
-          className={cn(
-            "flex shrink-0 items-center rounded-md p-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset",
-            group.selectableCount > 0 && tone.rowHover,
-          )}
-        >
-          <SelectionBox
-            state={group.selectionState}
-            disabled={group.selectableCount === 0}
-            tone={tone}
-          />
-        </button>
+        {group.selectableCount > 0 ? (
+          <TooltipWrapper
+            label={groupSelectionLabel(group)}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={
+                group.selectionState === "partial"
+                  ? "mixed"
+                  : group.selectionState === "all"
+              }
+              aria-label={`${group.name}: ${groupSelectionLabel(group)}`}
+              disabled={group.selectableCount === 0}
+              data-testid="session-import-group-select"
+              onClick={() =>
+                onSetGroupSelection(
+                  group.groupKey,
+                  group.selectionState !== "all",
+                )
+              }
+              // ring-inset on both header controls: the card clips at its rounded
+              // border, so an outset ring would render cut off. p-2.5 all round
+              // keeps this checkbox on the same left edge - and the same distance
+              // from what follows it - as the row checkboxes below (4px list
+              // padding + 6px row padding = the same 10px).
+              className={cn(
+                "flex shrink-0 items-center rounded-md p-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset",
+                group.selectableCount > 0 && tone.rowHover,
+              )}
+            >
+              <SelectionBox
+                state={group.selectionState}
+                disabled={group.selectableCount === 0}
+                tone={tone}
+              />
+            </button>
+          </TooltipWrapper>
+        ) : (
+          <span aria-hidden className="size-4 shrink-0 mx-2.5" />
+        )}
         <button
           type="button"
           aria-expanded={group.expanded}
@@ -227,40 +302,16 @@ export function SessionImportGroupItem(props: {
               >
                 {group.name}
               </span>
-              {group.missingFolder ? (
-                <TooltipWrapper
-                  label={MISSING_FOLDER_HINT}
-                  side="top"
-                  sideOffset={undefined}
-                  align={undefined}
-                >
-                  <span
-                    data-testid="session-import-missing-folder"
-                    className={cn(
-                      "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-ui-xs",
-                      tone.warningSurface,
-                    )}
-                  >
-                    <FolderX aria-hidden className="size-3" />
-                    Folder not found
-                  </span>
-                </TooltipWrapper>
-              ) : null}
             </span>
             <span className={cn("min-w-0 truncate text-ui-xs", tone.faint)}>
               {group.path}
             </span>
           </span>
-          {/*
-            One number, not a fraction: a folder the user has not touched is
-            fully picked, so "431 of 431" is noise on every row. The fraction
-            appears exactly when it says something - the folder is half in.
-          */}
           <span
             data-testid="session-import-group-count"
             className={cn("shrink-0 text-ui-xs tabular-nums", tone.muted)}
           >
-            {groupCountLabel(group)}
+            {group.totalCount.toLocaleString()}
           </span>
         </button>
       </div>
@@ -271,7 +322,10 @@ export function SessionImportGroupItem(props: {
               key={row.selectionKey}
               row={row}
               tone={tone}
+              showFolder={group.missingFolder}
               onToggle={onToggleSession}
+              onTaskOpened={props.onTaskOpened}
+              onBeforeTaskOpen={props.onBeforeTaskOpen}
             />
           ))}
         </div>

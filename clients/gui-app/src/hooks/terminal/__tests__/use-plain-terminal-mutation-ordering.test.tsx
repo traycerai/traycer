@@ -38,7 +38,7 @@ import {
   type PlainTerminalMutations,
 } from "@/hooks/terminal/use-plain-terminal-mutations";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 
 vi.mock("@/lib/host-error-toast", () => ({ toastFromHostError: vi.fn() }));
 
@@ -197,9 +197,8 @@ function seedPresentationRefs(): void {
       },
     },
   });
-  useLandingPanelStore.getState().resetForTests();
-  useLandingPanelStore.getState().addTab({
-    kind: "terminal",
+  useLandingTerminalStore.getState().resetForTests();
+  useLandingTerminalStore.getState().addTab({
     instanceId: "landing-ordering-ref",
     sessionId: "terminal-1",
     hostId: HOST_ID,
@@ -216,7 +215,7 @@ function expectPresentationRefs(): void {
       ?.tilesByInstanceId["epic-ordering-ref"],
   ).toBeDefined();
   expect(
-    useLandingPanelStore
+    useLandingTerminalStore
       .getState()
       .tabs.some((tab) => tab.instanceId === "landing-ordering-ref"),
   ).toBe(true);
@@ -225,7 +224,7 @@ function expectPresentationRefs(): void {
 describe("plain terminal mutation projection ordering", () => {
   afterEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    useLandingPanelStore.getState().resetForTests();
+    useLandingTerminalStore.getState().resetForTests();
   });
 
   it("does not let a delayed equal-revision rename replace newer stream runtime", async () => {
@@ -375,7 +374,7 @@ describe("plain terminal mutation projection ordering", () => {
         "removeHostTerminalRefs",
       );
       const landingRemove = vi.spyOn(
-        useLandingPanelStore.getState(),
+        useLandingTerminalStore.getState(),
         "removeHostTerminal",
       );
       const pending =
@@ -428,7 +427,7 @@ describe("plain terminal mutation projection ordering", () => {
       "removeHostTerminalRefs",
     );
     const landingRemove = vi.spyOn(
-      useLandingPanelStore.getState(),
+      useLandingTerminalStore.getState(),
       "removeHostTerminal",
     );
     const pending = test.result.current.close.mutateAsync({
@@ -530,9 +529,8 @@ describe("plain terminal mutation projection ordering", () => {
           },
         },
       });
-      useLandingPanelStore.getState().resetForTests();
-      useLandingPanelStore.getState().addTab({
-        kind: "terminal",
+      useLandingTerminalStore.getState().resetForTests();
+      useLandingTerminalStore.getState().addTab({
         instanceId: "late-legacy",
         sessionId: "terminal-1",
         hostId: HOST_ID,
@@ -547,7 +545,7 @@ describe("plain terminal mutation projection ordering", () => {
         "removeHostTerminalRefs",
       );
       const landingRemove = vi.spyOn(
-        useLandingPanelStore.getState(),
+        useLandingTerminalStore.getState(),
         "removeHostTerminal",
       );
       epicRemove.mockClear();
@@ -594,7 +592,7 @@ describe("plain terminal mutation projection ordering", () => {
           "late-epic-closed"
         ],
       ).toBeUndefined();
-      expect(useLandingPanelStore.getState().tabs).toEqual([]);
+      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
     },
   );
 });
