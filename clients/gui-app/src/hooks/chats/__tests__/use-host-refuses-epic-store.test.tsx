@@ -46,9 +46,6 @@ function useCombined(input: {
   readonly epicId: string;
   readonly fatalCloseCode: string | null;
   readonly snapshotLoaded: boolean;
-  readonly loadStalled: boolean;
-  readonly hostIsBehind: boolean;
-  readonly retryableCloseCode: string | null;
 }): boolean {
   useRecordHostOlderThanDataRefusal({
     hostId: input.hostId,
@@ -56,9 +53,6 @@ function useCombined(input: {
     hostVersion: directoryState.version,
     fatalCloseCode: input.fatalCloseCode,
     snapshotLoaded: input.snapshotLoaded,
-    loadStalled: input.loadStalled,
-    hostIsBehind: input.hostIsBehind,
-    retryableCloseCode: input.retryableCloseCode,
   });
   return useHostRefusesEpicStore(input.hostId, input.epicId);
 }
@@ -122,9 +116,6 @@ describe("useRecordHostOlderThanDataRefusal", () => {
         epicId: EPIC_ID,
         fatalCloseCode: HOST_OLDER_THAN_DATA_FATAL_CODE,
         snapshotLoaded: false,
-        loadStalled: false,
-        hostIsBehind: false,
-        retryableCloseCode: null,
       }),
     );
 
@@ -140,9 +131,6 @@ describe("useRecordHostOlderThanDataRefusal", () => {
         epicId: EPIC_ID,
         fatalCloseCode: "SOME_OTHER_FATAL_CODE",
         snapshotLoaded: false,
-        loadStalled: false,
-        hostIsBehind: false,
-        retryableCloseCode: null,
       }),
     );
 
@@ -166,103 +154,8 @@ describe("useRecordHostOlderThanDataRefusal", () => {
         epicId: EPIC_ID,
         fatalCloseCode: null,
         snapshotLoaded: true,
-        loadStalled: false,
-        hostIsBehind: false,
-        retryableCloseCode: null,
       }),
     );
-
-    await waitFor(() => {
-      expect(result.current).toBe(false);
-    });
-  });
-
-  it("infers the refusal for a shipped 1.2.0 host that answers CHAT_OPEN_FAILED forever - no fatal code ever arrives, so a stalled load past a behind host answering that code is the only evidence", async () => {
-    const { result } = renderHook(() =>
-      useCombined({
-        hostId: HOST_ID,
-        epicId: EPIC_ID,
-        fatalCloseCode: null,
-        snapshotLoaded: false,
-        loadStalled: true,
-        hostIsBehind: true,
-        retryableCloseCode: "CHAT_OPEN_FAILED",
-      }),
-    );
-
-    await waitFor(() => {
-      expect(result.current).toBe(true);
-    });
-  });
-
-  it("does not record the inference when the host is not behind", () => {
-    const { result } = renderHook(() =>
-      useCombined({
-        hostId: HOST_ID,
-        epicId: EPIC_ID,
-        fatalCloseCode: null,
-        snapshotLoaded: false,
-        loadStalled: true,
-        hostIsBehind: false,
-        retryableCloseCode: "CHAT_OPEN_FAILED",
-      }),
-    );
-
-    expect(result.current).toBe(false);
-  });
-
-  it("does not record for a silent host - a stall with no retryable close must stay on the live retry lane", () => {
-    const { result } = renderHook(() =>
-      useCombined({
-        hostId: HOST_ID,
-        epicId: EPIC_ID,
-        fatalCloseCode: null,
-        snapshotLoaded: false,
-        loadStalled: true,
-        hostIsBehind: true,
-        retryableCloseCode: null,
-      }),
-    );
-
-    expect(result.current).toBe(false);
-  });
-
-  it("does not record for a retryable close carrying some other code", () => {
-    const { result } = renderHook(() =>
-      useCombined({
-        hostId: HOST_ID,
-        epicId: EPIC_ID,
-        fatalCloseCode: null,
-        snapshotLoaded: false,
-        loadStalled: true,
-        hostIsBehind: true,
-        retryableCloseCode: "CHAT_INVALID",
-      }),
-    );
-
-    expect(result.current).toBe(false);
-  });
-
-  it("clears an inferred refusal once a snapshot lands", async () => {
-    const { result, rerender } = renderHook(
-      (props: { readonly snapshotLoaded: boolean }) =>
-        useCombined({
-          hostId: HOST_ID,
-          epicId: EPIC_ID,
-          fatalCloseCode: null,
-          snapshotLoaded: props.snapshotLoaded,
-          loadStalled: true,
-          hostIsBehind: true,
-          retryableCloseCode: "CHAT_OPEN_FAILED",
-        }),
-      { initialProps: { snapshotLoaded: false } },
-    );
-
-    await waitFor(() => {
-      expect(result.current).toBe(true);
-    });
-
-    rerender({ snapshotLoaded: true });
 
     await waitFor(() => {
       expect(result.current).toBe(false);

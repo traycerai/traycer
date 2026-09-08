@@ -47,13 +47,14 @@ export interface RetryableCloseLog {
   readonly fingerprint: string;
   /**
    * The host's code, bounded to the allowlisted shape - safe to RETAIN in
-   * client state and to compare against a known code.
+   * client state, where the pre-snapshot pane and the issue report show it.
    *
-   * Exposed because the log is not the only consumer any more: a consumer that
-   * has to tell "the host answered and refused" from "the host went quiet"
-   * needs the code, and it must not get there by matching on the message text.
-   * A placeholder (`<empty>`/`<oversized>`/`<unprintable>`) never equals a real
-   * code, so a comparison fails closed on a code this bound rejected.
+   * Exposed because the log is not the only consumer any more: the session
+   * carries the last retryable close to its consumer on the reconnecting
+   * transition, and what it carries must be these bounded fields, never the
+   * raw wire values. A placeholder (`<empty>`/`<oversized>`/`<unprintable>`)
+   * never equals a real code, so anything comparing it fails closed on a code
+   * this bound rejected.
    */
   readonly code: string;
   /** The reason, control-free, collapsed to one line, and length-bounded. */

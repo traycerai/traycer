@@ -186,9 +186,6 @@ import {
 } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
-import { hostIsBehindClient } from "@/lib/host/version-skew-copy";
-import { getClientAppVersion } from "@/lib/app-version";
-import { useChatLoadStalled } from "./use-chat-load-stalled";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
@@ -803,28 +800,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // chat in this epic is unreadable on this host build, so their rows route
   // to the published copy until the host is updated (the build key above is
   // what retires that verdict) or a snapshot lands here again.
-  // ONE stall verdict, from one clock anchor, for the two surfaces that must
-  // agree about when this load stopped being ordinary: the pre-snapshot pane
-  // below and the refusal recorder here.
-  const loadStalled = useChatLoadStalled({
-    retries: view.preSnapshotRetries,
-    snapshotLoaded: view.snapshotLoaded,
-  });
   useRecordHostOlderThanDataRefusal({
     hostId,
     epicId: view.currentEpicId,
     hostVersion: attachmentHostVersion,
     fatalCloseCode: view.fatalClose?.code ?? null,
     snapshotLoaded: view.snapshotLoaded,
-    loadStalled,
-    hostIsBehind: hostIsBehindClient({
-      hostAppVersion: attachmentHostVersion,
-      clientAppVersion: getClientAppVersion(),
-    }),
-    // The host's own code for the last retryable close, bounded at the
-    // transport seam. `null` on a host that has closed nothing, which is the
-    // silent-host case the recorder must not read as a refusal.
-    retryableCloseCode: view.preSnapshotRetries?.code ?? null,
   });
   const attachmentScope = useMemo<ChatAttachmentScopeValue>(
     () => ({
@@ -1258,7 +1239,6 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 snapshotLoaded={view.snapshotLoaded}
                 fatalClose={view.fatalClose}
                 preSnapshotRetries={view.preSnapshotRetries}
-                loadStalled={loadStalled}
                 onRetry={view.onChatRetry}
                 restoreContext={view.restoreContext}
                 node={view.node}
@@ -3242,8 +3222,6 @@ interface ChatSessionMessagesSurfaceProps {
   readonly fatalClose: FatalErrorDetails | null;
   /** Failed pre-snapshot attempts; see `ChatTilePreSnapshotGate`. */
   readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
-  /** The bounded-budget verdict; see `useChatLoadStalled`. */
-  readonly loadStalled: boolean;
   readonly onRetry: () => void;
   readonly restoreContext: ChatRestoreContextValue;
   readonly node: ChatSurfaceNode;
@@ -3327,10 +3305,17 @@ function ChatSessionMessagesSurface(
   // transition; there is no optimistic seed.
   if (!props.snapshotLoaded) {
     return (
+      // Keyed by the chat, because the gate's stall deadline is anchored at
+      // its own first render. Tiles are one chat for life and the surface host
+      // keys records by instance, so this never actually remounts today - it
+      // is here so that stays true by construction rather than by a property
+      // of a component two layers up: a gate instance carried over to another
+      // chat would inherit the first one's start and declare the new load
+      // stalled on sight.
       <ChatTilePreSnapshotGate
+        key={props.node.id}
         fatalClose={props.fatalClose}
         retries={props.preSnapshotRetries}
-        stalled={props.loadStalled}
         onRetry={props.onRetry}
       />
     );

@@ -2441,9 +2441,8 @@ class StreamSession<
       }
       // Carried to the consumer on the reconnecting transition below, from the
       // SAME bounded pieces the line is built from. Until this existed the
-      // details died here, and a consumer could not tell a host that answered
-      // and refused from one that went quiet - which is the whole difference
-      // between "this host cannot open this chat" and "wait a moment longer".
+      // details died here, so a session that kept redialing could show its
+      // reader nothing about what the host had said on the way out.
       this.pendingRetryableClose = {
         code: retryableClose.code,
         reason: retryableClose.reason,
