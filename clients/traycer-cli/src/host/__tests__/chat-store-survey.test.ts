@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   chatDbPathFor,
   EPIC_STATE_DIRNAME,
@@ -77,7 +77,7 @@ describe("surveyChatDbStamps", () => {
 
     expect(survey.readings).toEqual([]);
     expect(survey.failures).toEqual([
-      { epicId: "*", reason: expect.any(String) },
+      { epicId: "*", reason: "unreadable-epic-state-directory" },
     ]);
   });
 
@@ -98,7 +98,7 @@ describe("surveyChatDbStamps", () => {
 
         expect(survey.readings).toEqual([]);
         expect(survey.failures).toEqual([
-          { epicId: "*", reason: expect.any(String) },
+          { epicId: "*", reason: "unreadable-epic-state-directory" },
         ]);
       } finally {
         // Restore so the temp-dir cleanup in `afterEach` can actually delete it.
@@ -152,8 +152,9 @@ describe("surveyChatDbStamps", () => {
     const survey = await surveyChatDbStamps(hostHome);
 
     expect(survey.readings).toEqual([]);
-    expect(survey.failures).toHaveLength(1);
-    expect(survey.failures[0]?.epicId).toBe("epic-no-row");
+    expect(survey.failures).toEqual([
+      { epicId: "epic-no-row", reason: "missing-or-invalid-schema-version" },
+    ]);
   });
 
   it("records a failure when the db file has no chat_db_meta table at all", async () => {
@@ -165,8 +166,13 @@ describe("surveyChatDbStamps", () => {
     const survey = await surveyChatDbStamps(hostHome);
 
     expect(survey.readings).toEqual([]);
-    expect(survey.failures).toHaveLength(1);
-    expect(survey.failures[0]?.epicId).toBe("epic-no-table");
+    // Was the raw SQLite "no such table" message before the reason codes
+    // landed - opening succeeds (it is a valid, if unrelated, database), so
+    // the failure is in the QUERY, same finite bucket as any other unreadable
+    // store per the production module's doc comment.
+    expect(survey.failures).toEqual([
+      { epicId: "epic-no-table", reason: "unreadable-chat-db" },
+    ]);
   });
 
   it("records a failure for a non-database file at chat/chat.db", async () => {
@@ -176,8 +182,9 @@ describe("surveyChatDbStamps", () => {
     const survey = await surveyChatDbStamps(hostHome);
 
     expect(survey.readings).toEqual([]);
-    expect(survey.failures).toHaveLength(1);
-    expect(survey.failures[0]?.epicId).toBe("epic-garbage");
+    expect(survey.failures).toEqual([
+      { epicId: "epic-garbage", reason: "unreadable-chat-db" },
+    ]);
   });
 
   it("treats a FILE under epic-state (not a directory) as neither a reading nor a failure", async () => {
@@ -226,10 +233,125 @@ describe("surveyChatDbStamps", () => {
     );
     expect(survey.readings).toHaveLength(2);
     expect(survey.failures).toEqual([
-      { epicId: "epic-c", reason: expect.any(String) },
+      { epicId: "epic-c", reason: "unreadable-chat-db" },
     ]);
     const readingIds = new Set(survey.readings.map((r) => r.epicId));
     const failureIds = new Set(survey.failures.map((f) => f.epicId));
     for (const id of readingIds) expect(failureIds.has(id)).toBe(false);
+  });
+
+  it("rejects a schema_version value far past what any legitimate stamp could be, without echoing it anywhere", async () => {
+    const dbPath = await epicDbPath("epic-oversized-stamp");
+    const oversized = "9".repeat(100 * 1024);
+    await writeChatDb(dbPath, (db) => {
+      db.exec(
+        "CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+      );
+      db.prepare("INSERT INTO chat_db_meta (key, value) VALUES (?, ?)").run(
+        "schema_version",
+        oversized,
+      );
+    });
+
+    const survey = await surveyChatDbStamps(hostHome);
+
+    expect(survey.readings).toEqual([]);
+    expect(survey.failures).toEqual([
+      {
+        epicId: "epic-oversized-stamp",
+        reason: "missing-or-invalid-schema-version",
+      },
+    ]);
+    // The old code embedded the whole row into the human error AND the
+    // NDJSON details via `JSON.stringify` - a finite reason code cannot
+    // carry the stored value at all, but this is the regression test for
+    // that specific failure mode, not an incidental property of codes.
+    expect(JSON.stringify(survey)).not.toContain(oversized.slice(0, 100));
+  });
+
+  it("bounds and charset-filters an epic id that carries a control character, so it cannot forge a log line", async () => {
+    const rawEpicId = "epic\r\nINJECTED";
+    const dbPath = await epicDbPath(rawEpicId);
+    await writeStampedChatDb(dbPath, 9);
+
+    const survey = await surveyChatDbStamps(hostHome);
+
+    expect(survey.failures).toEqual([]);
+    expect(survey.readings).toEqual([
+      { epicId: "epic__INJECTED", schemaVersion: 9 },
+    ]);
+    for (const reading of survey.readings) {
+      expect(reading.epicId).not.toMatch(/[\r\n]/);
+    }
+  });
+
+  it("bounds an epic id longer than 64 characters, marking the truncation with a trailing ~", async () => {
+    const rawEpicId = "e".repeat(80);
+    const dbPath = await epicDbPath(rawEpicId);
+    await writeStampedChatDb(dbPath, 9);
+
+    const survey = await surveyChatDbStamps(hostHome);
+
+    expect(survey.failures).toEqual([]);
+    expect(survey.readings).toHaveLength(1);
+    const renderedId = survey.readings[0]?.epicId ?? "";
+    expect(renderedId.length).toBe(65);
+    expect(renderedId.endsWith("~")).toBe(true);
+    expect(renderedId.slice(0, 64)).toBe("e".repeat(64));
+  });
+
+  it("reports engine-unavailable as exactly ONE failure, never one per epic, when the runtime has no SQLite engine", async () => {
+    // Two epics, both with a genuine readable chat.db, written BEFORE the
+    // engine is stubbed out - `writeStampedChatDb` needs the real
+    // `node:sqlite` itself. The whole finding is the COUNT: N epics reading
+    // as N "damaged" failures would lie about the user's data, when the
+    // truth is a fact about this one process, not about either file.
+    const pathA = await epicDbPath("epic-a");
+    await writeStampedChatDb(pathA, 9);
+    const pathB = await epicDbPath("epic-b");
+    await writeStampedChatDb(pathB, 8);
+
+    vi.resetModules();
+    vi.doMock("node:sqlite", () => {
+      throw new Error("no node:sqlite in this simulated runtime");
+    });
+    try {
+      const { surveyChatDbStamps: surveyWithoutEngine } =
+        await import("../chat-store-survey");
+
+      const survey = await surveyWithoutEngine(hostHome);
+
+      expect(survey.readings).toEqual([]);
+      expect(survey.failures).toEqual([
+        { epicId: "*", reason: "engine-unavailable" },
+      ]);
+    } finally {
+      vi.doUnmock("node:sqlite");
+      vi.resetModules();
+    }
+  });
+
+  it("never reports engine-unavailable on an empty epic-state directory - there is no data there to fail to read", async () => {
+    // The early return (no epics enumerated -> return before the engine is
+    // ever resolved) is production code; this pins that a stubbed-out
+    // engine still cannot manufacture a refusal out of nothing.
+    await mkdir(join(hostHome, EPIC_STATE_DIRNAME), { recursive: true });
+
+    vi.resetModules();
+    vi.doMock("node:sqlite", () => {
+      throw new Error("no node:sqlite in this simulated runtime");
+    });
+    try {
+      const { surveyChatDbStamps: surveyWithoutEngine } =
+        await import("../chat-store-survey");
+
+      await expect(surveyWithoutEngine(hostHome)).resolves.toEqual({
+        readings: [],
+        failures: [],
+      });
+    } finally {
+      vi.doUnmock("node:sqlite");
+      vi.resetModules();
+    }
   });
 });

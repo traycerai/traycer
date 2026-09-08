@@ -169,15 +169,24 @@ describe("hostUpdateInstallResponseV13Schema — cli-failed details", () => {
         reason: "newer-chat-stores",
         targetVersion: "1.2.0",
         targetChatDb: 8,
-        onDiskMax: 9,
-        epicCount: 12,
-        epicIds: ["epic-a", "epic-b"],
+        onDiskMax: null,
+        epicCount: 1,
+        epicIds: ["epic-new"],
+        unreadableEpicCount: 1,
+        unreadableEpicIds: ["epic-broken"],
       },
     });
     expect(parsed).toMatchObject({
       outcome: "cli-failed",
       reason: "store-format-floor",
-      storeFloor: { targetChatDb: 8, onDiskMax: 9, epicCount: 12 },
+      storeFloor: {
+        targetChatDb: 8,
+        onDiskMax: null,
+        epicCount: 1,
+        epicIds: ["epic-new"],
+        unreadableEpicCount: 1,
+        unreadableEpicIds: ["epic-broken"],
+      },
     });
   });
 
@@ -190,6 +199,11 @@ describe("hostUpdateInstallResponseV13Schema — cli-failed details", () => {
       onDiskMax: null,
       epicCount: 11,
       epicIds: Array.from({ length: 10 }, (_, index) => `epic-${index}`),
+      unreadableEpicCount: 11,
+      unreadableEpicIds: Array.from(
+        { length: 10 },
+        (_, index) => `broken-${index}`,
+      ),
     };
     expect(
       hostUpdateInstallV13.responseSchema.parse({
@@ -206,7 +220,52 @@ describe("hostUpdateInstallResponseV13Schema — cli-failed details", () => {
       hostUpdateInstallV13.responseSchema.safeParse({
         outcome: "cli-failed",
         reason: "store-format-floor",
-        storeFloor: { ...refusal, epicIds: [...refusal.epicIds, "epic-10"] },
+        storeFloor: {
+          ...refusal,
+          epicIds: [...refusal.epicIds, "epic-10"],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      hostUpdateInstallV13.responseSchema.safeParse({
+        outcome: "cli-failed",
+        reason: "store-format-floor",
+        storeFloor: {
+          ...refusal,
+          unreadableEpicIds: [...refusal.unreadableEpicIds, "broken-10"],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires both unreadable-store fields on a v1.3 refusal", () => {
+    const refusal = {
+      kind: "indeterminate",
+      reason: "unreadable-stores",
+      targetVersion: "1.2.0",
+      targetChatDb: 8,
+      onDiskMax: null,
+      epicCount: 0,
+      epicIds: [],
+      unreadableEpicCount: 0,
+      unreadableEpicIds: [],
+    };
+    const { unreadableEpicCount, unreadableEpicIds, ...base } = refusal;
+    const withoutCount = { ...base, unreadableEpicIds };
+    const withoutIds = { ...base, unreadableEpicCount };
+
+    expect(
+      hostUpdateInstallV13.responseSchema.safeParse({
+        outcome: "cli-failed",
+        reason: "store-format-floor",
+        storeFloor: withoutCount,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostUpdateInstallV13.responseSchema.safeParse({
+        outcome: "cli-failed",
+        reason: "store-format-floor",
+        storeFloor: withoutIds,
       }).success,
     ).toBe(false);
   });

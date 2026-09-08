@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ILogger, LogFields } from "../../logger";
-import { readExtractedStoreFormats } from "../install";
+import { readExtractedStoreFormats } from "../version-sidecar";
 
 function fakeLogger(): ILogger & { readonly warnCalls: LogFields[] } {
   const warnCalls: LogFields[] = [];

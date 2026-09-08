@@ -795,6 +795,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
                   onDiskMax: null,
                   epicCount: 1,
                   epicIds: ["epic-a"],
+                  unreadableEpicCount: 0,
+                  unreadableEpicIds: [],
                 },
               }
             : { outcome: "accepted" as const, attemptId: null };
@@ -888,6 +890,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
                   onDiskMax: null,
                   epicCount: 1,
                   epicIds: ["epic-a"],
+                  unreadableEpicCount: 0,
+                  unreadableEpicIds: [],
                 },
               }
             : { outcome: "accepted" as const, attemptId: null };

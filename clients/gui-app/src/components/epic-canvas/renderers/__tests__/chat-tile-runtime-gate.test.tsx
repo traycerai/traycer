@@ -106,7 +106,11 @@ describe("<ChatTileError />", () => {
     expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
   });
 
-  it("names the client as the outdated leg when the versions say the client is behind, and offers no host-update remedy", () => {
+  it("keeps the host-update remedy for a disk-format refusal even when the host is newer than the app", () => {
+    // HOST_OLDER_THAN_DATA is a fact about the host's own reader - the chat
+    // store on disk was written by a newer build than the one serving it -
+    // so updating the app can never fix it, no matter what the two app
+    // versions say.
     const hostUpdate = stubHostUpdate({
       hostAppVersion: "1.4.0",
       clientAppVersion: "1.3.0",
@@ -126,7 +130,79 @@ describe("<ChatTileError />", () => {
       />,
     );
 
-    expect(screen.getByText("Your app is too old")).toBeTruthy();
+    expect(screen.getByText("Host update needed")).toBeTruthy();
+    const updateButton = screen.getByTestId("chat-tile-host-update");
+    expect(updateButton.textContent).toBe("Update now");
+  });
+
+  it("offers the host-update remedy from guidance alone on a code this build has never heard of", () => {
+    const hostUpdate = stubHostUpdate({
+      hostAppVersion: null,
+      clientAppVersion: null,
+    });
+    const details: ChatTileFatalDetails = {
+      code: "SOME_FUTURE_CODE",
+      reason: "SOME_FUTURE_CODE: the host says so",
+      upgradeGuidance: { hostShouldUpgrade: true, clientShouldUpgrade: false },
+    };
+
+    render(
+      <ChatTileError
+        details={details}
+        hostUpdate={hostUpdate}
+        onRetry={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Host update needed")).toBeTruthy();
+    expect(screen.getByTestId("chat-tile-host-update")).toBeTruthy();
+  });
+
+  it("keeps the generic pane for CHAT_STORE_UNUSABLE - its remedy is a repair or a support report, not a host update", () => {
+    const hostUpdate = stubHostUpdate({
+      hostAppVersion: "1.2.0",
+      clientAppVersion: "1.3.0",
+    });
+    const details: ChatTileFatalDetails = {
+      code: "CHAT_STORE_UNUSABLE",
+      reason: "CHAT_STORE_UNUSABLE: integrity verification failed",
+      upgradeGuidance: null,
+    };
+
+    render(
+      <ChatTileError
+        details={details}
+        hostUpdate={hostUpdate}
+        onRetry={() => undefined}
+      />,
+    );
+
+    const pane = screen.getByTestId("chat-tile-error");
+    expect(pane.getAttribute("data-error-code")).toBe("CHAT_STORE_UNUSABLE");
+    expect(screen.getByText("This agent could not be opened.")).toBeTruthy();
+    expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+  });
+
+  it("offers no host-update remedy when the guidance says both legs should upgrade", () => {
+    const hostUpdate = stubHostUpdate({
+      hostAppVersion: null,
+      clientAppVersion: null,
+    });
+    const details: ChatTileFatalDetails = {
+      code: "SOME_OTHER_CODE",
+      reason: "SOME_OTHER_CODE: both are stale",
+      upgradeGuidance: { hostShouldUpgrade: true, clientShouldUpgrade: true },
+    };
+
+    render(
+      <ChatTileError
+        details={details}
+        hostUpdate={hostUpdate}
+        onRetry={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("This agent could not be opened.")).toBeTruthy();
     expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
   });
 });

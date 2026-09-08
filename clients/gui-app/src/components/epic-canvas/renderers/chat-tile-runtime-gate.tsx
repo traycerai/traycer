@@ -11,9 +11,8 @@ import {
   type ReportIssueContext,
 } from "@/lib/report-issue-context";
 import {
-  describeVersionSkew,
   hostIsBehindClient,
-  type VersionSkewCopy,
+  HOST_UPDATE_SKEW_COPY,
 } from "@/lib/host/version-skew-copy";
 import type { PreSnapshotRetryEvidence } from "@/stores/chats/chat-session-store";
 import {
@@ -145,8 +144,10 @@ export function ChatTileLoading(): ReactNode {
  *
  * `HOST_OLDER_THAN_DATA` is the one code with a remedy the reader can act on:
  * the host is serving a chat store a NEWER host wrote, so no retry can help
- * and the only fix is updating that host. It gets the version-skew copy and
- * the update jump; every other code keeps the generic failure copy.
+ * and the only fix is updating that host. It gets the host-update copy and the
+ * update jump; every other code keeps the generic failure copy. See
+ * {@link describeFatalCopy} for why that is decided from the code and not from
+ * the two app versions.
  */
 export function ChatTileError(props: {
   readonly details: ChatTileFatalDetails;
@@ -154,35 +155,77 @@ export function ChatTileError(props: {
   readonly onRetry: () => void;
 }): ReactNode {
   const detail = props.details.reason.replace(/^[A-Z_]+:\s*/, "");
-  // The host's own `upgradeGuidance` is passed alongside the two versions:
-  // `HOST_OLDER_THAN_DATA` always carries `{hostShouldUpgrade: true}`, so the
-  // copy is decided even on a machine whose directory row has no version.
-  const skew =
-    props.details.code === HOST_OLDER_THAN_DATA_FATAL_CODE
-      ? describeVersionSkew({
-          hostAppVersion: props.hostUpdate.hostAppVersion,
-          clientAppVersion: props.hostUpdate.clientAppVersion,
-          guidance: props.details.upgradeGuidance,
-        })
-      : null;
+  const copy = describeFatalCopy(props.details);
   return (
     <ChatTilePane
       testId="chat-tile-error"
       errorCode={props.details.code}
       settled
-      title={skew?.title ?? "This agent could not be opened."}
+      title={copy.paneTitle}
       body={detail}
-      skew={skew}
+      hostUpdateLabel={copy.hostUpdateLabel}
       hostUpdate={props.hostUpdate}
       onRetry={props.onRetry}
       reportContext={createReportIssueContext({
-        title: skew?.title ?? "This agent could not be opened",
+        title: copy.reportTitle,
         message: "The agent could not be opened.",
         code: props.details.code,
         source: "Chat",
       })}
     />
   );
+}
+
+interface ChatTileFatalCopy {
+  readonly paneTitle: string;
+  readonly reportTitle: string;
+  /** The host-update affordance's label, or `null` for no such offer. */
+  readonly hostUpdateLabel: string | null;
+}
+
+/**
+ * What a fatal close tells the reader to DO.
+ *
+ * The host-update arm is decided by the host's own statements and never by
+ * relative versions, which is the whole point: `HOST_OLDER_THAN_DATA` says a
+ * store on that machine was written by a build newer than the one serving it,
+ * so an app at 1.3 talking to a host at 1.4 still needs the HOST to move.
+ * Routing this through `describeVersionSkew` answered "Your app is too old"
+ * for exactly that case and hid the only action that could help.
+ *
+ * `CHAT_STORE_UNUSABLE` is the neighbouring code and is deliberately NOT here.
+ * The host emits it for a malformed stamp, a shape that disagrees with its
+ * stamp, or failed integrity verification, and says so at the emitting site:
+ * "the remedy differs - this one needs a repair or a support report, not a
+ * host update". Its pane is the generic one, whose Report issue is that
+ * report.
+ */
+function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
+  if (fatalRemedyIsHostUpdate(details)) {
+    return {
+      paneTitle: HOST_UPDATE_SKEW_COPY.title,
+      reportTitle: HOST_UPDATE_SKEW_COPY.title,
+      hostUpdateLabel: HOST_UPDATE_SKEW_COPY.action,
+    };
+  }
+  return {
+    paneTitle: "This agent could not be opened.",
+    reportTitle: "This agent could not be opened",
+    hostUpdateLabel: null,
+  };
+}
+
+/**
+ * Whether the host has said, one way or the other, that IT is the leg that has
+ * to move. The code is the authoritative form; the guidance is the general
+ * one, and covers a future code this build has never heard of whose host still
+ * marked the direction. Neither is a version comparison.
+ */
+function fatalRemedyIsHostUpdate(details: ChatTileFatalDetails): boolean {
+  if (details.code === HOST_OLDER_THAN_DATA_FATAL_CODE) return true;
+  const guidance = details.upgradeGuidance;
+  if (guidance === null) return false;
+  return guidance.hostShouldUpgrade && !guidance.clientShouldUpgrade;
 }
 
 /**
@@ -204,21 +247,17 @@ export function ChatTileStillTrying(props: {
   readonly hostUpdate: ChatTileHostUpdate;
   readonly onRetry: () => void;
 }): ReactNode {
-  // The predicate decides WHETHER there is an update to offer - it answers
-  // from the two versions alone, where `describeVersionSkew`'s own fallback
-  // would warn and default to host-update copy on versions it cannot compare.
-  // `describeVersionSkew` still owns the WORDS, so this pane and the fatal one
-  // above name the remedy identically.
-  const skew = hostIsBehindClient({
+  // Versions are the ONLY evidence available here: there is no close to read a
+  // code or a guidance off, which is what separates this pane from the fatal
+  // one. The predicate answers from the two versions alone, where
+  // `describeVersionSkew`'s own fallback would warn and default to host-update
+  // copy on versions it cannot compare - and a stalled load is not yet an
+  // attributed skew. The WORDS are the shared constant either way, so this pane
+  // and the fatal one above name the remedy identically.
+  const hostIsBehind = hostIsBehindClient({
     hostAppVersion: props.hostUpdate.hostAppVersion,
     clientAppVersion: props.hostUpdate.clientAppVersion,
-  })
-    ? describeVersionSkew({
-        hostAppVersion: props.hostUpdate.hostAppVersion,
-        clientAppVersion: props.hostUpdate.clientAppVersion,
-        guidance: null,
-      })
-    : null;
+  });
   const attempts = describeAttempts(props.retries.count);
   return (
     <ChatTilePane
@@ -228,9 +267,11 @@ export function ChatTileStillTrying(props: {
       // replaced - and the spinner's live region, so a reader who was told the
       // agent was loading is told when that stops being the whole story.
       settled={false}
-      title={skew?.title ?? "Still opening this agent"}
+      title={
+        hostIsBehind ? HOST_UPDATE_SKEW_COPY.title : "Still opening this agent"
+      }
       body={`The host has not opened this agent after ${attempts}.`}
-      skew={skew}
+      hostUpdateLabel={hostIsBehind ? HOST_UPDATE_SKEW_COPY.action : null}
       hostUpdate={props.hostUpdate}
       onRetry={props.onRetry}
       reportContext={createReportIssueContext({
@@ -263,17 +304,18 @@ function ChatTilePane(props: {
   readonly settled: boolean;
   readonly title: string;
   readonly body: string;
-  readonly skew: VersionSkewCopy | null;
+  /**
+   * The host-update affordance's label, or `null` for no such offer. Each
+   * caller decides from its own evidence, and only ever for a HOST that has to
+   * move: "update the app" is a different remedy on a different surface (the
+   * app updater), and this jump would send that reader to a host page with
+   * nothing to fix.
+   */
+  readonly hostUpdateLabel: string | null;
   readonly hostUpdate: ChatTileHostUpdate;
   readonly onRetry: () => void;
   readonly reportContext: ReportIssueContext;
 }): ReactNode {
-  // Only the host-behind direction gets an action here. "Update the app" is a
-  // different remedy on a different surface (the app updater), and offering
-  // this jump for it would send the reader to a host page that has nothing to
-  // fix - so that direction keeps the title and falls back to Retry.
-  const hostUpdateLabel =
-    props.skew?.direction === "host-outdated" ? props.skew.action : null;
   return (
     <div
       data-testid={props.testId}
@@ -293,7 +335,7 @@ function ChatTilePane(props: {
         </div>
         <p className="text-ui-sm text-muted-foreground">{props.body}</p>
         <div className="flex flex-wrap justify-center gap-2">
-          {hostUpdateLabel !== null ? (
+          {props.hostUpdateLabel !== null ? (
             <Button
               type="button"
               variant="default"
@@ -301,7 +343,7 @@ function ChatTilePane(props: {
               data-testid="chat-tile-host-update"
               onClick={props.hostUpdate.openHostUpdate}
             >
-              {hostUpdateLabel}
+              {props.hostUpdateLabel}
             </Button>
           ) : null}
           <Button

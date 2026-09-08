@@ -5,6 +5,7 @@ import {
   SOURCE_TREE_HOST_VERSION,
   decideStoreFormatFloor,
   isReleasedHostVersion,
+  isValidStoreFormatVersion,
   resolveHostStoreFormats,
   storeFloorApplicability,
   storeFloorClearedByFormats,
@@ -113,6 +114,14 @@ describe("store floor format helpers", () => {
       null,
       { applies: true },
     ],
+    // R4: this one already passes via incomparability (`compareHostVersions`
+    // cannot order a released target against a build stamp at all), which is
+    // a different path than the sentinel row below (which passes because
+    // `isReleasedHostVersion` names it explicitly, not because it is
+    // incomparable - `0.0.0-dev` DOES compare, and orders below every
+    // release). Pinned so a future "simplify" collapsing the two into one
+    // rule cannot silently make the sentinel case the only thing holding
+    // this one up.
     [
       "released target over a build stamp",
       "1.2.0",
@@ -169,6 +178,22 @@ describe("store floor format helpers", () => {
       declared,
       { applies: true },
     ],
+    // R4: `SOURCE_TREE_HOST_VERSION` parses as SemVer and sorts below every
+    // release, so ordering ALONE would call a released target an upgrade
+    // over it and skip the floor - while a source build writes today's
+    // format. `isReleasedHostVersion` has to name the sentinel explicitly
+    // for the installed side, not merely rely on `compareHostVersions`. The
+    // build-stamped-installed sibling above already covers the same shape
+    // via incomparability - pinning the sentinel here separately means a
+    // future "simplify" that special-cases the sentinel cannot break this
+    // one while leaving that one green.
+    [
+      "released target over the source-tree sentinel installed",
+      "1.2.0",
+      SOURCE_TREE_HOST_VERSION,
+      null,
+      { applies: true },
+    ],
   ])("applicability: %s", (_label, target, installed, formats, expected) => {
     expect(storeFloorApplicability(target, installed, formats)).toEqual(
       expected,
@@ -213,7 +238,10 @@ describe("store floor format helpers", () => {
 });
 
 describe("decideStoreFormatFloor", () => {
-  const failure = { epicId: "epic-failed", reason: "read failed" };
+  const failure = {
+    epicId: "epic-failed",
+    reason: "unreadable-chat-db" as const,
+  };
   const readingAbove = { epicId: "epic-new", schemaVersion: 9 };
 
   it("returns target-format-unknown and carries survey failures", () => {
@@ -229,7 +257,11 @@ describe("decideStoreFormatFloor", () => {
     });
   });
 
-  it("blocks on readings above target, even when failures are present", () => {
+  it("blocks on readings above target, even when failures are present, and carries both", () => {
+    // `blocked` outranks `indeterminate` - the proven reading is the more
+    // useful refusal to lead with - but the unreadable store is still a
+    // store the verdict cannot speak for, and dropping it would
+    // under-report what the user was about to lose.
     expect(
       decideStoreFormatFloor(
         { kind: "known", formats: { chatDb: 8 } },
@@ -239,6 +271,7 @@ describe("decideStoreFormatFloor", () => {
       kind: "blocked",
       targetChatDb: 8,
       epics: [readingAbove],
+      failures: [failure],
     });
   });
 
@@ -286,10 +319,33 @@ describe("decideStoreFormatFloor", () => {
       kind: "blocked",
       targetChatDb: NO_CHAT_STORE,
       epics: [{ epicId: "epic", schemaVersion: 1 }],
+      failures: [],
     });
   });
 });
 
 it("uses the dedicated fatal code for a host older than its data", () => {
   expect(HOST_OLDER_THAN_DATA_FATAL_CODE).toBe("HOST_OLDER_THAN_DATA");
+});
+
+describe("isValidStoreFormatVersion", () => {
+  // The single predicate behind the manifest parser, the archive
+  // declaration and the store row - its edges are worth pinning once here
+  // rather than three times downstream.
+  it.each([1, 9])("accepts %s", (value) => {
+    expect(isValidStoreFormatVersion(value)).toBe(true);
+  });
+
+  it.each([
+    ["zero", 0],
+    ["a negative integer", -1],
+    ["a fractional number", 1.5],
+    ["NaN", Number.NaN],
+    ["one past MAX_SAFE_INTEGER", Number.MAX_SAFE_INTEGER + 1],
+    ["a numeric string", "9"],
+    ["null", null],
+    ["undefined", undefined],
+  ])("rejects %s", (_label, value) => {
+    expect(isValidStoreFormatVersion(value)).toBe(false);
+  });
 });

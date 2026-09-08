@@ -47,8 +47,8 @@ import {
   resolveHostStoreFormats,
   storeFloorApplicability,
   storeFloorClearedByFormats,
-  storeFormatsFromReleasedTable,
   type ChatDbStampFailure,
+  type ChatDbStampFailureReason,
   type ChatDbStampReading,
   type HostStoreFormats,
   type HostStoreFormatsKnowledge,
@@ -127,6 +127,16 @@ export interface StoreFormatFloorInput {
    * exactly the state in which a downgrade is most likely to be attempted.
    */
   readonly installedVersion: string | null;
+  /**
+   * What the INSTALLED tree declares it writes, or `null`. See
+   * `InstalledFloorOperands.storeFormats` - it is what keeps a build-stamped
+   * install from walking the disk on a move that is not a downgrade.
+   *
+   * An input rather than something this module fetches, so a caller's test can
+   * state the installed side instead of inheriting the developer's own
+   * `~/.traycer`.
+   */
+  readonly installedStoreFormats: HostStoreFormats | null;
   /** `--accept-store-format-loss`. Never inferred from `--force`. */
   readonly acceptStoreFormatLoss: boolean;
   readonly site: StoreFormatFloorSite;
@@ -150,30 +160,13 @@ export async function assertHostStoreFormatFloor(
     input.declaredStoreFormats,
   );
   if (!applicability.applies) {
-    // Two very different non-answers, and they are logged at different levels
-    // on purpose. `target-not-older` is the overwhelmingly common path (every
-    // upgrade) and belongs at debug. `target-off-ladder` means the floor had
-    // nothing to judge the target BY - it stood aside rather than cleared it -
-    // and an operator reading why a downgrade was allowed deserves to find
-    // that at INFO rather than infer it from silence.
-    if (applicability.reason === "target-off-ladder") {
-      input.logger.info("Host store-format floor stood aside", {
-        environment: input.environment,
-        site: input.site,
-        targetVersion: input.targetVersion,
-        installedVersion: input.installedVersion,
-        reason: applicability.reason,
-        detail:
-          "the target is not a released host version and declares no store formats; the commit tail judges the staged archive's own declaration",
-      });
-      return;
-    }
-    input.logger.debug("Host store-format floor not consulted", {
+    logFloorNotApplicable({
       environment: input.environment,
       site: input.site,
       targetVersion: input.targetVersion,
       installedVersion: input.installedVersion,
       reason: applicability.reason,
+      logger: input.logger,
     });
     return;
   }
@@ -186,16 +179,27 @@ export async function assertHostStoreFormatFloor(
     input.targetVersion,
     input.publishedStoreFormats ?? input.declaredStoreFormats,
   );
-  // The INSTALLED side is read from the fixed table only, never from a
-  // manifest. It is used solely by the short-circuit below, and the
-  // short-circuit can only SKIP the disk walk - a table that cannot name the
-  // installed build's format falls through to the walk, which is the
-  // authoritative answer anyway. So an unknown here costs milliseconds, and
-  // never a wrong verdict.
+  // The INSTALLED side, from the installed tree's own declaration first and
+  // the fixed table second - never from a manifest, which describes a build
+  // that may not be the one on disk.
+  //
+  // The declaration is not a nicety here. A skipped walk always ALLOWS, but a
+  // taken walk can return `indeterminate`, and that REFUSES - so an unknown
+  // installed side does not merely cost milliseconds, it converts a clear
+  // verdict into a refusal the moment any single store happens to be
+  // unreadable (an EACCES, a `-wal` under an unwritable directory, an
+  // exclusive lock - precisely the state a crash-looping host leaves behind).
+  // Every build-stamped install is unplaceable by the table, so without the
+  // declaration `host ensure` converging FORWARD onto its own bundled host
+  // could be refused over a move that cannot lose anything, with no way past
+  // it but a flag neither the desktop nor `make` passes.
   const installed =
     input.installedVersion === null
       ? null
-      : storeFormatsFromReleasedTable(input.installedVersion);
+      : resolveHostStoreFormats(
+          input.installedVersion,
+          input.installedStoreFormats,
+        );
   if (storeFloorClearedByFormats(target, installed)) {
     input.logger.debug("Host store-format floor cleared without a disk walk", {
       environment: input.environment,
@@ -253,6 +257,43 @@ export async function assertHostStoreFormatFloor(
   throw refusal;
 }
 
+/**
+ * The record that the floor did not judge this move.
+ *
+ * Shared by the pre-stage gate and the commit tail so both sites say it, and
+ * say it the same way. Two very different non-answers, logged at different
+ * levels on purpose: `target-not-older` is the overwhelmingly common path
+ * (every upgrade) and belongs at debug, while `target-off-ladder` means the
+ * floor had nothing to judge the target BY - it stood aside rather than
+ * cleared it - and an operator reading why a downgrade was allowed deserves to
+ * find that at INFO rather than infer it from silence.
+ */
+function logFloorNotApplicable(args: {
+  readonly environment: Environment;
+  readonly site: StoreFormatFloorSite;
+  readonly targetVersion: string;
+  readonly installedVersion: string | null;
+  readonly reason: "target-not-older" | "target-off-ladder";
+  readonly logger: ILogger;
+}): void {
+  const fields = {
+    environment: args.environment,
+    site: args.site,
+    targetVersion: args.targetVersion,
+    installedVersion: args.installedVersion,
+    reason: args.reason,
+  };
+  if (args.reason !== "target-off-ladder") {
+    args.logger.debug("Host store-format floor not consulted", fields);
+    return;
+  }
+  args.logger.info("Host store-format floor stood aside", {
+    ...fields,
+    detail:
+      "the target is not a released host version and declares no store formats; the commit tail judges the staged archive's own declaration",
+  });
+}
+
 function storeFormatFloorRefusal(
   input: StoreFormatFloorInput,
   target: HostStoreFormatsKnowledge,
@@ -263,7 +304,7 @@ function storeFormatFloorRefusal(
     "Update forward instead, or rerun with --accept-store-format-loss to install it anyway and lose access to those chats.";
   const message =
     verdict.kind === "blocked"
-      ? `${head} - it reads chat store format ${verdict.targetChatDb}, and ${countedEpics(verdict.epics.length)} on this machine ${verdict.epics.length === 1 ? "carries" : "carry"} a newer one (${describeReadings(verdict.epics)}). Those chats would be unreadable to it, and a host that meets a store it cannot open crash-loops rather than reporting it. ${remedy}`
+      ? `${head} - it reads chat store format ${verdict.targetChatDb}, and ${countedEpics(verdict.epics.length)} on this machine ${verdict.epics.length === 1 ? "carries" : "carry"} a newer one (${describeReadings(verdict.epics)}).${describeBlockedFailures(verdict.failures)} Those chats would be unreadable to it, and a host that meets a store it cannot open crash-loops rather than reporting it. ${remedy}`
       : `${head} - ${describeIndeterminate(input, verdict)}, so it cannot be shown that those chats survive the downgrade. ${remedy}`;
   return cliError({
     code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
@@ -279,6 +320,22 @@ function storeFormatFloorRefusal(
     },
     exitCode: 1,
   });
+}
+
+/**
+ * The unreadable stores a BLOCKED verdict also found, or nothing.
+ *
+ * `blocked` wins over `indeterminate` because naming the proven-newer epics is
+ * the more useful refusal - but the unreadable ones are still stores whose
+ * fate this verdict cannot speak for, and a message that listed only the
+ * proven ones would under-report what the user is about to lose. Leading space
+ * included so the caller can concatenate an empty string away.
+ */
+function describeBlockedFailures(
+  failures: readonly ChatDbStampFailure[],
+): string {
+  if (failures.length === 0) return "";
+  return ` A further ${countedEpics(failures.length)} could not be read at all (${describeFailures(failures)}), so what a downgrade would do to ${failures.length === 1 ? "it" : "them"} cannot be shown either.`;
 }
 
 function describeIndeterminate(
@@ -311,8 +368,45 @@ function describeReadings(readings: readonly ChatDbStampReading[]): string {
 
 function describeFailures(failures: readonly ChatDbStampFailure[]): string {
   return joinCapped(
-    failures.map((failure) => `${failure.epicId}: ${failure.reason}`),
+    failures.map(
+      (failure) =>
+        `${failure.epicId}: ${describeFailureReason(failure.reason)}`,
+    ),
   );
+}
+
+/**
+ * A failure code as a sentence fragment.
+ *
+ * The message a user reads should say what happened, not name an enum; the
+ * enum itself still travels in `details` for anything parsing the envelope.
+ * `engine-unavailable` is the one that matters most to get right - it is a
+ * statement about THIS PROCESS, and phrasing it as a damaged file would blame
+ * the user's data for the CLI's runtime.
+ */
+function describeFailureReason(reason: ChatDbStampFailureReason): string {
+  switch (reason) {
+    case "linked-epic-directory":
+      return "the epic directory is a symbolic link";
+    case "linked-chat-directory":
+      return "the chat directory is a symbolic link";
+    case "epic-state-not-a-directory":
+      return "the epic entry is not a directory";
+    case "chat-directory-not-a-directory":
+      return "the chat entry is not a directory";
+    case "unreadable-epic-state-directory":
+      return "the epic-state directory could not be read";
+    case "chat-db-not-a-file":
+      return "chat.db is not a regular file";
+    case "missing-or-invalid-schema-version":
+      return "it carries no usable format stamp";
+    case "unreadable-chat-db":
+      return "chat.db could not be read";
+    case "engine-unavailable":
+      return "this CLI has no SQLite engine under the runtime it is running on, so no store was examined";
+    case "survey-failed":
+      return "the survey did not complete";
+  }
 }
 
 function joinCapped(parts: readonly string[]): string {
@@ -336,7 +430,11 @@ function floorLogFields(
 ): { readonly [key: string]: LogValue } {
   const blockedEpics =
     verdict.kind === "blocked" ? verdict.epics : ([] as const);
-  const failures = verdict.kind === "blocked" ? [] : verdict.failures;
+  // Both verdicts carry failures now. A blocked verdict used to drop them,
+  // which meant the NDJSON envelope and the log line named only the epics the
+  // survey could prove - and everything downstream that renders a refusal
+  // (the consent warning, the typed GUI refusal) inherited that blind spot.
+  const failures = verdict.failures;
   return {
     targetVersion: input.targetVersion,
     installedVersion: input.installedVersion,
@@ -396,6 +494,33 @@ export interface StoreFormatFloorEvidence {
 }
 
 /**
+ * The version the floor judges for a tree that is about to land: the ARCHIVE's
+ * own `version.json` stamp when it declares one, else the version the install
+ * record will carry.
+ *
+ * The two are different strings for one shape of install, and only one of them
+ * describes the bytes. `host install --from ./host-v1.2.0.tar.gz` records
+ * `local-host-v1.2.0.tar.gz-<timestamp>` - deliberately, so one local install
+ * is distinguishable from the next - and that stamp is not a released version.
+ * Judged by it, a genuinely released 1.2.0 archive reads as off-ladder and the
+ * floor STANDS ASIDE on precisely the downgrade it exists to refuse. Judged by
+ * the sidecar's `1.2.0`, the fixed table answers chat store format 8 and a
+ * machine holding 9s blocks it.
+ *
+ * Preferred whether or not the declaration is itself a released version. A
+ * stamp read off the tree is a better description of the tree than one derived
+ * from a filename or a caller's prediction either way, and an off-ladder
+ * declaration that names no formats still stands aside - so the preference can
+ * only ever move a target from "unjudgeable" towards "judged".
+ */
+export function storeFormatFloorTargetVersion(
+  declaredRuntimeVersion: string | null,
+  recordVersion: string,
+): string {
+  return declaredRuntimeVersion ?? recordVersion;
+}
+
+/**
  * The floor, re-checked at the commit tail from the version actually being
  * placed.
  *
@@ -408,8 +533,19 @@ export interface StoreFormatFloorEvidence {
 export async function assertStoreFormatFloorAtCommit(args: {
   readonly environment: Environment;
   readonly hostHome: string;
-  /** The version whose bytes this commit is about to swap in. */
+  /**
+   * The version the install RECORD will carry. Not necessarily the version
+   * judged - see `declaredRuntimeVersion`.
+   */
   readonly committingVersion: string;
+  /**
+   * The archive's own `version.json` stamp, or `null` when it declares none.
+   *
+   * Takes precedence over `committingVersion` as the version this check
+   * judges (`storeFormatFloorTargetVersion`), because a record version can be
+   * derived from a local filename while this one is read from the tree.
+   */
+  readonly declaredRuntimeVersion: string | null;
   /**
    * What the extracted tree about to be swapped in declares about itself.
    *
@@ -420,11 +556,22 @@ export async function assertStoreFormatFloorAtCommit(args: {
    */
   readonly declaredStoreFormats: HostStoreFormats | null;
   readonly installedVersion: string | null;
+  /** See `StoreFormatFloorInput.installedStoreFormats`. */
+  readonly installedStoreFormats: HostStoreFormats | null;
   readonly evidence: StoreFormatFloorEvidence;
   readonly logger: ILogger;
 }): Promise<void> {
-  const sameBytesAsGated =
-    args.evidence.clearedVersion === args.committingVersion;
+  const targetVersion = storeFormatFloorTargetVersion(
+    args.declaredRuntimeVersion,
+    args.committingVersion,
+  );
+  // Compared against the version JUDGED, not the one recorded: the published
+  // formats were fetched for the manifest entry the early gate named, and if
+  // the tree about to land calls itself something else then that entry
+  // describes a different build. Dropping them sends the resolution to the
+  // archive's own declaration and then to the fixed table - the fail-closed
+  // direction - rather than clearing these bytes on another build's word.
+  const sameBytesAsGated = args.evidence.clearedVersion === targetVersion;
   if (!sameBytesAsGated && args.evidence.clearedVersion !== null) {
     args.logger.warn(
       "Host store-format floor re-checked against different bytes than the early gate cleared",
@@ -433,13 +580,15 @@ export async function assertStoreFormatFloorAtCommit(args: {
         site: args.evidence.site,
         clearedVersion: args.evidence.clearedVersion,
         committingVersion: args.committingVersion,
+        declaredRuntimeVersion: args.declaredRuntimeVersion,
+        targetVersion,
       },
     );
   }
   await assertHostStoreFormatFloor({
     environment: args.environment,
     hostHome: args.hostHome,
-    targetVersion: args.committingVersion,
+    targetVersion,
     publishedStoreFormats: sameBytesAsGated
       ? args.evidence.publishedStoreFormats
       : null,
@@ -448,6 +597,7 @@ export async function assertStoreFormatFloorAtCommit(args: {
     // whatever the early gate looked at.
     declaredStoreFormats: args.declaredStoreFormats,
     installedVersion: args.installedVersion,
+    installedStoreFormats: args.installedStoreFormats,
     acceptStoreFormatLoss: args.evidence.acceptStoreFormatLoss,
     site: args.evidence.site,
     logger: args.logger,
@@ -455,36 +605,6 @@ export async function assertStoreFormatFloorAtCommit(args: {
 }
 
 /**
- * `install.json`'s version for the floor's "installed" operand, collapsing
- * every unreadable state to `null`.
- *
- * `null` is the CONSERVATIVE answer here, which is why the strict reader's
- * throw is swallowed rather than propagated: `storeFloorApplicability` treats a
- * null install as "evaluate", so a corrupt record walks the epics instead of
- * skipping the gate. Refusing the whole command over an unreadable record
- * would be the wrong trade in the other direction - a corrupt `install.json`
- * is exactly when someone is reinstalling.
- */
-export async function readInstalledVersionForFloor(
-  environment: Environment,
-  logger: ILogger,
-): Promise<string | null> {
-  try {
-    const record = await readHostInstallRecord(environment);
-    return record === null ? null : record.version;
-  } catch (err) {
-    logger.warn(
-      "Host store-format floor could not read the install record; evaluating as if nothing were installed",
-      {
-        environment,
-        errorName: errorFromUnknown(err).name,
-        errorMessage: errorFromUnknown(err).message,
-      },
-    );
-    return null;
-  }
-}
-
 /**
  * Evidence for a caller that could NOT gate early - it had no concrete version
  * before staging (`--from`, an implicit `latest`).
@@ -535,6 +655,8 @@ export async function gateStoreFormatFloor(args: {
    * and asking the network would be a round trip that cannot answer.
    */
   readonly consultRegistry: boolean;
+  /** See `StoreFormatFloorInput.installedStoreFormats`. */
+  readonly installedStoreFormats: HostStoreFormats | null;
   readonly acceptStoreFormatLoss: boolean;
   readonly site: StoreFormatFloorSite;
   readonly logger: ILogger;
@@ -553,6 +675,18 @@ export async function gateStoreFormatFloor(args: {
     null,
   );
   if (!applicability.applies) {
+    // Logged HERE and not only inside the gate below: this early return is the
+    // one that runs on every ordinary install, so leaving it silent would mean
+    // the "stood aside" record the module promises appears at a pre-stage site
+    // exactly never.
+    logFloorNotApplicable({
+      environment: args.environment,
+      site: args.site,
+      targetVersion: args.targetVersion,
+      installedVersion: args.installedVersion,
+      reason: applicability.reason,
+      logger: args.logger,
+    });
     return { ...evidence, publishedStoreFormats: null };
   }
   const publishedStoreFormats = args.consultRegistry
@@ -569,6 +703,7 @@ export async function gateStoreFormatFloor(args: {
     publishedStoreFormats,
     declaredStoreFormats: null,
     installedVersion: args.installedVersion,
+    installedStoreFormats: args.installedStoreFormats,
     acceptStoreFormatLoss: args.acceptStoreFormatLoss,
     site: args.site,
     logger: args.logger,

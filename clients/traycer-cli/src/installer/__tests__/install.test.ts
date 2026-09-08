@@ -217,11 +217,42 @@ import type {
   RegistryClient,
 } from "../../registry";
 import { ungatedStoreFormatFloorEvidence } from "../../host/store-format-floor";
+import { EPIC_STATE_DIRNAME } from "../../host/chat-store-survey";
 import {
   expectReached,
   expectStillGated,
   makeBarrierGate,
 } from "../../__tests__/support/barrier-gate";
+
+// Written the same way `chat-store-survey.test.ts` writes its fixtures - the
+// real on-disk shape the host itself produces, at
+// `<hostHome>/epic-state/<epicId>/chat/chat.db`.
+async function writeStampedChatDbFor(
+  environment: Environment,
+  epicId: string,
+  schemaVersion: number,
+): Promise<void> {
+  const dir = join(
+    hostHomeFor(environment),
+    EPIC_STATE_DIRNAME,
+    epicId,
+    "chat",
+  );
+  mkdirSync(dir, { recursive: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(join(dir, "chat.db"));
+  try {
+    db.exec(
+      "CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    db.prepare("INSERT INTO chat_db_meta (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      String(schemaVersion),
+    );
+  } finally {
+    db.close();
+  }
+}
 
 const ENV: Environment = "production";
 
@@ -743,6 +774,158 @@ describe("commitInstallFromSource", () => {
 
     expect(record.version).toBe("1.0.0");
     expect(existsSync(installDirFor(ENV))).toBe(true);
+  });
+
+  describe("host install --from a released archive - the floor runs genuinely, not mocked", () => {
+    // `assertStoreFormatFloorAtCommitMock` is a pass-through spy by default
+    // (see the `../../host/store-format-floor` mock above) - none of these
+    // tests configure an implementation, so the REAL floor decides. This is
+    // the regression these tests exist to pin: `host install --from` records
+    // `deriveLocalVersion(sourcePath)` (`local-<basename>-<timestamp>`) as
+    // the install version, which no released-version table can place, so
+    // before the production fix the floor stood aside on precisely the
+    // downgrade it exists to refuse. `runtimeVersion`/`version.json` are what
+    // let the tail resolve the ACTUAL release being installed instead.
+    const LOCAL_VERSION = "local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z";
+
+    async function setUpPreviousInstall(): Promise<void> {
+      // The hostHome is empty at this point - no chat stores yet - so the
+      // floor clears this setup install unconditionally regardless of
+      // version, exactly like every other `installHost` call in this file.
+      const firstSource = join(sandboxRoot, "source-previous");
+      writeLocalHostSource(firstSource, "previous");
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: firstSource },
+        onProgress: () => {},
+        lifecycle: null,
+        recordVersionOverride: "1.3.0-rc.4",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+    }
+
+    it("refuses a released archive with no storeFormats declaration, never swapping - the bug this fixes", async () => {
+      await setUpPreviousInstall();
+      const sourceDir = join(sandboxRoot, "source-1.2.0-undeclared");
+      writeLocalHostSource(sourceDir, "1.2.0-undeclared");
+      writeFileSync(
+        join(sourceDir, "version.json"),
+        JSON.stringify({ version: "1.2.0" }),
+      );
+      const executablePath = join(sourceDir, "traycer-host");
+      let beforeSwapCalled = false;
+
+      await expect(
+        commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: LOCAL_VERSION,
+          runtimeVersion: "1.2.0",
+          source: { kind: "local-file", value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            beforeSwap: async () => {
+              beforeSwapCalled = true;
+            },
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            swapLockRecovery: null,
+          },
+          onWillSwap: null,
+          onCommitted: () => {},
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      // Nothing was stopped or swapped - a refusal that happens after the
+      // stop is not a floor.
+      expect(beforeSwapCalled).toBe(false);
+      expect(
+        readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
+      ).toBe("binary-previous");
+    });
+
+    it("commits when the archive declares a storeFormats that clears the chat store on disk", async () => {
+      await setUpPreviousInstall();
+      const sourceDir = join(sandboxRoot, "source-1.2.0-declared");
+      writeLocalHostSource(sourceDir, "1.2.0-declared");
+      writeFileSync(
+        join(sourceDir, "version.json"),
+        JSON.stringify({ version: "1.2.0", storeFormats: { chatDb: 9 } }),
+      );
+      const executablePath = join(sourceDir, "traycer-host");
+
+      const { record } = await commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: LOCAL_VERSION,
+        runtimeVersion: "1.2.0",
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: null,
+        onWillSwap: null,
+        onCommitted: () => {},
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+
+      expect(record.version).toBe(LOCAL_VERSION);
+      expect(
+        readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
+      ).toBe("binary-1.2.0-declared");
+    });
+
+    it("commits an archive with no version.json at all - unchanged off-ladder behaviour", async () => {
+      await setUpPreviousInstall();
+      const sourceDir = join(sandboxRoot, "source-no-version-json");
+      writeLocalHostSource(sourceDir, "no-version-json");
+      const executablePath = join(sourceDir, "traycer-host");
+
+      const { record } = await commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: LOCAL_VERSION,
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: null,
+        onWillSwap: null,
+        onCommitted: () => {},
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+
+      expect(record.version).toBe(LOCAL_VERSION);
+      expect(
+        readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
+      ).toBe("binary-no-version-json");
+    });
   });
 });
 

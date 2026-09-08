@@ -13298,6 +13298,11 @@ describe("preSnapshotRetries", () => {
 
     callbacks.onConnectionStatus("reconnecting", null);
     const first = preSnapshotRetries(harness);
+    // The `firstAt` below is self-referential - it proves STABILITY across the
+    // two reads, not that a clock was ever read - so pin down that it is a
+    // real instant here. Without this the whole assertion would pass on a
+    // `NaN` or an `Infinity`, and the gate's elapsed arm compares against it.
+    expect(Number.isFinite(first.firstAt)).toBe(true);
     expect(first).toEqual({
       count: 1,
       firstAt: first.firstAt,

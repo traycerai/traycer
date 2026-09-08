@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { HostUpdateStoreFloorRefusal } from "@traycer/protocol/host/maintenance/index";
 import {
+  describeHostStoreFloorRpcRefusal,
   hostStoreFormatRestriction,
+  hostStoreFormatRestrictionFromRpc,
   type HostStoreFormatOffer,
 } from "../host-overview-store-formats";
 
@@ -183,5 +186,136 @@ describe("hostStoreFormatRestriction", () => {
         offer({ version: "1.2.0", publishedFormats: { chatDb: 9 } }),
       ),
     ).toBeNull();
+  });
+});
+
+function blockedRefusal(
+  overrides: Partial<HostUpdateStoreFloorRefusal>,
+): HostUpdateStoreFloorRefusal {
+  return {
+    kind: "blocked",
+    reason: "newer-chat-stores",
+    targetVersion: "1.2.0",
+    targetChatDb: 8,
+    onDiskMax: 9,
+    epicCount: 2,
+    epicIds: ["epic-a", "epic-b"],
+    unreadableEpicCount: 0,
+    unreadableEpicIds: [],
+    ...overrides,
+  };
+}
+
+describe("describeHostStoreFloorRpcRefusal", () => {
+  it("says nothing about unreadable stores when none were unreadable", () => {
+    const description = describeHostStoreFloorRpcRefusal(
+      blockedRefusal({ unreadableEpicCount: 0, unreadableEpicIds: [] }),
+    );
+    expect(description).not.toContain("could not be read");
+    expect(description).toBe(
+      "Can't install 1.2.0: 2 epics (epic-a, epic-b) use a newer chat store (format 9; 1.2.0 reads 8). Update forward instead, or choose Install anyway for v1.2.0 to proceed and lose access to affected chats until the host is updated again.",
+    );
+  });
+
+  it("names the proven-newer epics and the unreadable epics separately, with the override guidance last", () => {
+    const description = describeHostStoreFloorRpcRefusal(
+      blockedRefusal({
+        epicCount: 2,
+        epicIds: ["epic-a", "epic-b"],
+        unreadableEpicCount: 2,
+        unreadableEpicIds: ["epic-c", "epic-d"],
+      }),
+    );
+    expect(description).toContain(
+      "2 epics (epic-a, epic-b) use a newer chat store",
+    );
+    expect(description).toContain(
+      "2 epics (epic-c, epic-d) could not be read.",
+    );
+    expect(description.indexOf("Update forward instead")).toBeGreaterThan(
+      description.indexOf("could not be read."),
+    );
+  });
+
+  it("truncates the unreadable group with an ellipsis when the count exceeds the id list", () => {
+    const unreadableEpicIds = Array.from(
+      { length: 10 },
+      (_, index) => `epic-${index}`,
+    );
+    const description = describeHostStoreFloorRpcRefusal(
+      blockedRefusal({
+        unreadableEpicCount: 14,
+        unreadableEpicIds,
+      }),
+    );
+    expect(description).toContain(
+      `14 epics (${unreadableEpicIds.join(", ")}, …) could not be read.`,
+    );
+  });
+
+  it("uses the singular for exactly one unreadable epic", () => {
+    const description = describeHostStoreFloorRpcRefusal(
+      blockedRefusal({
+        unreadableEpicCount: 1,
+        unreadableEpicIds: ["epic-c"],
+      }),
+    );
+    expect(description).toContain("1 epic (epic-c) could not be read.");
+    expect(description).not.toContain("1 epics");
+  });
+
+  it("does not add a second unreadable clause on the indeterminate arm, whose epicIds already ARE the unreadable set", () => {
+    const description = describeHostStoreFloorRpcRefusal({
+      kind: "indeterminate",
+      reason: "unreadable-stores",
+      targetVersion: "1.2.0",
+      targetChatDb: null,
+      onDiskMax: null,
+      epicCount: 2,
+      epicIds: ["epic-a", "epic-b"],
+      unreadableEpicCount: 2,
+      unreadableEpicIds: ["epic-a", "epic-b"],
+    });
+    const occurrences = description.split("could not be read").length - 1;
+    expect(occurrences).toBe(1);
+  });
+});
+
+describe("hostStoreFormatRestrictionFromRpc", () => {
+  it("includes the unreadable-stores sentence in the confirmation body when the refusal names unreadable epics", () => {
+    const restriction = hostStoreFormatRestrictionFromRpc(
+      blockedRefusal({
+        unreadableEpicCount: 2,
+        unreadableEpicIds: ["epic-c", "epic-d"],
+      }),
+    );
+    expect(restriction.kind).toBe("blocked");
+    expect(restriction.confirmation).toContain(
+      "2 epics (epic-c, epic-d) couldn't be read, so Traycer can't verify v1.2.0 can open them.",
+    );
+    expect(restriction.confirmation).toMatch(
+      /Nothing is deleted; updating forward restores access\.$/,
+    );
+  });
+
+  it("omits the unreadable-stores sentence when the refusal has no unreadable epics", () => {
+    const restriction = hostStoreFormatRestrictionFromRpc(
+      blockedRefusal({ unreadableEpicCount: 0, unreadableEpicIds: [] }),
+    );
+    expect(restriction.confirmation).not.toContain("couldn't be read");
+    expect(restriction.confirmation).toBe(
+      "This device has chat stores written in format 9. v1.2.0 reads format 8, so it can't open those chats, and it may fail to start until you update the host again. Nothing is deleted; updating forward restores access.",
+    );
+  });
+});
+
+describe("hostStoreFormatRestriction confirmation (cached host.status path)", () => {
+  it("never names unreadable epics, because the cached status has no per-epic list at all", () => {
+    const restriction = hostStoreFormatRestriction(offer({}));
+    expect(restriction).not.toBeNull();
+    // `hostStoreFormatRestriction` always passes `null` for the unreadable
+    // group to `newerStoresRestriction` - the cached `host.status` path can
+    // only say whether the survey failed, never which epics.
+    expect(restriction?.confirmation).not.toContain("couldn't be read, so");
   });
 });

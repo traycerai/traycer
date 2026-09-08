@@ -1,19 +1,10 @@
-import { dirname } from "node:path";
 import {
   resolveHostStoreFormats,
   CHAT_DB_FORMAT_TABLE_CEILING,
-  type HostStoreFormats,
 } from "@traycer/protocol/host/store-formats";
 import { surveyChatDbStamps } from "../host/chat-store-survey";
-import { readInstalledVersionForFloor } from "../host/store-format-floor";
-import { readExtractedStoreFormats } from "../installer/install";
-import {
-  readHostInstallRecord,
-  type HostInstallRecord,
-} from "../manifest/host-install";
+import { readInstalledFloorOperands } from "../host/installed-store-formats";
 import { hostHomeDir } from "../store/paths";
-import type { ILogger } from "../logger";
-import type { Environment } from "../runner/environment";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
 /**
@@ -25,8 +16,8 @@ import type { CommandFn, CommandResult } from "../runner/runner";
  * it exists for is the two callers that need the raw facts rather than a
  * sentence - support, when someone reports "the CLI will not let me install
  * 1.2.0" and the epic list has scrolled away, and the SEA release smoke, which
- * uses it as the per-platform proof that `node:sqlite` actually works inside
- * the signed binary (see `scripts/smoke-cli-sea.cjs`).
+ * uses it as the per-platform proof that the survey's SQLite engine actually
+ * works inside the signed binary (see `scripts/smoke-cli-sea.cjs`).
  *
  * It mutates nothing and refuses nothing. Every failure the survey collects is
  * REPORTED here rather than raised - the point of a diagnostic is to show the
@@ -41,36 +32,27 @@ export function buildHostStoreFormatsCommand(): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     const environment = ctx.runtime.environment;
     const hostHome = hostHomeDir(environment);
-    const installedVersion = await readInstalledVersionForFloor(
+    // The same operands the floor itself judges with, through the same reader
+    // - a diagnostic that resolved the installed side its own way could
+    // disagree with the refusal it is being run to explain. No manifest entry
+    // is consulted: this is a local read and an offline machine must still get
+    // an answer, so the installed build is placed by what its own tree
+    // DECLARES, falling back to the fixed table.
+    const installed = await readInstalledFloorOperands(
       environment,
       ctx.runtime.logger,
     );
+    const installedVersion = installed.version;
     const survey = await surveyChatDbStamps(hostHome);
-    // No manifest entry is consulted here - this is a local read, and an
-    // offline machine must still get an answer - so the installed build is
-    // placed by what its own tree DECLARES, falling back to the fixed table.
-    // The declaration is the half that matters in practice: a locally packaged
-    // install is stamped `<target>.<epochMs>.<sha>`, which the table cannot
-    // place at all, and "unknown" would otherwise be the only thing this
-    // command could ever say about a developer's machine.
-    const installedDeclaredFormats = await readInstalledDeclaredFormats(
-      environment,
-      ctx.runtime.logger,
-    );
     const installedFormats =
       installedVersion === null
         ? null
-        : resolveHostStoreFormats(installedVersion, installedDeclaredFormats);
+        : resolveHostStoreFormats(installedVersion, installed.storeFormats);
     const readings = [...survey.readings].sort(
       (left, right) => right.schemaVersion - left.schemaVersion,
     );
-    const maxChatDb =
-      readings.length === 0
-        ? null
-        : readings.reduce(
-            (highest, reading) => Math.max(highest, reading.schemaVersion),
-            0,
-          );
+    // Sorted descending immediately above, so the head IS the maximum.
+    const maxChatDb = readings[0]?.schemaVersion ?? null;
     return {
       data: {
         hostHome,
@@ -89,7 +71,7 @@ export function buildHostStoreFormatsCommand(): CommandFn {
         // Reported beside the resolved value, not folded into it: "the install
         // declares 9" and "the table places this version at 9" are different
         // provenances, and support needs to know which one answered.
-        installedDeclaredChatDbFormat: installedDeclaredFormats?.chatDb ?? null,
+        installedDeclaredChatDbFormat: installed.storeFormats?.chatDb ?? null,
         chatDbFormatTableCeiling: CHAT_DB_FORMAT_TABLE_CEILING,
         maxChatDbFormatOnDisk: maxChatDb,
         epics: readings.map((reading) => ({
@@ -119,33 +101,6 @@ export function buildHostStoreFormatsCommand(): CommandFn {
       exitCode: 0,
     };
   };
-}
-
-/**
- * The installed tree's own `version.json` declaration, or `null`.
- *
- * Read through the STRICT record reader deliberately: unlike
- * `readInstalledVersionForFloor`, which collapses an unreadable record to
- * `null` so the floor still evaluates, a diagnostic that cannot read the
- * record has nothing to locate the tree with and simply reports no
- * declaration. Every failure is `null`; nothing here refuses.
- */
-async function readInstalledDeclaredFormats(
-  environment: Environment,
-  logger: ILogger,
-): Promise<HostStoreFormats | null> {
-  let record: HostInstallRecord | null;
-  try {
-    record = await readHostInstallRecord(environment);
-  } catch {
-    return null;
-  }
-  if (record === null) return null;
-  return readExtractedStoreFormats(
-    dirname(record.executablePath),
-    environment,
-    logger,
-  );
 }
 
 function humanSummary(args: {

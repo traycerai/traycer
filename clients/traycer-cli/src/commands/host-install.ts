@@ -37,9 +37,10 @@ import { hostHomeDir } from "../store/paths";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
 import {
   gateStoreFormatFloor,
-  readInstalledVersionForFloor,
   ungatedStoreFormatFloorEvidence,
+  type StoreFormatFloorEvidence,
 } from "../host/store-format-floor";
+import { readInstalledFloorOperands } from "../host/installed-store-formats";
 
 // `traycer host install [--release <version>]` - registry path (NP-4) /
 // `--from <path>` local-file path (NP-2). There is NO positional argument:
@@ -137,6 +138,55 @@ export interface HostInstallArgs {
   readonly attemptAdoption: string | null;
 }
 
+/**
+ * The store-format floor, BEFORE staging.
+ *
+ * This command is the arm the reported live downgrade took, and it has no
+ * verify leg at all (`admission: "legacy-update-shadow"`, no attempt record),
+ * so nothing downstream of the swap can notice that the landed host cannot
+ * open this machine's chat stores. It reports `ok` over a host that then
+ * crash-loops.
+ *
+ * Only an explicit `--release <semver>` can be gated here. `--from` and an
+ * implicit `latest` have no version until the archive is staged or the
+ * manifest resolves, so they carry ungated evidence and are checked by
+ * `commitInstallFromSource` against the version that actually materialised.
+ * For `--from` that version is the extracted archive's own `version.json`
+ * stamp and NOT this command's `local-<basename>-<stamp>` record version - a
+ * released archive installed from a file is judged as the release it is (see
+ * `storeFormatFloorTargetVersion`).
+ *
+ * A function rather than a conditional expression at the call site so the
+ * install record is read only on the branch that consults it: the ungated
+ * branches have nothing to compare it against.
+ */
+async function gateInstallStoreFormatFloor(
+  ctx: CommandContext,
+  args: HostInstallArgs,
+): Promise<StoreFormatFloorEvidence> {
+  if (args.fromPath !== null || args.versionRequest === "latest") {
+    return ungatedStoreFormatFloorEvidence(
+      "host install",
+      args.acceptStoreFormatLoss,
+    );
+  }
+  const installed = await readInstalledFloorOperands(
+    ctx.runtime.environment,
+    ctx.runtime.logger,
+  );
+  return await gateStoreFormatFloor({
+    environment: ctx.runtime.environment,
+    hostHome: hostHomeDir(ctx.runtime.environment),
+    targetVersion: args.versionRequest,
+    installedVersion: installed.version,
+    installedStoreFormats: installed.storeFormats,
+    consultRegistry: true,
+    acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+    site: "host install",
+    logger: ctx.runtime.logger,
+  });
+}
+
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     if (args.noServiceRegister && currentInstallPlatform() === "win32") {
@@ -182,35 +232,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             versionRequest: args.versionRequest,
           };
 
-    // The store-format floor, BEFORE staging - this command is the arm the
-    // reported live downgrade took, and it has no verify leg at all
-    // (`admission: "legacy-update-shadow"`, no attempt record), so nothing
-    // downstream of the swap can notice that the landed host cannot open this
-    // machine's chat stores. It reports `ok` over a host that then crash-loops.
-    //
-    // Only an explicit `--release <semver>` can be gated here. `--from` and an
-    // implicit `latest` have no version until the archive is staged or the
-    // manifest resolves, so they carry ungated evidence and are checked by
-    // `commitInstallFromSource` against the version that actually materialised.
-    const storeFormatFloor =
-      args.fromPath === null && args.versionRequest !== "latest"
-        ? await gateStoreFormatFloor({
-            environment: ctx.runtime.environment,
-            hostHome: hostHomeDir(ctx.runtime.environment),
-            targetVersion: args.versionRequest,
-            installedVersion: await readInstalledVersionForFloor(
-              ctx.runtime.environment,
-              ctx.runtime.logger,
-            ),
-            consultRegistry: true,
-            acceptStoreFormatLoss: args.acceptStoreFormatLoss,
-            site: "host install",
-            logger: ctx.runtime.logger,
-          })
-        : ungatedStoreFormatFloorEvidence(
-            "host install",
-            args.acceptStoreFormatLoss,
-          );
+    const storeFormatFloor = await gateInstallStoreFormatFloor(ctx, args);
 
     // `--no-service-register` must be truly bytes-only: no stop, no
     // register/rewrite, no start - even when a service is already

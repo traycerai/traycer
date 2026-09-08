@@ -369,6 +369,7 @@ export function useHostOverviewUpdates(input: {
   });
   const storeFloor = useHostInstallStoreFloor({
     hostId: input.hostId,
+    hostName,
     runningVersion: input.runningVersion,
     storeFormats: input.storeFormats,
     manifest: actionableManifest,
@@ -651,6 +652,7 @@ interface HostInstallStoreFloor {
  */
 function useHostInstallStoreFloor(input: {
   readonly hostId: string | null;
+  readonly hostName: string;
   readonly runningVersion: string | null;
   readonly storeFormats: HostStatusStoreFormats | null;
   readonly manifest: HostAvailableManifest | null;
@@ -732,6 +734,7 @@ function useHostInstallStoreFloor(input: {
       const message = describeInstallRefusal(
         response.reason,
         response.storeFloor,
+        input.hostName,
       );
       if (message === null) return false;
       setRetained({
@@ -745,15 +748,31 @@ function useHostInstallStoreFloor(input: {
   };
 }
 
+/**
+ * What a `cli-failed` install refusal tells the reader, or `null` when the
+ * arm said nothing this page can improve on.
+ *
+ * The two named arms are refusals with their own remedy. The last one is the
+ * open half of the vocabulary, and it is deliberately ADDITIVE rather than a
+ * replacement: this page keeps its own sentence and attaches what it was told,
+ * the same shape the bound dispatches use for a reason they do not recognise.
+ * A reason is not guaranteed to be copy - the host mints short codes, while
+ * the local-CLI fallback lane forwards the CLI's own sentence, which for a
+ * store-format refusal is the ONLY evidence that reaches this page - so
+ * presenting one as the whole message would sooner or later put a bare code
+ * where a sentence belongs.
+ */
 function describeInstallRefusal(
   reason: string | null,
   storeFloor: HostUpdateStoreFloorRefusal | null,
+  hostName: string,
 ): string | null {
   if (storeFloor !== null) return describeHostStoreFloorRpcRefusal(storeFloor);
   if (reason === "cli-too-old") {
     return "This device's Traycer CLI is too old to start the update. Update the CLI, then try again.";
   }
-  return null;
+  if (reason === null) return null;
+  return `${describeCliShellFailure("cli-failed", hostName)} (${reason})`;
 }
 
 /**
@@ -990,16 +1009,18 @@ function visibleVersionRows(input: {
   return entries.map((entry) => {
     const asset = platformAssetFor(entry.platforms, input.platformKey);
     const isInstalled = entry.version === input.installedVersion;
-    // Platform and publisher refusals retain priority. A store warning must
-    // not obscure an asset that cannot be installed on this device at all.
+    // Platform and version refusals retain priority. A store warning must not
+    // obscure an asset that cannot be installed on this device at all.
     const existingReason =
       assetUnavailableReason(asset) ??
-      (entry.yanked ? entry.deprecationReason : null) ??
       versionUnavailableReason(
         input.installedVersion,
         entry.version,
         input.supportsDowngrade,
       );
+    // A yanked entry is blocked by the row itself, and no store restriction is
+    // computed for one: "install anyway" past a store floor is a choice about
+    // chat access, and it is not on offer for a release that was withdrawn.
     const restriction =
       existingReason === null && !entry.yanked
         ? input.storeRestrictionForVersion(entry.version)

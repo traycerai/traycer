@@ -71,6 +71,25 @@ export interface HostStoreFormats {
  */
 export const NO_CHAT_STORE = 0;
 
+/**
+ * Whether a value is a usable store-format version.
+ *
+ * One predicate for every boundary that admits a format number from outside
+ * this process - the registry manifest's `storeFormats.chatDb`, an archive's
+ * runtime `version.json`, a `chat_db_meta` row. They had the same three-clause
+ * check written out separately, which is exactly the kind of duplication that
+ * drifts one clause at a time.
+ *
+ * What each boundary does with a `false` stays its own business, and they
+ * deliberately differ: the manifest parser throws (a malformed published entry
+ * is a release-tooling bug), an archive declaration warns and degrades to
+ * "undeclared" (a typo must not brick a local install), and a store row
+ * becomes a finite failure code. Only the PREDICATE is shared.
+ */
+export function isValidStoreFormatVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 interface ChatDbFormatEra {
   /** First host version, inclusive, that writes `chatDb`. */
   readonly from: string;
@@ -188,10 +207,18 @@ export type StoreFloorApplicability =
  *
  * Only a move to an OLDER build can leave data unreadable, so an upgrade or a
  * same-version reinstall skips the floor entirely - no table lookup, no disk
- * walk. `null` (nothing installed) and an installed version that cannot be
- * compared (a `<target>.<epochMs>.<sha>` local install) both evaluate: neither
- * proves the move is an upgrade, and the survey is ground truth regardless of
- * what wrote the files.
+ * walk.
+ *
+ * That shortcut is available only when the INSTALLED version is itself a
+ * released one, because it is an argument about the ladder and only a ladder
+ * version has a place on it. `null` (nothing installed), a stamp that cannot
+ * be compared (`<target>.<epochMs>.<sha>`), and {@link
+ * SOURCE_TREE_HOST_VERSION} all evaluate instead. The sentinel is the one that
+ * has to be named: it parses as SemVer and sorts below every release, so
+ * ordering alone would call `1.2.0` an UPGRADE over it and skip the floor -
+ * while a build of today's source writes format 9. Nothing about `0.0.0-dev`
+ * describes what it wrote, which is the same reason
+ * {@link storeFormatsFromReleasedTable} refuses to place it.
  *
  * A target that is not a released version is judged only by what it DECLARES
  * (`targetDeclaredFormats`, from the archive's runtime `version.json`). With a
@@ -208,7 +235,9 @@ export function storeFloorApplicability(
   if (!isReleasedHostVersion(targetVersion) && targetDeclaredFormats === null) {
     return { applies: false, reason: "target-off-ladder" };
   }
-  if (installedVersion === null) return { applies: true };
+  if (installedVersion === null || !isReleasedHostVersion(installedVersion)) {
+    return { applies: true };
+  }
   const relation = compareHostVersions(targetVersion, installedVersion);
   if (!relation.comparable || relation.ordering === "less") {
     return { applies: true };
@@ -242,10 +271,55 @@ export interface ChatDbStampReading {
   readonly schemaVersion: number;
 }
 
+/**
+ * Why one epic's chat store could not be read.
+ *
+ * A CLOSED set, and closed is the point. These values travel into a human
+ * refusal, an NDJSON error envelope, the host's ledger and the CLI's
+ * diagnostic; the free-form strings they replaced came from a corrupt database
+ * row and from SQLite/OS error text - unbounded in length and unrestricted in
+ * charset, which in a log line is a forged-line vector as much as a size one.
+ * A code can be neither. What a code costs is the specific errno, and the
+ * remedy for every one of these is the same: look at the named epic's file.
+ *
+ * Both producers emit from this set - the CLI's pre-install survey
+ * (`chat-store-survey.ts`) and the host's ledger
+ * (`chat-store-format-ledger.ts`) - so a new failure mode is added HERE and
+ * the two ends stay comparable.
+ */
+export type ChatDbStampFailureReason =
+  /** The epic directory, or the `chat` directory inside it, is a symlink. */
+  | "linked-epic-directory"
+  | "linked-chat-directory"
+  /**
+   * The epic directory, or the `chat` directory inside it, exists but is not
+   * a directory, so the store behind it cannot be located, let alone read.
+   */
+  | "epic-state-not-a-directory"
+  | "chat-directory-not-a-directory"
+  /** The root holding the per-epic directories could not be enumerated. */
+  | "unreadable-epic-state-directory"
+  /** `chat.db` exists but is not a regular file. */
+  | "chat-db-not-a-file"
+  /** Opened, but no `chat_db_meta` row names a usable positive integer. */
+  | "missing-or-invalid-schema-version"
+  /** Could not be opened or queried: corrupt, locked, or access-denied. */
+  | "unreadable-chat-db"
+  /**
+   * No SQLite engine at all in the RUNTIME running the survey, so nothing on
+   * disk was examined. Distinct from `unreadable-chat-db` because it says
+   * nothing about the user's files, and a refusal that blamed them would be a
+   * lie: the CLI runs under `bun` in the repo's own dev loop and under Node in
+   * the released binary, and only one of those has `node:sqlite`.
+   */
+  | "engine-unavailable"
+  /** The survey did not complete; the caller could not attribute a cause. */
+  | "survey-failed";
+
 /** One epic's chat store that could not be read. */
 export interface ChatDbStampFailure {
   readonly epicId: string;
-  readonly reason: string;
+  readonly reason: ChatDbStampFailureReason;
 }
 
 /**
@@ -264,6 +338,18 @@ export type StoreFormatFloorVerdict =
       readonly kind: "blocked";
       readonly targetChatDb: number;
       readonly epics: readonly ChatDbStampReading[];
+      /**
+       * Stores the survey could not read at all, carried alongside the proven
+       * ones rather than dropped.
+       *
+       * `blocked` outranks `indeterminate` because naming the proven-newer
+       * epics is the more useful refusal - but "more useful" is not "the whole
+       * truth". An unreadable store is still a store whose fate this verdict
+       * cannot speak for, and a refusal that listed only the proven ones would
+       * under-report what the user is about to lose, in the one direction that
+       * matters. Every renderer that shows a blocked verdict shows these too.
+       */
+      readonly failures: readonly ChatDbStampFailure[];
     }
   | {
       /**
@@ -306,7 +392,14 @@ export function decideStoreFormatFloor(
   const epics = survey.readings.filter(
     (reading) => reading.schemaVersion > targetChatDb,
   );
-  if (epics.length > 0) return { kind: "blocked", targetChatDb, epics };
+  if (epics.length > 0) {
+    return {
+      kind: "blocked",
+      targetChatDb,
+      epics,
+      failures: survey.failures,
+    };
+  }
   if (survey.failures.length > 0) {
     return {
       kind: "indeterminate",

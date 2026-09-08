@@ -17,8 +17,6 @@ export interface ConfirmDestructiveDialogProps {
   cascadeSummary: string | null;
   /** Label for the destructive action button (e.g. "Delete" or "Remove"). */
   actionLabel: string;
-  /** Use a concrete safe action when "Cancel" would obscure the choice. */
-  cancelLabel?: string;
   isPending: boolean;
   /**
    * Why this action cannot be performed at all, or `null` when it can.
@@ -101,7 +99,7 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
             }}
             data-testid="confirm-cancel"
           >
-            {props.cancelLabel ?? "Cancel"}
+            Cancel
           </Button>
           <Button
             type="button"

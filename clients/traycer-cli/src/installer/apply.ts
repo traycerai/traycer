@@ -12,16 +12,19 @@ import {
 import { readHostStagedRecord } from "../manifest/host-staged";
 import { hostHomeDir, hostStagedDir } from "../store/paths";
 import { assertHostNotBusy } from "../host/busy-check";
-import { assertHostStoreFormatFloor } from "../host/store-format-floor";
+import {
+  assertHostStoreFormatFloor,
+  storeFormatFloorTargetVersion,
+} from "../host/store-format-floor";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
 import {
   commitInstallFromSource,
   currentInstallPlatform,
-  readExtractedStoreFormats,
   type InstallPhaseHooks,
 } from "./install";
+import { readExtractedStoreFormats } from "./version-sidecar";
 
 // `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed
 // commands" > `host apply`. Promotes the single-slot staged tree over the
@@ -307,10 +310,20 @@ export async function applyHost(
   // declaration - the tree is already extracted - so an off-ladder stage is
   // judged here rather than standing aside until the commit tail.
   const stagedRuntimeDir = dirname(join(stagedDir, staged.executablePath));
+  // The stage's own stamp outranks the version it was recorded under, for the
+  // same reason it does at the commit tail: a stage promoted from a local
+  // archive carries a `local-…` record version that no table can place, and
+  // the sidecar is what names the build. Resolved once and reused as the
+  // evidence's `clearedVersion` below, so the tail - which resolves it the
+  // same way from the same two values - agrees with this gate by construction.
+  const floorTargetVersion = storeFormatFloorTargetVersion(
+    staged.runtimeVersion,
+    staged.version,
+  );
   await assertHostStoreFormatFloor({
     environment: opts.environment,
     hostHome: hostHomeDir(opts.environment),
-    targetVersion: staged.version,
+    targetVersion: floorTargetVersion,
     publishedStoreFormats: null,
     declaredStoreFormats: await readExtractedStoreFormats(
       stagedRuntimeDir,
@@ -318,6 +331,15 @@ export async function applyHost(
       logger,
     ),
     installedVersion: installed.version,
+    // Read off the tree that is actually installed, not looked up: `host
+    // apply` runs on a machine whose install may be build-stamped, and the
+    // table cannot place one of those - so without this the short-circuit is
+    // missed and even a forward apply walks every epic.
+    installedStoreFormats: await readExtractedStoreFormats(
+      dirname(installed.executablePath),
+      opts.environment,
+      logger,
+    ),
     acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     site: "host apply",
     logger,
@@ -374,7 +396,7 @@ export async function applyHost(
     // question with the same answer, and pays only for the version it already
     // resolved.
     storeFormatFloor: {
-      clearedVersion: staged.version,
+      clearedVersion: floorTargetVersion,
       publishedStoreFormats: null,
       acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
       site: "host apply",

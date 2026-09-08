@@ -225,7 +225,6 @@ function VersionPicker(props: VersionPickerProps): ReactNode {
         description={confirmationBody ?? ""}
         cascadeSummary={null}
         actionLabel="Install anyway"
-        cancelLabel="Keep current host"
         isPending={props.installingVersion !== null}
         blockedReason={
           props.disabled || props.checking

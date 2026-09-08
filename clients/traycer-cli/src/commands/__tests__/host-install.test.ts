@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   runDeviceAuthFlowMock: vi.fn(),
   provisionInstalledHostCredentialMock: vi.fn(),
   gateStoreFormatFloorMock: vi.fn(),
-  readInstalledVersionForFloorMock: vi.fn(),
+  readInstalledFloorOperandsMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -131,9 +131,21 @@ vi.mock("../../host/store-format-floor", async (importOriginal) => {
     gateStoreFormatFloor: (
       ...callArgs: Parameters<typeof mocks.gateStoreFormatFloorMock>
     ) => mocks.gateStoreFormatFloorMock(...callArgs),
-    readInstalledVersionForFloor: (
-      ...callArgs: Parameters<typeof mocks.readInstalledVersionForFloorMock>
-    ) => mocks.readInstalledVersionForFloorMock(...callArgs),
+  };
+});
+
+// `readInstalledFloorOperands` reads `install.json` via `readHostInstallRecord`
+// - the same real-`~/.traycer` hazard as `gateStoreFormatFloor` above, and
+// this suite pins the site's wiring, not the floor's own resolution of the
+// installed side (that is `store-format-floor.test.ts`).
+vi.mock("../../host/installed-store-formats", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/installed-store-formats")>();
+  return {
+    ...actual,
+    readInstalledFloorOperands: (
+      ...callArgs: Parameters<typeof mocks.readInstalledFloorOperandsMock>
+    ) => mocks.readInstalledFloorOperandsMock(...callArgs),
   };
 });
 
@@ -385,7 +397,10 @@ describe("buildHostInstallCommand", () => {
     });
     // Default: the floor clears. Individual tests override this to prove
     // the site's refusal wiring.
-    mocks.readInstalledVersionForFloorMock.mockResolvedValue(null);
+    mocks.readInstalledFloorOperandsMock.mockResolvedValue({
+      version: null,
+      storeFormats: null,
+    });
     mocks.gateStoreFormatFloorMock.mockResolvedValue({
       clearedVersion: "2.0.0",
       publishedStoreFormats: null,

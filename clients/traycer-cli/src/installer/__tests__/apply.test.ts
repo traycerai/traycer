@@ -234,6 +234,37 @@ import {
 } from "../../manifest/host-staged";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import type { HostInstallRecord } from "../../manifest/host-install";
+import { EPIC_STATE_DIRNAME } from "../../host/chat-store-survey";
+
+// Written the same way `chat-store-survey.test.ts` writes its fixtures - the
+// real on-disk shape the host itself produces, at
+// `<hostHome>/epic-state/<epicId>/chat/chat.db`.
+async function writeStampedChatDbFor(
+  environment: Environment,
+  epicId: string,
+  schemaVersion: number,
+): Promise<void> {
+  const dir = join(
+    hostHomeFor(environment),
+    EPIC_STATE_DIRNAME,
+    epicId,
+    "chat",
+  );
+  mkdirSync(dir, { recursive: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(join(dir, "chat.db"));
+  try {
+    db.exec(
+      "CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    db.prepare("INSERT INTO chat_db_meta (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      String(schemaVersion),
+    );
+  } finally {
+    db.close();
+  }
+}
 
 const testMutationVerifier = async (): Promise<void> => undefined;
 type ApplyOptions = Parameters<typeof applyHostWithAuthority>[0];
@@ -385,6 +416,83 @@ describe("applyHost", () => {
     // must not appear in the order at all.
     expect(mocks.callOrder).not.toContain("busy-check");
     expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
+  describe("targetVersion resolution at the staged-apply gate - the floor runs genuinely, not mocked", () => {
+    // Unlike `host install --from` (Task C, `install.test.ts`),
+    // `HostStagedRecord.version` is schema-validated as strict SemVer
+    // (`hostStagedRecordSchema` in `@traycer/protocol/config/installation-records`
+    // - `readTolerantRecord` silently discards anything that fails it, which
+    // is why a `local-<basename>-<timestamp>` staged record reads back as
+    // "nothing staged" rather than as a stage to judge). So the on-disk
+    // `staged/` promotion path this describe block exercises can never carry
+    // the exact synthetic string `host install --from` produces - only
+    // `commitInstallFromSource`'s direct callers can. What IS reachable, and
+    // what these tests pin instead, is `apply.ts`'s own wiring of
+    // `storeFormatFloorTargetVersion(staged.runtimeVersion, staged.version)`:
+    // a staged record's own declared runtime stamp must be the version the
+    // gate judges, not the record's `version` field, whenever the two
+    // diverge.
+    it("judges by staged.runtimeVersion, not staged.version, when they diverge - falsified by a silent clear if the wiring regresses", async () => {
+      await writeInstall("1.3.0-rc.4", {});
+      // If `apply.ts` judged `staged.version` ("1.4.0" - an upgrade, chatDb
+      // 9) instead of `runtimeVersion` ("1.2.0" - a downgrade, chatDb 8),
+      // this would resolve silently with no error at all: 1.4.0 clears
+      // WITHOUT even walking disk (`storeFloorClearedByFormats`), so a
+      // wiring regression here does not merely pick the wrong message - it
+      // stops refusing altogether.
+      await writeStaged("1.4.0", { runtimeVersion: "1.2.0" });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+          onWillCommitStaged,
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(
+        mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+      ).toMatchObject({ targetVersion: "1.2.0", site: "host apply" });
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+      expect(mocks.callOrder).not.toContain("busy-check");
+      expect(mocks.lifecycleCalls).toHaveLength(0);
+    });
+
+    it("applies when the staged tree's own version.json declares a storeFormats that clears the chat store on disk", async () => {
+      // `staged.version` ("1.2.0") is newer than the installed "1.0.0" so
+      // reconcile's stale-or-equal deletion rule leaves the stage in place;
+      // read alone it would still name chatDb 8 from the fixed table and
+      // block against the v9 fixture below, but the sidecar declaration
+      // overrides that table lookup outright (`resolveHostStoreFormats`
+      // prefers a non-null declaration unconditionally) - the same
+      // precedence the commit tail gives it.
+      await writeInstall("1.0.0", {});
+      await writeStaged("1.2.0", {});
+      writeFileSync(
+        join(stagedDirFor(ENV), "version.json"),
+        JSON.stringify({ version: "1.2.0", storeFormats: { chatDb: 9 } }),
+      );
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(
+        mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+      ).toMatchObject({ targetVersion: "1.2.0", site: "host apply" });
+    });
   });
 
   it("rejects a different staged handoff under the apply lock without consuming it", async () => {

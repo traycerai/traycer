@@ -20,10 +20,8 @@ import type { ProgressInfo } from "../runner/output";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { createCliLogger } from "../logger";
 import { hostHomeDir } from "../store/paths";
-import {
-  gateStoreFormatFloor,
-  readInstalledVersionForFloor,
-} from "../host/store-format-floor";
+import { gateStoreFormatFloor } from "../host/store-format-floor";
+import { readInstalledFloorOperands } from "../host/installed-store-formats";
 
 export interface InstallHostDowngradeInput {
   readonly environment: Environment;
@@ -113,14 +111,13 @@ export async function installHostDowngradeInSegment(
   // refusal costs no transfer, and re-taken by the commit tail against
   // whatever record is on disk at the swap.
   const logger = createCliLogger(input.environment);
+  const installed = await readInstalledFloorOperands(input.environment, logger);
   const storeFormatFloor = await gateStoreFormatFloor({
     environment: input.environment,
     hostHome: hostHomeDir(input.environment),
     targetVersion: input.version,
-    installedVersion: await readInstalledVersionForFloor(
-      input.environment,
-      logger,
-    ),
+    installedVersion: installed.version,
+    installedStoreFormats: installed.storeFormats,
     consultRegistry: true,
     acceptStoreFormatLoss: input.acceptStoreFormatLoss,
     site: "host update",

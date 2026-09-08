@@ -233,35 +233,55 @@ function runStoreFormats(env, context) {
 }
 
 function writeFixtureChatDb(hostHome) {
+  const chatDir = path.join(hostHome, "epic-state", FIXTURE_EPIC_ID, "chat");
+  fs.mkdirSync(chatDir, { recursive: true });
+  const dbPath = path.join(chatDir, "chat.db");
+
+  // Written by a child process that EXITS WITHOUT CLOSING the database, which
+  // is the only reliable way to leave an un-checkpointed `-wal` behind:
+  // SQLite checkpoints and unlinks the write-ahead log when the last
+  // connection closes cleanly, which would fold the stamp into the main file
+  // and quietly turn this back into the rollback-journal case it is meant to
+  // replace. An abandoned `-wal` is also the exact shape a crash-looping host
+  // leaves on a real machine, and the design names a read-only open over one
+  // as its main source of an INDETERMINATE verdict - so if the SEA cannot
+  // recover a stamp from it, the floor refuses installs on machines whose
+  // files are fine.
+  //
   // The harness's own Node, not the SEA's: this is the fixture WRITER, and it
   // is deliberately a different runtime from the reader under test. A harness
   // Node without `node:sqlite` cannot produce the fixture at all, so it fails
   // loudly here rather than skipping the check that matters.
-  let DatabaseSync;
-  try {
-    ({ DatabaseSync } = require("node:sqlite"));
-  } catch (err) {
-    fail(
-      `this Node (${process.version}) cannot load 'node:sqlite', so the chat-store fixture cannot be written: ${err && err.message}`,
-    );
-  }
-  const chatDir = path.join(hostHome, "epic-state", FIXTURE_EPIC_ID, "chat");
-  fs.mkdirSync(chatDir, { recursive: true });
-  const db = new DatabaseSync(path.join(chatDir, "chat.db"));
-  try {
+  const writer = [
+    "const { DatabaseSync } = require('node:sqlite');",
+    `const db = new DatabaseSync(${JSON.stringify(dbPath)});`,
+    "db.exec('PRAGMA journal_mode=WAL');",
     // Byte-for-byte the host's own `CHAT_DB_META_DDL`, and the stamp written
     // as TEXT the way the host writes it (`String(version)`). A fixture that
     // stored an integer would still pass - the survey parses both - and would
     // stop proving that the shape on a real machine is readable.
-    db.exec(
-      "CREATE TABLE IF NOT EXISTS chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    "db.exec('CREATE TABLE IF NOT EXISTS chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');",
+    `db.prepare('INSERT INTO chat_db_meta (key, value) VALUES (?, ?)').run('schema_version', ${JSON.stringify(String(FIXTURE_CHAT_DB_FORMAT))});`,
+    // No `db.close()`, deliberately. See above.
+    "process.exit(0);",
+  ].join("\n");
+  const written = spawnSync(process.execPath, ["-e", writer], {
+    encoding: "utf8",
+  });
+  if (written.status !== 0) {
+    fail(
+      `could not write the WAL chat-store fixture with this Node (${process.version}); stderr=${written.stderr}`,
     );
-    db.prepare("INSERT INTO chat_db_meta (key, value) VALUES (?, ?)").run(
-      "schema_version",
-      String(FIXTURE_CHAT_DB_FORMAT),
+  }
+
+  // The fixture is only worth what its shape proves, so prove the shape. If a
+  // future Node checkpoints on exit anyway, this smoke would silently go back
+  // to exercising a plain database and nothing would say so.
+  const walPath = `${dbPath}-wal`;
+  if (!fs.existsSync(walPath)) {
+    fail(
+      `the fixture store has no ${path.basename(walPath)}; this smoke is meant to exercise a read-only open over a write-ahead log`,
     );
-  } finally {
-    db.close();
   }
 }
 

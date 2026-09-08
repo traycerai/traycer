@@ -11,6 +11,22 @@ export interface VersionSkewCopy {
   readonly direction: "host-outdated" | "client-outdated";
 }
 
+/**
+ * The words for "this host is the leg that has to move".
+ *
+ * Exported as a value so a surface whose evidence is NOT a version comparison
+ * can say the same thing without routing through {@link describeVersionSkew}
+ * and getting its version ordering applied. The chat tile's data-format
+ * refusal is that surface: a store written by a build newer than the host is
+ * a fact about the host's own reader, and updating the app cannot change it.
+ * One definition, so the two surfaces cannot drift apart.
+ */
+export const HOST_UPDATE_SKEW_COPY: VersionSkewCopy = {
+  title: "Host update needed",
+  action: "Update now",
+  direction: "host-outdated",
+};
+
 export interface VersionSkewInput {
   readonly hostAppVersion: string | null;
   readonly clientAppVersion: string | null;
@@ -39,11 +55,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
     input.clientAppVersion,
   );
   if (comparison === "host-behind") {
-    return {
-      title: "Host update needed",
-      action: "Update now",
-      direction: "host-outdated",
-    };
+    return HOST_UPDATE_SKEW_COPY;
   }
   if (comparison === "client-behind") {
     return {
@@ -57,11 +69,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
     input.guidance.hostShouldUpgrade &&
     !input.guidance.clientShouldUpgrade
   ) {
-    return {
-      title: "Host update needed",
-      action: "Update now",
-      direction: "host-outdated",
-    };
+    return HOST_UPDATE_SKEW_COPY;
   }
   if (
     input.guidance !== null &&
@@ -93,11 +101,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
             },
     },
   );
-  return {
-    title: "Host update needed",
-    action: "Update now",
-    direction: "host-outdated",
-  };
+  return HOST_UPDATE_SKEW_COPY;
 }
 
 /**

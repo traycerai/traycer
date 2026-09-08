@@ -470,8 +470,17 @@ export const hostUpdateStoreFloorRefusalSchema = z.object({
   targetChatDb: z.number().int().nonnegative().nullable(),
   // Null when any stamp was unreadable, just like host.status.onDiskMax.
   onDiskMax: z.number().int().positive().nullable(),
+  // For a blocked verdict these name only proven-newer stores. Indeterminate
+  // verdicts name the stores whose compatibility could not be established.
   epicCount: z.number().int().nonnegative(),
   epicIds: z.array(z.string().min(1)).max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
+  // Keep unreadable stores separate even when another store proves the move
+  // is blocked: the UI must not label an unreadable stamp as proven-newer.
+  // Zero/empty means no per-epic read failed, not that the peer said nothing.
+  unreadableEpicCount: z.number().int().nonnegative(),
+  unreadableEpicIds: z
+    .array(z.string().min(1))
+    .max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
 });
 export type HostUpdateStoreFloorRefusal = z.infer<
   typeof hostUpdateStoreFloorRefusalSchema

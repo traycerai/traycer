@@ -8,6 +8,7 @@ import {
   type StagedHostInstallSource,
 } from "../installer";
 import { readHostInstallRecord } from "../manifest/host-install";
+import { readInstalledFloorOperands } from "./installed-store-formats";
 import type { Environment } from "../runner/environment";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
@@ -304,7 +305,7 @@ export async function provisionHost(
     // the version check here, so without this gate the recovery button is an
     // ungated downgrade onto data the bundled build may not be able to read.
     const storeFormatFloor = predictedInstall
-      ? await gateProvisionStoreFormatFloor(opts, fast)
+      ? await gateProvisionStoreFormatFloor(opts)
       : ungatedStoreFormatFloorEvidence(
           "host ensure",
           opts.acceptStoreFormatLoss,
@@ -340,7 +341,6 @@ export async function provisionHost(
  */
 async function gateProvisionStoreFormatFloor(
   opts: ProvisionHostOptions,
-  fast: ProvisionState,
 ): Promise<StoreFormatFloorEvidence> {
   if (opts.satisfaction.kind === "presence") {
     return ungatedStoreFormatFloorEvidence(
@@ -348,14 +348,28 @@ async function gateProvisionStoreFormatFloor(
       opts.acceptStoreFormatLoss,
     );
   }
-  return gateStoreFormatFloor({
+  // The installed tree's own declaration, read once here. `host ensure` is
+  // the site that most needs it: the desktop converges onto its bundled host
+  // from an install stamped `<target>.<epochMs>.<sha>`, which the fixed table
+  // cannot place, so without the declaration even a FORWARD move would walk
+  // every epic and could be refused by one unreadable store - with no
+  // `--accept-store-format-loss` anywhere in that flow to get past it.
+  const installed = await readInstalledFloorOperands(
+    opts.runtime.environment,
+    opts.runtime.logger,
+  );
+  return await gateStoreFormatFloor({
     environment: opts.runtime.environment,
     hostHome: hostHomeDir(opts.runtime.environment),
     targetVersion: opts.satisfaction.version,
-    // The fast read's record, not a fresh one: this runs outside the lock,
-    // and the locked re-read below re-derives the install branch anyway. The
-    // commit tail asks again against whatever record is there at the swap.
-    installedVersion: fast.version,
+    // Both operands from that ONE read, never the version from `fast` and the
+    // formats from here: a mix could describe two different installs if a
+    // concurrent actor swapped one in between. Being a read behind the fast
+    // state costs nothing - this gate runs outside the lock, the locked
+    // re-read below re-derives the install branch, and the commit tail asks
+    // again against whatever record is on disk at the swap.
+    installedVersion: installed.version,
+    installedStoreFormats: installed.storeFormats,
     consultRegistry: opts.satisfaction.kind !== "own-build-minimum",
     acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     site: "host ensure",

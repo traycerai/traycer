@@ -65,6 +65,7 @@ import type {
 } from "./i-stream-session";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamClient } from "./i-stream-client";
+import { describeRetryableClose } from "./retryable-close-log";
 import { dialPriorityForMethod } from "./dial-priority";
 import type {
   IStreamWebSocketFactory,
@@ -1393,12 +1394,33 @@ class StreamSession<
   private slowClientReconnectStreak = 0;
   private lastCloseWasSlowClient = false;
   /**
-   * The last retryable close this session logged, so a host that refuses the
-   * same subscribe on every reconnect (once per backoff, indefinitely) costs
-   * one warn line rather than a log flood. A different refusal is logged
-   * again; a change in the reason is worth a line of its own.
+   * Fingerprint of the last retryable close this session logged, so a host
+   * that refuses the same subscribe on every reconnect (once per backoff,
+   * indefinitely) costs one warn line rather than a log flood. A different
+   * refusal is logged again; a change in the reason is worth a line of its
+   * own.
+   *
+   * A FINGERPRINT rather than the rendered line because both remote fields it
+   * is built from are unbounded on the wire - see `describeRetryableClose`,
+   * which bounds them - and this is retained for the life of the session.
+   *
+   * Cleared on the same proof of health the backoff uses, and at both of its
+   * sites: a delivered server frame ({@link emitServerFrame}, "every server
+   * frame proves the socket can deliver work") and the sustained-subscription
+   * dwell that stands in for one on a quiet stream
+   * ({@link resetLoopCounters}). Either way the next identical refusal is a
+   * NEW episode and logs again.
+   *
+   * Deliberately NOT on the subscribe ack, which is the one site that looks
+   * like the obvious place. The ack proves the handshake and nothing else:
+   * resolver-side failures land AFTER it as fatalError frames - a
+   * host-older-than-data refusal IS one - so a host that acks and immediately
+   * refuses would clear this key every lap and log the same line on every
+   * reconnect forever, which is precisely the flood the key exists to stop.
+   * `handleOpenAckFrame` declines to reset the loop counters there for the
+   * same reason, and cites the incident it cost (int #4781, traycer#892).
    */
-  private lastLoggedRetryableClose: string | null = null;
+  private lastRetryableCloseFingerprint: string | null = null;
   /**
    * Bounds the rare "valid-but-rejected" loop: AuthnV3 keeps accepting the
    * bearer (revalidation returns "rotated") yet the host keeps rejecting the
@@ -2398,10 +2420,14 @@ class StreamSession<
       // (a shipped 1.2.0 host refusing a chat store written by 1.3, once per
       // reconnect) silent everywhere - the tile spun, and no log named the
       // host's reason. One line here is what support has to go on.
-      const retryableClose = `[stream] host closed the stream as retryable; reconnecting (method=${this.config.method}, code=${details.code}): ${details.reason}`;
-      if (retryableClose !== this.lastLoggedRetryableClose) {
-        this.lastLoggedRetryableClose = retryableClose;
-        console.warn(retryableClose);
+      const retryableClose = describeRetryableClose({
+        method: this.config.method,
+        code: details.code,
+        reason: details.reason,
+      });
+      if (retryableClose.fingerprint !== this.lastRetryableCloseFingerprint) {
+        this.lastRetryableCloseFingerprint = retryableClose.fingerprint;
+        console.warn(retryableClose.line);
       }
       this.teardownSocket(1000, "host-retryable");
       this.onTransportDrop();
@@ -2854,6 +2880,10 @@ class StreamSession<
   private resetLoopCounters(): void {
     this.reconnectAttempt = 0;
     this.noProgressUnauthorizedReconnects = 0;
+    // The retryable-close suppression rides the same proof, for the same
+    // reason. This is the half that covers a QUIET stream, which has no frame
+    // to prove itself with; `emitServerFrame` clears it for every other.
+    this.lastRetryableCloseFingerprint = null;
   }
 
   /**
@@ -3016,6 +3046,14 @@ class StreamSession<
     if (envelope.kind === "snapshot") {
       this.noProgressUnauthorizedReconnects = 0;
     }
+    // The retryable-close suppression rides the same proof as the backoff, and
+    // for the same reason: a socket that has carried work since the last
+    // refusal ends that episode, so the next refusal is news rather than the
+    // repeat the key exists to swallow. Any frame counts here, unlike the
+    // auth-loop bound above - that one needs a `snapshot` because it is a
+    // give-up BOUND that an `earlyMeta` loop could otherwise evade, where this
+    // is only a log gate whose failure mode is one extra line.
+    this.lastRetryableCloseFingerprint = null;
     const handler = this.serverFrameHandler;
     if (handler === null) {
       return;

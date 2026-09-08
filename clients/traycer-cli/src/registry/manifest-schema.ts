@@ -1,5 +1,8 @@
 import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
-import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
+import {
+  isValidStoreFormatVersion,
+  type HostStoreFormats,
+} from "@traycer/protocol/host/store-formats";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
   HostPlatformAsset,
@@ -271,11 +274,7 @@ function parseNullableStoreFormats(
   }
   const obj = raw as Record<string, unknown>;
   const chatDb = obj.chatDb;
-  if (
-    typeof chatDb !== "number" ||
-    !Number.isSafeInteger(chatDb) ||
-    chatDb <= 0
-  ) {
+  if (!isValidStoreFormatVersion(chatDb)) {
     throw manifestInvalid(
       sourceLabel,
       "'storeFormats.chatDb' must be a positive integer",

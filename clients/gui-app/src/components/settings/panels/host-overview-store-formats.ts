@@ -66,10 +66,14 @@ export function hostStoreFormatRestriction(
   if (chatDb.onDiskMax === null || chatDb.onDiskMax <= target.formats.chatDb) {
     return null;
   }
+  // `null`, not an empty group: this path reads the cached `host.status`,
+  // which reports whether the survey failed but never which epics - so it has
+  // nothing to say about unreadable stores either way.
   return newerStoresRestriction(
     input.version,
     target.formats.chatDb,
     chatDb.onDiskMax,
+    null,
   );
 }
 
@@ -85,6 +89,10 @@ export function hostStoreFormatRestrictionFromRpc(
       refusal.targetVersion,
       refusal.targetChatDb,
       refusal.onDiskMax,
+      {
+        count: refusal.unreadableEpicCount,
+        epicIds: refusal.unreadableEpicIds,
+      },
     );
   }
   return refusal.reason === "target-format-unknown"
@@ -113,10 +121,26 @@ function unreadableStoresRestriction(
   };
 }
 
+/**
+ * Stores the host's survey could not read, for a caller that HAS that
+ * evidence.
+ *
+ * `null` is a distinct answer from `{count: 0}` and the reason this is an
+ * explicit parameter: the authoritative RPC refusal can say "none of them
+ * failed to read", while the cached `host.status` path has no per-epic list at
+ * all and can only say nothing. Rendering an absent list as "0 epics could not
+ * be read" would put a claim the status never made in the host's mouth.
+ */
+interface UnreadableStoreGroup {
+  readonly count: number;
+  readonly epicIds: readonly string[];
+}
+
 function newerStoresRestriction(
   version: string,
   targetFormat: number,
   onDiskMax: number | null,
+  unreadable: UnreadableStoreGroup | null,
 ): HostStoreFormatRestriction {
   const formatDescription =
     onDiskMax === null ? "in a newer format" : `written in format ${onDiskMax}`;
@@ -124,12 +148,19 @@ function newerStoresRestriction(
     targetFormat === NO_CHAT_STORE
       ? `v${version} doesn't read chat stores`
       : `v${version} reads format ${targetFormat}`;
+  // The consent this dialog collects is about losing access to chats, so the
+  // stores whose fate is UNKNOWN belong in it as much as the proven ones -
+  // they are the part of the loss the device cannot bound.
+  const unreadableSentence =
+    unreadable === null || unreadable.count === 0
+      ? ""
+      : ` ${describeEpicGroup(unreadable.count, unreadable.epicIds)} couldn't be read, so Traycer can't verify v${version} can open them.`;
   return {
     kind: "blocked",
     reason: newerStoresReason(targetFormat, onDiskMax),
     detail:
       "Can't open chat stores written by this host; installing anyway loses access to those chats until you update forward.",
-    confirmation: `This device has chat stores ${formatDescription}. ${targetDescription}, so it can't open those chats, and it may fail to start until you update the host again. Nothing is deleted; updating forward restores access.`,
+    confirmation: `This device has chat stores ${formatDescription}. ${targetDescription}, so it can't open those chats, and it may fail to start until you update the host again.${unreadableSentence} Nothing is deleted; updating forward restores access.`,
   };
 }
 
@@ -150,18 +181,18 @@ function newerStoresReason(
 export function describeHostStoreFloorRpcRefusal(
   refusal: HostUpdateStoreFloorRefusal,
 ): string {
-  const omitted = refusal.epicCount > refusal.epicIds.length ? ", …" : "";
-  const named =
-    refusal.epicIds.length === 0
-      ? ""
-      : ` (${refusal.epicIds.join(", ")}${omitted})`;
-  const epics = `${refusal.epicCount} ${refusal.epicCount === 1 ? "epic" : "epics"}${named}`;
+  const epics = describeEpicGroup(refusal.epicCount, refusal.epicIds);
   if (refusal.kind === "blocked") {
     const maximum =
       refusal.onDiskMax === null
         ? "maximum format could not be determined"
         : `format ${refusal.onDiskMax}`;
-    return `Can't install ${refusal.targetVersion}: ${epics} ${refusal.epicCount === 1 ? "uses" : "use"} a newer chat store (${maximum}; ${targetFormatDescription(refusal.targetVersion, refusal.targetChatDb)}). ${overrideGuidance(refusal.targetVersion)}`;
+    // The unreadable group is reported only on this arm. An `indeterminate`
+    // refusal's `epicIds` ARE the stores it could not establish, so naming
+    // them a second time here would list the same epics twice under two
+    // headings; `blocked` is the arm where they would otherwise vanish behind
+    // the proven-newer ones.
+    return `Can't install ${refusal.targetVersion}: ${epics} ${refusal.epicCount === 1 ? "uses" : "use"} a newer chat store (${maximum}; ${targetFormatDescription(refusal.targetVersion, refusal.targetChatDb)}).${describeUnreadableClause(refusal)} ${overrideGuidance(refusal.targetVersion)}`;
   }
   const affected = refusal.epicCount > 0 ? ` for ${epics}` : "";
   const reason =
@@ -169,6 +200,42 @@ export function describeHostStoreFloorRpcRefusal(
       ? "the target's chat store format is unknown"
       : `the chat stores could not be read${affected}`;
   return `Can't install ${refusal.targetVersion}: ${reason}. ${overrideGuidance(refusal.targetVersion)}`;
+}
+
+/**
+ * The sentence naming stores the survey could not read at all, or `""` when
+ * every store was readable.
+ *
+ * Separate from the proven-newer list because the two claims are not the same
+ * strength and must not be merged into one count: `blocked` proves those epics
+ * lose access, while these are epics whose fate nothing on this device can
+ * speak for. Folding them together would report an unread stamp as proven.
+ */
+function describeUnreadableClause(
+  refusal: HostUpdateStoreFloorRefusal,
+): string {
+  if (refusal.unreadableEpicCount === 0) return "";
+  const group = describeEpicGroup(
+    refusal.unreadableEpicCount,
+    refusal.unreadableEpicIds,
+  );
+  return ` ${group} could not be read.`;
+}
+
+/**
+ * "3 epics (a, b, …)" - a count, with as many ids as the refusal carried.
+ *
+ * The counts are unbounded while the id lists are capped at
+ * `HOST_STORE_FLOOR_EPIC_ID_LIMIT`, so the ellipsis is the only thing telling
+ * a reader the names are a sample rather than the whole set. One helper for
+ * both groups, so the proven-newer and unreadable lists cannot drift into two
+ * different truncation stories.
+ */
+function describeEpicGroup(count: number, epicIds: readonly string[]): string {
+  const omitted = count > epicIds.length ? ", …" : "";
+  const named =
+    epicIds.length === 0 ? "" : ` (${epicIds.join(", ")}${omitted})`;
+  return `${count} ${count === 1 ? "epic" : "epics"}${named}`;
 }
 
 function targetFormatDescription(

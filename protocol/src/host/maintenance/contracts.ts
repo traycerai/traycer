@@ -181,6 +181,11 @@ export const hostUpdateInstallV12 = defineRpcContract({
   responseSchema: hostUpdateInstallResponseV11Schema,
 });
 
+/**
+ * @1.3 adds per-dispatch store-loss consent and typed refusal details. The
+ * refusal names unreadable stores separately from proven-newer stores so a
+ * partial survey cannot misstate which chats the target is known to reject.
+ */
 export const hostUpdateInstallV13 = defineRpcContract({
   method: "host.update.install",
   schemaVersion: { major: 1, minor: 3 } as const,
