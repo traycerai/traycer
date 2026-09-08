@@ -30,7 +30,6 @@ import type {
   PlanAction,
   PlanContentRef,
   AutonomousResumeTrigger,
-  AutonomousResumeDeliveryPlacement,
   PlanSource,
   PlanStatus,
   PlanStep,
@@ -421,7 +420,6 @@ export type MessageSegment =
   | {
       id: string;
       kind: "autonomous_resume";
-      deliveryPlacement?: AutonomousResumeDeliveryPlacement;
       triggers: ReadonlyArray<AutonomousResumeTrigger>;
     }
   | InterviewSegment
