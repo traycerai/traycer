@@ -912,22 +912,22 @@ function TabCap({
 }) {
   const d =
     side === "left"
-      ? "M 20 0 L 15 0 C 10.6 0 8 2.8 8 7 L 8 32 C 8 36.8 4.8 40 0 40 L 20 40 Z"
-      : "M 0 0 L 5 0 C 9.4 0 12 2.8 12 7 L 12 32 C 12 36.8 15.2 40 20 40 L 0 40 Z";
+      ? "M 24 0 H 22 A 10 10 0 0 0 12 10 V 24 A 12 12 0 0 1 0 36 H 24 Z"
+      : "M 0 0 H 2 A 10 10 0 0 1 12 10 V 24 A 12 12 0 0 0 24 36 H 0 Z";
   // SVG strokes are centered on their path. Inset the top edge by half the
   // stroke width so it occupies the same inside pixel row as the center's CSS
   // border; placing it at y=0 clips the outer half and makes the center look
   // like a second line at display scaling.
   const outline =
     side === "left"
-      ? "M -2 39.5 L 0 39.5 C 4.8 39.5 8 36.8 8 32 L 8 7 C 8 2.8 10.6 0.5 15 0.5 L 20 0.5"
-      : "M 0 0.5 L 5 0.5 C 9.4 0.5 12 2.8 12 7 L 12 32 C 12 36.8 15.2 39.5 20 39.5 L 22 39.5";
+      ? "M -2 35.5 H 0 A 12 12 0 0 0 12 23.5 V 10.5 A 10 10 0 0 1 22 0.5 H 24"
+      : "M 0 0.5 H 2 A 10 10 0 0 1 12 10.5 V 23.5 A 12 12 0 0 0 24 35.5 H 26";
   return (
     <svg
       data-testid={`tab-cap-${side}`}
-      viewBox="0 0 20 40"
+      viewBox="0 0 24 36"
       preserveAspectRatio="none"
-      className="relative z-10 h-full w-5 shrink-0 overflow-visible"
+      className="relative z-10 h-full w-6 shrink-0 overflow-visible"
     >
       <path d={d} fill={fill} />
       {borderColor ? (

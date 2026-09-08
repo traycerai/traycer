@@ -128,7 +128,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
       ) : null}
       <div
         className={cn(
-          "relative z-10 flex min-w-0 flex-1 items-center",
+          "relative z-10 flex min-w-0 flex-1 items-center self-end",
           draggable && "[-webkit-app-region:drag]",
         )}
       >

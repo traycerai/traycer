@@ -42,7 +42,7 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       animate={{ opacity: mergeTargeted ? 0.45 : 1 }}
       transition={HEADER_TAB_OVERLAY_TRANSITION}
       style={props.width === null ? undefined : { width: props.width }}
-      className="pointer-events-none flex h-10 cursor-grabbing select-none items-center gap-2 rounded-t-md border border-b-0 border-border/80 bg-background px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm font-medium text-foreground shadow-lg"
+      className="pointer-events-none flex h-9 cursor-grabbing select-none items-center gap-2 rounded-t-md border border-b-0 border-border/80 bg-background px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm font-medium text-foreground shadow-lg"
     >
       <TabLeadingIcon icon={tab.icon} />
       <span className="min-w-0 truncate">{displayName}</span>

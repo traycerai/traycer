@@ -148,7 +148,7 @@ export const SplitTabItem = memo(function SplitTabItem(
         half's label and focus wash ride on top of the cap curve and read as
         overlapping chrome.
       */}
-      <div className="relative flex h-10 w-full min-w-0 items-center pr-[clamp(0.75rem,5%,1.5rem)] pl-2">
+      <div className="relative flex h-9 w-full min-w-0 items-center pr-[clamp(0.75rem,5%,1.5rem)] pl-2">
         {/* Hover and selection feedback stay per-half (see SplitMemberChrome)
             so the focused member reads like the selected tab in a group. */}
         {quickActionsTab === null ? null : (

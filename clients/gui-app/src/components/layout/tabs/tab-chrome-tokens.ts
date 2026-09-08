@@ -8,7 +8,7 @@ import { useReducedMotion, type Transition } from "motion/react";
  * non-components (which would cost it fast refresh).
  */
 export const TAB_CLASS_BASE =
-  "group/tab relative flex h-10 w-full min-w-0 items-center gap-1.5 px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
+  "group/tab relative flex h-9 w-full min-w-0 items-center gap-1.5 px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
 
 /** Neighbour movement settles quickly without overshooting its open slot. */
 export const HEADER_TAB_REORDER_TRANSITION = {
