@@ -173,7 +173,16 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   );
   const question = total > 0 ? questions[safeIndex] : null;
   const draft = drafts[safeIndex] ?? emptyDraft();
-  const freeTextQuestion = question !== null && question.options.length === 0;
+  // "This question renders a text field the card should yield focus to."
+  // Withdrawing free text from an OPTIONLESS question renders no field at all
+  // (`QuestionPage` returns null), so yielding to one would leave nothing
+  // focused: the card's native key handler owns Escape/Skip and the pager, and
+  // it never receives them until the user clicks. The predicate has to name the
+  // rendered field, not merely the absence of options.
+  const freeTextQuestion =
+    question !== null &&
+    question.options.length === 0 &&
+    questionAllowsCustomAnswer(question);
 
   const isLast = safeIndex >= total - 1;
   const answeredCount = drafts.filter(draftHasContent).length;

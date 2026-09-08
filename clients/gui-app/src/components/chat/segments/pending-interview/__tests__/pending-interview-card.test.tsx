@@ -1063,6 +1063,63 @@ describe("PendingInterviewCard keyboard navigation", () => {
     ]);
   });
 
+  it("takes card focus itself when an optionless question renders no field, so the keyboard still reaches it", () => {
+    vi.useFakeTimers();
+    try {
+      renderCardFor({
+        chatId: "chat-1",
+        blockId: "interview-1",
+        questions: [withoutCustomAnswer(singleSelect("q1", "Describe it", []))],
+        isBusy: false,
+        onSubmit: vi.fn(),
+        onSkip: vi.fn(),
+        onFork: null,
+      });
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      // The card yields focus to a text field when it renders one. This pair
+      // renders none, so yielding would leave focus nowhere and the card's own
+      // key handler - which owns Escape/Skip and the pager - would never see a
+      // keystroke until the user clicked.
+      //
+      // FALSIFICATION: drop `&& questionAllowsCustomAnswer(question)` from
+      // `freeTextQuestion` and this reddens while the CONTROL below stays
+      // green.
+      expect(document.activeElement).toBe(screen.getByTestId("interview-card"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("CONTROL: the same optionless question yields focus to its textarea when free text is unstated", () => {
+    vi.useFakeTimers();
+    try {
+      renderCardFor({
+        chatId: "chat-1",
+        blockId: "interview-1",
+        questions: [singleSelect("q1", "Describe it", [])],
+        isBusy: false,
+        onSubmit: vi.fn(),
+        onSkip: vi.fn(),
+        onFork: null,
+      });
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      // Without this arm, "the card has focus" could be the behaviour for
+      // every optionless question and the assertion above would say nothing
+      // about the flag.
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Interview answer"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("natively disables the free-text and Other answer fields while isBusy", () => {
     renderCardFor({
       chatId: "chat-1",

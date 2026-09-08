@@ -11,6 +11,17 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // mutation/host hooks unconditionally, so those are stubbed to keep this test
 // scoped to a QueryClient with no bound host. The gate under test reads only
 // `profile.apiKey`, so none of these participate in it.
+//
+// NOTE, because the stub below is a LIE about the contract and the next person
+// here will trip on it: `useHostClient()` returns `HostClient<HostRpcRegistry>`
+// and THROWS when there is no provider - it never returns null. "No usable
+// host" is a client whose `getActiveHostId()` is null and whose requests fail
+// at preflight, not a null client. This suite gets away with the stub only
+// because it also mocks both API-key mutation hooks, which are the ones that
+// dereference the client. Mount this form without those mocks and you get a
+// `Cannot read properties of null` from inside a hook, which reads as a bug in
+// the hook rather than as a fixture that misdescribes its type - stub a client
+// whose `getActiveHostId()` returns null instead.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
