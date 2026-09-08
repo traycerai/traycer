@@ -31,7 +31,10 @@ import type { FocusModel } from "@/lib/home-focus/focus-model";
 
 const BACKGROUND_CAPTION = "Only tasks open in this window";
 const NOTIFICATIONS_LOCAL_CAPTION = "this host only";
-const ACTIVITY_NOTICE = "Activity from other hosts may be missing";
+// Deliberately does not name other hosts: `disconnected` is also what THIS
+// client's own activity stream reports when it is closed, and then the Running
+// section can be empty outright rather than merely partial.
+const ACTIVITY_NOTICE = "Some activity may be missing";
 
 export function HomeFocusView(): ReactNode {
   const model = useFocusModel();

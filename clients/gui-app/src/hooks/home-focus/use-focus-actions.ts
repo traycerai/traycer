@@ -89,8 +89,8 @@ const EMPTY_STOPPING: ReadonlySet<string> = new Set<string>();
  * Every action the focus view can take, and deliberately no more.
  *
  * Navigation goes through `routeNotificationForHost` rather than assembling tab
- * intents here. That function already IS the recipe the ticket names - reuse an
- * open tile's tab and focus it, fall back to opening the epic's tab focused on
+ * intents here. That function is the bell's own Open path - reuse an open
+ * tile's tab and focus it, fall back to opening the epic's tab focused on
  * the artifact - and routing through it keeps Home's "Open" behaving exactly
  * like the bell's, including the closed-tile revival path and the host-bound
  * tile matching. Reimplementing it would also mean calling a canvas

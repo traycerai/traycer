@@ -433,7 +433,7 @@ describe("<AppShell />", () => {
       return screen.getByTestId("top-level-surface-home-home");
     }
 
-    it("mounts the Home surface when the flag is on", async () => {
+    it("mounts the Home surface when the flag is on and Home holds the selection", async () => {
       useSettingsStore.setState({ homeTabEnabled: true });
 
       queryClient = renderAppShell();
@@ -460,11 +460,13 @@ describe("<AppShell />", () => {
       expect(homeSurface().getAttribute("aria-hidden")).toBe("false");
     });
 
-    it("keeps the Home surface mounted but hidden while a real other tab is active", async () => {
+    it("keeps the Home surface mounted but hidden once it has been opened and a real other tab takes over", async () => {
       useSettingsStore.setState({ homeTabEnabled: true });
       // A real, non-Home strip tab - seeded the way `top-level-tab-host.test.tsx`
       // seeds a History tab (its own surface stubbed above, since this
       // provider-light shell has no router for the real one to run under).
+      // Home holds the selection first, because the surface latches its mount
+      // on that first activation: this is a window that HAS opened Home.
       useTabsStore.setState((state) => ({
         ...state,
         items: [
@@ -474,7 +476,7 @@ describe("<AppShell />", () => {
             ref: { kind: "history", id: "history" },
           },
         ],
-        activeItemId: "tab:history:history",
+        activeItemId: null,
         stripOrder: [{ kind: "history", id: "history" }],
         systemTabs: {
           history: {
@@ -489,6 +491,14 @@ describe("<AppShell />", () => {
 
       queryClient = renderAppShell();
       await screen.findByTestId("app-shell-child");
+      expect(homeSurface()).not.toBeNull();
+
+      act(() => {
+        useTabsStore.setState((state) => ({
+          ...state,
+          activeItemId: "tab:history:history",
+        }));
+      });
 
       // The other tab is the one actually visible...
       const historySurface = await screen.findByTestId(

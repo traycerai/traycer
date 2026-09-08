@@ -23,9 +23,9 @@ import {
 import { shallowEqualRow } from "@/lib/home-focus/focus-identity";
 
 /**
- * What `FocusModel` (`focus-model.ts`) means. The contract file is kept to the
- * interface block alone so the view lane's copy of it merges byte-identical,
- * so the reasoning behind those fields lives here.
+ * What `FocusModel` (`focus-model.ts`) means. That file is kept to the
+ * interface block alone so it reads as a contract at a glance, which is why the
+ * reasoning behind its fields lives here instead.
  *
  * The model is everything happening right now across every task on the host,
  * with the things that need the user first.
@@ -39,7 +39,9 @@ import { shallowEqualRow } from "@/lib/home-focus/focus-identity";
  * - `background` covers only tasks whose chats are warm in THIS window, because
  *   the only client-side source for a shell or a sub-agent is a live
  *   `chat.subscribe` session. `coverage.backgroundIsMountedOnly` is the literal
- *   `true` rather than a boolean so a renderer cannot forget to caption it.
+ *   `true` rather than a boolean, which puts that limit in the TYPE: a source
+ *   that ever covers unmounted tasks cannot be widened into this field without
+ *   failing to compile here, where the caption's premise is decided.
  *
  * What is missing is missing for a reason, not by omission: there are no agent
  * start timestamps on the activity plane (so no elapsed time), and a received

@@ -6,6 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { HomeFocusView } from "@/components/home-focus/home-focus-view";
@@ -169,6 +170,15 @@ function model(overrides: Partial<FocusModel>): FocusModel {
     badgeCount: 0,
     ...overrides,
   };
+}
+
+/** The element a row's tooltip is anchored to: `FocusStopButton` wraps its
+ * button in a span, because a disabled button fires no pointer events of its
+ * own. */
+function tooltipTriggerOf(control: HTMLElement): HTMLElement {
+  const trigger = control.parentElement;
+  if (trigger === null) throw new Error("control has no tooltip trigger");
+  return trigger;
 }
 
 function hostEntry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
@@ -886,7 +896,7 @@ describe("<HomeFocusView /> background rows", () => {
     expect(actionsMock.stopManagedCommand).toHaveBeenCalledWith(row);
   });
 
-  it("renders a disabled stop with a reason when the job is not stoppable", () => {
+  it("renders a disabled stop naming the unreachable host when a managed command's host is unknown", () => {
     modelMock.value = model({
       background: [backgroundRow({ stoppable: false })],
     });
@@ -897,6 +907,37 @@ describe("<HomeFocusView /> background rows", () => {
     fireEvent.click(stop);
     expect(actionsMock.stopManagedCommand).not.toHaveBeenCalled();
     expect(stop.getAttribute("aria-label")).toContain("Runs on another device");
+  });
+
+  // The shape `buildFocusBackground` actually produces: EVERY background item
+  // is `stoppable: false`, because its stop is a `chat.subscribe` action on a
+  // warm session rather than a unary RPC - which says nothing about which
+  // machine it runs on. A single-host install has no other device to blame.
+  it("sends a background item's disabled stop to the chat rather than to another device", async () => {
+    const user = userEvent.setup();
+    modelMock.value = model({
+      background: [
+        backgroundRow({
+          kind: "background-item",
+          label: "bun run dev",
+          startedAtMs: null,
+          stoppable: false,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const stop = screen.getByTestId("home-focus-background-stop");
+    expect(stop.hasAttribute("disabled")).toBe(true);
+    // The accessible name, which is the only place a reader who cannot hover a
+    // disabled button hears the reason at all.
+    expect(stop.getAttribute("aria-label")).toBe(
+      "Stop bun run dev. Stop this from the chat",
+    );
+
+    // And the same sentence in the tooltip, for everyone else.
+    await user.hover(tooltipTriggerOf(stop));
+    expect(await screen.findByText("Stop this from the chat")).toBeTruthy();
   });
 
   it("disables the stop while this job's stop is in flight", () => {

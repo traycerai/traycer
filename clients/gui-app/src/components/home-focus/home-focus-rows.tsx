@@ -46,10 +46,12 @@ import type {
 } from "@/lib/home-focus/focus-model";
 
 /**
- * What a row can do, declared structurally rather than imported from the
- * actions hook. The hook's module is the model lane's to own, so naming its
- * return type here would couple two lanes' file contents; structural matching
- * costs nothing and lets that lane name its own type whatever it likes.
+ * What a row can do, declared structurally rather than imported from
+ * `use-focus-actions`. A row depends on the SHAPE of the actions, not on the
+ * hook that builds them, so this module pulls in no hook, no router and no
+ * query client and a test can render a row with a plain object. Drift is still
+ * caught: `home-focus-view` assigns the real `FocusActions` to this type, so a
+ * member that stops matching is a type error at that assignment.
  */
 export interface HomeFocusRowActions {
   readonly openPrompt: (row: FocusPromptRow) => void;
@@ -73,8 +75,25 @@ export interface HomeFocusRowActions {
 
 const UNTITLED_TASK = "Untitled task";
 
-/** What a row whose stop cannot be routed says instead of offering one. */
+/** What a row whose stop cannot be ROUTED says instead of offering one: the
+ * machine it runs on is not one this window can dial. */
 const UNREACHABLE_STOP_REASON = "Runs on another device";
+
+/** A background item's stop is a `chat.subscribe` action on a warm session
+ * rather than a unary RPC (`focus-background.ts`), so it exists in the job's own
+ * chat and nowhere else - which is where this sends the user, not to another
+ * machine. */
+const BACKGROUND_ITEM_STOP_REASON = "Stop this from the chat";
+
+/** Why a background row's stop is disabled, which is never the same question
+ * for the two planes the section lists: a managed command is unstoppable only
+ * when its host is unknown, a background item always. */
+function backgroundStopReason(row: FocusBackgroundRow): string | null {
+  if (row.stoppable) return null;
+  return row.kind === "background-item"
+    ? BACKGROUND_ITEM_STOP_REASON
+    : UNREACHABLE_STOP_REASON;
+}
 
 // `active:press-scrim pointer-coarse:touch-chrome` for the same reason the
 // History row card carries them: the row is a plain container, not a `Button`,
@@ -654,7 +673,7 @@ export function HomeFocusBackgroundRow(props: {
         <FocusStopButton
           label="Stop"
           ariaLabel={`Stop ${row.label}`}
-          reason={row.stoppable ? null : UNREACHABLE_STOP_REASON}
+          reason={backgroundStopReason(row)}
           disabled={actions.stopping.has(row.key) || !row.stoppable}
           pending={actions.stopping.has(row.key)}
           onClick={() => actions.stopManagedCommand(row)}
