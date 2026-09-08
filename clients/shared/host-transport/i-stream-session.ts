@@ -33,14 +33,38 @@ export type StreamConnectionStatus =
   | "closed";
 
 /**
- * Reason surfaced alongside `"closed"` transitions so the consumer can
- * distinguish between caller-initiated teardown and fatal-error closes
- * originating from the host or the mirror compatibility check.
+ * Why the socket went away.
+ *
+ * `caller` and `fatalError` accompany `"closed"` and are the session's last
+ * word: the consumer distinguishes caller-initiated teardown from a fatal
+ * close originating at the host or the mirror compatibility check.
+ *
+ * `retryableClose` is the exception, and the ONLY reason that accompanies a
+ * `"reconnecting"` transition. It is a separate kind rather than a
+ * `fatalError` on a non-closed status precisely so it is invisible to the
+ * twenty-odd consumers that branch on `kind === "fatalError"` and to the
+ * several shaped `reason.kind === "caller" ? ignore : treat as fatal`: those
+ * all read a reason as "this session is over", which for a retryable close is
+ * the opposite of the truth - the client is already redialing. A consumer
+ * wanting it must name it.
  */
 export type StreamCloseReason =
   | { readonly kind: "caller" }
   | {
       readonly kind: "fatalError";
+      readonly details: FatalErrorDetails;
+    }
+  | {
+      /**
+       * The host closed the stream with `retryable: true`. The session is
+       * reconnecting; this names what the host said on the way out.
+       *
+       * `details.code` and `details.reason` are BOUNDED by
+       * `describeRetryableClose` before they reach here - both fields are
+       * remote and unbounded on the wire, and this reason is retained in
+       * consumer state rather than logged and dropped.
+       */
+      readonly kind: "retryableClose";
       readonly details: FatalErrorDetails;
     };
 

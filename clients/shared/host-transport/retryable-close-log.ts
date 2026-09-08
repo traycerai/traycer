@@ -45,6 +45,19 @@ export interface RetryableCloseLog {
   readonly line: string;
   /** Bounded key for suppressing the identical close on the next reconnect. */
   readonly fingerprint: string;
+  /**
+   * The host's code, bounded to the allowlisted shape - safe to RETAIN in
+   * client state and to compare against a known code.
+   *
+   * Exposed because the log is not the only consumer any more: a consumer that
+   * has to tell "the host answered and refused" from "the host went quiet"
+   * needs the code, and it must not get there by matching on the message text.
+   * A placeholder (`<empty>`/`<oversized>`/`<unprintable>`) never equals a real
+   * code, so a comparison fails closed on a code this bound rejected.
+   */
+  readonly code: string;
+  /** The reason, control-free, collapsed to one line, and length-bounded. */
+  readonly reason: string;
 }
 
 export function describeRetryableClose(input: {
@@ -56,6 +69,8 @@ export function describeRetryableClose(input: {
   const code = describeRemoteCode(input.code);
   const reason = describeRemoteReason(input.reason);
   return {
+    code,
+    reason,
     line: `[stream] host closed the stream as retryable; reconnecting (method=${input.method}, code=${code}): ${reason}`,
     // The same two bounded fields, so the key a session holds for the life of
     // a reconnect loop is bounded by construction. The separator is a

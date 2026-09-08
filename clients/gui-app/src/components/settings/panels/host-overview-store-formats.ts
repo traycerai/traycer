@@ -2,6 +2,7 @@ import {
   NO_CHAT_STORE,
   resolveHostStoreFormats,
   storeFloorApplicability,
+  storeFloorClearedByFormats,
   type HostStoreFormats,
 } from "@traycer/protocol/host/store-formats";
 import type { HostStatusStoreFormats } from "@traycer/protocol/host/status/index";
@@ -61,7 +62,25 @@ export function hostStoreFormatRestriction(
     return downgrade ? unknownTargetRestriction(input.version) : null;
   }
   if (downgrade && chatDb.survey === "failed") {
-    return unreadableStoresRestriction(input.version);
+    // A failed survey read no file, so on its own it can only ever produce
+    // uncertainty - and uncertainty about files the target can read ANYWAY is
+    // not a reason to demand destructive consent. An rc.4 → rc.1 move inside
+    // one chat-store format is the everyday case: both stamp 9, so there is
+    // nothing a completed walk could have found that would change the answer.
+    //
+    // `storeFloorClearedByFormats` rather than a local `===` because this is
+    // the same predicate the CLI clears a move with before it walks the disk
+    // and the host clears a refusal with before it sends one. Three ends, one
+    // rule; a fourth spelling here is how they drift. It also reads `>=`, not
+    // equality, which matters for the target that stamps NEWER than this
+    // build.
+    const clearedByFormats = storeFloorClearedByFormats(target, {
+      kind: "known",
+      formats: { chatDb: chatDb.current },
+    });
+    if (!clearedByFormats) {
+      return unreadableStoresRestriction(input.version);
+    }
   }
   if (chatDb.onDiskMax === null || chatDb.onDiskMax <= target.formats.chatDb) {
     return null;
@@ -80,6 +99,14 @@ export function hostStoreFormatRestriction(
 /**
  * A fresh host refusal outranks the catalog/status that offered the action.
  * Keep it actionable even when those retained reads cannot reproduce it.
+ *
+ * Deliberately WITHOUT the formats shortcut the cached path above applies.
+ * `hostInstallStoreFloorRefusal` already runs `storeFloorClearedByFormats`
+ * against the running build's own `CHAT_DB_SCHEMA_VERSION` and returns null
+ * when it clears, so a refusal that reached this function is one the host
+ * decided formats alone could NOT clear - with the authoritative version of
+ * the same evidence. Re-deciding it here from a cached status would be a
+ * second opinion formed from strictly less.
  */
 export function hostStoreFormatRestrictionFromRpc(
   refusal: HostUpdateStoreFloorRefusal,

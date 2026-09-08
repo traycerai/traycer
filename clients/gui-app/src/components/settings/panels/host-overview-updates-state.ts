@@ -705,9 +705,15 @@ function useHostInstallStoreFloor(input: {
     stagedEntryOfferable: (offerable, version) =>
       offerable &&
       (version === null || restrictionForVersion(version) === null),
+    // The notice explains the Install-anyway affordance, so it follows the
+    // rows that actually carry one rather than re-deriving the two conditions
+    // that used to imply it. A failed survey no longer implies one by itself:
+    // a target stamping at or above this build's format clears from formats
+    // alone, and a notice about consent nothing is asking for reads as a
+    // warning the page cannot act on. This also picks up the unknown-target
+    // row, which offers Install anyway and which the old pair missed.
     showNotice: (rows) =>
-      rows.some((row) => row.newerData) ||
-      input.storeFormats?.chatDb.survey === "failed",
+      rows.some((row) => row.storeFormatConfirmation !== null),
     prepareInstall: (version, acceptStoreFormatLoss) => {
       // A dialog can outlive a status poll. Re-read the row's evidence; force
       // authorizes ending busy work and never implies losing chat access.

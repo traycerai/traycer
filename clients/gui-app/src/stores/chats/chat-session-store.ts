@@ -6030,9 +6030,17 @@ export function createChatSessionStoreWithNotificationDependencies(
             if (state.snapshotLoaded || status !== "reconnecting") {
               return state.preSnapshotRetries;
             }
+            // `retryableClose` is the shape this streak is usually made of:
+            // the host answered `chat.subscribe` and refused it retryably, so
+            // the transport redialed rather than closing. Its details are
+            // bounded at the transport seam. A `fatalError` here would be a
+            // close, not a reconnect, but it costs nothing to accept and
+            // keeps this fold total over the reasons that carry details.
             return countPreSnapshotRetry(
               state.preSnapshotRetries,
-              reason?.kind === "fatalError" ? reason.details : null,
+              reason !== null && reason.kind !== "caller"
+                ? reason.details
+                : null,
               Date.now(),
             );
           };

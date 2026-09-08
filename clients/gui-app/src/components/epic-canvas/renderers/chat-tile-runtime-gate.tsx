@@ -1,9 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { useDeadlineReached } from "@/hooks/use-deadline-reached";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import {
@@ -19,39 +18,17 @@ import {
   useChatTileHostUpdate,
   type ChatTileHostUpdate,
 } from "./use-chat-tile-host-update";
+// Re-exported so the constants stay importable from the surface that
+// documents them, while the clock that uses them lives with the hook.
+export {
+  STALLED_CHAT_LOAD_ATTEMPTS,
+  STALLED_CHAT_LOAD_ELAPSED_MS,
+} from "./use-chat-load-stalled";
 
 // The chat tile's pre-snapshot states - loading, stalled-but-still-retrying,
 // and fatal-close error - and the gate that picks between them. Kept separate
 // from chat-tile.tsx so Fast Refresh stays intact (components only here; the
 // host-update affordance the panes share is a hook in its own module).
-
-/**
- * How many failed attempts before the tile stops presenting the load as
- * ordinary.
- *
- * Three, because two is one retry - the shape of a host restart or a
- * sleep-wake redial, both of which recover on their own - and telling the
- * reader something is wrong there would be wrong more often than right. The
- * third failure is the first one that is a pattern.
- */
-export const STALLED_CHAT_LOAD_ATTEMPTS = 3;
-
-/**
- * ...and how long the wait itself may run before the same pane is shown
- * anyway, counted from when the wait began rather than from any failure.
- *
- * The count alone is not enough, for two different reasons. The reconnect
- * ladder backs off, so a host that refuses slowly - or a dial that hangs
- * before failing - can spend a long time on attempt one. And a host that acks
- * `chat.subscribe` and then goes silent never produces an attempt to count at
- * all, which is the case that would otherwise spin forever.
- *
- * 20s is deliberately more patient than `TILE_CONTENT_BUDGET_MS` (15s): this
- * pane is not terminal and the load may still land on its own, so the cost of
- * waiting slightly longer is a few more seconds of spinner where it was about
- * to succeed.
- */
-export const STALLED_CHAT_LOAD_ELAPSED_MS = 20_000;
 
 /**
  * The fatal-close fields these panes read. A structural subset of
@@ -85,34 +62,15 @@ export interface ChatTileFatalDetails {
 export function ChatTilePreSnapshotGate(props: {
   readonly fatalClose: ChatTileFatalDetails | null;
   readonly retries: PreSnapshotRetryEvidence | null;
+  /**
+   * The bounded-budget verdict from {@link useChatLoadStalled}, computed by
+   * the chat tile rather than here so this pane and the refusal recorder read
+   * one verdict from one clock anchor. See that hook for why.
+   */
+  readonly stalled: boolean;
   readonly onRetry: () => void;
 }): ReactNode {
   const hostUpdate = useChatTileHostUpdate();
-  // The wait starts when this gate first renders for this session, NOT at the
-  // first failure - that distinction is the whole deadline.
-  //
-  // A host can ack `chat.subscribe` and then send neither a snapshot nor a
-  // close, with heartbeat pongs keeping the socket alive underneath. Nothing
-  // ever transitions to `reconnecting`, so `retries` stays null forever, and a
-  // budget anchored on the first failure never arms at all: the tile spins
-  // until the tab is closed. Invariant 6 asks for a deadline on every
-  // host-dependent loading state, and "no evidence yet" is precisely the state
-  // that needs one most, because it is the one nothing else can end.
-  const [waitStartedAt] = useState(() => Date.now());
-  // The streak's own start still wins where it is EARLIER, so a tile mounting
-  // into a stall that is already old inherits it instead of restarting the
-  // budget. `Math.min` rather than a preference for one or the other: whichever
-  // came first is when this wait actually began, and a failure that lands after
-  // this gate mounted does not restart it.
-  const waitBeganAt =
-    props.retries === null
-      ? waitStartedAt
-      : Math.min(props.retries.firstAt, waitStartedAt);
-  // Evaluated HERE rather than in the session store, which records the instant
-  // and never reads a clock to compare against it.
-  const stalledLongEnough = useDeadlineReached(
-    waitBeganAt + STALLED_CHAT_LOAD_ELAPSED_MS,
-  );
   if (props.fatalClose !== null) {
     return (
       <ChatTileError
@@ -122,15 +80,7 @@ export function ChatTilePreSnapshotGate(props: {
       />
     );
   }
-  // Either arm alone is enough, and the elapsed one no longer requires a
-  // failure to have happened: a wait long enough to give up presenting as
-  // ordinary is a wait long enough whether the host refused three times or
-  // said nothing at all.
-  if (
-    stalledLongEnough ||
-    (props.retries !== null &&
-      props.retries.count >= STALLED_CHAT_LOAD_ATTEMPTS)
-  ) {
+  if (props.stalled) {
     return (
       <ChatTileStillTrying
         retries={props.retries}

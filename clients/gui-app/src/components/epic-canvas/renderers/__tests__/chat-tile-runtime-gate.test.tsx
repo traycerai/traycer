@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
 import type { PreSnapshotRetryEvidence } from "@/stores/chats/chat-session-store";
 import {
@@ -16,8 +10,6 @@ import {
   ChatTileError,
   ChatTilePreSnapshotGate,
   ChatTileStillTrying,
-  STALLED_CHAT_LOAD_ATTEMPTS,
-  STALLED_CHAT_LOAD_ELAPSED_MS,
   type ChatTileFatalDetails,
 } from "../chat-tile-runtime-gate";
 
@@ -38,7 +30,6 @@ function stubHostUpdate(overrides: {
 
 afterEach(() => {
   cleanup();
-  vi.useRealTimers();
 });
 
 describe("<ChatTileError />", () => {
@@ -319,11 +310,12 @@ describe("<ChatTilePreSnapshotGate />", () => {
     });
   });
 
-  it("renders the loading spinner when no attempt has failed yet", () => {
+  it("renders the loading spinner when not stalled and there is no fatal close", () => {
     render(
       <ChatTilePreSnapshotGate
         fatalClose={null}
         retries={null}
+        stalled={false}
         onRetry={() => undefined}
       />,
     );
@@ -332,13 +324,12 @@ describe("<ChatTilePreSnapshotGate />", () => {
     expect(screen.queryByTestId("chat-tile-still-trying")).toBeNull();
   });
 
-  it("stays on the spinner for a single recent failure", () => {
-    vi.useFakeTimers();
-    const now = Date.now();
+  it("stays on the spinner while not stalled, even with a retry streak present", () => {
     render(
       <ChatTilePreSnapshotGate
         fatalClose={null}
-        retries={{ count: 1, firstAt: now, code: null, reason: null }}
+        retries={{ count: 1, firstAt: Date.now(), code: null, reason: null }}
+        stalled={false}
         onRetry={() => undefined}
       />,
     );
@@ -346,16 +337,12 @@ describe("<ChatTilePreSnapshotGate />", () => {
     expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
   });
 
-  it("switches to the stalled pane once the attempt count reaches the threshold, with no elapsed time required", () => {
+  it("renders the stalled pane when stalled is true", () => {
     render(
       <ChatTilePreSnapshotGate
         fatalClose={null}
-        retries={{
-          count: STALLED_CHAT_LOAD_ATTEMPTS,
-          firstAt: Date.now(),
-          code: null,
-          reason: null,
-        }}
+        retries={{ count: 3, firstAt: Date.now(), code: null, reason: null }}
+        stalled
         onRetry={() => undefined}
       />,
     );
@@ -363,50 +350,7 @@ describe("<ChatTilePreSnapshotGate />", () => {
     expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
   });
 
-  it("switches to the stalled pane once the elapsed budget passes, even with only one failed attempt", () => {
-    vi.useFakeTimers();
-    const now = Date.now();
-    render(
-      <ChatTilePreSnapshotGate
-        fatalClose={null}
-        retries={{ count: 1, firstAt: now, code: null, reason: null }}
-        onRetry={() => undefined}
-      />,
-    );
-
-    expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
-
-    act(() => {
-      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS - 1);
-    });
-    expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
-  });
-
-  it("inherits an already-elapsed streak on mount instead of restarting the budget", () => {
-    vi.useFakeTimers();
-    const now = Date.now();
-    render(
-      <ChatTilePreSnapshotGate
-        fatalClose={null}
-        retries={{
-          count: 1,
-          firstAt: now - STALLED_CHAT_LOAD_ELAPSED_MS - 1,
-          code: null,
-          reason: null,
-        }}
-        onRetry={() => undefined}
-      />,
-    );
-
-    expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
-  });
-
-  it("a fatal close always wins over any retry streak", () => {
+  it("a fatal close wins over a stalled retry streak", () => {
     render(
       <ChatTilePreSnapshotGate
         fatalClose={{
@@ -414,12 +358,8 @@ describe("<ChatTilePreSnapshotGate />", () => {
           reason: "CHAT_INVALID: nope",
           upgradeGuidance: null,
         }}
-        retries={{
-          count: STALLED_CHAT_LOAD_ATTEMPTS,
-          firstAt: Date.now(),
-          code: null,
-          reason: null,
-        }}
+        retries={{ count: 3, firstAt: Date.now(), code: null, reason: null }}
+        stalled
         onRetry={() => undefined}
       />,
     );
@@ -428,60 +368,15 @@ describe("<ChatTilePreSnapshotGate />", () => {
     expect(screen.queryByTestId("chat-tile-still-trying")).toBeNull();
   });
 
-  it("stalls a host that acks chat.subscribe and then goes silent, once the elapsed budget passes", () => {
-    // retries never becomes non-null here - the host never produces a
-    // failure to count - so only the gate's own wait-since-mount deadline
-    // can end this spin.
-    vi.useFakeTimers();
-    render(
-      <ChatTilePreSnapshotGate
-        fatalClose={null}
-        retries={null}
-        onRetry={() => undefined}
-      />,
-    );
-
-    expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
-
-    act(() => {
-      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS);
-    });
-
-    expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
-    expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
-  });
-
-  it("does not stall early for a host that acks chat.subscribe and then goes silent", () => {
-    vi.useFakeTimers();
-    render(
-      <ChatTilePreSnapshotGate
-        fatalClose={null}
-        retries={null}
-        onRetry={() => undefined}
-      />,
-    );
-
-    act(() => {
-      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS - 1000);
-    });
-
-    expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
-    expect(screen.queryByTestId("chat-tile-still-trying")).toBeNull();
-  });
-
   it("says only that nothing has arrived yet when the stall carries no retry evidence", () => {
-    vi.useFakeTimers();
     render(
       <ChatTilePreSnapshotGate
         fatalClose={null}
         retries={null}
+        stalled
         onRetry={() => undefined}
       />,
     );
-
-    act(() => {
-      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS);
-    });
 
     const pane = screen.getByTestId("chat-tile-still-trying");
     expect(
@@ -491,21 +386,7 @@ describe("<ChatTilePreSnapshotGate />", () => {
   });
 
   it("lets a fatal close outrank a stall that has no retry evidence", () => {
-    vi.useFakeTimers();
-    const { rerender } = render(
-      <ChatTilePreSnapshotGate
-        fatalClose={null}
-        retries={null}
-        onRetry={() => undefined}
-      />,
-    );
-
-    act(() => {
-      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS);
-    });
-    expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
-
-    rerender(
+    render(
       <ChatTilePreSnapshotGate
         fatalClose={{
           code: "UNAUTHORIZED",
@@ -513,6 +394,7 @@ describe("<ChatTilePreSnapshotGate />", () => {
           upgradeGuidance: null,
         }}
         retries={null}
+        stalled
         onRetry={() => undefined}
       />,
     );

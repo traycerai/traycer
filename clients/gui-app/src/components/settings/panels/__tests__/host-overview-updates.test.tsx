@@ -956,6 +956,62 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     rendered.unmount();
   });
 
+  it("drops the store-floor notice when a failed survey's rows all clear by format", async () => {
+    // Companion to `hostStoreFormatRestriction`'s own coverage: a failed
+    // survey used to force `storeFloorNotice` regardless of the rows it
+    // produced. With every offered row clearing by format alone (the target
+    // stamps the same chatDb as this build), there is nothing left asking for
+    // "Install anyway" consent, so the notice must follow the rows instead of
+    // the raw survey outcome.
+    const manifestBase = multiVersionManifest(["1.3.0"]);
+    const manifest: HostAvailableManifest = {
+      ...manifestBase,
+      versions: manifestBase.versions.map((entry) => ({
+        ...entry,
+        storeFormats: { chatDb: 9 },
+      })),
+    };
+    const storeFormats: HostStatusStoreFormats = {
+      chatDb: {
+        current: 9,
+        onDiskMax: null,
+        epicCount: 1,
+        survey: "failed",
+      },
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.1",
+      storeFormats,
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.1",
+      stagedVersion: null,
+      storeFormats,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(
+      rendered.result.current.picker.rows[0]?.storeFormatConfirmation,
+    ).toBeNull();
+    expect(rendered.result.current.picker.storeFloorNotice).toBe(false);
+    rendered.unmount();
+  });
+
   it("allows an explicit RC-to-stable downgrade, sends the exact target, and freezes the other rows while it is in flight", async () => {
     let releaseInstall: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {

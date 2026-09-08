@@ -187,6 +187,102 @@ describe("hostStoreFormatRestriction", () => {
       ),
     ).toBeNull();
   });
+
+  it("clears a failed survey when the target's own format equals this build's", () => {
+    // The rc.4 -> rc.1 case: both stamp chatDb 9, so a walk that failed could
+    // not have found anything that changes the answer.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0-rc.1",
+          publishedFormats: { chatDb: 9 },
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: null,
+              epicCount: 1,
+              survey: "failed",
+            },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("clears a failed survey from the released table too, without a published format", () => {
+    // Same as above, but the target's format is resolved from
+    // `storeFormatsFromReleasedTable` rather than the catalog's own metadata -
+    // the fix must not depend on the registry row carrying `storeFormats`.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0-rc.1",
+          publishedFormats: null,
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: null,
+              epicCount: 1,
+              survey: "failed",
+            },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("still restricts a failed survey when the unknown target's format cannot clear it", () => {
+    // Same shape as "refuses an older target whose format is unknown" above,
+    // but with a failed rather than complete survey - the unknown-target
+    // branch returns before the failed-survey check runs either way, so the
+    // restriction is unchanged by the survey outcome.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0",
+          runningVersion: "1.3.1",
+          publishedFormats: null,
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: null,
+              epicCount: 1,
+              survey: "failed",
+            },
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "unknown",
+      reason: "Chat store format not published",
+      detail:
+        "v1.3.0 doesn't publish which chat store format it reads, so this device's data can't be verified against it.",
+      confirmation:
+        "v1.3.0 doesn't publish which chat store format it reads, so Traycer can't verify it can open this device's chats.",
+    });
+  });
+
+  it("clears a failed survey when the target's format is strictly newer than this build's", () => {
+    // Pins `>=` rather than `==`: a target that stamps NEWER than the running
+    // build can read this build's own chats even less ambiguously than an
+    // equal target can.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0-rc.1",
+          publishedFormats: { chatDb: 9 },
+          storeFormats: {
+            chatDb: {
+              current: 8,
+              onDiskMax: null,
+              epicCount: 1,
+              survey: "failed",
+            },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
 });
 
 function blockedRefusal(

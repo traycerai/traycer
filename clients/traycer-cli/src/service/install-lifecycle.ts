@@ -44,6 +44,20 @@ function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
   };
 }
 
+/**
+ * Whether a host was actually running before a pre-swap stop, and therefore
+ * whether an abandoned swap owes the machine a restart.
+ *
+ * `stopped` and `not-installed` are NOT this, even when a stop was issued:
+ * Windows stops unconditionally to clear file handles the rename needs, so
+ * "we called stop" and "there was a host to put back" are different facts.
+ * Conflating them makes a refused install start a host the user had
+ * deliberately stopped.
+ */
+function hostWasRunningBefore(priorState: ServiceState): boolean {
+  return priorState === "running" || priorState === "externally-managed";
+}
+
 // State captured by the lifecycle hooks so the command can render an
 // accurate `serviceLifecycle` block in its result.
 //
@@ -58,10 +72,10 @@ function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
 //   - `stoppedBeforeSwap` - true iff we issued `controller.stop()`
 //     because the service was running (or because Windows needs a
 //     force-kill of stray host processes before the install-dir
-//     rename). The post-swap path no longer branches on it, but
-//     `restartAfterAbortedSwap` does: it is what distinguishes "put the
-//     host back" from "start one the user did not have" when a swap is
-//     abandoned after the stop.
+//     rename). Reporting only: the post-swap path does not branch on it,
+//     and `restartAfterAbortedSwap` needs `priorState` as well, because
+//     the Windows arm sets this for a service that was never running -
+//     see `hostWasRunningBefore`.
 //   - `postSwapAction` - what we actually attempted after the swap.
 //     `install` when we rewrote/re-registered the OS service manifest
 //     (fresh bootstrap or an existing registration that needs the
@@ -266,12 +280,20 @@ export function createServiceInstallLifecycle(
      * A plain start, not `relaunchAfterRestart`: nothing was replaced, so
      * there is no new generation to force a recycle onto - the job is to
      * return the machine to the host it was already running. Gated on
-     * `stoppedBeforeSwap` so a lifecycle that never stopped anything (a
-     * service that was not running, the `externally-managed` degrade) does not
-     * start a host the user did not have.
+     * Gated on TWO things, because `stoppedBeforeSwap` alone is not the
+     * question. It is set whenever `controller.stop` was issued - and on
+     * Windows that happens even for a service the probe found `stopped`,
+     * because the stop there is a force-kill of stray processes whose handles
+     * inside the install directory would fail the rename, not a host
+     * shutdown. Restoring on that alone would START a host the user had
+     * deliberately stopped. So the prior state has to say a host was actually
+     * running: `running`, or `externally-managed` where the cooperative stop
+     * resolved (it throws when no host was there, so reaching this with the
+     * flag set means one was).
      */
     restartAfterAbortedSwap: async () => {
       if (!state.stoppedBeforeSwap) return;
+      if (!hostWasRunningBefore(state.priorState)) return;
       await withServiceMutationAuthority(verifyMutationCapability, () =>
         runWithPublishedHostStartAdoption(
           publishHostStartAdoption,
@@ -558,7 +580,7 @@ export function createBytesOnlyInstallLifecycle(
   hooks: InstallPhaseHooks,
 ): InstallHostLifecycle {
   let verifyMutationCapability = async (): Promise<void> => {};
-  let stoppedForSwap = false;
+  let hostWasRunning = false;
   return {
     swapLockRecovery: swapLockRecoveryFor(label),
     setMutationVerifier: (verify) => {
@@ -566,17 +588,27 @@ export function createBytesOnlyInstallLifecycle(
     },
     beforeSwap: async (): Promise<void> => {
       if (process.platform !== "win32") return;
+      // Probed BEFORE the stop, and only to answer "was a host running?" -
+      // never to decide whether to stop. The Windows stop runs regardless,
+      // because it force-kills stray processes whose open handles inside the
+      // install directory would fail the rename, and those outlive a service
+      // the probe calls `stopped`.
+      const status = await controller.status(label);
       await withServiceMutationAuthority(verifyMutationCapability, () =>
         controller.stop(label, { force: false }),
       );
-      stoppedForSwap = true;
+      hostWasRunning = hostWasRunningBefore(status.state);
     },
     // Only Windows ever stopped anything here, so only Windows has anything
-    // to put back. On POSIX this lifecycle is bytes-only by contract - it
-    // leaves the running host alone - and starting one after an abandoned
-    // swap would be this path doing the very thing it promises not to.
+    // to put back - and only when a host was actually RUNNING to begin with.
+    // On POSIX this lifecycle is bytes-only by contract: it leaves the running
+    // host alone, and starting one after an abandoned swap would be this path
+    // doing the very thing it promises not to. On Windows the same promise
+    // binds one step further in: a refused `host install --no-service-register`
+    // over a deliberately stopped service must leave it stopped, even though
+    // the rename's force-kill did issue a stop.
     restartAfterAbortedSwap: async (): Promise<void> => {
-      if (!stoppedForSwap) return;
+      if (!hostWasRunning) return;
       await withServiceMutationAuthority(verifyMutationCapability, () =>
         controller.start(label),
       );

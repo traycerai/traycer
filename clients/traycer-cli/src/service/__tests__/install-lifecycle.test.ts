@@ -1220,6 +1220,132 @@ describe("service install lifecycle onWillStopHost", () => {
   });
 });
 
+// Codex P2: `restartAfterAbortedSwap` used to gate on "did we call stop?"
+// when the question is "was there a host to put back?". Those differ on
+// Windows, where both lifecycles stop UNCONDITIONALLY - a force-kill of
+// stray processes whose open handles inside `install/` would fail the
+// rename, not a host shutdown. A service the probe found `stopped` still
+// set the flag, and a refused post-stop floor check then started a host the
+// user had deliberately stopped, directly against the bytes-only no-start
+// contract. Fixed via `hostWasRunningBefore(priorState)`, true only for
+// `running`/`externally-managed`. These tests call `restartAfterAbortedSwap`
+// directly after `beforeSwap` - exactly what `assertFloorAfterStopOrRestore`
+// does on a refusal, without needing to drive a real floor refusal through
+// the full install path.
+describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+  });
+
+  describe("service lifecycle", () => {
+    it("restarts a host that was RUNNING before the stop", async () => {
+      const harness = makeController("running");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+      expect(handle.state.stoppedBeforeSwap).toBe(true);
+
+      await handle.lifecycle.restartAfterAbortedSwap();
+
+      expect(harness.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("on Windows, never restarts a service the probe found STOPPED, even though the handle-kill stop still ran", async () => {
+      const harness = makeController("stopped");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("win32", () => handle.lifecycle.beforeSwap());
+      // The Windows handle-kill runs regardless of prior state - this is the
+      // fact `stoppedBeforeSwap` alone used to be (wrongly) read as "there
+      // is a host to put back".
+      expect(handle.state.stoppedBeforeSwap).toBe(true);
+      expect(harness.stop).toHaveBeenCalledTimes(1);
+
+      await withPlatformAsync("win32", () =>
+        handle.lifecycle.restartAfterAbortedSwap(),
+      );
+
+      expect(harness.start).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bytes-only lifecycle", () => {
+    it("on Windows, restarts a host that was RUNNING before the handle-kill stop", async () => {
+      const harness = makeController("running");
+      const lifecycle = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+        NO_INSTALL_PHASE_HOOKS,
+      );
+
+      await withPlatformAsync("win32", () => lifecycle.beforeSwap());
+      expect(harness.stop).toHaveBeenCalledTimes(1);
+
+      await withPlatformAsync("win32", () =>
+        lifecycle.restartAfterAbortedSwap(),
+      );
+
+      expect(harness.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("on Windows, leaves a STOPPED service stopped, but the handle-kill stop still ran - the regression this pins", async () => {
+      // If a future "fix" skips the stop entirely when the service is not
+      // running, the rename loses its handle-kill and Windows installs
+      // start failing with EBUSY. Asserting `stop` WAS called is what makes
+      // that regression visible instead of passing quietly alongside the
+      // "never restarts" half.
+      const harness = makeController("stopped");
+      const lifecycle = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+        NO_INSTALL_PHASE_HOOKS,
+      );
+
+      await withPlatformAsync("win32", () => lifecycle.beforeSwap());
+      expect(harness.stop).toHaveBeenCalledTimes(1);
+
+      await withPlatformAsync("win32", () =>
+        lifecycle.restartAfterAbortedSwap(),
+      );
+
+      expect(harness.start).not.toHaveBeenCalled();
+    });
+
+    it("on POSIX, stops nothing before the swap, so restartAfterAbortedSwap is already a no-op", async () => {
+      const harness = makeController("running");
+      const lifecycle = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+        NO_INSTALL_PHASE_HOOKS,
+      );
+
+      await withPlatformAsync("linux", () => lifecycle.beforeSwap());
+      expect(harness.stop).not.toHaveBeenCalled();
+
+      await withPlatformAsync("linux", () =>
+        lifecycle.restartAfterAbortedSwap(),
+      );
+
+      expect(harness.start).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe("InstallPhaseHooks forwarding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
