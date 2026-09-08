@@ -560,6 +560,83 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(screen.queryByTestId(/^split-focus-indicator-/)).toBeNull();
       expect(overlay.style.width).toBe("220px");
     });
+
+    it("renders as inactive when a different ordinary tab, not the split group, is the active strip item", () => {
+      const OTHER: TabRef = { kind: "epic", id: "epic-other" };
+      useEpicCanvasStore
+        .getState()
+        .seedEpic("epic-left", { tabId: "epic-left", name: "Left Epic" }, []);
+      useEpicCanvasStore
+        .getState()
+        .seedEpic(
+          "epic-right",
+          { tabId: "epic-right", name: "Right Epic" },
+          [],
+        );
+      useEpicCanvasStore
+        .getState()
+        .seedEpic(
+          "epic-other",
+          { tabId: "epic-other", name: "Other Epic" },
+          [],
+        );
+      useTabsStore.setState({
+        version: 2,
+        items: [
+          {
+            kind: "split",
+            id: "split-1",
+            left: { kind: "tab", ref: LEFT },
+            right: { kind: "tab", ref: RIGHT },
+            focusedSide: "right",
+            routeBackingSide: "right",
+            leftRatio: 0.5,
+          },
+          { kind: "tab", id: "tab:epic:epic-other", ref: OTHER },
+        ],
+        activeItemId: "tab:epic:epic-other",
+        stripOrder: [LEFT, RIGHT, OTHER],
+        systemTabs: { history: null, settings: null },
+      });
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "split-1",
+          tabKind: "epic",
+          tabId: "epic-right",
+          index: 0,
+        },
+        480,
+      );
+      renderOverlay();
+
+      const overlay = screen.getByTestId("header-tab-drag-overlay");
+      expect(within(overlay).getByText("Left Epic")).toBeTruthy();
+      expect(within(overlay).getByText("Right Epic")).toBeTruthy();
+      expect(
+        within(overlay).getByTestId("split-tab-divider-split-1"),
+      ).toBeTruthy();
+      const leftUnderline = within(overlay).getByTestId(
+        "split-tab-group-underline-left-split-1",
+      );
+      const rightUnderline = within(overlay).getByTestId(
+        "split-tab-group-underline-right-split-1",
+      );
+      expect(leftUnderline.className).toContain("bg-primary");
+      expect(rightUnderline.className).toContain("bg-primary");
+      expect(within(overlay).queryByTestId("tab-chrome-center")).toBeNull();
+
+      act(() => {
+        useTabsStore.setState({ activeItemId: "split-1" });
+      });
+
+      expect(
+        within(overlay).queryByTestId("split-tab-divider-split-1"),
+      ).toBeNull();
+      expect(leftUnderline.className).toContain("bg-primary");
+      expect(rightUnderline.className).not.toContain("bg-primary");
+      expect(within(overlay).getByTestId("tab-chrome-center")).toBeTruthy();
+    });
   });
 
   describe("header-tab overlay shares the strip's live visual", () => {

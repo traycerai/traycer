@@ -37,12 +37,12 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
         <TabLeadingIcon tab={props.tab} />
         {props.titleControl ?? (
           <span
-            className="header-tab-label relative min-w-0 flex-1 text-left"
+            className="header-tab-label relative flex min-w-0 flex-1 items-center gap-1.5 text-left"
             data-leader-visible={props.leaderVisible}
           >
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="block w-full">
+                <span className="block min-w-0 flex-1">
                   <span
                     data-testid={`tab-title-${props.tab.kind}-${props.tab.id}`}
                     className="header-tab-title block"

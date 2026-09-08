@@ -621,8 +621,8 @@ interface TabTrailingSlotProps {
 }
 
 /**
- * Overlaid close control or leader badge. The title makes room only while the
- * control is visible; its tooltip anchor keeps a stable width across hover.
+ * Close controls overlay the label; leader badges reserve their intrinsic width.
+ * The title's tooltip anchor keeps a stable width across hover.
  */
 function TabTrailingSlot(props: TabTrailingSlotProps) {
   const { label, testId, onClose, leaderBadge, active, disabled } = props;
@@ -630,8 +630,10 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
   return (
     <span
       className={cn(
-        "absolute right-0 top-1/2 z-20 flex -translate-y-1/2 items-center justify-center overflow-hidden transition-opacity duration-150 ease-spring [-webkit-app-region:no-drag]",
-        showLeader ? "w-fit opacity-100" : "header-tab-trailing-slot",
+        "z-20 flex shrink-0 items-center justify-center overflow-hidden transition-opacity duration-150 ease-spring [-webkit-app-region:no-drag]",
+        showLeader
+          ? "relative w-fit opacity-100"
+          : "header-tab-trailing-slot absolute right-0 top-1/2 -translate-y-1/2",
       )}
     >
       <AnimatePresence initial={false}>

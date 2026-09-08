@@ -1025,8 +1025,8 @@
     opacity: 0;
   }
 
-  /* The close button is inert by default and only becomes clickable once the
-     tab is wide enough and hovered / keyboard-focused. Keep BOTH the `none`
+  /* The close button is inert until keyboard focus, or hover on a wide tab.
+     Keep BOTH the `none`
      default and the `auto` reveal in this same @layer so the reveal wins by
      specificity. Do NOT put a `pointer-events-none` Tailwind utility on the
      button: it lands in Tailwind's `utilities` layer, declared after
@@ -1051,29 +1051,39 @@
 
   /* Only the title's text box shrinks. Its full-width tooltip anchor stays
      fixed so revealing the close control cannot reposition the tooltip. */
-  .header-tab-label[data-leader-visible="true"] .header-tab-title {
+  .group\/tab:focus-visible .header-tab-title,
+  .group\/tab:has(:focus-visible) .header-tab-title {
     padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
   }
 
+  .group\/tab:focus-visible .header-tab-trailing-slot,
+  .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
+    width: 1.25rem;
+    opacity: 1;
+  }
+
+  .group\/tab:focus-visible .header-tab-close-button,
+  .group\/tab:has(:focus-visible) .header-tab-close-button {
+    pointer-events: auto;
+  }
+
   @container (min-width: 7rem) {
-    .group\/tab:hover .header-tab-title,
-    .group\/tab:focus-visible .header-tab-title,
-    .group\/tab:has(:focus-visible) .header-tab-title {
+    .group\/tab:hover .header-tab-title {
       padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
     }
 
-    .group\/tab:hover .header-tab-trailing-slot,
-    .group\/tab:focus-visible .header-tab-trailing-slot,
-    .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
+    .group\/tab:hover .header-tab-trailing-slot {
       width: 1.25rem;
       opacity: 1;
     }
 
-    .group\/tab:hover .header-tab-close-button,
-    .group\/tab:focus-visible .header-tab-close-button,
-    .group\/tab:has(:focus-visible) .header-tab-close-button {
+    .group\/tab:hover .header-tab-close-button {
       pointer-events: auto;
     }
+  }
+
+  .header-tab-label[data-leader-visible="true"] .header-tab-title {
+    padding-inline-end: 0;
   }
 
   [data-composer-editor] ul {

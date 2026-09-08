@@ -21,6 +21,7 @@ interface SplitTabDragOverlayProps {
   readonly item: Extract<HeaderStripItem, { readonly kind: "split" }>;
   readonly width: number | null;
   readonly source: HeaderTabDragData;
+  readonly isActive: boolean;
 }
 
 export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
@@ -52,12 +53,14 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
     >
       <SplitTabLayout
         splitId={item.id}
-        selectedSide={item.focusedSide}
+        selectedSide={props.isActive ? item.focusedSide : null}
         control={
           <span
             className={cn(
               SPLIT_TAB_CONTROL_CLASS,
-              "text-blue-600 dark:text-blue-300",
+              props.isActive
+                ? "text-blue-600 dark:text-blue-300"
+                : "text-muted-foreground",
             )}
           >
             <SplitFocusIcon splitId={item.id} focusedSide={item.focusedSide} />
@@ -66,13 +69,13 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
         left={
           <SplitMemberOverlay
             member={item.left}
-            focused={item.focusedSide === "left"}
+            focused={props.isActive ? item.focusedSide === "left" : false}
           />
         }
         right={
           <SplitMemberOverlay
             member={item.right}
-            focused={item.focusedSide === "right"}
+            focused={props.isActive ? item.focusedSide === "right" : false}
           />
         }
       />

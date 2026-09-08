@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { TabChromeBackground } from "./tab-chrome-background";
 
+const SPLIT_ROW_PADDING_CLASS = "pr-[clamp(0.75rem,5%,1.5rem)] pl-2";
+const SPLIT_CONTROL_WIDTH_CLASS = "w-11";
+
 interface SplitTabLayoutProps {
   readonly splitId: string;
   readonly selectedSide: "left" | "right" | null;
@@ -14,8 +17,18 @@ interface SplitTabLayoutProps {
 export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
   return (
     <div className="relative flex w-full min-w-0 items-end">
-      <div className="relative flex h-9 w-full min-w-0 items-center pr-[clamp(0.75rem,5%,1.5rem)] pl-2">
-        <span className="relative z-20 flex w-11 shrink-0 items-center">
+      <div
+        className={cn(
+          "relative flex h-9 w-full min-w-0 items-center",
+          SPLIT_ROW_PADDING_CLASS,
+        )}
+      >
+        <span
+          className={cn(
+            "relative z-20 flex shrink-0 items-center",
+            SPLIT_CONTROL_WIDTH_CLASS,
+          )}
+        >
           {props.control}
         </span>
         <div className="relative flex min-w-0 flex-1" data-split-member="left">
@@ -48,12 +61,16 @@ function SplitGroupUnderline(props: {
     <span
       aria-hidden="true"
       data-testid={`split-tab-group-underline-${props.splitId}`}
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-px pr-[clamp(0.75rem,5%,1.5rem)] pl-2"
+      className={cn(
+        "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-px",
+        SPLIT_ROW_PADDING_CLASS,
+      )}
     >
       <span
         data-testid={`split-tab-group-underline-control-${props.splitId}`}
         className={cn(
-          "relative w-11 shrink-0 rounded-l-full bg-primary",
+          "relative shrink-0 rounded-l-full bg-primary",
+          SPLIT_CONTROL_WIDTH_CLASS,
           props.selectedSide === "left" &&
             "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-primary",
         )}

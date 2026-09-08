@@ -27,6 +27,7 @@ import {
 } from "@/stores/tabs/use-header-tabs";
 import { useHeaderTabIndicators } from "@/components/layout/tabs/header-tab-presentation";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { useTabsStore } from "@/stores/tabs/store";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -188,6 +189,9 @@ function HeaderTabOverlayChip(props: {
   readonly width: number | null;
 }) {
   const item = useHeaderStripItem(props.tab.stripItemId);
+  const isActive = useTabsStore(
+    (state) => state.activeItemId === props.tab.stripItemId,
+  );
   const tabs = useHeaderTabs();
   const { indicators } = useHeaderTabIndicators(tabs);
   if (item === null) return null;
@@ -198,6 +202,7 @@ function HeaderTabOverlayChip(props: {
           item={item}
           width={props.width}
           source={props.tab}
+          isActive={isActive}
         />
       ) : (
         <HeaderTabDragOverlay tab={item.tab} width={props.width} />
