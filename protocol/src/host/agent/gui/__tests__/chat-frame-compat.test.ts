@@ -273,12 +273,16 @@ function chatEventFixture(
  * under test is reached.
  */
 /**
- * The four `1.7`-only structured keys a durable chat event's metadata may
- * carry. Mirrors the protocol's own list; both directions must remove all of
- * them, and the two companion facts are here because they were declared in the
- * HOST while the other two were imported - so neither projector knew them.
+ * The structured keys that ride an `interview.*` event - a deliberate SUBSET
+ * of the protocol's list, not a mirror of it.
+ *
+ * The fifth registered key, `deletedInterviewDeliveries`, rides
+ * `history.deleted` and so cannot appear on the fixtures below; it has its own
+ * arm. Naming this subset honestly matters here: a list that claimed to mirror
+ * the protocol's while missing an entry is the same shape of mistake as the
+ * projector that never knew about a key.
  */
-const STRUCTURED_METADATA_KEYS: ReadonlyArray<string> = [
+const STRUCTURED_METADATA_KEYS_ON_INTERVIEW_EVENTS: ReadonlyArray<string> = [
   INTERVIEW_SETTLEMENT_METADATA_KEY,
   INTERVIEW_DELIVERY_METADATA_KEY,
   INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY,
@@ -1045,7 +1049,7 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
     // prove nothing.
     for (const seeded of [eventFromProjected(appended), inSnapshot]) {
       const before = asRecord(seeded.metadata, "seeded metadata");
-      for (const key of STRUCTURED_METADATA_KEYS) {
+      for (const key of STRUCTURED_METADATA_KEYS_ON_INTERVIEW_EVENTS) {
         expect(Object.hasOwn(before, key)).toBe(true);
       }
     }
@@ -1061,7 +1065,7 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
       // Deleted, not nulled: `metadata` is an open record, so absence is the
       // state a conforming pre-1.7 peer produces and the state the outbound
       // projector hands one.
-      for (const key of STRUCTURED_METADATA_KEYS) {
+      for (const key of STRUCTURED_METADATA_KEYS_ON_INTERVIEW_EVENTS) {
         expect(Object.hasOwn(metadata, key)).toBe(false);
       }
       const answers = recordAnswers(metadata.answers);

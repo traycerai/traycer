@@ -757,10 +757,19 @@ export function projectChatServerFrameForVersion(
  * durable counterpart is written with `metadata: null`. Tests still use it as
  * a synthetic colliding key, which is exactly what it is.)
  *
- * So settlement facts live under this key and nowhere else, the projector
- * removes exactly this key, and pre-existing metadata is untouched. Nested
- * future facts go inside it and are removed wholesale - the same argument that
- * puts future block facts in `settlementExtensions`.
+ * So the canonical settlement ENVELOPE lives under this key, the projectors
+ * remove every registered structured key (see
+ * `INTERVIEW_STRUCTURED_METADATA_KEYS`) and filter answer selection, and
+ * pre-existing flat metadata is untouched. Nested future facts go inside this
+ * envelope and are removed wholesale - the same argument that puts future
+ * block facts in `settlementExtensions`.
+ *
+ * "Under this key" describes the ENVELOPE, not the whole surface, and the
+ * difference has already cost two rounds of leaks: the host writes flat
+ * `answers`/`reason`/`code` beside it, a detached delivery carries its own
+ * payload, and four further namespaced facts ride the same and other events.
+ * This key is the replay authority for a settlement; it is not the only place
+ * settlement-derived data is written.
  *
  * PHASE 2 OBLIGATION: the host must write `DurableInterviewSettlement` under
  * this key. Writing `outcome`/`draftAnswers`/`settlementId` flat onto the
@@ -772,7 +781,14 @@ export const INTERVIEW_SETTLEMENT_METADATA_KEY = "interviewSettlement";
 /**
  * The opaque delivery envelope paired with a detached settlement. It is only
  * durable-repair input for the host (identity, owner, and exact provider
- * payload); pre-`1.7` peers must not observe this new metadata surface.
+ * payload); a peer that negotiated `chat.subscribe` below `1.7` must not
+ * observe this new metadata surface ON THAT STREAM.
+ *
+ * Scoped to the stream deliberately. Persistence is a different contract and
+ * an intentionally lossless one: chat-sync publications and clones carry these
+ * records verbatim to readers on older lines, by design, and normalizing them
+ * there would corrupt the data rather than protect anyone. Every "must not
+ * observe" in this file means "on a `chat.subscribe` line below `1.7`".
  */
 export const INTERVIEW_DELIVERY_METADATA_KEY = "interviewDelivery";
 
@@ -826,11 +842,23 @@ export const DELETED_INTERVIEW_DELIVERIES_METADATA_KEY =
  * never heard of them, so both projectors passed them straight through to
  * every pre-`1.7` peer, `settlementId` included, for as long as they existed.
  *
- * So the vocabulary lives here and the host imports all four. Adding a key
- * means adding it to this list, which is the only edit that makes it
- * strippable in either direction. `answers` is deliberately NOT here - it is a
- * pre-`1.7` key whose CONTENTS are filtered rather than removed, which is a
- * different operation.
+ * So the vocabulary lives here and the host imports every key from it.
+ *
+ * REGISTERING A NEW FACT TAKES TWO EDITS, and the second is the one that gets
+ * forgotten: add the key to this list, AND add its carrier event type to
+ * `INTERVIEW_METADATA_CHAT_EVENT_TYPES` if it does not ride an `interview.*`
+ * event. Either edit alone leaves the leak intact - both helpers check the
+ * carrier before they ever reach this list, which is exactly how
+ * `deletedInterviewDeliveries` survived on `history.deleted` while sitting one
+ * `push` away from being covered.
+ *
+ * Neither edit is ENFORCED. This list is maintained by hand and the host's
+ * `createEvent` takes an open record, so nothing detects a new key declared
+ * elsewhere. That is a convention, and the two rounds of leaks above are what
+ * it costs when the convention is not followed.
+ *
+ * `answers` is deliberately NOT here - it is a pre-`1.7` key whose CONTENTS
+ * are filtered rather than removed, which is a different operation.
  */
 const INTERVIEW_STRUCTURED_METADATA_KEYS: ReadonlyArray<string> = [
   INTERVIEW_SETTLEMENT_METADATA_KEY,
