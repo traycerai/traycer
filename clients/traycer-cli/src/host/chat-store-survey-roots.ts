@@ -38,7 +38,8 @@
  * with no flag in the dev loop to get past it. Over-refusal is correctable;
  * under-refusal is the crash loop this whole gate exists to prevent.
  */
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { join } from "node:path";
 import {
   hostDevHomeDir,
@@ -83,6 +84,13 @@ const DEV_HOME_ROOT_LABEL = "dev";
  * Existence-only reads: a missing pool root is the ordinary state and yields
  * no extra roots. Ordering is stable (primary first) so a refusal lists the
  * machine's own root before any pooled identity.
+ *
+ * Every pool entry is `lstat`ed rather than trusted to be a directory, and the
+ * three non-directory answers are deliberately different: a regular file is
+ * skipped (it never was an identity home), a vanished entry is skipped
+ * (nothing there to be blind to), and a SYMLINK sets `enumerationFailed`
+ * (following it could widen the survey, ignoring it could hide a real home,
+ * and the resolver cannot tell which).
  */
 export async function resolveChatStoreSurveyRoots(
   environment: Environment,
@@ -113,10 +121,39 @@ export async function resolveChatStoreSurveyRoots(
     if (isNotFound(error)) return { roots, enumerationFailed: false };
     return { roots, enumerationFailed: true };
   }
+  let enumerationFailed = false;
   for (const identity of [...identities].sort()) {
-    roots.push({ path: join(poolRoot, identity), label: identity });
+    const path = join(poolRoot, identity);
+    let entry: Stats;
+    try {
+      entry = await lstat(path);
+    } catch (error: unknown) {
+      // Vanished between the readdir and this lstat - a pool entry being
+      // reclaimed while we walk. Nothing is there, so there is nothing to be
+      // blind to.
+      if (isNotFound(error)) continue;
+      enumerationFailed = true;
+      continue;
+    }
+    // A LINK is not silently skipped, and this is the one entry class where
+    // skipping would be wrong in both directions: followed, it could point the
+    // survey at a tree that is not an identity home; ignored, it could hide
+    // one that is. The survey cannot say which, and "cannot say" is exactly
+    // what `enumerationFailed` means. Same rule as a linked epic directory,
+    // for the same reason.
+    if (entry.isSymbolicLink()) {
+      enumerationFailed = true;
+      continue;
+    }
+    // A stray regular file - `.DS_Store`, a lockfile, an editor swapfile - is
+    // NOT an identity home and never was. Taking it as a root made
+    // `listEpicDirs` fail with ENOTDIR, which the survey correctly reports as
+    // a root it could not enumerate, so a single Finder visit to this
+    // directory refused every downgrade on an otherwise healthy dev machine.
+    if (!entry.isDirectory()) continue;
+    roots.push({ path, label: identity });
   }
-  return { roots, enumerationFailed: false };
+  return { roots, enumerationFailed };
 }
 
 /**

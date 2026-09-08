@@ -252,60 +252,74 @@ describe("surveyChatDbStamps", () => {
     // silence; everything else - a link, a wrong type, a permission denial -
     // is a failure this survey owes the caller.
 
-    it("refuses a symlinked epic directory as linked-epic-directory, without following it", async () => {
-      const realTarget = await mkdtemp(
-        join(tmpdir(), "chat-store-survey-test-link-target-"),
-      );
-      try {
-        // A real, readable chat.db behind the link - proves the refusal is
-        // about the LINK, not about anything downstream being unreadable.
-        await mkdir(join(realTarget, "chat"), { recursive: true });
-        await writeStampedChatDb(join(realTarget, "chat", "chat.db"), 9);
-        await mkdir(join(hostHome, EPIC_STATE_DIRNAME), { recursive: true });
-        await symlink(
-          realTarget,
-          join(hostHome, EPIC_STATE_DIRNAME, "epic-linked"),
+    // `symlink()` is EPERM for a Windows developer without the create-
+    // symbolic-link privilege, so every symlink-creating test here fails
+    // there rather than skipping, without this guard.
+    const canSymlink = platform !== "win32";
+
+    (canSymlink ? it : it.skip)(
+      "refuses a symlinked epic directory as linked-epic-directory, without following it",
+      async () => {
+        const realTarget = await mkdtemp(
+          join(tmpdir(), "chat-store-survey-test-link-target-"),
         );
+        try {
+          // A real, readable chat.db behind the link - proves the refusal
+          // is about the LINK, not about anything downstream being
+          // unreadable.
+          await mkdir(join(realTarget, "chat"), { recursive: true });
+          await writeStampedChatDb(join(realTarget, "chat", "chat.db"), 9);
+          await mkdir(join(hostHome, EPIC_STATE_DIRNAME), {
+            recursive: true,
+          });
+          await symlink(
+            realTarget,
+            join(hostHome, EPIC_STATE_DIRNAME, "epic-linked"),
+          );
 
-        const survey = await surveyChatDbStamps(
-          singleChatStoreSurveyRoot(hostHome),
+          const survey = await surveyChatDbStamps(
+            singleChatStoreSurveyRoot(hostHome),
+          );
+
+          expect(survey.readings).toEqual([]);
+          expect(survey.failures).toEqual([
+            { epicId: "epic-linked", reason: "linked-epic-directory" },
+          ]);
+        } finally {
+          await rm(realTarget, { recursive: true, force: true });
+        }
+      },
+    );
+
+    (canSymlink ? it : it.skip)(
+      "refuses a symlinked chat directory as linked-chat-directory, without following it",
+      async () => {
+        const realTarget = await mkdtemp(
+          join(tmpdir(), "chat-store-survey-test-link-target-"),
         );
+        try {
+          await writeStampedChatDb(join(realTarget, "chat.db"), 9);
+          await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-linked"), {
+            recursive: true,
+          });
+          await symlink(
+            realTarget,
+            join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-linked", "chat"),
+          );
 
-        expect(survey.readings).toEqual([]);
-        expect(survey.failures).toEqual([
-          { epicId: "epic-linked", reason: "linked-epic-directory" },
-        ]);
-      } finally {
-        await rm(realTarget, { recursive: true, force: true });
-      }
-    });
+          const survey = await surveyChatDbStamps(
+            singleChatStoreSurveyRoot(hostHome),
+          );
 
-    it("refuses a symlinked chat directory as linked-chat-directory, without following it", async () => {
-      const realTarget = await mkdtemp(
-        join(tmpdir(), "chat-store-survey-test-link-target-"),
-      );
-      try {
-        await writeStampedChatDb(join(realTarget, "chat.db"), 9);
-        await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-linked"), {
-          recursive: true,
-        });
-        await symlink(
-          realTarget,
-          join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-linked", "chat"),
-        );
-
-        const survey = await surveyChatDbStamps(
-          singleChatStoreSurveyRoot(hostHome),
-        );
-
-        expect(survey.readings).toEqual([]);
-        expect(survey.failures).toEqual([
-          { epicId: "epic-chat-linked", reason: "linked-chat-directory" },
-        ]);
-      } finally {
-        await rm(realTarget, { recursive: true, force: true });
-      }
-    });
+          expect(survey.readings).toEqual([]);
+          expect(survey.failures).toEqual([
+            { epicId: "epic-chat-linked", reason: "linked-chat-directory" },
+          ]);
+        } finally {
+          await rm(realTarget, { recursive: true, force: true });
+        }
+      },
+    );
 
     it("records chat-directory-not-a-directory when 'chat' is a FILE", async () => {
       await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-is-file"), {

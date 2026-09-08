@@ -1,4 +1,11 @@
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
@@ -9,6 +16,10 @@ const mocks = vi.hoisted(() => ({
   hostHomeDirMock: vi.fn(),
   hostDevHomeDirMock: vi.fn(),
   hostDevIdentityPoolRootMock: vi.fn(),
+  // Path to make `lstat` reject with ENOENT for, simulating a pool entry
+  // that vanished between the `readdir` and the `lstat` - `null` (the
+  // default) lets every `lstat` through to the real filesystem.
+  lstatEnoentForPath: null as string | null,
 }));
 
 // `resolveChatStoreSurveyRoots` resolves every path itself through
@@ -23,6 +34,24 @@ vi.mock("../../store/paths", async (importOriginal) => {
       mocks.hostHomeDirMock(environment),
     hostDevHomeDir: () => mocks.hostDevHomeDirMock(),
     hostDevIdentityPoolRoot: () => mocks.hostDevIdentityPoolRootMock(),
+  };
+});
+
+// Only `lstat` is intercepted, and only for one path at a time - everything
+// else (including this test file's own `mkdir`/`writeFile`/`symlink`/`rm`
+// calls) passes straight through to the real filesystem.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: (path: Parameters<typeof actual.lstat>[0]) => {
+      if (path === mocks.lstatEnoentForPath) {
+        return Promise.reject(
+          Object.assign(new Error("simulated ENOENT"), { code: "ENOENT" }),
+        );
+      }
+      return actual.lstat(path);
+    },
   };
 });
 
@@ -57,6 +86,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(sandboxRoot, { recursive: true, force: true });
+  mocks.lstatEnoentForPath = null;
   vi.clearAllMocks();
 });
 
@@ -117,6 +147,84 @@ describe("resolveChatStoreSurveyRoots", () => {
       }
     },
   );
+
+  describe("pool-entry classification (lstat, not readdir Dirent)", () => {
+    // The bug this whole describe block guards: a stray `.DS_Store` in
+    // `host/dev/identities` became a survey root, `listEpicDirs` failed with
+    // ENOTDIR, and the floor refused every downgrade on an otherwise healthy
+    // dev machine - one Finder visit to that directory was enough.
+
+    it("skips a regular file among the identities - it never was an identity home, enumerationFailed stays false", async () => {
+      await mkdir(join(poolRoot(), "identity-real"), { recursive: true });
+      await writeFile(join(poolRoot(), ".DS_Store"), "", "utf8");
+
+      await expect(resolveChatStoreSurveyRoots("dev")).resolves.toEqual({
+        roots: [
+          { path: devSlotHome(), label: "host" },
+          { path: devHome(), label: "dev" },
+          { path: join(poolRoot(), "identity-real"), label: "identity-real" },
+        ],
+        enumerationFailed: false,
+      });
+    });
+
+    // `symlink()` is EPERM for a Windows developer without the create-
+    // symbolic-link privilege - see `chat-store-survey.test.ts`'s same guard.
+    const canSymlink = platform !== "win32";
+    (canSymlink ? it : it.skip)(
+      "a symlink among the identities is NOT a root, AND sets enumerationFailed: true - the one case that is easy to get wrong by pattern-matching the regular-file case",
+      async () => {
+        const realTarget = await mkdtemp(
+          join(tmpdir(), "chat-store-survey-roots-test-link-target-"),
+        );
+        try {
+          await mkdir(join(poolRoot(), "identity-real"), {
+            recursive: true,
+          });
+          await symlink(realTarget, join(poolRoot(), "identity-linked"));
+
+          const result = await resolveChatStoreSurveyRoots("dev");
+
+          // Both halves: absent from `roots` AND the flag is set. Skipping
+          // it silently would be wrong in both directions - followed, it
+          // could point the survey at a tree that is not an identity home;
+          // ignored, it could hide one that is. The resolver cannot tell
+          // which, and that is exactly what `enumerationFailed` means.
+          expect(
+            result.roots.some((root) => root.label === "identity-linked"),
+          ).toBe(false);
+          expect(result.enumerationFailed).toBe(true);
+          expect(result.roots).toEqual([
+            { path: devSlotHome(), label: "host" },
+            { path: devHome(), label: "dev" },
+            {
+              path: join(poolRoot(), "identity-real"),
+              label: "identity-real",
+            },
+          ]);
+        } finally {
+          await rm(realTarget, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it("skips an entry that vanishes between readdir and lstat (ENOENT) - nothing is there, so there is nothing to be blind to", async () => {
+      await mkdir(join(poolRoot(), "identity-real"), { recursive: true });
+      await mkdir(join(poolRoot(), "identity-vanishing"), {
+        recursive: true,
+      });
+      mocks.lstatEnoentForPath = join(poolRoot(), "identity-vanishing");
+
+      await expect(resolveChatStoreSurveyRoots("dev")).resolves.toEqual({
+        roots: [
+          { path: devSlotHome(), label: "host" },
+          { path: devHome(), label: "dev" },
+          { path: join(poolRoot(), "identity-real"), label: "identity-real" },
+        ],
+        enumerationFailed: false,
+      });
+    });
+  });
 });
 
 describe("singleChatStoreSurveyRoot", () => {
