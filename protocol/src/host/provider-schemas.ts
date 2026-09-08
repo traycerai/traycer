@@ -1255,11 +1255,39 @@ const providerProfileShapeV70 = {
 
 export const providerProfileSchemaV70 = z.object(providerProfileShapeV70);
 
+/**
+ * Whether this profile authenticates with a pasted API key, and whether one is
+ * stored - never the key itself, which has no wire representation in either
+ * direction (`providers.setProfileApiKey` carries it inbound and nothing
+ * carries it back).
+ *
+ * `supported` is a property of the PROVIDER-and-kind pair, not of the account:
+ * a provider whose key method exists only for Traycer-owned profile
+ * directories reports `false` on its ambient row, because writing the method
+ * selection there would reconfigure a directory shared with the user's other
+ * clients. So a client must gate its paste form on this flag and not on the
+ * provider id.
+ */
+export const providerProfileApiKeyStateSchema = z.object({
+  supported: z.boolean(),
+  configured: z.boolean(),
+});
+export type ProviderProfileApiKeyState = z.infer<
+  typeof providerProfileApiKeyStateSchema
+>;
+
 export const providerProfileSchema = z.object({
   ...providerProfileShapeV70,
   // Host-wide eligibility. Old supporting decoders treat an omitted legacy
   // field as enabled; older protocol lines omit disabled rows entirely.
   enabled: z.boolean().default(true).catch(true),
+  // Per-profile API-key state (see the schema above). Same forward-compat
+  // shape as `launchCommand` below - `.catch(null).optional()`, so a host that
+  // predates the field degrades to "no key method here" rather than throwing
+  // and tripping the array-level `.catch([])` on `profiles`, which would wipe
+  // every profile for this provider. Null and absent both mean unknown, and a
+  // client renders no paste form for either.
+  apiKey: providerProfileApiKeyStateSchema.nullable().catch(null).optional(),
   // Copyable command for opening this managed account directly in its CLI.
   // The host owns the absolute config path and shell quoting; ambient rows and
   // hosts that predate this field omit it. Kept inside v8.0 because that line
@@ -1296,6 +1324,59 @@ export const providersSetProfileEnabledResponseSchema = z.object({
 });
 export type ProvidersSetProfileEnabledResponse = z.infer<
   typeof providersSetProfileEnabledResponseSchema
+>;
+
+/**
+ * Store an API key against ONE profile.
+ *
+ * Deliberately a new method rather than a `profileId` on the released
+ * `providers.setApiKey`: that method is in `RELEASED_FLOOR_METHOD_NAMES`, so a
+ * request field is projected AWAY when the peer is on the floor line, and a
+ * key meant for one managed account would land in the provider-wide store and
+ * authenticate every other profile with it. A scope that must not be lost in
+ * translation cannot ride as a field on a released request - it has to be the
+ * thing being called. (Same reasoning as `providers.setEnabled@2.1`'s
+ * `profileAction` in reverse: folding on is right when losing the field
+ * degrades to today's behavior, and wrong when it silently widens.)
+ *
+ * The key is write-only across the wire: no response, state field or list
+ * response ever returns it, and `providerProfileApiKeyStateSchema` carries
+ * only whether one is stored.
+ */
+export const providersSetProfileApiKeyRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string(),
+  // `min(1)` rather than an empty-string clear: an empty paste is a slip, and
+  // an accidental credential deletion is not a recoverable one. Clearing is
+  // `providers.clearProfileApiKey`, which the caller has to mean.
+  apiKey: z.string().min(1),
+});
+export type ProvidersSetProfileApiKeyRequest = z.infer<
+  typeof providersSetProfileApiKeyRequestSchema
+>;
+
+export const providersSetProfileApiKeyResponseSchema = z.object({
+  profileId: z.string(),
+  apiKey: providerProfileApiKeyStateSchema,
+});
+export type ProvidersSetProfileApiKeyResponse = z.infer<
+  typeof providersSetProfileApiKeyResponseSchema
+>;
+
+export const providersClearProfileApiKeyRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string(),
+});
+export type ProvidersClearProfileApiKeyRequest = z.infer<
+  typeof providersClearProfileApiKeyRequestSchema
+>;
+
+export const providersClearProfileApiKeyResponseSchema = z.object({
+  profileId: z.string(),
+  apiKey: providerProfileApiKeyStateSchema,
+});
+export type ProvidersClearProfileApiKeyResponse = z.infer<
+  typeof providersClearProfileApiKeyResponseSchema
 >;
 
 /**

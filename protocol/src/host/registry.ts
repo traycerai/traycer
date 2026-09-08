@@ -838,6 +838,10 @@ import {
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV10,
   providersSetEnabledResponseSchemaV20,
+  providersClearProfileApiKeyRequestSchema,
+  providersClearProfileApiKeyResponseSchema,
+  providersSetProfileApiKeyRequestSchema,
+  providersSetProfileApiKeyResponseSchema,
   providersSetProfileEnabledRequestSchema,
   providersSetProfileEnabledResponseSchema,
   providersSetEnvOverrideRequestSchema,
@@ -3369,6 +3373,36 @@ export const providersSetProfileEnabledV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSetProfileEnabledRequestSchema,
   responseSchema: providersSetProfileEnabledResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 methods, registered like `providers.submitLoginCode` below:
+ * outside `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`,
+ * because a new method NAME is handshake-fatal against a released peer.
+ *
+ * These could NOT have ridden `providers.setApiKey` as a `profileId` field
+ * instead - see `providersSetProfileApiKeyRequestSchema`'s note. That method is
+ * ON the floor, so the scope would be projected away against a floor peer and
+ * the key would silently be stored provider-wide.
+ *
+ * Missing-peer behavior is safe by construction: a host that predates these
+ * also predates `ProviderProfile.apiKey`, so every profile it reports carries
+ * `apiKey: null` ("unknown") and the client draws no paste form to call them
+ * from. The degrade arm covers a client that calls anyway with per-call
+ * upgrade guidance rather than a dead handshake.
+ */
+export const providersSetProfileApiKeyV10 = defineRpcContract({
+  method: "providers.setProfileApiKey",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetProfileApiKeyRequestSchema,
+  responseSchema: providersSetProfileApiKeyResponseSchema,
+});
+
+export const providersClearProfileApiKeyV10 = defineRpcContract({
+  method: "providers.clearProfileApiKey",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersClearProfileApiKeyRequestSchema,
+  responseSchema: providersClearProfileApiKeyResponseSchema,
 });
 
 export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
@@ -8364,6 +8398,32 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersSetProfileEnabledV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.setProfileApiKey": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetProfileApiKeyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.clearProfileApiKey": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersClearProfileApiKeyV10,
           upgradeFromPreviousVersion: null,
         },
       },

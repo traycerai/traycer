@@ -930,6 +930,7 @@ function persistedInterviewMessage(
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
