@@ -90,6 +90,10 @@ export function recordObservationFromLocalAttempt(input: {
     // and make the deadline the projector applies unenforceable.
     liveness: facts.liveness,
     livenessObservedAtMs: facts.livenessObservedAtMs,
+    // The cause a `failed` record carries. The record is the ONLY place it
+    // exists when the host is down, which is the window this observation is
+    // for; `null` on every other phase.
+    errorMessage: facts.error?.message ?? null,
     // The three ordering facts `preferLiveOverRecord` needs. They travel with
     // the observation rather than being read at the comparison site so the
     // projector stays pure and the adapter stays the only thing that knows

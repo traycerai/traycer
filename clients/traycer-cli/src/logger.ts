@@ -56,6 +56,25 @@ const SENSITIVE_TEXT_PATTERNS: ReadonlyArray<{
       /((?:access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|authorization|password|secret|cookie|code[_-]?verifier|codeVerifier|api[_-]?key|apiKey)\s*[:=]\s*)("[^"]*"|'[^']*'|[^&\s,}]+)/gi,
     replacement: "$1[redacted]",
   },
+  // Credentials that travel INSIDE A URL. The registry fetcher quotes the
+  // asset URL whole in every error it throws (`host registry: GET <url>
+  // returned 503`), and those errors are now written with their message and
+  // stack. A manifest that hands out a presigned URL, or a mirror configured
+  // with userinfo, would put the secret in the log through that quote - the
+  // field patterns above stop at `token=` and `key=` and would not see a
+  // `X-Amz-Signature=` or a `https://user:pass@` (Codex, traycerai/traycer#1773
+  // round 8). Two shapes: the `user:password@` userinfo, and the query values
+  // cloud signers name (S3 / GCS `X-Amz-*` / `X-Goog-*`, Azure's `sig`, the
+  // bare `Signature`).
+  {
+    pattern: /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@?#"']+@/gi,
+    replacement: "$1[redacted]@",
+  },
+  {
+    pattern:
+      /([?&](?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|X-Goog-Signature|X-Goog-Credential|Signature|sig)=)[^&\s"']+/gi,
+    replacement: "$1[redacted]",
+  },
 ];
 
 export const noopLogger: ILogger = {

@@ -251,6 +251,16 @@ describe("compatibility fence — non-release build identities", () => {
       "0.0.0-local",
       "local-build",
     ],
+    // What `app.getVersion()` returns under `make dev-desktop`: the committed
+    // package.json placeholder, never the `-local` sentinel. A fence that
+    // recognised only the sentinel refused every source Desktop as
+    // below-floor the first time it had to create an activation attempt
+    // (Codex, #1773 round 8).
+    [
+      "source-tree Desktop (comparable, BELOW the floor, bare package.json version)",
+      "0.0.0",
+      "local-build",
+    ],
   ] as const)(
     "admits a %s DESKTOP with a recorded waiver - the matrix's own builds run here",
     (_label, desktopVersion, identity) => {
@@ -330,6 +340,17 @@ describe("compatibility fence — non-release build identities", () => {
       ),
     ).toEqual({ kind: "refuse", reason: "cli-below-floor" });
     expect(nonReleaseIdentityKind("0.0.0-locale")).toBeNull();
+    // The bare source-tree version is recognised EXACTLY, the same way: a
+    // real `0.0.1` or a `0.0.0-0` prerelease is a below-floor release, not a
+    // source tree.
+    expect(nonReleaseIdentityKind("0.0.1")).toBeNull();
+    expect(nonReleaseIdentityKind("0.0.0-0")).toBeNull();
+    expect(
+      decideCompatibilityFence(
+        { installedCliVersion: "1.4.2", desktopVersion: "0.0.1" },
+        SHIPPED_COMPATIBILITY_FLOORS,
+      ),
+    ).toEqual({ kind: "refuse", reason: "desktop-below-floor" });
   });
 
   it.each(REAL_STAGING_IDENTITIES)(

@@ -53,6 +53,7 @@ function fakeLocalAttempt(
     phase: "restarting",
     continuation: null,
     updatedAt: new Date().toISOString(),
+    error: null,
     liveness: "live",
     livenessObservedAtMs: Date.now(),
     ...overrides,

@@ -30,6 +30,30 @@
 export const LOCAL_BUILD_VERSION = "0.0.0-local";
 
 /**
+ * What a Desktop run FROM THE SOURCE TREE reports as its version.
+ *
+ * `clients/desktop/package.json` is committed at `0.0.0` and the release
+ * pipeline stamps the real version at package time, so `app.getVersion()`
+ * under `make dev-desktop` / `bun run dev` is this bare placeholder - not the
+ * `-local` sentinel the bundled CLI and the GUI stamp on themselves. It is
+ * valid SemVer and sorts below every floor, so a fence that recognised only
+ * {@link LOCAL_BUILD_VERSION} refused every source Desktop as
+ * `desktop-below-floor` the moment it had to create an activation attempt
+ * (Codex, traycerai/traycer#1773 round 8). Recognised here, beside the other
+ * two, so the fence reads it through `nonReleaseIdentityKind` rather than
+ * special-casing the string.
+ *
+ * Scope: this names a DESKTOP identity. The CLI's client floor
+ * (`registry/client-floor.ts`) compares against `LOCAL_CLI_VERSION` by name
+ * and never sees this constant; a CLI reporting bare `0.0.0` would be
+ * compared as SemVer and land below the floor. That is deliberate - no CLI
+ * path yields bare `0.0.0` (`resolveCliVersion` injects a version or falls
+ * back to the `-local` sentinel), so recognising it there would license a
+ * path that does not exist.
+ */
+export const SOURCE_TREE_VERSION = "0.0.0";
+
+/**
  * A staging host's runtime stamp: `staging.<epoch-millis>.<sha>`, e.g.
  * `staging.1783550586518.bb8c937d9`. Not SemVer at all, so every comparison
  * against it is `{comparable: false}`.
@@ -65,7 +89,9 @@ export type NonReleaseIdentityKind =
 export function nonReleaseIdentityKind(
   value: string,
 ): NonReleaseIdentityKind | null {
-  if (value === LOCAL_BUILD_VERSION) return "local-build";
+  if (value === LOCAL_BUILD_VERSION || value === SOURCE_TREE_VERSION) {
+    return "local-build";
+  }
   if (STAGING_IDENTITY_PATTERN.test(value)) return "staging-build";
   if (LOCAL_INSTALL_IDENTITY_PATTERN.test(value)) return "local-install";
   return null;

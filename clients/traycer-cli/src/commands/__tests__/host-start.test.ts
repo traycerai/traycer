@@ -2606,6 +2606,57 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(recorded.exited).toBe(0);
   });
 
+  it("a raced RESTART intent still exits restart-owed (77) when the child dies by signal, not the plain stop's 0", async () => {
+    // Same race as the row above with the other reason. The raced-stop branch
+    // used to keep only the `shuttingDown` latch and drop the reason it read,
+    // so `decideRelaunch` answered the latch with `stop-requested` and the
+    // supervisor exited 0 - "finished" to systemd/launchd, which then left the
+    // host down although `host restart` had promised a comeback (Codex, #1773
+    // round 8). Ablation: answer the latch with `stop-requested` regardless of
+    // the reason and this reads 0.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let stopLanded = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () =>
+              stopLanded ? ("restart" as const) : null,
+            escalateAfter: (_ms, run) => {
+              setImmediate(run);
+              return () => undefined;
+            },
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              stopLanded = true;
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                if (signal === "SIGKILL") {
+                  setImmediate(() => {
+                    child.emit("exit", null, "SIGKILL");
+                  });
+                }
+                return true;
+              };
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(77);
+  });
+
   it("relaunches a host the OOM killer took, which no diagnostic whitelist names", async () => {
     // Recoverability and diagnosability are different questions, and deciding
     // one with the other's answer is the bug this pins. `describeFatalSignal`

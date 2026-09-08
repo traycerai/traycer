@@ -106,6 +106,37 @@ describe("serializeError", () => {
     expect(serialized.stack).not.toContain("dXNlcjpwYXNz");
   });
 
+  it("redacts credentials carried INSIDE a quoted URL - userinfo and signed-query values", async () => {
+    const { createCliLogger } = await import("../logger");
+    // The registry fetcher quotes the asset URL whole in every error it
+    // throws. A presigned URL or a mirror with userinfo would otherwise land
+    // in the log through that quote; the field patterns stop at `token=`.
+    const error = new Error(
+      "host registry: GET https://user:s3cret@mirror.example/host.tgz?X-Amz-Credential=AKIAXYZ%2F20260908&X-Amz-Signature=deadbeef01&X-Amz-Security-Token=tok123&X-Goog-Signature=cafe&sig=azuresas&Signature=plain&size=79 returned 503",
+    );
+
+    createCliLogger("dev").error("failed", {}, error);
+
+    const serialized = loggedError();
+    expect(serialized.message).toBe(
+      "host registry: GET https://[redacted]@mirror.example/host.tgz?X-Amz-Credential=[redacted]&X-Amz-Signature=[redacted]&X-Amz-Security-Token=[redacted]&X-Goog-Signature=[redacted]&sig=[redacted]&Signature=[redacted]&size=79 returned 503",
+    );
+    for (const secret of [
+      "s3cret",
+      "AKIAXYZ",
+      "deadbeef01",
+      "tok123",
+      "cafe",
+      "azuresas",
+      "plain",
+    ]) {
+      expect(serialized.message).not.toContain(secret);
+      expect(serialized.stack).not.toContain(secret);
+    }
+    // The host and path survive: the line still says WHICH asset failed.
+    expect(serialized.message).toContain("mirror.example/host.tgz");
+  });
+
   it("bounds a pathological stack", async () => {
     const { createCliLogger } = await import("../logger");
     const error = new Error("deep");

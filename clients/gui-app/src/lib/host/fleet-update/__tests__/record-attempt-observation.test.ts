@@ -23,6 +23,7 @@ function facts(overrides: Partial<LocalAttemptFacts>): LocalAttemptFacts {
     phase: "preparing",
     continuation: null,
     updatedAt: "2026-08-27T00:00:00.000Z",
+    error: null,
     // Desktop's probed liveness (D13). `unknown` is the base fixture because
     // these cases are about the RECORD's facts; a case about liveness overrides
     // it explicitly.
@@ -104,12 +105,46 @@ describe("recordObservationFromLocalAttempt", () => {
       attemptId: "attempt-failed",
       targetVersion: "2.1.0",
       phase: "failed",
+      errorMessage: null,
       liveness: "unknown",
       livenessObservedAtMs: null,
       updatedAt: "2026-08-27T00:00:00.000Z",
       generation: 1,
       sequence: 1,
     });
+  });
+
+  // Codex thread: a post-swap failure leaves the host down, and the record is
+  // the only place the CAUSE survives. `errorMessage` must be the forwarded
+  // `error.message`, never a fabricated or dropped one.
+  //
+  // Ablation: replace `facts.error?.message ?? null` with `null` in
+  // `record-attempt-observation.ts` and this row reddens (expects
+  // "the service did not start", gets `null`).
+  it("a FAILED record's error.message becomes the observation's errorMessage", () => {
+    const result = recordObservationFromLocalAttempt({
+      hostId: HOST_ID,
+      localAttempt: facts({
+        phase: "failed",
+        attemptId: "attempt-failed-2",
+        error: {
+          code: "service-start-failed",
+          message: "the service did not start",
+          phase: "restarting",
+        },
+      }),
+      observedAtMs: OBSERVED_AT_MS,
+    });
+    expect(result?.errorMessage).toBe("the service did not start");
+  });
+
+  it("a non-failed record with error: null yields errorMessage: null", () => {
+    const result = recordObservationFromLocalAttempt({
+      hostId: HOST_ID,
+      localAttempt: facts({ phase: "preparing", error: null }),
+      observedAtMs: OBSERVED_AT_MS,
+    });
+    expect(result?.errorMessage).toBeNull();
   });
 
   // D13's stamp is the PUBLISHER's clock at its probe, and forwarding it
@@ -139,6 +174,7 @@ describe("recordObservationFromLocalAttempt", () => {
       attemptId: "attempt-1",
       targetVersion: "2.1.0",
       phase: "restarting",
+      errorMessage: null,
       liveness: "live",
       // NOT `OBSERVED_AT_MS`: the two are deliberately different numbers here
       // so a re-stamp cannot pass by coincidence.
@@ -181,6 +217,7 @@ describe("recordObservationFromLocalAttempt", () => {
         attemptId: "attempt-non-terminal",
         targetVersion: "3.0.0",
         phase,
+        errorMessage: null,
         liveness: "unknown",
         livenessObservedAtMs: null,
         updatedAt: "2026-08-27T00:00:00.000Z",

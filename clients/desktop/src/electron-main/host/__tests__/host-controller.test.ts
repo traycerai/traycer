@@ -2523,6 +2523,10 @@ describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
       phase: "failed",
       continuation: null,
       updatedAt: oneHourAgo,
+      // The fixture's raw JSON write above hardcodes `error: null` (it takes
+      // no override for it), so the published fact must round-trip that
+      // exactly — never a fabricated cause for a record that carries none.
+      error: null,
       // A terminal record is never probed (D13), so there is no observation
       // to timestamp and nothing that could make it `live`.
       liveness: "unknown",

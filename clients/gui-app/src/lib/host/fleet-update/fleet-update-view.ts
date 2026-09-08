@@ -144,6 +144,12 @@ export interface FleetUpdateRecordObservation {
   /** The phase the record names, already narrowed at the read boundary. */
   readonly phase: HostUpdateAttemptPhase;
   /**
+   * The cause a `failed` record carries, `null` on every other phase. The
+   * record is the only evidence of it once the host is down, so the retained
+   * `failed` view carries it the way the stale coarse marker's does.
+   */
+  readonly errorMessage: string | null;
+  /**
    * What the READER's own holder probe established (D13), never something
    * derived from the record's contents.
    *
@@ -734,6 +740,9 @@ function recordObservationView(
     ...identity,
     lastKnownKind: phaseKind(observation.phase, false),
     lastObservedAtMs: observation.observedAtMs,
+    // Same slot the stale coarse marker fills: a retained `failed` with its
+    // cause, so the host-down window can say WHY, not only that it failed.
+    errorMessage: observation.errorMessage,
   };
 }
 

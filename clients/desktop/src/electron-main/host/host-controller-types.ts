@@ -1,6 +1,7 @@
 import type { HostActivationState } from "./host-state";
 import type {
   HostUpdateAttemptContinuation,
+  HostUpdateAttemptError,
   HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 
@@ -100,6 +101,8 @@ export interface LocalAttemptFacts {
   // `HostUpdateAttemptContinuation` already includes `null`.
   readonly continuation: HostUpdateAttemptContinuation;
   readonly updatedAt: string;
+  /** The record's terminal cause, `null` on every non-failed record. See the shared declaration. */
+  readonly error: HostUpdateAttemptError;
   /** Probed, never inferred (D13). See the shared declaration. */
   readonly liveness: LocalAttemptLiveness;
   /** Desktop's clock at the probe; `null` when no probe ran. */

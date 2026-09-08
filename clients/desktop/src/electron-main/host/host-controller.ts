@@ -198,6 +198,7 @@ function localAttemptFacts(
     phase: record.phase,
     continuation: record.continuation,
     updatedAt: record.updatedAt,
+    error: record.error,
     liveness,
     livenessObservedAtMs,
   };

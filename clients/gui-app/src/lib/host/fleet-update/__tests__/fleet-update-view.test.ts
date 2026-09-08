@@ -1257,6 +1257,7 @@ function recordObservation(
     attemptId: "attempt-1",
     targetVersion: "2.0.0",
     phase: "preparing",
+    errorMessage: null,
     // Un-probed by default, which is what a parked or terminal record carries
     // and what every case here that is not ABOUT liveness should assert
     // against — `live` is the exceptional verdict, so it has to be asked for.
@@ -1295,6 +1296,13 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
         phase: "failed",
         continuation: null,
         updatedAt: "2026-08-27T00:00:00.000Z",
+        // A post-swap failure leaves the host down; the record is the ONLY
+        // place the cause survives.
+        error: {
+          code: "service-start-failed",
+          message: "the service did not start",
+          phase: "restarting",
+        },
         // A terminal record is never probed (D13), so Desktop publishes
         // `unknown` with no observation timestamp.
         liveness: "unknown",
@@ -1318,6 +1326,9 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
     // It must not earn the acceleration or hold a lifecycle gate.
     expect(warrantsFastPoll(view)).toBe(false);
     expect(holdsLifecycleGate(view)).toBe(false);
+    // The cause the record carries must reach the view — the only evidence
+    // that exists while the host is down.
+    expect(view.errorMessage).toBe("the service did not start");
   });
 
   it("distinguishes 'attempt exists, host unreachable' from 'attempt progressing'", () => {
@@ -1461,6 +1472,9 @@ describe("projectFleetUpdateView — probed local liveness on a `restarting` rec
     expect(view.progress.kind).toBe("indeterminate");
     expect(holdsLifecycleGate(view)).toBe(true);
     expect(view.lastKnownKind).toBeNull();
+    // A live restarting record has nothing to say about failure — the cause
+    // slot is for the retained `failed` arm only.
+    expect(view.errorMessage).toBeNull();
   });
 
   it("the SAME observation, once nowMs advances past the 5s proof window, decays to unknown with the gate released", () => {

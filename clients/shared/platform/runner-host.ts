@@ -31,6 +31,7 @@ import type {
 } from "@traycer/protocol/host/maintenance/index";
 import type {
   HostUpdateAttemptContinuation,
+  HostUpdateAttemptError,
   HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 import type { BrowserViewBridge } from "./browser-view";
@@ -1820,6 +1821,19 @@ export interface LocalAttemptFacts {
   // `HostUpdateAttemptContinuation` already includes `null`.
   readonly continuation: HostUpdateAttemptContinuation;
   readonly updatedAt: string;
+  /**
+   * The record's terminal cause - the executor's own `error` field, `null` on
+   * every record that is not `failed`.
+   *
+   * Carried because the host-down window is exactly when it is needed: a
+   * post-swap failure (`service-start-failed`, a verify timeout) leaves the
+   * host DOWN, so no `host.status` RPC can ever report the reason, and the
+   * durable record is the only place it exists. Projecting the phase without
+   * it gave the banner and the Overview "Last seen: Update failed" with no
+   * cause precisely when nothing else could say one (Codex, traycerai/traycer#1773
+   * round 8). The renderer shows `error.message` beside the retained phase.
+   */
+  readonly error: HostUpdateAttemptError;
   /**
    * What Desktop's own PROBE established about the record's holder, flat
    * beside the record's facts (D13).

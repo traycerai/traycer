@@ -958,6 +958,13 @@ export async function runHostStart(
   // crash and must not consume crash allowance, but it still needs a bound.
   let consecutiveImmediateRestarts = 0;
   let shuttingDown = false;
+  // WHICH stop latched `shuttingDown`, when a record said. A forwarded signal
+  // reads no record and leaves this `null`; a raced stop intent (below) keeps
+  // the reason it read, because `restart` is the one reason that promises a
+  // comeback and has to exit `RESTART_OWED_EXIT_CODE` rather than 0 - the
+  // latch alone was collapsing it to a plain stop, and the service manager
+  // then left the host down (Codex, traycerai/traycer#1773 round 8).
+  let shutdownReason: StopIntentReason | null = null;
   let currentChild: ChildProcess | null = null;
   // Resolves the first time a shutdown signal arrives, so a backoff can be
   // ABANDONED rather than merely re-checked once it finishes.
@@ -1129,6 +1136,7 @@ export async function runHostStart(
           reason: "target-resolution-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          shutdownReason: () => shutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1339,6 +1347,7 @@ export async function runHostStart(
           reason: "attempt-setup-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          shutdownReason: () => shutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1837,6 +1846,7 @@ export async function runHostStart(
             reason: "target-resolution-failed-after-admission",
             consecutiveRelaunches,
             isShuttingDown: () => shuttingDown,
+            shutdownReason: () => shutdownReason,
             servedStopIntentAtStartup,
             shutdownRequested,
           });
@@ -1913,6 +1923,7 @@ export async function runHostStart(
           reason: "spawn-threw",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          shutdownReason: () => shutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -2038,20 +2049,25 @@ export async function runHostStart(
     // once more, and undo the spawn if the answer changed. Latching
     // `shuttingDown` is what makes the death that follows read as requested
     // rather than as a crash to be recovered.
-    if (
-      !shuttingDown &&
-      (await deps.hasStopIntent(
-        opts.environment,
-        Date.now(),
-        servedStopIntentAtStartup,
-      )) !== null
-    ) {
+    // The REASON is kept, not just the fact: the ending below goes through
+    // `decideRelaunch`, which answers a latched shutdown with the exit code
+    // the reason owes.
+    const racedStop = shuttingDown
+      ? null
+      : await deps.hasStopIntent(
+          opts.environment,
+          Date.now(),
+          servedStopIntentAtStartup,
+        );
+    if (racedStop !== null) {
       logger.info("Host supervisor stopping a child a stop raced", {
         environment: opts.environment,
         attemptId,
         childPidKnown: child.pid !== undefined,
+        stopReason: racedStop,
       });
       shuttingDown = true;
+      shutdownReason = racedStop;
       markShutdownRequested();
       try {
         child.kill("SIGTERM");
@@ -2122,6 +2138,7 @@ export async function runHostStart(
           reason: "spawn-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
+          shutdownReason: () => shutdownReason,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -2216,8 +2233,12 @@ export async function runHostStart(
           environment: opts.environment,
           exitCode: RESTART_EXIT_CODE,
           attemptId,
+          stopReason: shutdownReason,
         });
-        return exitSupervisor(0);
+        // A raced `restart` intent still owes the comeback it promised.
+        return exitSupervisor(
+          shutdownReason === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+        );
       }
       logger.info("Host child requested an intentional restart", {
         environment: opts.environment,
@@ -2323,6 +2344,7 @@ export async function runHostStart(
       reason: ending.signal !== null ? "fatal-signal" : "crashed",
       consecutiveRelaunches,
       isShuttingDown: () => shuttingDown,
+      shutdownReason: () => shutdownReason,
       servedStopIntentAtStartup,
       shutdownRequested,
     });
@@ -2412,6 +2434,8 @@ async function decideRelaunch(input: {
   readonly reason: string;
   readonly consecutiveRelaunches: number;
   readonly isShuttingDown: () => boolean;
+  /** The reason a RECORD latched the shutdown, or `null` for a forwarded signal. */
+  readonly shutdownReason: () => StopIntentReason | null;
   readonly servedStopIntentAtStartup: StopIntentIdentity | null;
   readonly shutdownRequested: Promise<void>;
 }): Promise<RelaunchDecision> {
@@ -2422,15 +2446,18 @@ async function decideRelaunch(input: {
     when: "before" | "after",
   ): Promise<RelaunchStopCause | null> => {
     if (input.isShuttingDown()) {
+      const latchedBy = input.shutdownReason();
       logger.info("Host supervisor not relaunching - shutting down", {
         environment,
         reason,
         observed: when,
+        stopReason: latchedBy,
       });
       // A forwarded SIGTERM is this process being torn down, not a record
       // being honoured. No intent has been read, so it takes the exit that
-      // asks for nothing.
-      return "stop-requested";
+      // asks for nothing. A raced stop INTENT did read one, and `restart` is
+      // the reason that owes a comeback.
+      return latchedBy === "restart" ? "restart-requested" : "stop-requested";
     }
     const announced = await deps.hasStopIntent(
       environment,
