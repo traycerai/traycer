@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
+  DELETED_INTERVIEW_DELIVERIES_METADATA_KEY,
   INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY,
   INTERVIEW_DELIVERY_METADATA_KEY,
   INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY,
@@ -2335,6 +2336,66 @@ describe("chat-event metadata projection", () => {
     }
   });
 
+  it("strips the interview delivery fact riding a NON-interview event", () => {
+    // The fifth key, and the one that outlived four widenings of the key list
+    // because no widening could reach it: `deletedInterviewDeliveries` rides
+    // `history.deleted`, so a gate enumerating the three `interview.*` types
+    // returned before the key list was ever consulted. Fixing it meant
+    // enumerating carriers by what their METADATA holds, not by what the event
+    // is about.
+    //
+    // FALSIFICATION: remove "history.deleted" from
+    // `INTERVIEW_METADATA_CHAT_EVENT_TYPES` and this reddens while every
+    // `interview.*` arm stays green - adding the key alone fixes nothing.
+    const event = chatEventWith("e-deleted", 40, "history.deleted", {
+      // Ordinary deletion metadata every pre-1.7 peer has always received.
+      fromMessageId: "m-7",
+      deletedMessageCount: 3,
+      deletedUserMessageIds: ["m-7", "m-8"],
+      [DELETED_INTERVIEW_DELIVERIES_METADATA_KEY]: [
+        { settlementId: "gui-1", deliveryId: "dlv-1", blockId: "iv-1" },
+      ],
+    });
+    const frame = eventAppendedFrame(event);
+
+    expect(projectChatServerFrameForVersion(frame, live)).toBe(frame);
+
+    for (const version of legacyLines()) {
+      const projected = projectChatServerFrameForVersion(frame, version);
+      expect(projected).not.toBe(frame);
+      const metadata = asRecord(
+        eventFromProjected(projected).metadata,
+        "metadata",
+      );
+      expect(
+        Object.hasOwn(metadata, DELETED_INTERVIEW_DELIVERIES_METADATA_KEY),
+      ).toBe(false);
+      // The deletion facts themselves are NOT interview facts and must survive
+      // untouched - this event is how a pre-1.7 peer learns history was cut.
+      expect(metadata.fromMessageId).toBe("m-7");
+      expect(metadata.deletedMessageCount).toBe(3);
+      expect(metadata.deletedUserMessageIds).toEqual(["m-7", "m-8"]);
+    }
+
+    // Inbound too: a mislabeled peer's `history.deleted` carrying the fact.
+    const inbound = chatEventWith("e-deleted", 40, "history.deleted", {
+      fromMessageId: "m-7",
+      [DELETED_INTERVIEW_DELIVERIES_METADATA_KEY]: [
+        { settlementId: "gui-1", deliveryId: "dlv-1", blockId: "iv-1" },
+      ],
+    });
+    const before = asRecord(inbound.metadata, "seeded metadata");
+    expect(
+      Object.hasOwn(before, DELETED_INTERVIEW_DELIVERIES_METADATA_KEY),
+    ).toBe(true);
+    normalizeV16InterviewFieldsInFrame(eventAppendedFrame(inbound));
+    const after = asRecord(inbound.metadata, "normalized metadata");
+    expect(
+      Object.hasOwn(after, DELETED_INTERVIEW_DELIVERIES_METADATA_KEY),
+    ).toBe(false);
+    expect(after.fromMessageId).toBe("m-7");
+  });
+
   it("removes the host's two COMPANION metadata facts, not just the two protocol declared", () => {
     // The gap this pins: the host wrote `interviewDeliveryAcceptance` and
     // `interviewDeliveryRepairDiagnostic` as its OWN local constants while
@@ -2410,11 +2471,17 @@ describe("chat-event metadata projection", () => {
   });
 
   it("preserves pre-1.7 interview.requested source and interview.errored reason/code byte-for-byte", () => {
-    // COLLISION GUARD. Today's host writes `{ source: "traycer_a2a" }` on
-    // interview.requested and `{ reason }` / `{ reason, code }` on
-    // interview.errored. The settlement payload has its own `source` and
-    // `reason`. A projector that stripped settlement facts by flat name
-    // would silently rewrite what 1.4-1.6 peers have always received.
+    // COLLISION GUARD. `source` is a SYNTHETIC colliding key here, standing
+    // for the class of flat pre-1.7 metadata whose names clash with the
+    // settlement vocabulary - the settlement payload has its own `source` and
+    // `reason`, so a projector stripping settlement facts by FLAT NAME would
+    // silently rewrite what 1.4-1.6 peers have always received.
+    //
+    // Synthetic deliberately: the host sets `source: "traycer_a2a"` on a
+    // RUNTIME interview event, and the durable `interview.requested` beside it
+    // is written with `metadata: null`. The production members of this class
+    // are `reason`/`code` on a durable `interview.errored` and
+    // `carriedFromChatId` on a forked request.
     const requestedMetadata = { source: "traycer_a2a" };
     const erroredMetadata = { reason: "adapter cleanup", code: "E_INTERVIEW" };
     const requestedEvent = chatEventWith(

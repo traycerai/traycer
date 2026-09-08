@@ -744,14 +744,18 @@ export function projectChatServerFrameForVersion(
  * facts to a durable chat event.
  *
  * A namespaced envelope, not flat keys, and the reason is concrete rather than
- * stylistic: the `interview.*` chat events ALREADY carry metadata on `1.4`-`1.6`,
- * and two of those keys collide with the settlement vocabulary. Today's host
- * writes `{ source: "traycer_a2a" }` on `interview.requested` and
- * `{ reason }` / `{ reason, code }` on `interview.errored` - while the durable
- * settlement payload has its own `source` and `reason`. A projector that
- * stripped settlement facts by flat name would delete `source` from an A2A
- * request event and `reason` from every errored event, silently changing what
- * `1.4`-`1.6` peers have always received.
+ * stylistic: the `interview.*` chat events ALREADY carry flat metadata on
+ * `1.4`-`1.6` whose names collide with the settlement vocabulary. The durable
+ * settlement writer itself puts `reason` and `code` on `interview.errored`
+ * beside the envelope, and a forked request carries `carriedFromChatId` -
+ * while the settlement payload has its own `source` and `reason`. A projector
+ * that stripped settlement facts by flat name would delete those, silently
+ * changing what `1.4`-`1.6` peers have always received.
+ *
+ * (`source: "traycer_a2a"` is the example that used to sit here, and it is
+ * NOT one: the host sets it on a RUNTIME `interview.requested` event, whose
+ * durable counterpart is written with `metadata: null`. Tests still use it as
+ * a synthetic colliding key, which is exactly what it is.)
  *
  * So settlement facts live under this key and nowhere else, the projector
  * removes exactly this key, and pre-existing metadata is untouched. Nested
@@ -800,6 +804,17 @@ export const INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY =
   "interviewDeliveryRepairDiagnostic";
 
 /**
+ * The delivery identities a history rewrite cancelled, written on a
+ * `history.deleted` event: `[{ settlementId, deliveryId, blockId }]`.
+ *
+ * The one structured interview fact that does NOT ride an `interview.*` event,
+ * which is exactly why it outlived the first four - see
+ * `INTERVIEW_METADATA_CHAT_EVENT_TYPES` below.
+ */
+export const DELETED_INTERVIEW_DELIVERIES_METADATA_KEY =
+  "deletedInterviewDeliveries";
+
+/**
  * EVERY `1.7`-only structured interview key a durable chat event's metadata
  * may carry, as one list both directions read.
  *
@@ -822,12 +837,35 @@ const INTERVIEW_STRUCTURED_METADATA_KEYS: ReadonlyArray<string> = [
   INTERVIEW_DELIVERY_METADATA_KEY,
   INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY,
   INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY,
+  DELETED_INTERVIEW_DELIVERIES_METADATA_KEY,
 ];
 
-const INTERVIEW_CHAT_EVENT_TYPES: ReadonlyArray<string> = [
+/**
+ * Event types whose METADATA can carry a `1.7` interview fact.
+ *
+ * Enumerated by what the metadata holds, not by what the event is about, and
+ * that distinction is the whole reason this list has a name of its own. It was
+ * `INTERVIEW_CHAT_EVENT_TYPES` - the three `interview.*` types - and under that
+ * predicate a fifth structured key survived every widening of the KEY list,
+ * because it rides `history.deleted`: a history rewrite cancels the delivery
+ * obligations of the interviews it removed, and records which ones it
+ * cancelled as `settlementId`/`deliveryId` pairs. No reading of "is this an
+ * interview event" reaches it, so both directions returned at this gate before
+ * the key list was ever consulted.
+ *
+ * The lesson is in the name: a gate that enumerates the SUBJECT will keep
+ * missing carriers, because a fact travels on whatever event happens to know
+ * it. Add an event type here the moment its metadata can hold one.
+ *
+ * Ordinary metadata on these events is untouched either way -
+ * `history.deleted` keeps `fromMessageId`, its anchors and its counts, exactly
+ * as every pre-`1.7` peer has always received them.
+ */
+const INTERVIEW_METADATA_CHAT_EVENT_TYPES: ReadonlyArray<string> = [
   "interview.requested",
   "interview.resolved",
   "interview.errored",
+  "history.deleted",
 ];
 
 /**
@@ -839,7 +877,7 @@ const INTERVIEW_CHAT_EVENT_TYPES: ReadonlyArray<string> = [
 function projectChatEvent(event: unknown): unknown {
   if (!isRecord(event)) return event;
   if (typeof event.type !== "string") return event;
-  if (!INTERVIEW_CHAT_EVENT_TYPES.includes(event.type)) return event;
+  if (!INTERVIEW_METADATA_CHAT_EVENT_TYPES.includes(event.type)) return event;
   const metadata = event.metadata;
   if (!isRecord(metadata)) return event;
 
@@ -905,7 +943,7 @@ function projectChatEvent(event: unknown): unknown {
 function neutralizeChatEventInterviewMetadata(event: unknown): void {
   if (!isRecord(event)) return;
   if (typeof event.type !== "string") return;
-  if (!INTERVIEW_CHAT_EVENT_TYPES.includes(event.type)) return;
+  if (!INTERVIEW_METADATA_CHAT_EVENT_TYPES.includes(event.type)) return;
   const metadata = event.metadata;
   if (!isRecord(metadata)) return;
   for (const key of INTERVIEW_STRUCTURED_METADATA_KEYS) {
