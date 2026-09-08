@@ -57,6 +57,7 @@ const landingMocks = vi.hoisted(() => ({
   navigate: vi.fn<(options: CapturedNavigation) => void>(),
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
+  floorsRequested: new Array<unknown>(),
   getActiveHost: vi.fn(() => ({
     hostId: "host-landing",
     label: "Local",
@@ -75,6 +76,21 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => ({
     request: landingMocks.request,
+    // An UNVERIFIED create dispatches here instead: the floor that decides
+    // whether this host creates locally rides on the request now, answered by
+    // the transport from its own handshake. Delegating to the same `request`
+    // spy is what a host MEETING the floor does, which is the second half of
+    // the case below; the floor is recorded so the admitted dispatch is
+    // distinguishable from an authorized one.
+    requestWithSignalRequiringHostMethodVersion: (
+      method: string,
+      payload: unknown,
+      _signal: AbortSignal | undefined,
+      requiredHostMethodVersion: unknown,
+    ): Promise<unknown> => {
+      landingMocks.floorsRequested.push(requiredHostMethodVersion);
+      return landingMocks.request(method, payload);
+    },
     getActiveHostId: landingMocks.getActiveHostId,
     getActiveHost: landingMocks.getActiveHost,
     getRequestContextUserId: landingMocks.getRequestContextUserId,
@@ -573,6 +589,14 @@ describe("useLandingComposerActions", () => {
     await waitFor(() => {
       expect(landingMocks.request).toHaveBeenCalled();
     });
+    // The admitted create carries the floor, which is what makes it safe to
+    // admit: the composer's own gate reads the negotiated-manifest registry,
+    // and that registry can name a host process already replaced by the time
+    // this create's handshake runs. The floor is what the connection carrying
+    // the create answers for itself.
+    expect(landingMocks.floorsRequested).toEqual([
+      { method: "epic.listTasks", version: { major: 1, minor: 6 } },
+    ]);
     queryClient.clear();
   });
 

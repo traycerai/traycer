@@ -1,4 +1,5 @@
 import { createElement, type ReactNode } from "react";
+import type { RequiredHostMethodVersion } from "@traycer-clients/shared/host-transport/host-messenger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -73,6 +74,24 @@ const mockHostClient = {
       _signal: AbortSignal | undefined,
     ): Promise<MockHostResponse> => mockHostClient.request(method, params),
   ),
+  // The entry point an UNVERIFIED local-first leg dispatches on: it carries a
+  // floor the real transport answers from its own handshake. Delegating to the
+  // same `request` spy is what a host that MEETS the floor does, which is the
+  // host every unverified case here sets up (`epic.listTasks@1.6` negotiated).
+  // The floor itself is recorded rather than dropped so a case can still tell
+  // the unverified path from the authorized one.
+  requestWithSignalRequiringHostMethodVersion: vi.fn(
+    (
+      method: string,
+      params: MockHostRequest,
+      _signal: AbortSignal | undefined,
+      requiredHostMethodVersion: RequiredHostMethodVersion,
+    ): Promise<MockHostResponse> => {
+      mockHostClient.floorsRequested.push(requiredHostMethodVersion);
+      return mockHostClient.request(method, params);
+    },
+  ),
+  floorsRequested: new Array<RequiredHostMethodVersion>(),
 };
 
 vi.mock("@/lib/host", () => ({
@@ -144,6 +163,10 @@ function listTasksCalls(): Array<[string, unknown]> {
 describe("useCloudEpicTasksQuery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // `vi.clearAllMocks()` resets the spies but not this plain array, and it
+    // is asserted by exact contents - left accumulating, a later case reads an
+    // earlier one's dispatch as its own.
+    mockHostClient.floorsRequested.length = 0;
     mockHostClient.getActiveHostId.mockReturnValue(HOST_ID);
     mockHostClient.getRequestContextUserId.mockReturnValue(USER_ID);
     mockHostClient.onChange.mockImplementation(() => () => undefined);
@@ -1741,9 +1764,24 @@ describe("useCloudEpicTasksQuery", () => {
       await waitFor(() => {
         expect(taskLightIds(result.current.tasks)).toEqual(["unverified-1-6"]);
       });
-      // Probe first, then the list: the admission is decided on the live
-      // host's handshake, not on the registry read alone.
-      expect(mockHostClient.request.mock.calls[0]?.[0]).toBe("host.status");
+      // No probe first. There used to be a `host.status` here, dispatched to
+      // force a handshake so the admission could be decided on what it wrote -
+      // and it was removed because it decides nothing about the connection the
+      // LIST then rides: every local unary dials afresh, so probe and request
+      // are two handshakes. The floor travels on the list request itself now,
+      // and the transport answers it from the connection carrying the frame.
+      expect(
+        mockHostClient.request.mock.calls.some(
+          ([method]) => method === "host.status",
+        ),
+      ).toBe(false);
+      // The list IS the first dispatch, and it carries the floor - which is
+      // what "the admission was decided for an unverified session" looks like
+      // from here.
+      expect(mockHostClient.request.mock.calls[0]?.[0]).toBe("epic.listTasks");
+      expect(mockHostClient.floorsRequested).toEqual([
+        { method: "epic.listTasks", version: { major: 1, minor: 6 } },
+      ]);
       expect(listTasksCalls()[0]?.[1]).toMatchObject({
         localFirstPhase: "initial",
       });
