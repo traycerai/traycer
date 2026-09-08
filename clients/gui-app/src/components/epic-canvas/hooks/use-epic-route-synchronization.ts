@@ -27,6 +27,7 @@ import {
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
+  epicNodeRecency,
   useEpicArtifactRecords,
   useEpicChatRecordListAuthoritative,
   useEpicLastFocusedArtifactId,
@@ -388,10 +389,20 @@ export function useEpicRouteSynchronization(
     }
 
     lastAutoOpenKey.current = key;
+    // Auto-open's recency input, read HERE rather than subscribed to. Every
+    // value in it moves on each streamed token, and this decision fires once
+    // per key - a subscription would re-render this hook at the token rate to
+    // feed a branch that has already run. The projection it reads is the same
+    // one `records` comes from, so the two are always in step: whatever agent
+    // rows this device has, it has their activity clocks, and an epic whose
+    // projection carries no agent rows yields an empty map - the resolver's
+    // "no recency available" input, which lands on the first node in tree
+    // order exactly as before.
     const target = resolveAutoOpenTarget(
       records,
       focusArtifactId ?? null,
       persistedFocus,
+      epicNodeRecency(handle.store.getState()),
     );
     if (target === null) {
       return;
@@ -440,6 +451,7 @@ export function useEpicRouteSynchronization(
   }, [
     snapshotLoaded,
     records,
+    handle,
     focusArtifactId,
     focusedAt,
     persistedFocus,

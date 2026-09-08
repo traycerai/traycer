@@ -204,6 +204,7 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
 });
 
 vi.mock("@/lib/epic-selectors", () => ({
+  epicNodeRecency: () => ({}),
   useEpicArtifactRecords: () => testState.records,
   useEpicChatRecordListAuthoritative: () =>
     testState.chatRecordListAuthoritative,

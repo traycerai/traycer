@@ -104,6 +104,7 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
   HostControllerStatus,
   LifecycleAdmissionBlock,
@@ -416,6 +417,7 @@ export interface IpcHostController {
   convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
@@ -424,6 +426,14 @@ export interface IpcHostController {
   ): Promise<MutationOutcome<ApplyStagedOk>>;
   activateInstalled(
     force: boolean,
+    // When false, activate the installed bytes WITHOUT promoting a ready newer
+    // stage. The implicit launch reconcile passes false for EVERY launch
+    // activation (a known-ready update is handled by its own apply branch under
+    // the CLI hold guard; a stage that only becomes ready mid-activation must
+    // not be promoted here, or it could revert a held downgrade). Explicit
+    // callers (a GUI "Update"/activate click) pass true and keep the
+    // "ready update supersedes activation debt" behaviour.
+    promoteReadyStage: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>>;
   installVersion(
     pin: string,

@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   createBytesOnlyInstallLifecycleMock: vi.fn(),
   withCliLockMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
+  gateStoreFormatFloorMock: vi.fn(),
+  isVersionYankedMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -76,6 +78,22 @@ vi.mock("../../manifest/host-install", () => ({
   readHostInstallRecord: mocks.readHostInstallRecordMock,
 }));
 
+// `ensureHost` calls the real `provisionHost`, which calls
+// `gateStoreFormatFloor` - unmocked, that resolves `hostHomeDir` from
+// `os.homedir()` at module load and walks it for real. This suite pins the
+// ensure state machine, not the floor's own semantics (that is
+// `store-format-floor.test.ts`, against an explicit temp `hostHome`), so the
+// gate is mocked here.
+vi.mock("../store-format-floor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../store-format-floor")>();
+  return {
+    ...actual,
+    gateStoreFormatFloor: (
+      ...callArgs: Parameters<typeof mocks.gateStoreFormatFloorMock>
+    ) => mocks.gateStoreFormatFloorMock(...callArgs),
+  };
+});
+
 vi.mock("../../service", () => ({
   createServiceController: mocks.createServiceControllerMock,
   serviceLabelFor: mocks.serviceLabelForMock,
@@ -96,6 +114,23 @@ vi.mock("../../store/cli-lock", () => ({
 
 vi.mock("../busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusyMock,
+}));
+
+// `provisionHost` constructs a REAL registry yank-lookup up front
+// (`provision.ts` - see `../../registry/client`), and only the
+// "regression: installed 1.2.0, pin 1.3.0-rc.4, --keep-installed" case
+// below actually calls it (it is the one path that asks whether the
+// installed version is yanked). Left unmocked, that one test makes a
+// genuine network `fetchText` to the manifest URL: `YANK_LOOKUP_TIMEOUT_MS`
+// is 10s, twice vitest's 5s default, so a sandboxed CI runner with no
+// egress cannot finish the test before vitest kills it - invisible on a
+// developer machine, where the connection is refused fast enough to just
+// look like a 20x-slower outlier. Mirrors `provision.test.ts`'s own mock of
+// this same boundary.
+vi.mock("../../registry/client", () => ({
+  createRegistryYankLookup: () => ({
+    isVersionYanked: mocks.isVersionYankedMock,
+  }),
 }));
 
 // The real `publishHostStartAdoption` waits (up to 30s) for a service-
@@ -123,6 +158,7 @@ const {
   createBytesOnlyInstallLifecycleMock,
   withCliLockMock,
   assertHostNotBusyMock,
+  isVersionYankedMock,
 } = mocks;
 
 import { ensureHost, type EnsureHostOptions } from "../ensure";
@@ -151,6 +187,8 @@ function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
     allowSelfInvocation: true,
     noServiceRegister: false,
     force: false,
+    acceptStoreFormatLoss: false,
+    keepInstalled: false,
     onProgress: null,
     adoption: undefined,
     beforeMutate: null,
@@ -220,6 +258,7 @@ beforeEach(() => {
     args: [],
   });
   resolveBundledHostArchiveMock.mockResolvedValue(null);
+  isVersionYankedMock.mockResolvedValue(false);
   withCliLockMock.mockImplementation(
     async (_opts: unknown, fn: () => Promise<unknown>) => {
       mocks.callOrder.push("lock-enter");
@@ -268,6 +307,12 @@ beforeEach(() => {
   });
   assertHostNotBusyMock.mockResolvedValue(undefined);
   mocks.currentInstallPlatformMock.mockReturnValue("darwin");
+  mocks.gateStoreFormatFloorMock.mockResolvedValue({
+    clearedVersion: null,
+    publishedStoreFormats: null,
+    acceptStoreFormatLoss: false,
+    site: "host ensure",
+  });
 });
 
 afterEach(() => {
@@ -743,6 +788,23 @@ describe("ensureHost", () => {
         source: { kind: "registry", versionRequest: "1.6.0" },
       }),
     );
+  });
+
+  // Ticket 1/2 regression: the exact downgrade-revert RCA shape - a viable
+  // OLDER install must not be reinstalled to the build's preferred pin just
+  // because `--keep-installed` is threaded all the way through `ensureHost`.
+  it("regression: installed 1.2.0, pin 1.3.0-rc.4, --keep-installed - no-op, no reinstall", async () => {
+    config.supportedHostVersion = "1.3.0-rc.4";
+    readHostInstallRecordMock.mockResolvedValue({ version: "1.2.0" });
+    const controller = makeController("running");
+    createServiceControllerMock.mockReturnValue(controller);
+
+    const result = await ensureHost(makeOpts({ keepInstalled: true }));
+
+    expect(result.action).toBe("noop");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(controller.install).not.toHaveBeenCalled();
   });
 
   it("a lost race (locked recheck finds the host already provisioned by another actor) discards the pre-staged temp and never commits", async () => {

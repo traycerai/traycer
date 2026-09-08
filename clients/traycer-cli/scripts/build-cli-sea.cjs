@@ -95,11 +95,18 @@ async function main() {
 
   // No externals - the CLI bundle is intentionally self-contained so the
   // SEA blob can ship as a single file with no companion directory.
+  //
+  // `bun:sqlite` is not a counter-example to that. It is a virtual module
+  // that exists only inside the Bun runtime, so there is no file to bundle
+  // and esbuild would fail the build trying to resolve it. The chat-store
+  // survey imports it dynamically and only when `process.versions.bun` is
+  // set, which a Node SEA never is - so this leaves a `require` the binary
+  // cannot reach, and adds no companion file.
   await bundleCjs({
     entry: cliEntry,
     outfile: bundleFile,
     tsconfig: cliTsconfig,
-    externals: [],
+    externals: ["bun:sqlite"],
     bannerJs: "",
     cwd: workspaceRoot,
     defines,

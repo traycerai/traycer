@@ -29,6 +29,24 @@ import { preserveLegacyProviders } from "./legacy-providers";
 import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
 import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
+import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
+import {
+  readExtractedRuntimeVersion,
+  readExtractedStoreFormats,
+} from "./version-sidecar";
+import {
+  assertStoreFormatFloorAfterStop,
+  type StoreFloorTargetIdentity,
+  assertStoreFormatFloorAtCommit,
+  publishedStoreFormatsForTarget,
+  storeFormatFloorTargetVersion,
+  type StoreFormatFloorEvidence,
+} from "../host/store-format-floor";
+import { observeSwapQuiescence } from "../host/swap-quiescence";
+import {
+  resolveChatStoreSurveyRoots,
+  type ChatStoreSurveyRoots,
+} from "../host/chat-store-survey-roots";
 import {
   invalidateAsideDir,
   legacyMutationVerifier,
@@ -113,6 +131,20 @@ export interface InstallHostLifecycle {
   readonly beforeSwap: () => Promise<void>;
   readonly beforeSwapCommit: () => Promise<void>;
   readonly afterSwap: () => Promise<void>;
+  /**
+   * Undo `beforeSwap`'s stop when the swap is abandoned after it.
+   *
+   * The one caller is the store-format floor's post-stop refusal: the host is
+   * down, nothing has been replaced, and an install that declines to install
+   * owes the machine the host it had. Deliberately NOT `afterSwap`, which is
+   * the post-swap relaunch and does things that are wrong when no swap
+   * happened - it announces the caller's swap barrier, retires a competing
+   * registration, and records a `postSwapAction`.
+   *
+   * A lifecycle that stopped nothing must no-op. Only the implementation knows
+   * whether it stopped, which is why this is its decision and not the caller's.
+   */
+  readonly restartAfterAbortedSwap: () => Promise<void>;
   readonly swapLockRecovery: SwapLockRecovery | null;
   /**
    * The contender facade supplies its live-capability verifier immediately
@@ -204,6 +236,8 @@ export interface InstallHostOptions {
   // identity that the freshness check can compare. `null` keeps the derived
   // default (registry installs ignore it - they record the registry version).
   readonly recordVersionOverride: string | null;
+  /** See `CommitInstallFromSourceOptions.storeFormatFloor`. Passed straight through. */
+  readonly storeFormatFloor: StoreFormatFloorEvidence;
 }
 
 export interface InstallHostResult {
@@ -251,6 +285,9 @@ export async function installHost(
     lifecycle: opts.lifecycle,
     verifyMutationCapability: legacyMutationVerifier,
     onWillSwap: null,
+    storeFormatFloor: opts.storeFormatFloor,
+    // Legacy/test convenience path: records no version hold.
+    onSwapCommitted: null,
   });
   logger.info("Host install completed", {
     environment: opts.environment,
@@ -492,6 +529,10 @@ export interface CommitHostInstallSourceOptions {
   readonly verifyMutationCapability: () => Promise<void>;
   /** See `CommitInstallFromSourceOptions.onWillSwap`. */
   readonly onWillSwap: (() => void) | null;
+  /** See `CommitInstallFromSourceOptions.storeFormatFloor`. Passed straight through. */
+  readonly storeFormatFloor: StoreFormatFloorEvidence;
+  /** See `CommitInstallFromSourceOptions.onSwapCommitted`. */
+  readonly onSwapCommitted: HostInstallCommitObserver | null;
 }
 
 export interface CommitHostInstallSourceResult {
@@ -543,9 +584,11 @@ export async function commitHostInstallSource(
       lifecycle: opts.lifecycle,
       verifyMutationCapability: opts.verifyMutationCapability,
       onWillSwap: opts.onWillSwap,
+      storeFormatFloor: opts.storeFormatFloor,
       onCommitted: () => {
         swapped = true;
       },
+      onSwapCommitted: opts.onSwapCommitted,
     });
 
     await reconcileHostStageWithAttempt(
@@ -646,6 +689,28 @@ async function cleanupStagingArtifacts(
   }
 }
 
+/**
+ * A best-effort observer fired the instant the swap-in rename has placed the
+ * new tree (and with it the new `install.json`) at `install/` - the commit
+ * point. It runs INSIDE the swap, before everything that follows the rename
+ * and can still reject with the new install already in place: the post-rename
+ * provider carryover and aside invalidation (each revalidates mutation
+ * authority and throws on its loss), {@link
+ * CommitInstallFromSourceOptions.onCommitted}, and the post-swap lifecycle hook
+ * (whose bookkeeping write may reject with the bytes nevertheless committed
+ * and the host restarting, per the T6 contract). It receives the ACTUAL
+ * committed record and the record it replaced, so a caller can record
+ * install-instance-scoped state (e.g. the version hold, keyed on
+ * `record.installId`) at the true successful-swap boundary, under the same
+ * lock, without a pre-lock snapshot and without being lost to any later throw.
+ * Its own rejection is swallowed by the committer and never aborts the commit
+ * or masks a later failure.
+ */
+export type HostInstallCommitObserver = (info: {
+  readonly record: HostInstallRecord;
+  readonly previous: HostInstallRecord | null;
+}) => Promise<void>;
+
 export interface CommitInstallFromSourceOptions {
   readonly environment: Environment;
   // A pre-staged tree ready to become `install/` wholesale - either a
@@ -671,6 +736,12 @@ export interface CommitInstallFromSourceOptions {
   // are committed, a later step failed" from "never swapped, the source dir
   // still needs cleanup", without re-deriving that boundary itself.
   readonly onCommitted: () => void;
+  /**
+   * Best-effort post-swap observer (see {@link HostInstallCommitObserver}).
+   * `null` when the caller records nothing at the swap boundary (e.g. an apply,
+   * which only ever moves forward and holds nothing).
+   */
+  readonly onSwapCommitted: HostInstallCommitObserver | null;
   /** See `CommitHostInstallSourceOptions.verifyMutationCapability`. */
   readonly verifyMutationCapability: () => Promise<void>;
   /**
@@ -684,6 +755,22 @@ export interface CommitInstallFromSourceOptions {
    * tracking it treats the two as one edge. `null` when no caller is.
    */
   readonly onWillSwap: (() => void) | null;
+  /**
+   * The store-format floor's LAST fail-closed check, run here from the version
+   * actually being committed and the record actually on disk.
+   *
+   * Its home is this function and not only the commands because this is the
+   * single funnel every path that places host bytes goes through - `host
+   * install`, `host ensure`'s provisioning core, every `host update` arm, and
+   * `host apply`. The early gates each refuse before a byte is transferred,
+   * which is where a refusal belongs; this one exists so that coverage is a
+   * property of the code rather than of every caller having remembered.
+   *
+   * It sits BEFORE `lifecycle.beforeSwap()`, so a refusal here still leaves
+   * the running host untouched. `beforeSwapCommit` would have been the wrong
+   * hook by construction: its failure is captured and the swap proceeds.
+   */
+  readonly storeFormatFloor: StoreFormatFloorEvidence;
 }
 
 export interface CommitInstallFromSourceResult {
@@ -704,6 +791,89 @@ export interface CommitInstallFromSourceResult {
 // no record on a crash in between (the on-disk state the reconcile
 // "orphan"/target-missing rules are built to heal either side of, never a
 // bytes-with-no-record gap).
+/** The operands both store-format checks in the commit tail share. */
+interface CommitFloorOperands {
+  /** From both records' `source.kind`: see `StoreFloorTargetIdentity`. */
+  readonly targetIdentity: StoreFloorTargetIdentity;
+  readonly surveyRoots: ChatStoreSurveyRoots;
+  readonly declaredStoreFormats: HostStoreFormats | null;
+  readonly installedVersion: string | null;
+  readonly installedStoreFormats: HostStoreFormats | null;
+}
+
+/**
+ * The post-stop floor check, and the restart it owes the machine if it
+ * refuses.
+ *
+ * The restart is the whole reason this is a function rather than a call. By
+ * the time this runs the lifecycle has stopped the host, so a bare `throw`
+ * would leave the user with no host at all - and the command they ran was an
+ * INSTALL, which they are entitled to have change nothing when it declines.
+ * The lifecycle decides whether there is anything to restart; a lifecycle that
+ * never stopped anything no-ops.
+ *
+ * A restart that itself fails must not replace the refusal: the refusal is why
+ * the user is here, and "could not restart" is a second, lesser fact that
+ * belongs in the log beside it.
+ */
+async function assertFloorAfterStopOrRestore(
+  opts: CommitInstallFromSourceOptions,
+  operands: CommitFloorOperands,
+  logger: ILogger,
+): Promise<void> {
+  try {
+    // The probe is handed in LAZY and runs INSIDE this try. Lazy because the
+    // check asks it only once applicability and formats have failed to settle
+    // the move: with the host already stopped, a `launchctl print` that waits
+    // out its timeout - or the bounded wait for the service manager to settle
+    // - is host downtime an upgrade must not pay. Inside the try because the
+    // probe shells out to the service manager - a spawn failure, a timeout, or
+    // a revoked mutation capability all throw - and a throw outside it skipped
+    // the restore and left the machine hostless for a reason that has nothing
+    // to do with the floor.
+    await assertStoreFormatFloorAfterStop({
+      environment: opts.environment,
+      targetIdentity: operands.targetIdentity,
+      surveyRoots: operands.surveyRoots,
+      targetVersion: storeFormatFloorTargetVersion(
+        opts.runtimeVersion,
+        opts.version,
+      ),
+      declaredStoreFormats: operands.declaredStoreFormats,
+      installedVersion: operands.installedVersion,
+      installedStoreFormats: operands.installedStoreFormats,
+      // The same published formats the check above resolved, through the same
+      // rule - the two must not disagree about which build is landing.
+      publishedStoreFormats: publishedStoreFormatsForTarget(
+        opts.storeFormatFloor,
+        storeFormatFloorTargetVersion(opts.runtimeVersion, opts.version),
+      ),
+      observeQuiescence: () =>
+        observeSwapQuiescence(opts.environment, operands.surveyRoots, logger),
+      acceptStoreFormatLoss: opts.storeFormatFloor.acceptStoreFormatLoss,
+      site: opts.storeFormatFloor.site,
+      logger,
+    });
+  } catch (refusal) {
+    if (opts.lifecycle !== null) {
+      try {
+        await opts.lifecycle.restartAfterAbortedSwap();
+      } catch (err) {
+        logger.warn(
+          "Host install could not restart the host after the store-format floor refused the swap",
+          {
+            environment: opts.environment,
+            version: opts.version,
+            errorName: errorFromUnknown(err).name,
+            errorMessage: errorFromUnknown(err).message,
+          },
+        );
+      }
+    }
+    throw refusal;
+  }
+}
+
 export async function commitInstallFromSource(
   opts: CommitInstallFromSourceOptions,
 ): Promise<CommitInstallFromSourceResult> {
@@ -716,6 +886,69 @@ export async function commitInstallFromSource(
     opts.lifecycle.setMutationVerifier(verifyMutationCapability);
   }
   const previous = await readHostInstallRecord(opts.environment);
+  // Read ONCE and reused by the post-stop check below. Both need the same four
+  // operands, and re-deriving them after the stop would re-read two sidecars
+  // for no gain - worse, it would let the two checks silently disagree about
+  // which build is landing.
+  const floorOperands: CommitFloorOperands = {
+    // A registry download is signature-verified bytes the registry names by
+    // version; anything else is a tree that names itself - and so is an
+    // INSTALLED tree that `host ensure --from` recorded under the CLI's
+    // version, which a registry artifact of that version must not read as
+    // the same build.
+    targetIdentity:
+      opts.source.kind === "registry" &&
+      (previous === null || previous.source.kind === "registry")
+        ? "registry-artifact"
+        : "local-archive",
+    // Resolved once for both checks: on dev this can span a run slot AND the
+    // pooled identity homes, and the two checks must judge the same machine.
+    surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
+    declaredStoreFormats: await readExtractedStoreFormats(
+      dirname(opts.executablePath),
+      opts.environment,
+      logger,
+    ),
+    installedVersion: previous?.version ?? null,
+    installedStoreFormats:
+      previous === null
+        ? null
+        : await readExtractedStoreFormats(
+            dirname(previous.executablePath),
+            opts.environment,
+            logger,
+          ),
+  };
+  // Before the record is materialized and before the lifecycle stops
+  // anything: a refusal here has moved nothing and taken nothing down.
+  await assertStoreFormatFloorAtCommit({
+    environment: opts.environment,
+    targetIdentity: floorOperands.targetIdentity,
+    surveyRoots: floorOperands.surveyRoots,
+    committingVersion: opts.version,
+    // The stamp the archive gave itself, which for `host install --from` is
+    // the ONLY thing that names the build: `opts.version` there is
+    // `deriveLocalVersion`'s `local-<basename>-<timestamp>`, which no table
+    // can place. Taken from the options rather than re-read off the tree
+    // because - unlike the formats below - the record already carries it, read
+    // by `stageVerifiedSource` from this same runtime directory.
+    declaredRuntimeVersion: opts.runtimeVersion,
+    // The archive's own answer, read from the tree this commit is about to
+    // swap in. For a build that is not a release - the host a local desktop
+    // install bundles - this is the ONLY thing that can place it, so without
+    // it the floor would stand aside on exactly the convergence a developer
+    // runs daily.
+    declaredStoreFormats: floorOperands.declaredStoreFormats,
+    installedVersion: floorOperands.installedVersion,
+    // The OUTGOING tree's declaration, for the short-circuit that lets a
+    // non-downgrade skip the disk walk. Read from the record on disk rather
+    // than carried in the evidence for the same reason as the target's: the
+    // record at the swap is the one that matters, and it may not be the one
+    // the early gate saw.
+    installedStoreFormats: floorOperands.installedStoreFormats,
+    evidence: opts.storeFormatFloor,
+    logger,
+  });
 
   const finalExecutablePath = opts.executablePath.replace(
     opts.sourceDir,
@@ -773,6 +1006,18 @@ export async function commitInstallFromSource(
       version: record.version,
     });
     await opts.lifecycle.beforeSwap();
+  }
+
+  // The floor's LAST word, after the stop and before anything is announced or
+  // moved. The check above it ran before the stop, which is where a refusal
+  // belongs - but it is not authoritative: the executable hash, the record
+  // write and the stop itself all happen with a host that may still be up, and
+  // a chat opened in that window migrates a store past what these bytes can
+  // read. A refusal here has still moved nothing, so the recovery is a
+  // restart rather than a rollback.
+  await assertFloorAfterStopOrRestore(opts, floorOperands, logger);
+
+  if (opts.lifecycle !== null) {
     // The stop RESOLVED - a busy host's denial threw above and never
     // reaches here, which is the whole point of the barrier sitting on this
     // side of the call. Nothing has moved yet: the swap is next.
@@ -814,12 +1059,40 @@ export async function commitInstallFromSource(
   });
   await verifyMutationCapability();
   if (opts.onWillSwap !== null) opts.onWillSwap();
+  // The observer runs at the true successful-swap boundary - INSIDE
+  // `atomicSwap`, the instant the swap-in rename lands: the record is
+  // committed and the record it replaced is still known, but nothing that can
+  // still reject with the new install in place has run yet. That is not only
+  // the post-swap lifecycle hook below (a T6 hook failure leaves the bytes
+  // committed and the host restarting, then rethrows): the swap's OWN
+  // post-rename provider carryover and aside invalidation revalidate mutation
+  // authority and throw on its loss, with `install.json` already swapped in.
+  // Firing after `atomicSwap` returned would lose the hold on exactly that
+  // path. Best-effort: swallow its rejection so it neither aborts the commit
+  // nor masks a failure surfaced later.
+  const onSwapCommitted = opts.onSwapCommitted;
+  const onSwappedIn =
+    onSwapCommitted === null
+      ? null
+      : async (): Promise<void> => {
+          try {
+            await onSwapCommitted({ record, previous });
+          } catch (err) {
+            logger.warn("Host install swap-committed observer failed", {
+              environment: opts.environment,
+              version: record.version,
+              errorName: errorFromUnknown(err).name,
+              errorMessage: errorFromUnknown(err).message,
+            });
+          }
+        };
   await atomicSwap({
     environment: opts.environment,
     stagingDir: opts.sourceDir,
     swapLockRecovery:
       opts.lifecycle === null ? null : opts.lifecycle.swapLockRecovery,
     verifyMutationCapability,
+    onSwappedIn,
   });
   opts.onCommitted();
   logger.info("Host install atomic swap completed", {
@@ -1218,6 +1491,15 @@ interface AtomicSwapOptions {
   readonly swapLockRecovery: SwapLockRecovery | null;
   /** Revalidated immediately before every irreversible swap edge. */
   readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Runs the instant the swap-in rename has succeeded - the commit point, with
+   * the new tree (and its `install.json`) at `install/` - and BEFORE the
+   * post-rename provider carryover and aside invalidation, which are
+   * canonical-tree mutations that revalidate authority and can still reject
+   * with the new install in place. Must not throw; the caller owns any
+   * best-effort wrapping. `null` when nothing observes the commit point.
+   */
+  readonly onSwappedIn: (() => Promise<void>) | null;
 }
 
 // The swap renames get a far longer runway than `renameWithRetry`'s
@@ -1388,6 +1670,10 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
       exitCode: 1,
     });
   }
+  // The new install is committed from here on: nothing below rolls it back,
+  // and the carryover / invalidation that follow can each throw with the new
+  // tree in place. Observe the commit point now, before either can.
+  if (opts.onSwappedIn !== null) await opts.onSwappedIn();
   if (targetExists) {
     // Carry the outgoing install's bundled provider packs into the new
     // install BEFORE the old dir is invalidated - a slim host archive ships
@@ -1421,31 +1707,6 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
       opts.verifyMutationCapability,
     );
   }
-}
-
-// Reads the `version.json` sidecar the host build emits into the archive
-// root (traycer-host/scripts/build-host-sea.cjs, writeRuntimeVersionJson).
-// Absent or malformed (archives predating the sidecar, hand-rolled trees)
-// degrades to null - the record then simply carries no runtime stamp.
-export async function readExtractedRuntimeVersion(
-  extractedDir: string,
-): Promise<string | null> {
-  let raw: string;
-  try {
-    raw = await readFile(join(extractedDir, "version.json"), "utf8");
-  } catch {
-    return null;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed !== null && typeof parsed === "object") {
-      const version = (parsed as Record<string, unknown>).version;
-      if (typeof version === "string" && version.length > 0) return version;
-    }
-  } catch {
-    // fall through
-  }
-  return null;
 }
 
 function deriveLocalVersion(sourcePath: string): string {

@@ -424,6 +424,48 @@ describe('the probe reports "unsupported" on a method-incompatible close', () =>
     expect(rig.probeOutcomes).toEqual<EpicLaneProbeOutcome[]>(["unsupported"]);
   });
 
+  it("a probe-only refusal does not spend the required-lane latch", () => {
+    const rig = buildArmRig();
+    rig.arm.probe();
+
+    rig.status.deliverClosed({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "epic.status.subscribe is not served by this host",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    // The close IS the probe's answer, and nothing more: no arm was
+    // installed, so there is no required lane to have gone away. Reporting
+    // here used to set the latch AFTER the legacy install's detach had reset
+    // it, which left the next lanes arm with its one report already spent.
+    expect(rig.probeOutcomes).toEqual<EpicLaneProbeOutcome[]>(["unsupported"]);
+    expect(rig.requiredLaneUnsupportedCount()).toBe(0);
+  });
+
+  it("an INCOMPATIBLE close under an INSTALLED arm reports the required lane refused", () => {
+    const rig = buildArmRig();
+    rig.arm.probe();
+    rig.status.deliverSnapshot();
+    expect(rig.probeOutcomes).toEqual<EpicLaneProbeOutcome[]>(["succeeded"]);
+
+    rig.status.deliverClosed({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "epic.status.subscribe is not served by this host",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    expect(rig.probeOutcomes).toEqual<EpicLaneProbeOutcome[]>(["succeeded"]);
+    expect(rig.requiredLaneUnsupportedCount()).toBe(1);
+  });
+
   it("does NOT report an outcome on an UNAUTHORIZED close - a different failure must not install the legacy arm", () => {
     const rig = buildArmRig();
     rig.arm.probe();

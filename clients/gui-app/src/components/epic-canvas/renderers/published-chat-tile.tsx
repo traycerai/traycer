@@ -29,6 +29,7 @@ import {
   publishedChatLockReason,
   replicaChatLockReason,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
+import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 
 /**
@@ -140,6 +141,14 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // the offline/back-soon vocabulary below is about the viewer's own fleet
   // and cannot be honestly said about a machine this account never sees.
   const ownedByViewer = useOwnedByViewer(node.ownerUserId);
+  // Whether this copy is on screen because the owner, though reachable, is a
+  // build too old for the epic's store. Read live rather than off the ref so
+  // the lock sentence follows the host: an update retires the verdict and
+  // the footer stops asking for one.
+  const ownerRefusesStore = useHostRefusesEpicStore(
+    node.ownerHostId.length > 0 ? node.ownerHostId : null,
+    node.taskId,
+  );
 
   // The same Clone offer the LIVE tile's dead-tile banner makes, on the copy.
   // Gated (inside the child) on the SAME two signals the lock sentence below
@@ -294,6 +303,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
         {deadTileBanner}
         <ChatTileSessionView
+          isLiveSession={false}
           handle={replicaHandle}
           node={{
             id: node.chatId,
@@ -306,6 +316,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           currentEpicId={props.epicId}
           readOnlyNotice={replicaChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
+            ownerRefusesStore,
             ownerIsThisHost,
             ownedByViewer,
             ownerLabel,
@@ -352,6 +363,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           have no business knowing about publication. Absent everywhere else. */}
       <PublishedChatSourceProvider source={publishedSource}>
         <ChatTileSessionView
+          isLiveSession={false}
           handle={handle}
           node={{
             // The CHAT id, not the tile ref's id: inside the surface this is what
@@ -368,6 +380,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
+            ownerRefusesStore,
             ownerIsThisHost,
             ownedByViewer,
             ownerLabel,

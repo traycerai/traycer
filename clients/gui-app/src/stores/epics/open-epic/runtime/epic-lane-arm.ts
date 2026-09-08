@@ -554,10 +554,33 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
         if (isMethodIncompatibleClose(status.closeReason)) {
           // Before the probe answers, this IS the answer. After it, the arm is
           // already installed and this is a required lane going away, which
-          // `answerProbe` would swallow (one answer per arm). Both are routed,
-          // and each guards itself.
+          // `answerProbe` would swallow (one answer per arm). Decided BEFORE
+          // `answerProbe` runs, because that call is synchronous all the way
+          // through the legacy install, whose `detach` resets the required-lane
+          // latch - so reporting unconditionally afterwards re-spent the latch
+          // on an arm that was already over. The next lanes arm then inherited
+          // it spent, and a genuine refusal under that arm (the host moved back
+          // to an old build) reached nobody: `answerProbe` a no-op, the report
+          // a no-op, and the `return` below skipping the status consumers.
+          const armWasInstalled = probeAnswered;
           answerProbe("unsupported");
-          reportRequiredLaneUnsupported();
+          if (armWasInstalled) reportRequiredLaneUnsupported();
+          // And that is ALL this close is. It is an answer to a capability
+          // question, not a transport event about the epic, so it must not
+          // reach the consumers below. Forwarded, it read as a fatal close on
+          // the control cycle: `applyTransportStatus` published
+          // `snapshotFetchError` ("Host update needed", with the method named)
+          // and cleared the write gate. On a cold open the legacy arm's own
+          // root snapshot happened to clear the error a moment later; on a
+          // RE-probe - every reconnect on a relay, whose support is unknown
+          // forever - legacy was already installed, the transition planned no
+          // steps, no snapshot was owed, and the error stayed up over a
+          // healthy `@1` session with the epic read-only until Retry. The two
+          // legitimate responses to this close are the arm install above
+          // (first probe) and the replacement `reportRequiredLaneUnsupported`
+          // requests (a lane going away under an installed arm); both open a
+          // session that reports its own status.
+          return;
         }
         // The CONTROL lane's transitions and not the records lane's, because
         // the policy's reconnect trigger is one fact and two lanes reporting

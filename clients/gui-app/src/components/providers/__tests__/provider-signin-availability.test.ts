@@ -74,6 +74,31 @@ describe("providerSignInUnavailableHint", () => {
     expect(hint).not.toContain("local host");
   });
 
+  it("treats an empty-but-non-null oauthArgs as sign-in capable, not as no sign-in", () => {
+    // The ACP-authenticate shape (antigravity): no `terminalLogin`, and a
+    // headless sign-in that needs no login subcommand because the host spawns
+    // the server and drives ACP `authenticate`. This used to read `null ||
+    // length === 0` and answered the "does not support browser sign-in"
+    // sentence, which disabled the button for the one provider whose argv is
+    // legitimately empty. Distinct from the terminal-login rows below, which
+    // are answered by the earlier branch whichever way their argv points -
+    // this one has no `terminalLogin`, so it reaches the argv check.
+    expect(
+      providerSignInUnavailableHint(
+        providerState({
+          providerId: "antigravity",
+          loginCapability: {
+            oauthArgs: [],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        }),
+        true,
+      ),
+    ).toBeNull();
+  });
+
   it("does not invent a CLI or API-key path for traycer", () => {
     const hint = providerSignInUnavailableHint(
       providerState({ providerId: "traycer", loginCapability: null }),

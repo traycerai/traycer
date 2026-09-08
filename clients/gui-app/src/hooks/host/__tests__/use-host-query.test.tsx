@@ -328,6 +328,7 @@ describe("useHostQuery auth readiness", () => {
             busyBreakdown: null,
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
           };
         },
       },
@@ -914,6 +915,7 @@ function createHostQueryFixture(): {
             // which is exactly what host.status@1.2-and-older peers send.
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
           };
         },
       },
@@ -968,6 +970,7 @@ function createEndpointGatedHostQueryFixture(): {
             busyBreakdown: null,
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
           };
         },
       },

@@ -118,7 +118,11 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "1.5.0", runningActivated: true },
+          value: {
+            appliedVersion: "1.5.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       ),
     activateInstalled:
@@ -412,7 +416,11 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
       })
       .mockResolvedValueOnce({
         kind: "ok" as const,
-        value: { appliedVersion: "1.5.0", runningActivated: true },
+        value: {
+          appliedVersion: "1.5.0",
+          runningActivated: true,
+          applied: true,
+        },
       });
     const management = makeManagement({ status: READY_STATUS, applyStaged });
     renderListener(makeHost(tray.bridge, management));

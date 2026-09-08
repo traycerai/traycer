@@ -146,6 +146,7 @@ const EMPTY_TERMINAL_AGENT_PROJECTIONS: ReadonlyArray<TuiAgentProjection> =
   Object.freeze([]);
 const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
   Object.freeze([]);
+const EMPTY_NODE_RECENCY: Readonly<Record<string, number>> = Object.freeze({});
 const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
 const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
 const EMPTY_ROLE_CLAIMS: readonly RoleClaim[] = Object.freeze([]);
@@ -1133,6 +1134,40 @@ export function useEpicArtifactRecords(): ReadonlyArray<EpicTreeRecord> {
       return records;
     }),
   );
+}
+
+/**
+ * The last-activity clock of every agent row an epic's projection holds, keyed
+ * by node id - the whole-epic counterpart of {@link useEpicNodeUpdatedAt}, and
+ * read off the same projection for the same reason: the `TreeNode` copy lags,
+ * because `CHAT_TREE_KEYS` deliberately omits `updatedAt` so touching a chat
+ * never rebuilds the tree.
+ *
+ * Artifact rows (spec / ticket / story / review) are ABSENT rather than mapped
+ * to `0`. They have no activity clock at all, and a caller ranking rows by
+ * recency must be able to tell that apart from a row last touched at the epoch.
+ *
+ * Deliberately a plain state reader and NOT a hook. Every value in it moves on
+ * each streamed token, so a subscriber would re-render at that rate; the caller
+ * that ranks rows by recency does so at a single decision point and reads the
+ * projection there instead. A row that has to RENDER its own timestamp wants
+ * the per-id {@link useEpicNodeUpdatedAt}, which stays reference-stable through
+ * unrelated churn. See RENDER_PERF_INVARIANTS.md.
+ */
+export function epicNodeRecency(
+  state: Pick<OpenEpicState, "chats" | "tuiAgents">,
+): Readonly<Record<string, number>> {
+  if (state.chats.allIds.length === 0 && state.tuiAgents.allIds.length === 0) {
+    return EMPTY_NODE_RECENCY;
+  }
+  const recency: Record<string, number> = {};
+  for (const id of state.chats.allIds) {
+    recency[id] = state.chats.byId[id].updatedAt;
+  }
+  for (const id of state.tuiAgents.allIds) {
+    recency[id] = state.tuiAgents.byId[id].updatedAt;
+  }
+  return recency;
 }
 
 export function useEpicHasArtifactRecords(): boolean {

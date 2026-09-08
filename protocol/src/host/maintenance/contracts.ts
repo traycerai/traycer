@@ -19,12 +19,15 @@ import {
   hostUpdateCheckRequestSchemaV11,
   hostUpdateCheckResponseSchema,
   hostUpdateCheckResponseSchemaV11,
+  hostUpdateCheckResponseSchemaV12,
   hostUpdateBoundDispatchRequestSchema,
   hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity,
   hostUpdateBoundDispatchResponseSchema,
   hostUpdateInstallRequestSchema,
+  hostUpdateInstallRequestV13Schema,
   hostUpdateInstallResponseSchema,
   hostUpdateInstallResponseV11Schema,
+  hostUpdateInstallResponseV13Schema,
 } from "./schemas";
 
 /** Runs the host's own CLI doctor against the host's local installation. */
@@ -55,6 +58,38 @@ export const hostUpdateCheckV11 = defineRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: hostUpdateCheckRequestSchemaV11,
   responseSchema: hostUpdateCheckResponseSchemaV11,
+});
+
+/** @1.2 adds each release's published store formats to the catalog. */
+export const hostUpdateCheckV12 = defineRpcContract({
+  method: "host.update.check",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: hostUpdateCheckRequestSchemaV11,
+  responseSchema: hostUpdateCheckResponseSchemaV12,
+});
+
+export const hostUpdateCheckUpgradeV11ToV12 = defineUpgradePath<
+  typeof hostUpdateCheckV11,
+  typeof hostUpdateCheckV12
+>({
+  from: hostUpdateCheckV11.schemaVersion,
+  to: hostUpdateCheckV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    response.outcome === "ok"
+      ? {
+          ...response,
+          manifest: {
+            ...response.manifest,
+            versions: response.manifest.versions.map((entry) => ({
+              ...entry,
+              // The old peer never reported a format. The released table is
+              // consulted by the consumer; the bridge must not invent one.
+              storeFormats: null,
+            })),
+          },
+        }
+      : response,
 });
 
 /**
@@ -144,6 +179,36 @@ export const hostUpdateInstallV12 = defineRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: hostUpdateInstallRequestSchema,
   responseSchema: hostUpdateInstallResponseV11Schema,
+});
+
+/**
+ * @1.3 adds per-dispatch store-loss consent and typed refusal details. The
+ * refusal names unreadable stores separately from proven-newer stores so a
+ * partial survey cannot misstate which chats the target is known to reject.
+ */
+export const hostUpdateInstallV13 = defineRpcContract({
+  method: "host.update.install",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: hostUpdateInstallRequestV13Schema,
+  responseSchema: hostUpdateInstallResponseV13Schema,
+});
+
+export const hostUpdateInstallUpgradeV12ToV13 = defineUpgradePath<
+  typeof hostUpdateInstallV12,
+  typeof hostUpdateInstallV13
+>({
+  from: hostUpdateInstallV12.schemaVersion,
+  to: hostUpdateInstallV13.schemaVersion,
+  // An old caller never authorized loss of chat access. Conversely, the
+  // framework's lower-minor projection parses through @1.2 and drops this
+  // field: that peer has no store floor to bypass, so no behavior is lost.
+  // Same-major projections use the released request schema, not a cross-major
+  // downgradePathsFromLatest entry.
+  upgradeRequest: (request) => ({ ...request, acceptStoreFormatLoss: false }),
+  upgradeResponse: (response) =>
+    response.outcome === "cli-failed"
+      ? { ...response, reason: null, storeFloor: null }
+      : response,
 });
 
 export const hostUpdateInstallUpgradeV11ToV12 = defineUpgradePath<

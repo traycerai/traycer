@@ -341,18 +341,6 @@ function buildMessengerFactory(
       handlers: {
         "epic.listTasks": (params): Promise<ListTasksResponse> =>
           Promise.resolve(tasksHandler(params)),
-        "host.status": () =>
-          Promise.resolve({
-            ready: true,
-            hostVersion: "1.2.3",
-            protocolVersion: { major: 1, minor: 0 },
-            busy: false,
-            busySessionCount: 0,
-            updateProgress: null,
-            busyBreakdown: null,
-            updateOperation: null,
-            updateTransaction: null,
-          }),
       },
     });
 }

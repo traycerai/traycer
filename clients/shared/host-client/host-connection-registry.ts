@@ -246,6 +246,23 @@ function readEntry(hostId: string): HostDirectoryEntry | null {
   return source === null ? null : source.directory.findById(hostId);
 }
 
+/**
+ * The row the installed source currently describes `hostId` with, or `null`
+ * when there is no source (shells and suites with no runtime) or no row.
+ *
+ * A read-only, context-free counterpart to `useHostDirectoryEntry` for a
+ * consumer that pairs it with {@link subscribeHostRowChanged} inside its own
+ * `useSyncExternalStore` and cannot depend on a `<HostRuntimeProvider>` being
+ * mounted. Rows are rebuilt per read (see `reconcileAllRows`), so a caller
+ * must reduce the result to the field it displays rather than compare the
+ * object.
+ */
+export function readHostDirectoryEntry(
+  hostId: string,
+): HostDirectoryEntry | null {
+  return readEntry(hostId);
+}
+
 function readLease(hostId: string): HostLeaseSnapshot | null {
   if (source === null || source.leases === null) return null;
   return source.leases.leaseFor(hostId);
