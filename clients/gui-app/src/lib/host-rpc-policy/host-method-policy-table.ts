@@ -1463,6 +1463,20 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The per-profile pair. `fifo` for the same reason as the provider-wide pair
+  // above, and one reason more: these two write and delete the SAME cell, so a
+  // "latest wins" policy could drop a set that a later clear was meant to
+  // follow - leaving the credential the user asked to remove still stored.
+  "providers.setProfileApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.clearProfileApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Updating terminal args changes persisted provider configuration.
   "providers.setTerminalAgentArgs": {
     mode: "fifo",

@@ -486,6 +486,7 @@ describe("the runtime-disposal card on an already-hydrated windowed row", () => 
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ],
           answers: [],

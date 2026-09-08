@@ -335,6 +335,7 @@ function interviewErrorAction(): ChatSubscribeClientFrame {
 
 function snapshotFrameWithAssistantMessage(
   assistantMessage: Record<string, unknown>,
+  events: ReadonlyArray<Record<string, unknown>>,
 ): Record<string, unknown> {
   return {
     kind: "snapshot",
@@ -353,7 +354,7 @@ function snapshotFrameWithAssistantMessage(
         isTitleEditedByUser: false,
         sessionRef: null,
         messages: [assistantMessage],
-        events: [],
+        events: [...events],
       },
       access: { role: "owner", ownerUserId: "owner-1", canAct: true },
       queue: { status: "idle", items: [] },
@@ -365,6 +366,71 @@ function snapshotFrameWithAssistantMessage(
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+    },
+  };
+}
+
+/**
+ * A durable `interview.resolved` chat event carrying the `1.7`-only interview
+ * metadata a mislabeled, stale or hostile "1.6" host could put on the event
+ * log: the namespaced settlement envelope, the delivery envelope, and answers
+ * with `selection`.
+ *
+ * The event log is the SECOND way settlement reaches a subscriber, and on the
+ * exact-`1.6` snapshot route it is the one no schema strips: both shallow
+ * schemas leave `chat.events` structural, exactly like `chat.messages`.
+ */
+function smuggledV16InterviewEvent(): Record<string, unknown> {
+  return {
+    eventId: "e-resolved",
+    type: "interview.resolved",
+    timestamp: 20,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: "iv-1",
+    severity: "info",
+    metadata: {
+      // An unrelated flat key that COLLIDES with the settlement vocabulary
+      // (the settlement envelope has a `source` of its own). It must survive:
+      // stripping settlement facts by flat name would take it too. Synthetic
+      // here - the durable events the host actually writes carry `reason` and
+      // `code` beside the envelopes, while `source: "traycer_a2a"` is set on a
+      // RUNTIME event - so this stands for the class, not for one producer.
+      source: "traycer_a2a",
+      interviewSettlement: { settlementId: "gui-1", outcome: "answered" },
+      interviewDelivery: { outboxId: "ob-1" },
+      // The two COMPANION facts the host writes on durable interview events.
+      // They were declared in the host rather than in protocol, so neither
+      // projector knew them and both carried `settlementId` past the boundary.
+      interviewDeliveryAcceptance: {
+        settlementId: "gui-1",
+        deliveryId: "dlv-1",
+      },
+      interviewDeliveryRepairDiagnostic: {
+        settlementId: "gui-1",
+        diagnosticId: "diag-1",
+        code: "OUTBOX_MISSING",
+        source: "repair",
+      },
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: {
+            questionIndex: 0,
+            optionIndices: [0],
+            optionLabels: ["date-fns"],
+            customText: null,
+          },
+        },
+      ],
     },
   };
 }
@@ -779,7 +845,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     completeHandshakeAtVersion(sockets[0], { major: 1, minor: 5 });
 
     sockets[0].fireText(
-      snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage()),
+      snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage(), []),
     );
 
     expect(deliveredMessages).toHaveLength(1);
@@ -815,7 +881,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     completeHandshakeAtVersion(sockets[0], FULL_SNAPSHOT_VERSION);
 
     sockets[0].fireText(
-      snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage()),
+      snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage(), []),
     );
 
     expect(deliveredMessages).toHaveLength(1);
@@ -850,7 +916,10 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     completeHandshakeAtVersion(sockets[0], { major: 1, minor: 6 });
 
     sockets[0].fireText(
-      snapshotFrameWithAssistantMessage(frozenV16InterviewAssistantMessage()),
+      snapshotFrameWithAssistantMessage(
+        frozenV16InterviewAssistantMessage(),
+        [],
+      ),
     );
 
     expect(deliveredMessages).toHaveLength(1);
@@ -870,6 +939,73 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     }
     expect(interview.answers[0].selection).toBeNull();
     expect(interview.answers[0].values).toEqual(["date-fns"]);
+
+    client.close();
+  });
+
+  it("neutralizes the 1.6 snapshot's EVENT log, not just its messages", () => {
+    // The route the direct-helper tests cannot see. This branch parses the
+    // envelope against the frozen 1.6 schemas and then re-parses shallowly -
+    // and BOTH schemas leave `chat.events` structural
+    // (`z.custom(isStructuralRecord)`), exactly as they leave `chat.messages`.
+    // So neither SCHEMA on this path validates or strips what is inside an
+    // event's `metadata` - only the normalize pass does - and the GUI assigns
+    // these events straight into its store.
+    //
+    // Wiring this branch to the message-only pass therefore left the shipped
+    // 1.6 cohort's durable log open while the message history beside it was
+    // neutralized - the exact asymmetry the outbound projector's
+    // `projectSnapshot` already closes by projecting BOTH histories.
+    //
+    // FALSIFICATION: call `normalizeV16MessagesInShallowSnapshot(
+    // shallowV16.data.snapshot.chat.messages)` here again instead of the
+    // whole-frame pass, and the neutralization assertions below redden - the
+    // four key deletions and the nulled `selection` - while the interview-block
+    // test above stays green. The count, `source` and `values` expectations are
+    // preservation checks and survive that mutation by design.
+    const { factory, sockets } = makeFactory();
+    const deliveredEvents: unknown[] = [];
+
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks((frame) => {
+        deliveredEvents.push(...frame.snapshot.chat.events);
+      }),
+    });
+    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 6 });
+
+    sockets[0].fireText(
+      snapshotFrameWithAssistantMessage(frozenV16InterviewAssistantMessage(), [
+        smuggledV16InterviewEvent(),
+      ]),
+    );
+
+    expect(deliveredEvents).toHaveLength(1);
+    const [event] = deliveredEvents;
+    if (!isRecord(event) || !isRecord(event.metadata)) {
+      throw new Error("expected an event with metadata");
+    }
+    const metadata = event.metadata;
+    // Deleted, not nulled: `metadata` is an open record, so absence is the
+    // state a conforming 1.6 host produces.
+    for (const key of [
+      "interviewSettlement",
+      "interviewDelivery",
+      "interviewDeliveryAcceptance",
+      "interviewDeliveryRepairDiagnostic",
+    ]) {
+      expect(Object.hasOwn(metadata, key)).toBe(false);
+    }
+    // The colliding pre-1.7 key survives - it is not a settlement fact.
+    expect(metadata.source).toBe("traycer_a2a");
+    if (!Array.isArray(metadata.answers) || !isRecord(metadata.answers[0])) {
+      throw new Error("expected event metadata answers");
+    }
+    expect(metadata.answers[0].selection).toBeNull();
+    // The answer this line has always carried is untouched.
+    expect(metadata.answers[0].values).toEqual(["date-fns"]);
 
     client.close();
   });
