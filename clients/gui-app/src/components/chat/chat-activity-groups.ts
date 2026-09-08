@@ -1,8 +1,4 @@
 import {
-  isMonitorActivitySegment,
-  type MonitorDeliverySegment,
-} from "./chat-monitor-delivery";
-import {
   isKnownInterviewDisplayToolName,
   toolUseIdFromInterviewBlockId,
 } from "@traycer/protocol/host/agent/gui/interview-tools";
@@ -29,8 +25,7 @@ export type ActivitySegment =
   | CommandSegment
   | FileChangeSegment
   | SubagentSegment
-  | ApprovalSegment
-  | MonitorDeliverySegment;
+  | ApprovalSegment;
 
 // Reasoning folds into the surrounding activity group for its whole life -
 // streaming AND completed - and its duration accumulates into the "Thought for
@@ -124,8 +119,6 @@ interface ActivitySummaryCounts {
   approved: number;
   denied: number;
   usedTools: number;
-  monitorUpdates: number;
-  shellUpdates: number;
 }
 
 type ToolActivityKind =
@@ -222,8 +215,6 @@ function createEmptyCounts(): ActivitySummaryCounts {
     approved: 0,
     denied: 0,
     usedTools: 0,
-    monitorUpdates: 0,
-    shellUpdates: 0,
   };
 }
 
@@ -378,12 +369,6 @@ export function activityGroupSummary(
     countPhrase(counts.approved, "approved", "request", "requests"),
     countPhrase(counts.denied, "denied", "request", "requests"),
     countPhrase(counts.usedTools, "used", "tool", "tools"),
-    counts.monitorUpdates > 0
-      ? `${counts.monitorUpdates} monitor ${counts.monitorUpdates === 1 ? "update" : "updates"}`
-      : null,
-    counts.shellUpdates > 0
-      ? `${counts.shellUpdates} shell ${counts.shellUpdates === 1 ? "update" : "updates"}`
-      : null,
   ].filter((part): part is string => part !== null);
 
   if (parts.length === 0) return "Ran activity";
@@ -460,10 +445,6 @@ export function activityChildLabel(
 
 export function latestActivityLabel(segment: ActivitySegment): string {
   switch (segment.kind) {
-    case "autonomous_resume":
-      return segment.triggers
-        .map((trigger) => `${trigger.title} · ${trigger.summary}`)
-        .join(", ");
     case "command":
       return commandActivityLabel(segment);
     case "file_change":
@@ -659,7 +640,6 @@ function markTrailingActivityGroupActive(
 function isActivitySegment(
   segment: MessageSegment,
 ): segment is ActivityGroupDetailSegment {
-  if (isMonitorActivitySegment(segment)) return true;
   if (
     segment.kind === "tool" ||
     segment.kind === "command" ||
@@ -679,8 +659,7 @@ function isActivitySegment(
 function isStreamingActivitySegment(
   segment: ActivityGroupDetailSegment,
 ): boolean {
-  if (segment.kind === "approval" || segment.kind === "autonomous_resume")
-    return false;
+  if (segment.kind === "approval") return false;
   return segment.isStreaming;
 }
 
@@ -717,24 +696,10 @@ function isSuppressedQuestionTool(
   );
 }
 
-function countMonitorDelivery(
-  counts: ActivitySummaryCounts,
-  segment: MonitorDeliverySegment,
-): void {
-  for (const trigger of segment.triggers) {
-    if (trigger.managedCommand?.monitoring === false) counts.shellUpdates += 1;
-    else counts.monitorUpdates += 1;
-  }
-}
-
 function countActivitySegment(
   counts: ActivitySummaryCounts,
   segment: ActivityGroupDetailSegment,
 ): void {
-  if (segment.kind === "autonomous_resume") {
-    countMonitorDelivery(counts, segment);
-    return;
-  }
   if (segment.kind === "reasoning") {
     countReasoningSegment(counts, segment);
     return;
@@ -757,13 +722,6 @@ function countActivitySegment(
     return;
   }
 
-  countToolActivity(counts, segment);
-}
-
-function countToolActivity(
-  counts: ActivitySummaryCounts,
-  segment: ToolSegment,
-): void {
   const kind = toolActivityKind(segment.toolName);
   if (kind === "explore") {
     counts.exploredFiles += 1;
