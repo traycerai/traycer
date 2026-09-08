@@ -177,7 +177,11 @@ export type AnalyticsNotificationFilter =
 
 export type AnalyticsNotificationSection = "attention" | "recent";
 
-export type AnalyticsNotificationSurface = "center" | "toast" | "native";
+export type AnalyticsNotificationSurface =
+  | "center"
+  | "toast"
+  | "native"
+  | "home";
 
 export type AnalyticsNotificationAcknowledgmentSource =
   | "explicit_action"
