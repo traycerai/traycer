@@ -35,6 +35,7 @@ import {
   draftToAnswerValues,
   draftToStoredAnswer,
   emptyDraft,
+  questionAllowsCustomAnswer,
   replaceDraftAt,
   type DraftAnswer,
 } from "./interview-draft";
@@ -267,6 +268,11 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   const answersFromDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) =>
     questions.map((q, i) => {
       const source = answerDrafts[i] ?? emptyDraft();
+      // Evidence must agree with the values beside it: `draftToAnswerValues`
+      // drops a withdrawn Other, so recording `customText` here would attach
+      // evidence of a custom answer to an answer that carries none.
+      const otherSelected =
+        source.otherSelected && questionAllowsCustomAnswer(q);
       const optionIndices = [...source.selected].filter(
         (index) => index >= 0 && index < q.options.length,
       );
@@ -281,13 +287,13 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         notes: null,
         selection:
           !source.selectionEvidenceExact ||
-          (optionIndices.length === 0 && !source.otherSelected)
+          (optionIndices.length === 0 && !otherSelected)
             ? null
             : {
                 questionIndex: i,
                 optionIndices,
                 optionLabels,
-                customText: source.otherSelected
+                customText: otherSelected
                   ? source.otherText.trim() || null
                   : null,
               },
@@ -406,6 +412,12 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
 
   const toggleOther = () => {
     if (question === null || isBusy) return;
+    // A withdrawn channel has no Other to toggle. The row is not rendered, so
+    // this closes the paths that reach the toggle without it - the digit
+    // shortcut below being the live one. Without this, a single-select press
+    // would clear the visible choice (`selected: new Set()`) and leave an
+    // invisible custom selection the user cannot see or undo.
+    if (!questionAllowsCustomAnswer(question)) return;
     // Diverting to a custom answer cancels any pending single-select advance.
     clearAdvanceTimer();
     setPendingOptionIndex(null);
@@ -452,7 +464,11 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       toggleOption(digit - 1);
       return true;
     }
-    if (digit === optionCount + 1) {
+    // `optionCount + 1` is the Other row's digit. When the channel cannot
+    // carry free text that row is not rendered, so the digit addresses
+    // nothing: fall through and leave the key to the page rather than
+    // silently mutating a selection the user cannot see.
+    if (digit === optionCount + 1 && questionAllowsCustomAnswer(question)) {
       toggleOther();
       return true;
     }

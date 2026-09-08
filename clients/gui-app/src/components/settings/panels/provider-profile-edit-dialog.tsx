@@ -320,10 +320,19 @@ function ProfileApiKeyForm(props: {
             className="text-destructive"
             onClick={() => {
               if (busy) return;
-              clearApiKey.mutate({
-                providerId: props.providerId,
-                profileId: props.profile.profileId,
-              });
+              clearApiKey.mutate(
+                {
+                  providerId: props.providerId,
+                  profileId: props.profile.profileId,
+                },
+                // Same success-only clear as `onSave`. A replacement typed but
+                // not saved, followed by Remove, otherwise leaves that secret
+                // sitting in a live field: the row flips to "Not set", the
+                // button becomes an ENABLED "Add key", and the next Enter
+                // stores the very credential the user was removing. On
+                // failure the draft is kept, because nothing was removed.
+                { onSuccess: () => props.onDraftChange("") },
+              );
             }}
             disabled={busy}
           >

@@ -1092,6 +1092,20 @@ export const interviewQuestionSchema = z.object({
    * Options are then the only surviving answer channel and there are none, so
    * the question cannot be answered at all - the renderer offers no input for
    * that pair, leaving Skip as the only exit.
+   *
+   * It is an invariant for the RAISER, and deliberately not a `.refine()`
+   * here. This schema is both the persistence schema for stored epic content
+   * and the wire schema released streamchat lines project
+   * (`runtimeInterviewQuestionSchema` aliases it), so rejecting the pair would
+   * not withdraw one bad question - it would fail the parse of the whole
+   * content block, and drop a live interview frame from a peer host entitled
+   * to send it. A skippable question is a smaller harm than an unreadable
+   * transcript. The pair is refused where it can actually be decided instead:
+   * every per-harness bridge makes it unreachable by construction, the generic
+   * tool-call normalizer downgrades it to `null` (it reads whatever JSON a
+   * tool emitted, so it is the one producer that can be handed the
+   * contradiction), and the renderer's no-input branch is the fail-safe for
+   * anything that still gets through.
    */
   allowsCustomAnswer: z.boolean().nullable().default(null),
 });

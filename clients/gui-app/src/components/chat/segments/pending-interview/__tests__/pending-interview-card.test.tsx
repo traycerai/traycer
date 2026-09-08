@@ -957,6 +957,112 @@ describe("PendingInterviewCard keyboard navigation", () => {
     ).not.toBeNull();
   });
 
+  // Hiding the Other ROW is only half of withdrawing the channel: the card
+  // also reaches it by digit, and a stored draft can carry one in from before
+  // the withdrawal. Both would produce an invisible custom selection - one the
+  // user cannot see, undo, or deliver.
+  it("ignores the withdrawn Other's digit instead of clearing the visible choice", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      renderCard(
+        [
+          withoutCustomAnswer(
+            singleSelect("only", "Choose", ["Alpha", "Beta"]),
+          ),
+        ],
+        onSubmit,
+        () => null,
+      );
+
+      fireEvent.keyDown(card(), { key: "1" });
+      expect(
+        screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+      ).toBeTruthy();
+
+      // `options.length + 1` is the Other row's digit, and that row is not
+      // rendered. Ungated, this reached `toggleOther()`, which in single-select
+      // does `selected: new Set()` - clearing the visible choice AND setting
+      // `otherSelected` behind a row that does not exist.
+      //
+      // FALSIFICATION takes BOTH gates, because they are deliberately
+      // redundant: remove `&& questionAllowsCustomAnswer(question)` from
+      // `selectByDigit` AND the `questionAllowsCustomAnswer` early return in
+      // `toggleOther`. Then Alpha comes back unpressed and the submitted
+      // values are empty. Dropping either one alone leaves the other holding
+      // the line and this stays green - measured, not assumed.
+      fireEvent.keyDown(card(), { key: "3" });
+      expect(
+        screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+      ).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+      expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+        expect.objectContaining({ values: ["Alpha"] }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("CONTROL: the same digit DOES reach Other when the field is unstated, so the arm above is about the flag", () => {
+    // Without this, `key: "3"` could simply be an unbound key and the test
+    // above would pass against a card that never had the shortcut at all.
+    renderCard(
+      [singleSelect("only", "Choose", ["Alpha", "Beta"])],
+      () => null,
+      () => null,
+    );
+
+    fireEvent.keyDown(card(), { key: "3" });
+
+    expect(
+      screen.getByRole("textbox", { name: "Other answer" }),
+    ).not.toBeNull();
+  });
+
+  it("does not submit a custom answer restored from a draft written before the withdrawal", () => {
+    // The draft is per block in localStorage and outlives the
+    // `interview.requested` that raised the question, so a re-raise carrying
+    // `allowsCustomAnswer: false` inherits whatever the user had typed.
+    //
+    // FALSIFICATION: restore `otherSelected: stored.otherSelected` in
+    // `draftFromStoredAnswer` and this reddens - the values carry the text
+    // through a channel that cannot deliver it.
+    const onSubmit = vi.fn();
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [
+        {
+          selected: ["Alpha"],
+          otherText: "typed before the withdrawal",
+          otherSelected: true,
+        },
+      ],
+    });
+
+    renderCardFor({
+      chatId: "chat-1",
+      blockId: "interview-1",
+      questions: [
+        withoutCustomAnswer(singleSelect("only", "Choose", ["Alpha", "Beta"])),
+      ],
+      isBusy: false,
+      onSubmit,
+      onSkip: null,
+      onFork: null,
+    });
+
+    fireEvent.click(proceedButton());
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({ values: ["Alpha"] }),
+    ]);
+  });
+
   it("natively disables the free-text and Other answer fields while isBusy", () => {
     renderCardFor({
       chatId: "chat-1",

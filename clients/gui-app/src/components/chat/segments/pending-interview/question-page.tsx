@@ -9,7 +9,10 @@ import type {
 import { InterviewOptionDetailsButton } from "@/components/chat/segments/interview-visuals";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
-import type { DraftAnswer } from "./interview-draft";
+import {
+  questionAllowsCustomAnswer,
+  type DraftAnswer,
+} from "./interview-draft";
 import { QUESTION_TRANSITION } from "./use-interview-card";
 
 const OTHER_LABEL = "Other";
@@ -108,7 +111,7 @@ export function QuestionPage(props: QuestionPageProps) {
   // none. Render no input rather than a field whose contents provably cannot
   // be delivered; Skip stays available, so the card is still resolvable.
   if (question.options.length === 0) {
-    if (question.allowsCustomAnswer === false) return null;
+    if (!questionAllowsCustomAnswer(question)) return null;
     return (
       <textarea
         ref={focusFieldIfActive}
@@ -146,7 +149,7 @@ export function QuestionPage(props: QuestionPageProps) {
           );
         })}
       </ul>
-      {question.allowsCustomAnswer === false ? null : (
+      {questionAllowsCustomAnswer(question) ? (
         <OtherRow
           selected={draft.otherSelected}
           value={draft.otherText}
@@ -155,7 +158,7 @@ export function QuestionPage(props: QuestionPageProps) {
           onSelect={onToggleOther}
           onValueChange={onOtherTextChange}
         />
-      )}
+      ) : null}
     </div>
   );
 }

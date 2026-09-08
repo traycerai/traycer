@@ -43,6 +43,22 @@ export function draftHasState(draft: DraftAnswer): boolean {
   );
 }
 
+/**
+ * Whether this question's answer channel can carry free text ("Other").
+ *
+ * `null` is UNSTATED and offers free text, exactly as every renderer did
+ * before the field existed; only an explicit `false` withdraws it. Withdrawal
+ * has to hold across the whole card and not just the rendered row: the digit
+ * shortcut maps `options.length + 1` to Other, and a stored draft outlives the
+ * event that raised the question. So this predicate gates the two entry
+ * points and the submission boundary, not the markup alone.
+ */
+export function questionAllowsCustomAnswer(
+  question: InterviewQuestion,
+): boolean {
+  return question.allowsCustomAnswer !== false;
+}
+
 export function questionIdentity(question: InterviewQuestion): string {
   return JSON.stringify([
     "question",
@@ -225,12 +241,23 @@ export function draftFromStoredAnswer(
     return matching.length === 0 ? [] : [matching[0]];
   });
   const selected = exactIndices ?? [...new Set(legacyIndices)];
+  // A question whose channel cannot carry free text has no Other to restore.
+  // The stored draft can easily predate the withdrawal - it is written to
+  // localStorage per block and outlives an `interview.requested` update that
+  // re-raised the same question with the flag set - and restoring it would
+  // put an invisible custom selection behind a row that is no longer
+  // rendered, which submission would then send through the channel that
+  // provably cannot deliver it.
+  const allowsOther = questionAllowsCustomAnswer(question);
+  const restoredOtherSelected = allowsOther && stored.otherSelected;
   // Enforce single-select mutual exclusivity on restore: a stored answer can
   // carry both `selected` and `otherSelected: true` (e.g. hand-edited
   // localStorage, or an older draft written before this invariant existed),
-  // and restoring both would violate single-select semantics.
+  // and restoring both would violate single-select semantics. Keyed on the
+  // RESTORED flag rather than the stored one, so withdrawing Other hands the
+  // option choice back instead of discarding both and emptying the draft.
   const normalizedSelected =
-    !question.multiSelect && stored.otherSelected ? [] : selected;
+    !question.multiSelect && restoredOtherSelected ? [] : selected;
   return {
     selected: new Set(
       question.multiSelect
@@ -238,8 +265,12 @@ export function draftFromStoredAnswer(
         : normalizedSelected.slice(0, 1),
     ),
     selectionEvidenceExact: exactIndices !== null,
-    otherText: stored.otherText,
-    otherSelected: stored.otherSelected,
+    // Keyed on the QUESTION, not on the restored flag: text typed into the
+    // Other field without selecting it is a legitimate draft state
+    // (`setOtherText` writes text alone), so only a withdrawn channel clears
+    // it.
+    otherText: allowsOther ? stored.otherText : "",
+    otherSelected: restoredOtherSelected,
   };
 }
 
@@ -270,7 +301,13 @@ export function draftToAnswerValues(
     const option = question.options.at(index);
     return option === undefined ? [] : [option.label];
   });
-  return draft.otherSelected && otherText.length > 0
+  // The last gate before an answer leaves the client. Restoration already
+  // withdraws a stored Other, so this covers the drafts that never went
+  // through it - one built in memory this session - and makes the guarantee
+  // hold at the boundary rather than only at the entry points.
+  return draft.otherSelected &&
+    otherText.length > 0 &&
+    questionAllowsCustomAnswer(question)
     ? [...selected, otherText]
     : selected;
 }

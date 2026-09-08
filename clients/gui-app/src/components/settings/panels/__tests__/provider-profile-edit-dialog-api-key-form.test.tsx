@@ -185,6 +185,12 @@ function keyField(): HTMLInputElement | null {
 beforeEach(() => {
   apiKeyMutation.set.isPending = false;
   apiKeyMutation.clear.isPending = false;
+  // `vi.clearAllMocks()` in `afterEach` clears CALLS, not implementations, so
+  // a test that makes a mutate invoke its `onSuccess` would leak that into
+  // every test after it. State the default here instead: mutate is called and
+  // nothing settles, which is what a request in flight looks like.
+  apiKeyMutation.set.mutate.mockImplementation(() => undefined);
+  apiKeyMutation.clear.mutate.mockImplementation(() => undefined);
 });
 
 afterEach(() => {
@@ -381,12 +387,62 @@ describe("<ProfileEditDialog /> API-key submission", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove key" }));
 
     expect(apiKeyMutation.clear.mutate).toHaveBeenCalledTimes(1);
-    // No second argument at all here - so this also pins that the clear call
-    // carries NO key field, which is the point of the test.
-    expect(apiKeyMutation.clear.mutate).toHaveBeenCalledWith({
-      providerId: PROVIDER_ID,
-      profileId: PROFILE_ID,
-    });
+    // The FIRST argument is what carries the request, and asserting it by
+    // object equality is what pins that it holds no key field. The second is
+    // the `{ onSuccess }` options bag (see the draft-clearing test below), so
+    // it is matched loosely rather than asserted absent.
+    expect(apiKeyMutation.clear.mutate).toHaveBeenCalledWith(
+      {
+        providerId: PROVIDER_ID,
+        profileId: PROFILE_ID,
+      },
+      expect.anything(),
+    );
+  });
+
+  it("clears a typed replacement once the removal SUCCEEDS, so it cannot be re-armed", () => {
+    // The sequence that makes this matter: a configured profile, a replacement
+    // typed but never saved, then Remove instead. Without the success callback
+    // the field keeps that secret while the row flips to "Not set" and the
+    // button becomes an ENABLED "Add key" - one Enter away from storing the
+    // credential the user was in the middle of removing.
+    //
+    // FALSIFICATION: drop the `{ onSuccess: ... }` argument from
+    // `clearApiKey.mutate(...)` and this reddens while the CONTROL below
+    // stays green.
+    apiKeyMutation.clear.mutate.mockImplementation(
+      (_variables: unknown, options: { onSuccess: () => void } | undefined) => {
+        options?.onSuccess();
+      },
+    );
+    renderDialog(profileWithApiKey({ supported: true, configured: true }));
+
+    const field = keyField();
+    expect(field).not.toBeNull();
+    if (field === null) return;
+    fireEvent.change(field, { target: { value: "sk-typed-but-not-saved" } });
+    expect(field.value).toBe("sk-typed-but-not-saved");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove key" }));
+
+    expect(keyField()?.value).toBe("");
+  });
+
+  it("CONTROL: a removal that never settles KEEPS the draft, so the clear above is the callback and not the click", () => {
+    // The default mock never invokes `onSuccess`. A removal that failed
+    // removed nothing, so discarding what the user typed would be the wrong
+    // call - and without this arm, clearing the draft unconditionally on
+    // click would pass the test above just as well.
+    renderDialog(profileWithApiKey({ supported: true, configured: true }));
+
+    const field = keyField();
+    expect(field).not.toBeNull();
+    if (field === null) return;
+    fireEvent.change(field, { target: { value: "sk-typed-but-not-saved" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove key" }));
+
+    expect(keyField()?.value).toBe("sk-typed-but-not-saved");
   });
 
   // FALSIFICATION:
