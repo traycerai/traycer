@@ -41,9 +41,11 @@ import {
 // masquerade as the job's plist path.
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
-  type CooperativeShutdownOutcome,
   forceStopHostProcess,
+  forceStopHostProcessReporting,
   requestCooperativeShutdown,
+  requestCooperativeShutdownReporting,
+  type CooperativeShutdownOutcome,
 } from "./desktop-agent-shutdown";
 import {
   classifyLaunchctlPrintResult,
@@ -126,7 +128,14 @@ export function createMacosController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label, run),
-    stop: (label, options) => stopService(label, run, options.force, "stop"),
+    stop: (label, options) =>
+      stopService(
+        label,
+        run,
+        options.force,
+        "stop",
+        options.onHostAddressed ?? null,
+      ),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
     hostStartAdoptionLabel: async (label) => {
@@ -1431,6 +1440,117 @@ function classifyLaunchdPrintOutput(printOutput: string): LaunchdOwnership {
   };
 }
 
+/**
+ * Whether launchd could start a host for this label on its own before a swap
+ * lands - i.e. whether "no host process right now" is a promise about the next
+ * few seconds or merely a snapshot.
+ *
+ * The store-format floor's post-stop quiescence check needs this and cannot
+ * get it from `statusService`, which reports from `pid.json` and so calls a
+ * LOADED, crash-throttled job `stopped`. That is the epic's headline shape: a
+ * 1.2.0 host crash-looping on v9 data while an install lands underneath it.
+ *
+ * BOTH labels are asked - the CLI's own and Desktop's SMAppService `.agent` -
+ * because either can be the loaded job on a given machine, and
+ * `stopDesktopManagedHost` can return `no-host` on missing metadata without
+ * suppressing the agent's next launch. Whichever is loaded answers; if neither
+ * is, nothing can start a writer.
+ */
+export async function macosServiceMayRespawn(
+  label: ServiceLabel,
+  runner: ProcessRunner | null,
+  // ONE deadline for the whole probe, shared by both labels: the caller's
+  // settle loop sizes it from its remaining budget, and a first `launchctl`
+  // that spends most of it must leave the second only the rest.
+  timeoutMs: number,
+): Promise<boolean> {
+  const run = runner ?? runCommand;
+  const deadline = performance.now() + timeoutMs;
+  const targets = [
+    `${guiDomain()}/${label.id}`,
+    `${guiDomain()}/${smAppServiceAgentLabelId(label)}`,
+  ];
+  for (const target of targets) {
+    // A spent budget hands the next label a 1 ms probe, which times out and
+    // reads as MAY RESPAWN (`launchdJobMayRespawn` on a negative exit). That
+    // is the fail-closed answer on purpose: a label this probe never got to
+    // ask has not been cleared, and the settle loop's own deadline - not a
+    // guess about the unasked label - decides the refusal.
+    const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
+    if (await launchdJobMayRespawn(target, run, remaining)) return true;
+  }
+  return false;
+}
+
+/**
+ * One launchd job's respawn risk, read straight off `launchctl print`.
+ *
+ * Deliberately NOT routed through `inspectLaunchdOwnership`: that classifies
+ * WHO owns the job and drops the two fields this needs for an SMAppService
+ * one. The question here is the same whoever owns it.
+ *
+ * A LIVE `pid` means MAY RESPAWN, which reads backwards until you know whose
+ * pid it is. `launchctl`'s `pid` is the JOB's process - the supervisor - while
+ * the floor's other evidence (`publishedHostProcessGone`) probes the HOST
+ * CHILD from `pid.json`. Reaching this function at all means that child is
+ * gone or was never published, so a live supervisor is one sitting BETWEEN
+ * children: the internal crash-relaunch loop, which can spawn the next writer
+ * without launchd being involved at all.
+ *
+ * With no supervisor either, the decision falls to launchd's own policy, and
+ * only a CLEAN last exit clears - `KeepAlive{SuccessfulExit:false}` does not
+ * respawn one, which is what keeps a deliberate `host stop` safe to downgrade
+ * over.
+ */
+async function launchdJobMayRespawn(
+  serviceTarget: string,
+  run: ProcessRunner,
+  timeoutMs: number,
+): Promise<boolean> {
+  const result = await run("launchctl", ["print", serviceTarget], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs,
+    tolerateNonZeroExit: true,
+  });
+  // A NEGATIVE code is this runner saying it never got an answer:
+  // `tolerateNonZeroExit` resolves a spawn failure or a timeout as `-1`
+  // (`process-runner.ts` maps a non-numeric `err.code` to it), and reading
+  // that as "not loaded" would clear the swap on a probe that never ran.
+  // launchctl's own "could not find service" is a positive exit code.
+  if (result.exitCode < 0) return true;
+  // Not loaded. Nothing holds a definition, so nothing can start it.
+  if (result.exitCode !== 0) return false;
+  const fields = parseLaunchctlPrintFields(
+    `${result.stdout}\n${result.stderr}`,
+  );
+  const pidField = fields.get("pid");
+  const pid =
+    pidField === undefined ? Number.NaN : Number.parseInt(pidField, 10);
+  if (Number.isInteger(pid) && pid > 0) return true;
+  return !lastExitWasClean(fields);
+}
+
+/**
+ * Whether `launchctl print`'s exit fields describe a CLEAN last exit.
+ *
+ * Only an actual `0` is clean. `(never exited)` is NOT: both jobs this file
+ * knows are `RunAtLoad`, so a loaded job that has not run yet is one launchd
+ * is about to start - the survey or swap could be racing its first spawn,
+ * which is the writer race the settle wait exists to close. It reads as may
+ * respawn and the settle loop keeps asking; a job that does start shows a
+ * pid on the next poll, and one that never does spends the window and
+ * refuses, which is the honest answer for a job nobody can prove idle. A
+ * `last exit reason` means the process was signalled or jetsammed, which is
+ * never clean. An absent code field is UNKNOWN and answers false - the format
+ * is not stable across macOS releases (this file has been broken by that once
+ * already), and the safe direction for the caller is "may respawn".
+ */
+function lastExitWasClean(fields: ReadonlyMap<string, string>): boolean {
+  if (fields.get("last exit reason") !== undefined) return false;
+  return fields.get("last exit code") === "0";
+}
+
 // launchctl returns "Service is already loaded" / "Bootstrap failed:
 // 37: ... (already loaded)" when the agent is already registered. We
 // classify these as *recoverable races* (not success): the caller must
@@ -1680,15 +1800,17 @@ async function stopDesktopManagedHost(
   label: ServiceLabel,
   agent: DesktopAgentOwnership,
   force: boolean,
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
   if (force) {
-    await forceStopDesktopManagedHost(label, agent);
+    await forceStopDesktopManagedHost(label, agent, onHostAddressed);
     return;
   }
-  const outcome = await requestCooperativeShutdown(
+  const outcome = await requestCooperativeShutdownReporting(
     label.environment,
     "stop",
     "shutdown",
+    onHostAddressed,
   );
   switch (outcome.kind) {
     case "stopped":
@@ -1750,8 +1872,13 @@ async function stopDesktopManagedHost(
 async function forceStopDesktopManagedHost(
   label: ServiceLabel,
   agent: DesktopAgentOwnership,
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
-  const outcome = await forceStopHostProcess(label.environment, "stop");
+  const outcome = await forceStopHostProcessReporting(
+    label.environment,
+    "stop",
+    onHostAddressed,
+  );
   switch (outcome.kind) {
     case "stopped":
     case "no-host":
@@ -2325,10 +2452,12 @@ async function stopService(
   run: ProcessRunner,
   force: boolean,
   operation: "stop" | "restart",
+  // See `StopServiceOptions.onHostAddressed`.
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
   if (desktopAgent !== null) {
-    await stopDesktopManagedHost(label, desktopAgent, force);
+    await stopDesktopManagedHost(label, desktopAgent, force, onHostAddressed);
     return;
   }
   if (force) {
@@ -2355,7 +2484,7 @@ async function stopService(
     // pid-identity gate and the instance-matched pid.json purge hold here
     // too, including when no endpoint is published at all (reported as
     // `no-metadata`, never as an unverified success).
-    await forceStopCliOwnedHost(label, operation);
+    await forceStopCliOwnedHost(label, operation, onHostAddressed);
     return;
   }
   // Snapshot the live host pid BEFORE signalling so we can confirm the
@@ -2375,6 +2504,9 @@ async function stopService(
   // the same correction `refuseIfPublishedHostAlive` took in an earlier round
   // (traycer#1761 round 7); `linux.ts`'s restart ladder is the sibling site.
   const before = await readHostPidMetadataEvidence(label.environment);
+  if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
+    onHostAddressed?.();
+  }
   await run("launchctl", ["kill", "TERM", `${guiDomain()}/${label.id}`], {
     env: undefined,
     cwd: undefined,
@@ -2444,8 +2576,13 @@ async function stopService(
 async function forceStopCliOwnedHost(
   label: ServiceLabel,
   operation: "stop" | "restart",
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
-  const outcome = await forceStopHostProcess(label.environment, operation);
+  const outcome = await forceStopHostProcessReporting(
+    label.environment,
+    operation,
+    onHostAddressed,
+  );
   switch (outcome.kind) {
     case "stopped":
     case "no-host":
@@ -2561,7 +2698,7 @@ async function stopServiceForRestart(
   // kickstart, and `kickstart -k` is correct either way - it recycles a running
   // job and starts a stopped one. All it costs is the tail of a deliberate
   // stop's diagnostics, which describe a shutdown nobody is debugging.
-  await stopService(label, run, force, "restart");
+  await stopService(label, run, force, "restart", null);
   return { forcedRecycle: true };
 }
 

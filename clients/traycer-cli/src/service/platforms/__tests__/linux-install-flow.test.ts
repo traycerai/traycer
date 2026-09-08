@@ -25,14 +25,19 @@ import { fileExists } from "../../install-binary";
 // child-kill engine the macOS force paths use (`forceStopHostProcess`) -
 // the local purge helper is gone, along with its own pid.json read/verdict
 // gating. Stub the engine exactly the way `macos.test.ts` already stubs
-// this identical seam (a WHOLE-MODULE factory - `linux.ts` imports only
-// `forceStopHostProcess` from this module, so that is the only export this
-// suite needs to supply).
+// this identical seam (a WHOLE-MODULE factory - `linux.ts` imports only the
+// reporting variant, which the factory routes onto the same two-argument
+// mock so every assertion below keeps reading `(environment, operation)`).
 const MOCKS = vi.hoisted(() => ({
   forceStopHostProcess: vi.fn(),
 }));
 vi.mock("../desktop-agent-shutdown", () => ({
   forceStopHostProcess: MOCKS.forceStopHostProcess,
+  forceStopHostProcessReporting: (
+    environment: string,
+    operation: string,
+    _onHostAddressed: (() => void) | null,
+  ) => MOCKS.forceStopHostProcess(environment, operation),
 }));
 
 // CodeRabbit #1773 round 2 (r3951899621). The SAME isolation argument the unit

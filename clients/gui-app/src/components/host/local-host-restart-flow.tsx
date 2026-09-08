@@ -512,6 +512,7 @@ function CooperativeFirstRestartFlow(
       />
       <HostBusyForceDeferDialog
         purpose="restart"
+        detail={null}
         open={busyOpen}
         title="Host is busy"
         message={forceOffer?.message ?? ""}

@@ -20,6 +20,14 @@ const HOST_INSTALL_DIRNAME = "install";
 const HOST_STAGED_DIRNAME = "staged";
 const HOST_INSTALL_RECORD_FILENAME = "install.json";
 const HOST_STAGED_RECORD_FILENAME = "staged.json";
+/**
+ * The held-host-version marker, a sibling of the `install/` and `staged/`
+ * directories under the host home (NOT inside `install/`, so an atomic swap of
+ * the install dir never disturbs it). Single-sourced here; the desktop shell
+ * hand-mirrors this exact name in its `HostFsLayout` with a lockstep comment,
+ * the same duplication precedent as `substrate.json`/`transition.json`.
+ */
+const HOST_HELD_VERSION_RECORD_FILENAME = "held-host-version.json";
 const CLI_MANIFEST_FILENAME = "manifest.json";
 const DEV_DESKTOP_SLOT_ENV = "DEV_DESKTOP_SLOT";
 
@@ -28,9 +36,11 @@ const DEV_DESKTOP_SLOT_ENV = "DEV_DESKTOP_SLOT";
 // imported by name because the readers below need them in local scope.
 export * from "./installation-records";
 import {
+  hostHeldVersionRecordSchema,
   hostInstallRecordSchema,
   hostStagedRecordSchema,
   storedCliInstallManifestSchema,
+  type HostHeldVersionRecord,
   type HostInstallRecord,
   type HostStagedRecord,
   type StoredCliInstallManifest,
@@ -101,6 +111,13 @@ export function hostStagedRecordPath(environment: Environment): string {
   return join(hostStagedDir(environment), HOST_STAGED_RECORD_FILENAME);
 }
 
+export function hostHeldVersionRecordPath(environment: Environment): string {
+  return join(
+    hostInstallHomeDir(environment),
+    HOST_HELD_VERSION_RECORD_FILENAME,
+  );
+}
+
 /**
  * Reads the installed-host record. A missing file is the unmanaged/tree-run
  * state; malformed present bytes reject so callers never mistake corruption
@@ -151,6 +168,27 @@ export async function readHostStagedRecordAt(
   )
     ? record
     : null;
+}
+
+/**
+ * Reads the held-host-version marker (its `{ version, installId }`), or `null`
+ * when nothing is held. Tolerant like the staged reader: a missing OR malformed
+ * record - including a legacy record without `installId` - reads as "nothing
+ * held" so the hold degrades toward the normal update path instead of ever
+ * wedging a converge. Callers gate on `installId` equality with the installed
+ * record, so a record that cannot supply one is correctly treated as no hold.
+ */
+export async function readHostHeldVersion(
+  environment: Environment,
+): Promise<HostHeldVersionRecord | null> {
+  return readHostHeldVersionAtPath(hostHeldVersionRecordPath(environment));
+}
+
+/** Shared tolerant held-version reader for explicit CLI/desktop paths. */
+export async function readHostHeldVersionAtPath(
+  path: string,
+): Promise<HostHeldVersionRecord | null> {
+  return readTolerantRecord(path, hostHeldVersionRecordSchema);
 }
 
 /** Reads only an on-disk CLI manifest; synthetic package-manager state is CLI-owned. */

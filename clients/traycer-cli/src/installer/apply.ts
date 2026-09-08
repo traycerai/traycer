@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { Environment } from "../runner/environment";
 import { createCliLogger } from "../logger";
@@ -10,8 +10,13 @@ import {
   type HostInstallRecord,
 } from "../manifest/host-install";
 import { readHostStagedRecord } from "../manifest/host-staged";
-import { hostStagedDir } from "../store/paths";
+import { hostHomeDir, hostStagedDir } from "../store/paths";
+import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { assertHostNotBusy } from "../host/busy-check";
+import {
+  assertHostStoreFormatFloor,
+  storeFormatFloorTargetVersion,
+} from "../host/store-format-floor";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
@@ -20,6 +25,7 @@ import {
   currentInstallPlatform,
   type InstallPhaseHooks,
 } from "./install";
+import { readExtractedStoreFormats } from "./version-sidecar";
 
 // `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed
 // commands" > `host apply`. Promotes the single-slot staged tree over the
@@ -106,6 +112,26 @@ export interface ApplyHostOptions {
    * `null` for a caller not tracking it.
    */
   readonly onWillDisruptHost: (() => void) | null;
+  /**
+   * `--accept-store-format-loss`, for the store-format floor this function
+   * runs against the STAGED version before the busy gate and the stop.
+   *
+   * A stage older than the install is not the ordinary case - reconcile's
+   * stale-or-equal rule removes a comparable `staged <= installed` stage
+   * before this function reads one - but an INCOMPARABLE pair survives that
+   * rule by design, and an incomparable pair cannot prove the move is an
+   * upgrade. The gate evaluates those rather than assuming, and refuses what
+   * it cannot clear. (A stage whose version is not on the release ladder AND
+   * declares nothing is the one case it stands aside for; see
+   * `storeFloorApplicability`.)
+   *
+   * There is no manifest entry to read on this path - a stage carries the
+   * catalog's `version`, not its `storeFormats` - so the target is resolved
+   * from the archive's OWN declaration (its extracted `version.json`) and
+   * otherwise from the fixed table. Both are local reads, which is what keeps
+   * this gate cheap: nothing here goes to the network.
+   */
+  readonly acceptStoreFormatLoss: boolean;
   /**
    * The two swap barriers, threaded into the lifecycle this function builds
    * internally so a caller reaches them without duplicating the apply path
@@ -276,6 +302,58 @@ export async function applyHost(
     };
   }
 
+  const stagedDir = hostStagedDir(opts.environment);
+  // BEFORE the busy gate and before `onWillCommitStaged`: a stage the target
+  // could not read is refused with nothing announced, nothing stopped and the
+  // stage left exactly where its promoter put it.
+  //
+  // Unlike the pre-stage gates, this one CAN read the archive's own
+  // declaration - the tree is already extracted - so an off-ladder stage is
+  // judged here rather than standing aside until the commit tail.
+  const stagedRuntimeDir = dirname(join(stagedDir, staged.executablePath));
+  // The stage's own stamp outranks the version it was recorded under, for the
+  // same reason it does at the commit tail: a stage promoted from a local
+  // archive carries a `local-…` record version that no table can place, and
+  // the sidecar is what names the build. Resolved once and reused as the
+  // evidence's `clearedVersion` below, so the tail - which resolves it the
+  // same way from the same two values - agrees with this gate by construction.
+  const floorTargetVersion = storeFormatFloorTargetVersion(
+    staged.runtimeVersion,
+    staged.version,
+  );
+  await assertHostStoreFormatFloor({
+    environment: opts.environment,
+    // Both ends: a stage promoted from a signed registry download over an
+    // install that was one too keeps the version shortcuts; a local file on
+    // either end (an `ensure --from` install records the CLI's version) means
+    // the declaration judges.
+    targetIdentity:
+      staged.source.kind === "registry" && installed.source.kind === "registry"
+        ? "registry-artifact"
+        : "local-archive",
+    surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
+    targetVersion: floorTargetVersion,
+    publishedStoreFormats: null,
+    declaredStoreFormats: await readExtractedStoreFormats(
+      stagedRuntimeDir,
+      opts.environment,
+      logger,
+    ),
+    installedVersion: installed.version,
+    // Read off the tree that is actually installed, not looked up: `host
+    // apply` runs on a machine whose install may be build-stamped, and the
+    // table cannot place one of those - so without this the short-circuit is
+    // missed and even a forward apply walks every epic.
+    installedStoreFormats: await readExtractedStoreFormats(
+      dirname(installed.executablePath),
+      opts.environment,
+      logger,
+    ),
+    acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
+    site: "host apply",
+    logger,
+  });
+
   if (!opts.noService && !opts.force) {
     await assertHostNotBusy(opts.environment);
   }
@@ -306,7 +384,6 @@ export async function applyHost(
     );
   }
 
-  const stagedDir = hostStagedDir(opts.environment);
   const { record, previous } = await commitInstallFromSource({
     environment: opts.environment,
     sourceDir: stagedDir,
@@ -321,8 +398,21 @@ export async function applyHost(
     onProgress: opts.onProgress,
     lifecycle: lifecycleHandle?.lifecycle ?? null,
     onCommitted: () => {},
+    // Apply only ever moves FORWARD (the stage is newer than the install), so
+    // it records no version hold at the swap boundary.
+    onSwapCommitted: null,
     verifyMutationCapability: opts.verifyMutationCapability,
     onWillSwap: opts.onWillDisruptHost,
+    // The gate above cleared exactly these bytes, under the same lock, with
+    // no transfer in between - so the commit tail's re-check is the same
+    // question with the same answer, and pays only for the version it already
+    // resolved.
+    storeFormatFloor: {
+      clearedVersion: floorTargetVersion,
+      publishedStoreFormats: null,
+      acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
+      site: "host apply",
+    },
   });
 
   // `createServiceInstallLifecycle`'s `afterSwap` already swallows its own

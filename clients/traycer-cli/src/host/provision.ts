@@ -8,6 +8,7 @@ import {
   type StagedHostInstallSource,
 } from "../installer";
 import { readHostInstallRecord } from "../manifest/host-install";
+import { readInstalledFloorOperands } from "./installed-store-formats";
 import type { Environment } from "../runner/environment";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
@@ -40,8 +41,16 @@ import {
   type RegistryYankLookup,
 } from "../registry/client";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import { holdVersionOnSwapCommitted } from "./held-host-version";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { assertHostNotBusy } from "./busy-check";
+import { hostHomeDir } from "../store/paths";
+import { resolveChatStoreSurveyRoots } from "./chat-store-survey-roots";
+import {
+  gateStoreFormatFloor,
+  ungatedStoreFormatFloorEvidence,
+  type StoreFormatFloorEvidence,
+} from "./store-format-floor";
 
 // The single host-provisioning core behind `host ensure` (the desktop's
 // post-auth call and the CLI's convergent provisioning verb). It reads the
@@ -56,8 +65,9 @@ import { assertHostNotBusy } from "./busy-check";
 //
 // Source resolution and idempotency policy differ per caller, so both are
 // injected: `resolveInstallSource` is only invoked on the install branch,
-// and `satisfaction` (presence / exact / own-build-minimum /
-// implicit-registry-minimum, finding D + Q7) controls the fast no-op.
+// and `satisfaction` (presence / viability / exact / own-build-minimum /
+// implicit-registry-minimum, finding D + Q7 + the downgrade-revert RCA)
+// controls the fast no-op.
 
 export type HostProvisionAction =
   | "noop"
@@ -117,6 +127,20 @@ export interface HostProvisionResult {
 // same newer direction, for the same reason - see `own-build-minimum`.
 export type HostSatisfactionPolicy =
   | { readonly kind: "presence" }
+  /**
+   * Liveness-only: ANY installed, non-yanked version satisfies - older, newer,
+   * or equal - so a background converge that fires on a "host down" gap keeps
+   * whatever is installed rather than reinstalling the client's preferred pin
+   * over it (the downgrade-revert RCA). It asks NOTHING about which version:
+   * genuine incompatibility is left to where it is actually decided - the
+   * runtime admits-or-rejects at handshake, the selection authority marks an
+   * unusable host dead, and the host's own reconciler plus the server support
+   * floor move a genuinely-too-old host forward. Deliberately NOT a version
+   * floor: host compatibility is a host-admits-client epoch and per-method
+   * protocol negotiation, never a `hostVersion` ordering, so a static semver
+   * floor would proxy the wrong quantity.
+   */
+  | { readonly kind: "viability" }
   | { readonly kind: "exact"; readonly version: string }
   /**
    * This build's own host archive: converge to `version`, but never BACKWARDS
@@ -179,6 +203,26 @@ export interface ProvisionHostOptions {
   // unconditionally (the desktop's "Force restart"). Default callers pass
   // false so in-progress chat/terminal/CLI work is protected.
   readonly force: boolean;
+  /**
+   * Provision even when a chat store on this machine is stamped in a format
+   * the target build cannot read, losing access to those chats.
+   *
+   * Deliberately NOT folded into `force`. `--force` is the desktop's "Force
+   * restart" and the CLI's "replace a busy host", and Force restart is what a
+   * user presses when their chats hang - which IS this failure's symptom. A
+   * force that also waived the floor would make the recovery button the thing
+   * that completes the data loss.
+   */
+  readonly acceptStoreFormatLoss: boolean;
+  // When true, record a version hold if this run's install branch commits a
+  // strict DOWNGRADE (committed version below the previous install). Set by
+  // `host ensure --release <concrete>` - the other explicit-version install
+  // verb - so a deliberate downgrade through ensure is held just like one
+  // through `host install`/`host update`, at the committed-install boundary
+  // UNDER this lock (never a post-return write). Every implicit convergence
+  // (background/viability, first-install, the default pin) leaves it false, so
+  // a liveness converge can never create a hold.
+  readonly holdExplicitDowngrade: boolean;
   // Invoked once this call has committed to MUTATING the host (install,
   // register or start) and never on the no-op fast path - so a caller can
   // run a step that is only warranted when a host will actually be started.
@@ -223,8 +267,9 @@ export async function provisionHost(
     force: opts.force,
     satisfactionKind: opts.satisfaction.kind,
     satisfactionVersion:
-      opts.satisfaction.kind === "presence"
-        ? "presence-only"
+      opts.satisfaction.kind === "presence" ||
+      opts.satisfaction.kind === "viability"
+        ? opts.satisfaction.kind
         : opts.satisfaction.version,
     recordVersionOverride: opts.recordVersionOverride !== null,
     lockReason: opts.lockReason,
@@ -250,6 +295,7 @@ export async function provisionHost(
       opts.satisfaction,
       opts.registerService,
       yankLookup,
+      opts.recordVersionOverride,
     ))
   ) {
     opts.runtime.logger.debug("Host provisioning fast-path satisfied", {
@@ -280,7 +326,23 @@ export async function provisionHost(
     const predictedInstall =
       opts.force ||
       !fast.installed ||
-      !(await versionSatisfied(fast, opts.satisfaction, yankLookup));
+      !(await versionSatisfied(
+        fast,
+        opts.satisfaction,
+        yankLookup,
+        opts.recordVersionOverride,
+      ));
+    // THE STORE-FORMAT FLOOR, before staging - and reached on the `--force`
+    // branch above like every other. This is the path the desktop's Force
+    // restart drives (`host ensure --force`), and force is exactly what skips
+    // the version check here, so without this gate the recovery button is an
+    // ungated downgrade onto data the bundled build may not be able to read.
+    const storeFormatFloor = predictedInstall
+      ? await gateProvisionStoreFormatFloor(opts)
+      : ungatedStoreFormatFloorEvidence(
+          "host ensure",
+          opts.acceptStoreFormatLoss,
+        );
     const preStaged = predictedInstall
       ? await prepareInstallStage(opts, progress, capability, contenderOptions)
       : null;
@@ -294,7 +356,64 @@ export async function provisionHost(
       yankLookup,
       capability,
       contenderOptions,
+      storeFormatFloor,
     );
+  });
+}
+
+/**
+ * The floor's operands for a provisioning run, derived from the satisfaction
+ * policy - the one place this core states which version it is converging to.
+ *
+ * `presence` (a registry `latest`) names no version, so nothing can be gated
+ * before the manifest resolves and the run carries ungated evidence to the
+ * commit tail. `own-build-minimum` is this CLI's own bundled/`--from` archive:
+ * a build stamp with no manifest entry behind it, so the registry is not
+ * consulted and the fixed table decides. The two registry policies name a real
+ * catalog version and may have published formats.
+ */
+async function gateProvisionStoreFormatFloor(
+  opts: ProvisionHostOptions,
+): Promise<StoreFormatFloorEvidence> {
+  // `presence` and `viability` name no target version: the install branch is
+  // only reached when nothing viable is installed, and the archive that lands
+  // is whatever the source resolves to after staging. The commit tail gates
+  // it from the extracted tree instead.
+  if (
+    opts.satisfaction.kind === "presence" ||
+    opts.satisfaction.kind === "viability"
+  ) {
+    return ungatedStoreFormatFloorEvidence(
+      "host ensure",
+      opts.acceptStoreFormatLoss,
+    );
+  }
+  // The installed tree's own declaration, read once here. `host ensure` is
+  // the site that most needs it: the desktop converges onto its bundled host
+  // from an install stamped `<target>.<epochMs>.<sha>`, which the fixed table
+  // cannot place, so without the declaration even a FORWARD move would walk
+  // every epic and could be refused by one unreadable store - with no
+  // `--accept-store-format-loss` anywhere in that flow to get past it.
+  const installed = await readInstalledFloorOperands(
+    opts.runtime.environment,
+    opts.runtime.logger,
+  );
+  return await gateStoreFormatFloor({
+    environment: opts.runtime.environment,
+    surveyRoots: await resolveChatStoreSurveyRoots(opts.runtime.environment),
+    targetVersion: opts.satisfaction.version,
+    // Both operands from that ONE read, never the version from `fast` and the
+    // formats from here: a mix could describe two different installs if a
+    // concurrent actor swapped one in between. Being a read behind the fast
+    // state costs nothing - this gate runs outside the lock, the locked
+    // re-read below re-derives the install branch, and the commit tail asks
+    // again against whatever record is on disk at the swap.
+    installedVersion: installed.version,
+    installedStoreFormats: installed.storeFormats,
+    consultRegistry: opts.satisfaction.kind !== "own-build-minimum",
+    acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
+    site: "host ensure",
+    logger: opts.runtime.logger,
   });
 }
 
@@ -328,6 +447,7 @@ async function provisionUnderLock(
     readonly pollIntervalMs: number;
     readonly admission: "legacy-update-shadow";
   },
+  storeFormatFloor: StoreFormatFloorEvidence,
 ): Promise<HostProvisionResult> {
   let stagedConsumed = false;
   opts.runtime.logger.debug("Host provisioning entering CLI lock", {
@@ -359,6 +479,7 @@ async function provisionUnderLock(
             opts.satisfaction,
             opts.registerService,
             yankLookup,
+            opts.recordVersionOverride,
           ))
         ) {
           opts.runtime.logger.debug(
@@ -387,7 +508,12 @@ async function provisionUnderLock(
         if (
           !opts.force &&
           state.installed &&
-          (await versionSatisfied(state, opts.satisfaction, yankLookup)) &&
+          (await versionSatisfied(
+            state,
+            opts.satisfaction,
+            yankLookup,
+            opts.recordVersionOverride,
+          )) &&
           !opts.registerService
         ) {
           opts.runtime.logger.debug(
@@ -434,6 +560,7 @@ async function provisionUnderLock(
           state,
           opts.satisfaction,
           yankLookup,
+          opts.recordVersionOverride,
         );
         if (opts.force || !state.installed || !reinstallVersionSatisfied) {
           if (preStaged === null) {
@@ -485,6 +612,7 @@ async function provisionUnderLock(
               preStaged,
               capability,
               contenderOptions,
+              storeFormatFloor,
             ),
           };
         }
@@ -549,6 +677,7 @@ async function provisionUnderLock(
       yankLookup,
       capability,
       contenderOptions,
+      storeFormatFloor,
     );
   } finally {
     // Anything staged in anticipation of the install branch that the lock
@@ -623,6 +752,7 @@ async function commitInstall(
     readonly pollIntervalMs: number;
     readonly admission: "legacy-update-shadow";
   },
+  storeFormatFloor: StoreFormatFloorEvidence,
 ): Promise<HostProvisionResult> {
   // When the host owns service registration, install the bytes without service
   // bootstrap. On Windows, still stop the slot first so stale processes do not
@@ -662,6 +792,13 @@ async function commitInstall(
   // source directly (it expects the caller to hold the lock). Reconcile
   // wiring (Tech Plan: "Install/ensure re-run reconcile after a successful
   // commit") comes from `commitHostInstallSource` itself.
+  // Version hold recorded via the committer's post-swap observer (at the true
+  // successful-swap boundary under this CLI lock, keyed on the ACTUAL committed
+  // vs previous records): only an explicit `host ensure --release X` below the
+  // prior install (`holdExplicitDowngrade`) holds; every implicit convergence
+  // (background/viability, first-install, the default pin) passes `null` and
+  // never writes a hold. Only the install branch reaches here, so no-op / start
+  // / register never touch it.
   const result = await commitHostInstallSourceWithAttempt(
     capability,
     contenderOptions,
@@ -671,6 +808,10 @@ async function commitInstall(
       onProgress: progress,
       lifecycle,
       onWillSwap: null,
+      storeFormatFloor,
+      onSwapCommitted: opts.holdExplicitDowngrade
+        ? holdVersionOnSwapCommitted(opts.runtime.environment)
+        : null,
     },
   );
   const post = await readProvisionState(controller, label, opts.runtime);
@@ -1010,10 +1151,13 @@ async function readProvisionState(
   };
 }
 
-// The installed-version predicate (RCA finding D, narrowed by Q7). Four
+// The installed-version predicate (RCA finding D, narrowed by Q7). Five
 // policies, one per shape of request:
 //
 //   - `latest` carries no version to compare against, so it is `presence`;
+//   - a background liveness converge (`host ensure --keep-installed`) is
+//     `viability`: installed + not-yanked, whatever the version - it never
+//     moves a viable install's version as a matter of client preference;
 //   - an explicit `--release <semver>` is `exact` - a pin is a pin;
 //   - the build-stamped registry default is `implicit-registry-minimum`,
 //     which accepts an installed version NEWER than the target (an
@@ -1034,13 +1178,38 @@ async function versionSatisfied(
   state: ProvisionState,
   satisfaction: HostSatisfactionPolicy,
   yankLookup: RegistryYankLookup,
+  ownBuildVersion: string | null,
 ): Promise<boolean> {
   if (!state.installed) return false;
+  // THE SOURCE IS THIS SAME BUILD: `ownBuildVersion` is what a local-file
+  // (bundled / `--from`) install would record, so an installed host already
+  // carrying it can only be "unsatisfied" here through a registry yank - and
+  // reinstalling identical withdrawn bytes with a fresh `installId` neither
+  // heals the yank nor changes what runs; it just restarts the host and, on
+  // the next liveness converge, does it again. Keep the install and let the
+  // channel's own replacement (a different, non-yanked version) move it. A
+  // `--force` bypasses satisfaction altogether (every caller ORs it in ahead
+  // of this predicate), so an operator can still redo the bytes on purpose.
+  // Registry sources pass `null`: their target is resolved from the manifest,
+  // which never points at a withdrawn release.
+  if (ownBuildVersion !== null && state.version === ownBuildVersion) {
+    return true;
+  }
   if (satisfaction.kind === "presence") return true;
   if (satisfaction.kind === "exact") {
     return state.version === satisfaction.version;
   }
   if (state.version === null) return false;
+  if (satisfaction.kind === "viability") {
+    // Installed + not-yanked: any readable installed version is viable unless
+    // the registry has explicitly withdrawn it. The yank check fails open (a
+    // registry miss/outage reads as not-yanked), which is the right bias for a
+    // liveness path - keep a working host alive over a network blip rather than
+    // tear it down. (`state.version === null` was excluded by the guard above;
+    // `readProvisionState` only reports `installed` for a record with a real
+    // version, so a null-version-yet-installed state is unreachable here.)
+    return !(await yankLookup.isVersionYanked(state.version));
+  }
   if (satisfaction.kind === "own-build-minimum") {
     // The requested stamp itself, decided BEFORE the comparator so a rebuilt
     // same-release host (another build string the comparator ranks equal) does
@@ -1083,8 +1252,11 @@ async function isSatisfied(
   satisfaction: HostSatisfactionPolicy,
   registerService: boolean,
   yankLookup: RegistryYankLookup,
+  ownBuildVersion: string | null,
 ): Promise<boolean> {
-  if (!(await versionSatisfied(state, satisfaction, yankLookup))) {
+  if (
+    !(await versionSatisfied(state, satisfaction, yankLookup, ownBuildVersion))
+  ) {
     return false;
   }
   // Host-owned registration: only the bytes are the CLI's concern.

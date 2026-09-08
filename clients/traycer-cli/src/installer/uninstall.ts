@@ -14,6 +14,7 @@ import {
 } from "../store/paths";
 import { legacyMutationVerifier } from "./aside-dirs";
 import { sweepOldTrash } from "./install";
+import { resetHeldHostVersion } from "../host/held-host-version";
 
 // Uninstall the installed host directory for a single environment. Always
 // removes the install dir + record, AND the staged dir alongside it (Tech
@@ -149,6 +150,15 @@ export async function uninstallHost(
     logger,
     verify,
   );
+
+  // The version hold names a deliberate downgrade of the install we just
+  // removed; drop it so a later fresh install of that same version does not
+  // inherit a stale hold and silently park its updates (first install has no
+  // previous version, so it writes no hold of its own to overwrite it).
+  // Best-effort - a surviving marker is only inert until then, and never
+  // blocks the uninstall.
+  await verify();
+  await resetHeldHostVersion(opts.environment);
 
   let purgedRuntime = false;
   if (opts.purgeChannelRuntime) {

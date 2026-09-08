@@ -153,10 +153,56 @@ describe("mapInstallVersionOutcome", () => {
       kind: "installed-not-converged" as const,
       message: "installed host did not come up",
     },
-  ])("maps $kind to cli-failed", (outcome) => {
-    expect(mapInstallVersionOutcome(outcome)).toEqual({
+  ])(
+    "maps $kind to cli-failed, forwarding the lane message as reason",
+    (outcome) => {
+      expect(mapInstallVersionOutcome(outcome)).toEqual({
+        outcome: "cli-failed",
+        reason: outcome.message,
+        storeFloor: null,
+      });
+    },
+  );
+
+  it("collapses a multiline message into one line", () => {
+    expect(
+      mapInstallVersionOutcome({
+        kind: "failed",
+        message: "first line\nsecond line\r\nthird line",
+      }),
+    ).toEqual({
       outcome: "cli-failed",
+      reason: "first line second line third line",
+      storeFloor: null,
     });
+  });
+
+  it("maps a whitespace-only message to a null reason - the wire schema requires a non-empty string", () => {
+    expect(
+      mapInstallVersionOutcome({
+        kind: "stage-fingerprint-mismatch",
+        message: "   \n\t  ",
+      }),
+    ).toEqual({
+      outcome: "cli-failed",
+      reason: null,
+      storeFloor: null,
+    });
+  });
+
+  it("truncates a very long message and ends it with an ellipsis", () => {
+    const longMessage = "x".repeat(400);
+    const result = mapInstallVersionOutcome({
+      kind: "installed-not-converged",
+      message: longMessage,
+    });
+    expect(result.outcome).toBe("cli-failed");
+    if (result.outcome !== "cli-failed") {
+      throw new Error("expected cli-failed outcome");
+    }
+    expect(result.reason).not.toBeNull();
+    expect(result.reason?.length).toBeLessThanOrEqual(300);
+    expect(result.reason?.endsWith("…")).toBe(true);
   });
 });
 
@@ -360,7 +406,11 @@ describe("buildMaintenanceFallbackServeMap", () => {
     const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: false }),
-    ).resolves.toEqual({ outcome: "cli-failed" });
+    ).resolves.toEqual({
+      outcome: "cli-failed",
+      reason: "install failed",
+      storeFloor: null,
+    });
     expect(management.getHostControllerStatus).not.toHaveBeenCalled();
     expect(management.installVersion).not.toHaveBeenCalled();
   });
@@ -532,6 +582,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
             // which is exactly what host.status@1.2-and-older peers send.
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
           };
         },
       },
@@ -683,6 +734,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
     await client.request("host.update.install", {
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
     });
 
     expect(rpcCalls).toEqual([
@@ -712,6 +764,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
     const install = await client.request("host.update.install", {
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
     });
 
     expect(rpcCalls).toEqual([]);

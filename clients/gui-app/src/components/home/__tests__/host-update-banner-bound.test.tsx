@@ -276,6 +276,7 @@ function attemptStatus(
     busyBreakdown: null,
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
   };
 }
 
@@ -766,6 +767,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
                 busyBreakdown: null,
                 updateOperation: null,
                 updateTransaction: null,
+                storeFormats: null,
               }
             : { ...attemptStatus(operation), updateProgress },
       });
@@ -913,7 +915,11 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "2.1.0", runningActivated: true },
+          value: {
+            appliedVersion: "2.1.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       );
       bindLocalHost({
@@ -1288,7 +1294,11 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "2.1.0", runningActivated: true },
+          value: {
+            appliedVersion: "2.1.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       );
       const activateInstalled = vi.fn(() =>

@@ -97,6 +97,8 @@ describe("provisionHost real yank lookup construction", () => {
       lockReason: "test",
       onProgress: null,
       force: false,
+      acceptStoreFormatLoss: false,
+      holdExplicitDowngrade: false,
       adoption: undefined,
       beforeMutate: null,
     });
