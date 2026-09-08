@@ -496,10 +496,7 @@ function WorkspaceRefreshFooter(props: {
   // return to the idle stamp (or an eternal spinner).
   if (props.verifyFailed && !props.refreshing) {
     return (
-      <div
-        className="shrink-0 bg-popover px-3"
-        data-testid="workspace-refresh-footer"
-      >
+      <div className="shrink-0 px-3" data-testid="workspace-refresh-footer">
         <div className="flex items-center justify-between gap-2 border-t border-border/25 py-1.5">
           <span
             className="text-ui-xs text-muted-foreground"
@@ -523,10 +520,7 @@ function WorkspaceRefreshFooter(props: {
     );
   }
   return (
-    <div
-      className="shrink-0 bg-popover px-3"
-      data-testid="workspace-refresh-footer"
-    >
+    <div className="shrink-0 px-3" data-testid="workspace-refresh-footer">
       <div className="flex items-center justify-between gap-2 border-t border-border/25 py-1.5">
         <WorkspaceCheckedAt
           checkedAt={props.checkedAt}
