@@ -1626,6 +1626,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -1692,6 +1693,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -1755,6 +1757,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2004,
           triggers: [
@@ -1831,6 +1834,7 @@ describe("useRenderedMessages", () => {
           // must catch by comparing against the visible (post-nesting) order.
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -4300,6 +4304,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4365,6 +4370,72 @@ describe("useRenderedMessages turn.stopped", () => {
     );
   });
 
+  it("infers an in-turn placement when legacy delivery follows assistant work", () => {
+    const steeredUser = userMessageAt("steered-placement", 11_500);
+    const assistant = {
+      ...assistantMessage("turn-legacy-placement", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        textBlock("text-before-delivery", 11_000, "Still working."),
+        steerBlock("steer-before-delivery", steeredUser.messageId, 11_500),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-in-turn",
+          deliveryPlacement: null,
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+    });
+    const deliveryRow = result.current.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.segments.some(
+          (segment) => segment.kind === "autonomous_resume",
+        ),
+    );
+    const delivery = deliveryRow?.segments.find(
+      (segment) => segment.kind === "autonomous_resume",
+    );
+    expect(delivery?.kind).toBe("autonomous_resume");
+    if (delivery?.kind === "autonomous_resume") {
+      expect(delivery.deliveryPlacement).toBe("in_turn");
+    }
+  });
+
+  it("honors an explicit turn-start placement after assistant prose", () => {
+    const assistant = {
+      ...assistantMessage("turn-explicit-placement", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        textBlock("text-before-start", 11_000, "Previous response."),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-at-start",
+          status: "completed" as const,
+          timestamp: 12_000,
+          deliveryPlacement: "turn_start" as const,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+    const row = result.current.find((message) => message.role === "assistant");
+    const delivery = row?.segments.find(
+      (segment) => segment.kind === "autonomous_resume",
+    );
+    expect(delivery?.kind).toBe("autonomous_resume");
+    if (delivery?.kind === "autonomous_resume") {
+      expect(delivery.deliveryPlacement).toBe("turn_start");
+    }
+  });
+
   it("keeps an adopted start without a terminal event footerless", () => {
     const assistant = {
       ...assistantMessage("turn-resume", 10_000),
@@ -4373,6 +4444,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4415,6 +4487,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4467,6 +4540,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4544,6 +4618,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4604,6 +4679,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4655,6 +4731,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4704,6 +4781,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4745,6 +4823,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4788,6 +4867,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4833,6 +4913,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 14_000,
           triggers: [],
@@ -4883,6 +4964,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],

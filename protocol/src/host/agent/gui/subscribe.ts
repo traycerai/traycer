@@ -31,6 +31,8 @@ import {
   chatRunSettingsSchema,
   chatRunSettingsSchemaPreReasonix,
   chatSchema,
+  chatSchemaPrePlacement,
+  messageSchemaPrePlacement,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
@@ -2571,7 +2573,14 @@ export const chatSubscribeV17 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 7 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: chatSubscribeServerFrameSchema,
+  serverFrameSchema: z.discriminatedUnion("kind", [
+    chatSubscribeSnapshotServerFrameSchema.extend({
+      snapshot: chatSnapshotSchema.extend({ chat: chatSchemaPrePlacement }),
+    }),
+    ...chatSubscribeServerFrameSchema.options.filter(
+      (frame) => frame.shape.kind.value !== "snapshot",
+    ),
+  ]),
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
 
@@ -2865,6 +2874,33 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
 export const chatSubscribeV18 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 8 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchema.extend({
+        tail: chatTranscriptWindowSchema.extend({
+          messages: z.array(messageSchemaPrePlacement),
+        }),
+      }),
+    }),
+    chatSubscribeRangeServerFrameSchema.extend({
+      range: chatRangeResponseSchema.extend({
+        messages: z.array(messageSchemaPrePlacement),
+      }),
+    }),
+    ...chatSubscribeWindowedServerFrameSchema.options.filter(
+      (frame) =>
+        frame.shape.kind.value !== "snapshot" &&
+        frame.shape.kind.value !== "range",
+    ),
+  ]),
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/** 1.9 adds recorded placement to notification blocks in tails and ranges. */
+export const chatSubscribeV19 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 9 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

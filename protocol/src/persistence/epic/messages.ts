@@ -2,6 +2,7 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
+  contentBlockSchemaPrePlacement,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
   contentBlockSchemaPreSettlement,
@@ -553,4 +554,11 @@ export const assistantMessageSchemaPreSettlement = z.object({
 export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
   userMessageSchemaV16,
   assistantMessageSchemaPreSettlement,
+]);
+
+export const messageSchemaPrePlacement = z.discriminatedUnion("role", [
+  userMessageSchema,
+  assistantMessageSchema.extend({
+    blocks: z.array(contentBlockSchemaPrePlacement),
+  }),
 ]);

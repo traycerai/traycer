@@ -2578,6 +2578,32 @@ interface AssistantTurnRenderInput {
   readonly chatId: string;
 }
 
+/** Infer legacy placement before steer boundaries split a turn into rows. */
+function resolveResumeDeliveryPlacements(
+  blocks: ReadonlyArray<ContentBlock>,
+): ReadonlyArray<ContentBlock> {
+  let hasAssistantWork = false;
+  return blocks.map((block) => {
+    if (block.type === "autonomous_resume") {
+      const placement = block.deliveryPlacement ?? null;
+      if (placement !== null) return block;
+      return {
+        ...block,
+        deliveryPlacement: hasAssistantWork ? "in_turn" : "turn_start",
+      };
+    }
+    if (
+      block.type === "text" ||
+      block.type === "reasoning" ||
+      block.type === "tool_call" ||
+      block.type === "command"
+    ) {
+      hasAssistantWork = true;
+    }
+    return block;
+  });
+}
+
 /**
  * Renders one turn's rows from the SHARED plan.
  *
@@ -2591,7 +2617,7 @@ interface AssistantTurnRenderInput {
 function renderAssistantTurnRows(
   input: AssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
-  const blocks = input.acc.blocks;
+  const blocks = resolveResumeDeliveryPlacements(input.acc.blocks);
   const plan = planAssistantTurnRows(blocks);
   const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
 
@@ -4070,6 +4096,7 @@ const BLOCK_HANDLERS: {
   autonomous_resume: (block) => ({
     kind: "autonomous_resume",
     triggers: block.triggers,
+    deliveryPlacement: block.deliveryPlacement ?? null,
   }),
   interview: (block) => ({
     kind: "interview",

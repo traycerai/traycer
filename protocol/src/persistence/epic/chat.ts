@@ -10,6 +10,7 @@ import {
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   messageSchema,
+  messageSchemaPrePlacement,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
   messageSchemaPreReasonix,
@@ -316,4 +317,8 @@ export const chatSchemaV16 = z.object({
   archivedAt: z.number().nullable().default(null),
   pinnedUserProviderHandle: z.string().nullable().default(null),
   lastDeliveredRolesDigest: z.string().nullable().default(null),
+});
+
+export const chatSchemaPrePlacement = chatSchema.extend({
+  messages: z.array(messageSchemaPrePlacement),
 });
