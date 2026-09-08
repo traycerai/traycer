@@ -562,6 +562,77 @@ describe("PendingInterviewCard keyboard navigation", () => {
     ).toBeTruthy();
   });
 
+  // The unanswerable pair: no options AND no free text. The schema tolerates it
+  // deliberately (rejecting would drop the whole content block, not one bad
+  // question), and `content-blocks.ts` promises the renderer leaves Skip as the
+  // only exit. Before this gate the card rendered no input and still offered an
+  // ENABLED Submit, which sent `values: []` down a channel that requires a
+  // listed option - the card contradicting its own contract.
+  //
+  // FALSIFICATION: drop `!hasUnanswerableQuestion` from `canSubmit` and the
+  // button arm reddens; drop the `hasUnanswerableQuestion` guard from
+  // `submitDrafts` and the Enter arm reddens. They are separate paths -
+  // `proceed()` checks `isBusy` alone - so one gate does not cover both.
+  it("refuses Submit for a question with no answer channel, by button and by Enter", () => {
+    const onSubmit = vi.fn(() => "action-1");
+    renderCardFor({
+      chatId: "chat-unanswerable",
+      blockId: "iv-unanswerable",
+      questions: [withoutCustomAnswer(singleSelect("q1", "Pick one", []))],
+      isBusy: false,
+      onSubmit,
+      onSkip: vi.fn(() => "skip-1"),
+      onFork: null,
+    });
+
+    const submit = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Submit$/,
+    });
+    expect(submit.disabled).toBe(true);
+
+    // The keyboard path is the one that does NOT consult the button's disabled
+    // state: `proceed()` checks `isBusy` alone, so it reaches `submitDrafts`
+    // whatever the button looks like. Cmd+Enter on the card is how this suite
+    // drives it.
+    fireEvent.click(submit);
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    // Skip remains the documented exit, so the card is still resolvable.
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: /Skip/ }).disabled,
+    ).toBe(false);
+  });
+
+  // CONTROL: the same question WITH an option submits normally, so the arm
+  // above is pinning the missing answer channel and not simply a card that
+  // never submits.
+  it("still submits when the question has a listed option", () => {
+    const onSubmit = vi.fn(() => "action-1");
+    renderCardFor({
+      chatId: "chat-answerable",
+      blockId: "iv-answerable",
+      questions: [withoutCustomAnswer(singleSelect("q1", "Pick one", ["A"]))],
+      isBusy: false,
+      onSubmit,
+      onSkip: vi.fn(() => "skip-1"),
+      onFork: null,
+    });
+
+    const submit = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Submit$/,
+    });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+
+    // The keyboard path reaches the same place, so the control covers both
+    // gates the arm above ablates.
+    onSubmit.mockClear();
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
   it("retains the persisted draft after Submit returns an action id", () => {
     renderCard(
       [singleSelect("free", "Describe it", [])],

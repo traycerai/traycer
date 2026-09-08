@@ -12,10 +12,7 @@ import type {
 } from "@/components/chat/chat-activity-groups";
 import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-key";
 import type { MessageSegment } from "@/stores/composer/chat-store";
-import type {
-  AgentMessageSend,
-  AutonomousResumeTrigger,
-} from "@traycer/protocol/persistence/epic/content-blocks";
+import type { AgentMessageSend } from "@traycer/protocol/persistence/epic/content-blocks";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import {
@@ -680,84 +677,6 @@ describe("chat activity grouping", () => {
         item.group.segments.map((segment) => segment.kind),
       ),
     ).not.toContain("subagent");
-  });
-
-  it("folds an in-turn live monitor delivery into the surrounding activity group", () => {
-    const timeline = buildCompleteTimeline([
-      reasoningSegment("reasoning-1", false, 1000),
-      monitorDeliverySegment("monitor-1", "PR checks", "in_turn"),
-      toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
-    ]);
-
-    expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("activity_group");
-    if (timeline[0]?.kind !== "activity_group") {
-      throw new Error("Expected monitor delivery in activity group");
-    }
-    expect(timeline[0].group.segments.map((segment) => segment.kind)).toEqual([
-      "reasoning",
-      "autonomous_resume",
-      "tool",
-    ]);
-    expect(timeline[0].group.summary).toContain("monitor");
-  });
-
-  it("keeps a turn-start or legacy monitor delivery out of activity groups", () => {
-    for (const placement of ["turn_start", null] as const) {
-      const timeline = buildCompleteTimeline([
-        monitorDeliverySegment("monitor-1", "PR checks", placement),
-        toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
-      ]);
-
-      expect(timeline.map((item) => item.kind)).toEqual([
-        "segment",
-        "activity_group",
-      ]);
-    }
-  });
-
-  it("recognizes a live managed non-monitor shell delivery as activity", () => {
-    const timeline = buildCompleteTimeline([
-      managedShellDeliverySegment("shell-1", "Shell output", "in_turn"),
-      toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
-    ]);
-
-    expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("activity_group");
-    if (timeline[0]?.kind !== "activity_group") {
-      throw new Error("Expected managed shell delivery in activity group");
-    }
-    expect(timeline[0].group.segments.map((segment) => segment.kind)).toContain(
-      "autonomous_resume",
-    );
-  });
-
-  it("keeps lifecycle outcomes and mixed live/terminal deliveries standalone", () => {
-    const live = monitorDeliverySegment("monitor-live", "PR checks", "in_turn");
-    const firstTrigger = live.triggers[0];
-    const mixed = {
-      ...live,
-      id: "monitor-mixed",
-      triggers: [
-        ...live.triggers,
-        {
-          ...firstTrigger,
-          blockId: "monitor-terminal",
-          status: "stopped" as const,
-          live: false,
-        },
-      ],
-    };
-    const timeline = buildCompleteTimeline([
-      mixed,
-      toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
-    ]);
-
-    expect(timeline.map((item) => item.kind)).toEqual([
-      "segment",
-      "activity_group",
-    ]);
-    expect(timeline[0]?.kind).toBe("segment");
   });
 
   it("promotes running background command tools out of generic activity groups", () => {
@@ -1464,57 +1383,6 @@ function buildActiveTimeline(
 
 function textSegment(id: string, markdown: string): MessageSegment {
   return { id, kind: "text", markdown, isStreaming: false };
-}
-
-function monitorDeliverySegment(
-  id: string,
-  title: string,
-  deliveryPlacement: "turn_start" | "in_turn" | null,
-): Extract<MessageSegment, { kind: "autonomous_resume" }> {
-  const trigger: AutonomousResumeTrigger = {
-    kind: "monitor",
-    title,
-    status: "completed",
-    live: true,
-    summary: "1 new log line",
-    blockId: `${id}:trigger`,
-    outputFile: null,
-    mcp: null,
-    managedCommand: null,
-  };
-  return {
-    id,
-    kind: "autonomous_resume",
-    triggers: [trigger],
-    deliveryPlacement,
-  };
-}
-
-function managedShellDeliverySegment(
-  id: string,
-  title: string,
-  deliveryPlacement: "turn_start" | "in_turn" | null,
-): Extract<MessageSegment, { kind: "autonomous_resume" }> {
-  const trigger: AutonomousResumeTrigger = {
-    kind: "command",
-    title,
-    status: "completed",
-    live: true,
-    summary: "1 new log line",
-    blockId: `${id}:trigger`,
-    outputFile: null,
-    mcp: null,
-    managedCommand: {
-      commandId: `${id}:command`,
-      monitoring: false,
-    },
-  };
-  return {
-    id,
-    kind: "autonomous_resume",
-    triggers: [trigger],
-    deliveryPlacement,
-  };
 }
 
 function toolSegment(

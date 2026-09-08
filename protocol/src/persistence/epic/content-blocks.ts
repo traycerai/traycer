@@ -924,67 +924,21 @@ export type AutonomousResumeWakeTrigger = z.infer<
 // plain functions (not just wrapped in the codec below) so the storage layer's
 // hot read/write funnels - `denormalizeMessages` / `toStoredBlock` in
 // `chat-message-collections.ts` - can normalize without a full schema parse.
-/**
- * Where the host inserted this notification in the transcript, not whether
- * the harness acknowledged/consumed a steer. `null` is historical/unknown;
- * readers may infer placement from the original turn's preceding blocks.
- */
-export const autonomousResumeDeliveryPlacementSchema = z
-  .enum(["turn_start", "in_turn"])
-  .nullable()
-  .default(null);
-export type AutonomousResumeDeliveryPlacement = z.infer<
-  typeof autonomousResumeDeliveryPlacementSchema
->;
-
-// Checkpoint for chat.subscribe 1.8 (also reused by older wire lines).
-// V18 names in this file refer to that RPC version, not the independent
-// chat-sync storage version. The current schema extends this checkpoint.
-const domainAutonomousResumeBlockSchemaV18 = z.object({
-  blockId: z.string(),
-  status: z.enum(["streaming", "completed", "errored"]),
-  timestamp: z.number(),
-  parentBlockId: z.string().nullish(),
+const persistedAutonomousResumeBlockSchema = z.object({
+  ...baseBlockFields,
   type: z.literal("autonomous_resume"),
   triggers: z.array(autonomousResumeTriggerSchema),
+  wakeTriggers: z.array(autonomousResumeWakeTriggerSchema).default([]),
 });
-const persistedAutonomousResumeBlockSchemaV18 =
-  domainAutonomousResumeBlockSchemaV18.extend({
-    wakeTriggers: z.array(autonomousResumeWakeTriggerSchema).default([]),
-  });
-type AutonomousResumeBlockV18 = z.infer<
-  typeof domainAutonomousResumeBlockSchemaV18
->;
-type PersistedAutonomousResumeBlockV18 = z.infer<
-  typeof persistedAutonomousResumeBlockSchemaV18
->;
-type RawStoredAutonomousResumeBlockV18 = Omit<
-  PersistedAutonomousResumeBlockV18,
-  "wakeTriggers"
-> & {
-  wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
-};
-
-// Reinsert the trigger fields after placement to retain the existing JSON
-// Schema property/required order as well as its meaning.
-const persistedAutonomousResumeBlockSchema =
-  persistedAutonomousResumeBlockSchemaV18
-    .omit({ triggers: true, wakeTriggers: true })
-    .extend({
-      deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
-      triggers: persistedAutonomousResumeBlockSchemaV18.shape.triggers,
-      wakeTriggers: persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
-    });
 export type PersistedAutonomousResumeBlock = z.infer<
   typeof persistedAutonomousResumeBlockSchema
 >;
 
-const domainAutonomousResumeBlockSchema = domainAutonomousResumeBlockSchemaV18
-  .omit({ triggers: true })
-  .extend({
-    deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
-    triggers: domainAutonomousResumeBlockSchemaV18.shape.triggers,
-  });
+const domainAutonomousResumeBlockSchema = z.object({
+  ...baseBlockFields,
+  type: z.literal("autonomous_resume"),
+  triggers: z.array(autonomousResumeTriggerSchema),
+});
 export type AutonomousResumeBlock = z.infer<
   typeof domainAutonomousResumeBlockSchema
 >;
@@ -998,11 +952,8 @@ export type AutonomousResumeBlock = z.infer<
 // this shape - `.default([])` only exists after a parse.
 export type RawStoredAutonomousResumeBlock = Omit<
   PersistedAutonomousResumeBlock,
-  "wakeTriggers" | "deliveryPlacement"
-> & {
-  wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
-  deliveryPlacement?: AutonomousResumeDeliveryPlacement;
-};
+  "wakeTriggers"
+> & { wakeTriggers: AutonomousResumeWakeTrigger[] | undefined };
 
 // Merges `wakeTriggers` into `triggers` (wakeup entries last, matching
 // construction order in `buildAutonomousResumeBlock`) and accepts legacy
@@ -1014,18 +965,6 @@ export type RawStoredAutonomousResumeBlock = Omit<
 export function decodeAutonomousResumeBlock(
   stored: RawStoredAutonomousResumeBlock,
 ): AutonomousResumeBlock {
-  const { deliveryPlacement, ...historical } = stored;
-  return {
-    ...decodeAutonomousResumeBlockV18(historical),
-    deliveryPlacement: deliveryPlacement ?? null,
-  };
-}
-
-// Shared historical conversion: newer codecs may add normalization around
-// this function, but must not change how the 1.8 wire is interpreted.
-function decodeAutonomousResumeBlockV18(
-  stored: RawStoredAutonomousResumeBlockV18,
-): AutonomousResumeBlockV18 {
   const { wakeTriggers, ...rest } = stored;
   if (wakeTriggers === undefined || wakeTriggers.length === 0) return rest;
   return {
@@ -1060,15 +999,6 @@ function isWakeupTrigger(
 export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
-  return {
-    ...encodeAutonomousResumeBlockV18(domain),
-    deliveryPlacement: domain.deliveryPlacement,
-  };
-}
-
-function encodeAutonomousResumeBlockV18(
-  domain: AutonomousResumeBlockV18,
-): PersistedAutonomousResumeBlockV18 {
   const triggers = domain.triggers.filter(
     (trigger) => !isWakeupTrigger(trigger),
   );
@@ -1100,20 +1030,6 @@ export const autonomousResumeBlockSchema = z.codec(
     encode: (domain) =>
       encodeAutonomousResumeBlock(
         domainAutonomousResumeBlockSchema.parse(domain),
-      ),
-  },
-);
-
-// Frozen wire shape for chat.subscribe through 1.8. Keep the field absent
-// on both JSON-schema surfaces; normalization belongs to the live decoder.
-export const autonomousResumeBlockSchemaV18 = z.codec(
-  persistedAutonomousResumeBlockSchemaV18,
-  domainAutonomousResumeBlockSchemaV18,
-  {
-    decode: decodeAutonomousResumeBlockV18,
-    encode: (domain) =>
-      encodeAutonomousResumeBlockV18(
-        domainAutonomousResumeBlockSchemaV18.parse(domain),
       ),
   },
 );
@@ -1196,18 +1112,22 @@ export const interviewQuestionSchema = z.object({
 export type InterviewQuestion = z.infer<typeof interviewQuestionSchema>;
 
 // Wire-freeze copy of `interviewQuestionSchema` from before
-// `allowsCustomAnswer`. Bound to every `chat.subscribe` line through `@1.8`, so
-// no released line advertises a field it was not shipped with.
+// `allowsCustomAnswer`. Bound to every `chat.subscribe` line through `@1.6`,
+// alongside the block-level freezes that carry the same boundary.
 //
 // Hand-frozen field-for-field; NOT derived from the live shape, for the same
 // reason `interviewBlockSchemaPreSettlement` is - a later field added above
 // must not silently leak in here.
 //
-// This is the leaf the freeze actually has to happen at. The block-level
-// freezes DELEGATED `questions` to the live schema, so they were frozen against
-// block fields and wide open at the question level: adding
-// `allowsCustomAnswer` moved all ten released server-frame surfaces at once,
-// including `@1.0`, which is what `chat-schema-checkpoints` caught.
+// This is the leaf the freeze has to happen at, and it is easy to miss: the
+// block-level freezes DELEGATED `questions` to the live schema, so they were
+// frozen against block FIELDS and wide open one level down. A field added to a
+// question therefore reached `@1.0` through a schema whose own comment
+// promises the opposite.
+//
+// `@1.7`/`@1.8` deliberately do NOT take this: they follow the live interview
+// shape, which is the same thing they already do for `settlement`, `delivery`
+// and every other additive block field. The freeze boundary is `@1.6`.
 export const interviewQuestionSchemaPreCustomAnswer = z.object({
   questionId: z.string().nullable(),
   question: z.string(),
@@ -1477,24 +1397,6 @@ export const interviewBlockSchemaPreSettlement = z.object({
   metadata: z.record(z.string(), z.unknown()).nullable(),
 });
 
-// Wire-freeze copy of `interviewBlockSchema` as `chat.subscribe@1.7-1.8`
-// shipped it: canonical settlement IS observed on those lines, so this keeps
-// the live block whole and swaps only `questions` for the pre-`allowsCustom
-// Answer` freeze. Bound to `@1.7`/`@1.8` through `contentBlockSchemaV18`.
-//
-// Deliberately SHALLOW - spread from the live shape rather than hand-frozen,
-// unlike `interviewBlockSchemaPreSettlement` above. That is the same contract
-// every other `contentBlockSchemaV18` member already has ("every other member
-// reuses the live sub-schema"), and it is safe here in a way it was not before:
-// `chat-schema-checkpoints` now digests all ten released server-frame surfaces,
-// so a later live field reaching these lines fails a test instead of shipping.
-// Hand-freezing the settlement fields would duplicate ten `.catch()` defaults
-// whose drift nothing would detect.
-export const interviewBlockSchemaPreCustomAnswer = z.object({
-  ...interviewBlockSchema.shape,
-  questions: z.array(interviewQuestionSchemaPreCustomAnswer),
-});
-
 // The semantic operation an agent performed on an artifact during a turn,
 // inferred from its filesystem actions (Write/Edit ⇒ create|update, bash
 // rm/mv ⇒ delete|update). Distinct from the `file_change` block: an
@@ -1695,7 +1597,7 @@ export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
   planBlockSchemaPreReasonix,
   errorBlockSchema,
   compactionBlockSchema,
-  autonomousResumeBlockSchemaV18,
+  autonomousResumeBlockSchema,
   steerBlockSchemaPreReasonix,
   interviewBlockSchemaPreSettlement,
   artifactOperationBlockSchema,
@@ -1723,7 +1625,7 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
   planBlockSchemaPreReasonix,
   errorBlockSchema,
   compactionBlockSchema,
-  autonomousResumeBlockSchemaV18,
+  autonomousResumeBlockSchema,
   steerBlockSchemaPreReasonix,
   interviewBlockSchemaPreSettlement,
   artifactOperationBlockSchema,
@@ -1743,26 +1645,3 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
 export type PersistedContentBlock =
   | Exclude<ContentBlock, AutonomousResumeBlock>
   | PersistedAutonomousResumeBlock;
-
-/**
- * chat.subscribe 1.8 checkpoint; 1.9 adds notification placement, and 1.9 is
- * also the first line to observe an interview question's `allowsCustomAnswer`
- * (hence the frozen `interview` member).
- */
-export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
-  autonomousResumeBlockSchemaV18,
-  textBlockSchema,
-  reasoningBlockSchema,
-  toolCallBlockSchema,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchema,
-  errorBlockSchema,
-  compactionBlockSchema,
-  steerBlockSchema,
-  interviewBlockSchemaPreCustomAnswer,
-  artifactOperationBlockSchema,
-]);

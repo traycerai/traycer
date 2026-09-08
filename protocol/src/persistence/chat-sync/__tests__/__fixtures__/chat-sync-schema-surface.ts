@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 4
+              "const": 3
             }
           },
           "required": [
@@ -457,7 +457,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 4
+              "const": 3
             }
           },
           "required": [
@@ -1214,7 +1214,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 4
+              "const": 3
             }
           },
           "required": [
@@ -1289,7 +1289,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 4
+              "const": 3
             }
           },
           "required": [
@@ -4002,21 +4002,6 @@ export const chatSyncSchemaSurfaceBaseline = {
                                               "type": "string",
                                               "const": "autonomous_resume"
                                             },
-                                            "deliveryPlacement": {
-                                              "default": null,
-                                              "anyOf": [
-                                                {
-                                                  "type": "string",
-                                                  "enum": [
-                                                    "turn_start",
-                                                    "in_turn"
-                                                  ]
-                                                },
-                                                {
-                                                  "type": "null"
-                                                }
-                                              ]
-                                            },
                                             "triggers": {
                                               "type": "array",
                                               "items": {
@@ -4147,7 +4132,6 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "status",
                                             "timestamp",
                                             "type",
-                                            "deliveryPlacement",
                                             "triggers"
                                           ],
                                           "additionalProperties": false

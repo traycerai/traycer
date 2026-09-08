@@ -341,8 +341,8 @@ export type RuntimeInterviewQuestion = z.infer<
 >;
 
 // Wire-freeze alias of the question shape from before `allowsCustomAnswer`.
-// Bound to every `chat.subscribe` line through `@1.8`; `@1.9` is the first line
-// that observes the field.
+// Bound to every `chat.subscribe` line through `@1.6`, matching the answer-side
+// freeze directly above; `@1.7`+ observe the field.
 //
 // The question shape is shared with persistence on purpose (see the comment
 // above), which is exactly why it needs an alias here: a field added for the
@@ -747,8 +747,9 @@ export type InterviewRequestedEvent = z.infer<
 
 // Wire-freeze copy of `interview.requested` from before `allowsCustomAnswer`,
 // carrying the frozen question shape. Bound to every `chat.subscribe` line
-// through `@1.8` via the frozen `blockDelta` unions below (and `@1.7`/`@1.8`
-// via `runtimeEventSchemaV18`).
+// through `@1.6` via the frozen `blockDelta` unions below - the questions-side
+// counterpart to `interviewResolvedEventSchemaPreSettlement`, which freezes
+// answers across exactly the same lines.
 //
 // Hand-frozen field-for-field rather than spread from the live event, matching
 // the convention the frozen unions below already state: the freeze must not
@@ -1551,67 +1552,6 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
   userMessageAnchorTailUpdatedEventSchema,
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
-
-// Wire-freeze copy of the live runtime-event union as `chat.subscribe@1.7` and
-// `@1.8` shipped it: every live member, with `interview.requested` swapped for
-// its pre-`allowsCustomAnswer` freeze. `@1.9` keeps the live union and is the
-// first line that observes the field.
-//
-// Those two minors previously SHARED the live union (through
-// `chatSubscribeSharedServerFrameSchemasV18`), which is what made a field added
-// for the current line reach them. Splitting the list is the whole fix for
-// `@1.7`/`@1.8`; the older lines have their own frozen unions below.
-//
-// Explicitly listed rather than derived from the live union, for the reason
-// already stated on `runtimeEventSchemaPreImage`: a derived freeze silently
-// absorbs a future event. Member order is load-bearing - it is the `anyOf`
-// order in the emitted JSON Schema, and `chat-schema-checkpoints` digests it.
-export const runtimeEventSchemaV18 = z.discriminatedUnion("type", [
-  textDeltaEventSchema,
-  textCompletedEventSchema,
-  reasoningDeltaEventSchema,
-  reasoningCompletedEventSchema,
-  toolCallStartedEventSchema,
-  toolCallCompletedEventSchema,
-  toolCallErroredEventSchema,
-  toolCallProgressEventSchema,
-  approvalRequestedEventSchema,
-  approvalResolvedEventSchema,
-  todoUpdatedEventSchema,
-  planDeltaEventSchema,
-  planUpdatedEventSchema,
-  planCompletedEventSchema,
-  compactionStartedEventSchema,
-  compactionCompletedEventSchema,
-  compactionErroredEventSchema,
-  interviewRequestedEventSchemaPreCustomAnswer,
-  interviewResolvedEventSchema,
-  interviewErroredEventSchema,
-  subAgentStartedEventSchema,
-  subAgentProgressEventSchema,
-  subAgentCompletedEventSchema,
-  fileChangeStartedEventSchema,
-  fileChangeCompletedEventSchema,
-  artifactOperationEventSchema,
-  commandStartedEventSchema,
-  commandCompletedEventSchema,
-  sessionCreatedEventSchema,
-  sessionResumedEventSchema,
-  turnStartedEventSchema,
-  userMessageAnchorResolvedEventSchema,
-  turnCompletedEventSchema,
-  turnStoppedEventSchema,
-  turnInterruptedEventSchema,
-  steerSubmittedEventSchema,
-  usageUpdatedEventSchema,
-  errorEventSchema,
-  workflowStartedEventSchema,
-  workflowProgressEventSchema,
-  workflowCompletedEventSchema,
-  providerNoticeUpsertEventSchema,
-  imageResolutionUpdatedEventSchema,
-  userMessageAnchorTailUpdatedEventSchema,
-]);
 
 // Wire-freeze copy of the live runtime-event union from before image support
 // existed (`chat.subscribe@1.4`/`1.5` - `1.6` takes `runtimeEventSchemaPreSettlement`):

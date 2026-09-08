@@ -1436,6 +1436,10 @@ describe("projectChatServerFrameForVersion", () => {
   // Sibling of the `interview.resolved` case below. Questions and answers ride
   // the same frame kind on two different event types, so the strip written for
   // one does not cover the other - this pins the requested side.
+  //
+  // It is also the only executed guard that `allowsCustomAnswer` stays off the
+  // `@1.6`-and-older lines: the block-level freezes delegated `questions` to
+  // the live schema, so nothing else here would notice the leak.
   it("strips allowsCustomAnswer from blockDelta(interview.requested)", () => {
     const requested = asProjectedServerFrame({
       kind: "blockDelta",

@@ -24,7 +24,14 @@ import { providersMutationKeys } from "@/lib/query-keys";
  * and no `…ForClient` variant for the same reason - see the setter's note,
  * which also covers why the invalidation set is the full one.
  */
-export function useClearProviderProfileApiKey(): UseMutationResult<
+export function useClearProviderProfileApiKey(
+  // Mutation-level, NOT a `mutate(vars, { onSuccess })` at the call site: the
+  // paste form unmounts while the reauth panel is up, and TanStack drops the
+  // per-`mutate` callbacks of an observer with no listeners. A removal that
+  // settles during that window would otherwise skip the caller's draft clear
+  // and leave the removed secret in a field that remounts enabled.
+  onSuccess: (() => void) | undefined,
+): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.clearProfileApiKey">,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.clearProfileApiKey">,
@@ -36,5 +43,6 @@ export function useClearProviderProfileApiKey(): UseMutationResult<
     errorMessage: "Couldn't remove the API key.",
     invalidateMethods: PROVIDER_INVALIDATIONS,
     scope: PROFILE_API_KEY_MUTATION_SCOPE,
+    onSuccess: onSuccess === undefined ? undefined : () => onSuccess(),
   });
 }

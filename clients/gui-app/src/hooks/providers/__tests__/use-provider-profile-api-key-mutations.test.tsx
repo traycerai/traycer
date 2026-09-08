@@ -92,7 +92,7 @@ describe("per-profile API-key mutations", () => {
     // FALSIFICATION: remove the `setProfileApiKey` entry from
     // `PROVIDER_MUTATION_OPERATIONS` and this reddens; route the hook back
     // through a bare `useHostMutation` and it reddens too.
-    renderAndSucceed(useSetProviderProfileApiKey);
+    renderAndSucceed(() => useSetProviderProfileApiKey(undefined));
 
     expect(mocks.track).toHaveBeenCalledWith(
       AnalyticsEvent.ProviderConfigurationChanged,
@@ -104,7 +104,7 @@ describe("per-profile API-key mutations", () => {
     // Same operation, not a second one: `api_key` answers "did this user
     // configure a key", and the provider-wide pair already reports set and
     // clear under one value.
-    renderAndSucceed(useClearProviderProfileApiKey);
+    renderAndSucceed(() => useClearProviderProfileApiKey(undefined));
 
     expect(mocks.track).toHaveBeenCalledWith(
       AnalyticsEvent.ProviderConfigurationChanged,
@@ -144,14 +144,62 @@ describe("per-profile API-key mutations", () => {
     // `useHostScopedMutation`'s options passthrough, which is where it now
     // travels - and the ids stop matching.
     mocks.useHostMutation.mockClear();
-    renderHook(() => useSetProviderProfileApiKey(), { wrapper });
+    renderHook(() => useSetProviderProfileApiKey(undefined), { wrapper });
     const set = captureLastMutation();
 
     mocks.useHostMutation.mockClear();
-    renderHook(() => useClearProviderProfileApiKey(), { wrapper });
+    renderHook(() => useClearProviderProfileApiKey(undefined), { wrapper });
     const clear = captureLastMutation();
 
     expect(set.options.scope?.id).toBe(PROFILE_API_KEY_MUTATION_SCOPE.id);
     expect(clear.options.scope?.id).toBe(PROFILE_API_KEY_MUTATION_SCOPE.id);
+  });
+
+  // The paste form unmounts behind the reauth panel, and TanStack drops the
+  // per-`mutate` callbacks of an observer with no listeners while the
+  // MUTATION's own options still run from `Mutation.execute`. A draft clear on
+  // the wrong one of those is skipped exactly when Remove key is followed by
+  // Switch account - and the removed secret then remounts in an enabled field.
+  //
+  // What this can and cannot show: `useHostMutation` is mocked here, so the
+  // drop itself is upstream behaviour, quoted where `useHostScopedMutation`
+  // documents it. What is OURS - and all that is asserted - is WHERE the
+  // caller's callback is wired. Invoking it after `unmount()` models what
+  // `Mutation.execute` does once the observer is gone; a per-`mutate` callback
+  // would never appear in these options at all.
+  //
+  // FALSIFICATION: drop the `onSuccess` passthrough from either hook, or move
+  // the clear back to `mutate(vars, { onSuccess })` in the dialog, and the
+  // spy stops firing.
+  it.each([
+    ["set", useSetProviderProfileApiKey],
+    ["clear", useClearProviderProfileApiKey],
+  ] as const)(
+    "runs the %s caller's onSuccess from the mutation options after unmount",
+    (_label, hook) => {
+      mocks.useHostMutation.mockClear();
+      const onSuccess = vi.fn();
+      const { unmount } = renderHook(() => hook(onSuccess), { wrapper });
+      const captured = captureLastMutation();
+
+      unmount();
+      expect(onSuccess).not.toHaveBeenCalled();
+
+      captured.options.onSuccess({}, {}, { hostId: "host-1" });
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("still succeeds when the caller passes no onSuccess", () => {
+    // The passthrough must tolerate `undefined` rather than calling into it:
+    // `useHostScopedMutation` always defines its OWN options.onSuccess (it
+    // tracks and invalidates), so the only observable question here is whether
+    // driving it without a caller callback throws.
+    mocks.useHostMutation.mockClear();
+    renderHook(() => useClearProviderProfileApiKey(undefined), { wrapper });
+    const captured = captureLastMutation();
+    expect(() =>
+      captured.options.onSuccess({}, {}, { hostId: "host-1" }),
+    ).not.toThrow();
   });
 });

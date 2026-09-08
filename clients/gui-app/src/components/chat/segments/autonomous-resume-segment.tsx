@@ -4,7 +4,6 @@ import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ManagedCommandTranscriptDoor } from "@/components/managed-commands/managed-command-transcript-door";
-import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { managedCommandNoun } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
@@ -16,32 +15,27 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
-import { SegmentRow } from "./segment-row";
 import { SegmentPanel } from "./segment-panel";
-import { isShellDelivery } from "../chat-monitor-delivery";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
 /**
- * Delivery marker at the head of an autonomous turn or within an active turn,
+ * Lean marker at the head of an AUTONOMOUS turn (one with no user message),
  * naming which backgrounded command/shell/subagent completion or scheduled
  * wakeup woke the agent - so the resume reads as a consequence, not an abrupt
  * reply.
  *
- * - Shell / monitor deliveries: a static card header with an inline summary
- *   and the existing output shortcut, at the same density as a start card.
- * - Other command / wakeup triggers: lazy-fetch captured output on expand.
+ * - Command / shell / wakeup triggers: rendered as cards that lazy-fetch
+ *   output on expand when an output file is available.
  * - Subagent triggers with a result summary: rendered as expandable cards
  *   showing the full markdown result.
  */
 interface AutonomousResumeSegmentProps {
   triggers: ReadonlyArray<AutonomousResumeTrigger>;
-  variant?: "card" | "row";
 }
 
 const RESUME_OUTPUT_FILE_MAX_BYTES = 500_000;
 
 function triggerKey(trigger: AutonomousResumeTrigger): string {
-  return `${trigger.kind}:${trigger.managedCommand?.commandId ?? trigger.blockId}:${trigger.title}:${trigger.status}`;
+  return `${trigger.kind}:${trigger.blockId}:${trigger.title}:${trigger.status}`;
 }
 
 export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
@@ -50,11 +44,7 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
   return (
     <div className="flex flex-col gap-2">
       {triggers.map((trigger) => (
-        <ResumeCompletionCard
-          key={triggerKey(trigger)}
-          trigger={trigger}
-          variant={props.variant ?? "card"}
-        />
+        <ResumeCompletionCard key={triggerKey(trigger)} trigger={trigger} />
       ))}
     </div>
   );
@@ -67,15 +57,9 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
  */
 function ResumeCompletionCard(props: {
   readonly trigger: AutonomousResumeTrigger;
-  readonly variant: "card" | "row";
 }) {
   const { trigger } = props;
   const [open, setOpen] = useState(false);
-  const compact = isShellDelivery(trigger);
-  const deliverySummary = formatSingleLine(
-    trigger.summary.replace(/^still running\s*(?:[-–—·:]\s*)?/i, ""),
-    { maxLength: 180, ellipsis: "…" },
-  );
 
   // An auto-backgrounded MCP call rides a "command" trigger (the kind enum is
   // frozen for old-host chat parses); the structured identity is what marks it
@@ -92,40 +76,19 @@ function ResumeCompletionCard(props: {
     <>
       {resumeStatusIcon(trigger)}
       <span className="shrink-0 text-ui-sm font-medium text-foreground/85">
-        {props.variant === "row" && trigger.live
-          ? `${resumeNoun(trigger)} update`
-          : resumeStatusTitle(trigger)}
+        {resumeStatusTitle(trigger)}
       </span>
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
       </span>
-      <TooltipWrapper
-        label={rawTitle}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground/85">
-          {title}
-        </span>
-      </TooltipWrapper>
-      {compact && deliverySummary.length > 0 ? (
-        <TooltipWrapper
-          label={trigger.summary}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <span className="max-w-[40%] shrink truncate text-ui-xs text-muted-foreground">
-            {deliverySummary}
-          </span>
-        </TooltipWrapper>
-      ) : null}
+      <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground/85">
+        {title}
+      </span>
     </>
   );
 
   const preview =
-    !compact && trigger.summary.trim().length > 0 ? (
+    trigger.summary.trim().length > 0 ? (
       <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
         {formatSingleLine(trigger.summary, { maxLength: 180, ellipsis: "…" })}
       </p>
@@ -142,38 +105,15 @@ function ResumeCompletionCard(props: {
   // time, so collapse to a static single-row card. Shell and wakeup triggers
   // do not normally have capturable output files; subagents always have a
   // markdown result to show.
-  const expandable =
-    !compact && (trigger.kind === "subagent" || trigger.outputFile !== null);
+  const expandable = trigger.kind === "subagent" || trigger.outputFile !== null;
 
-  if (props.variant === "row") {
-    return (
-      <SegmentRow
-        header={header}
-        headerAction={
-          <ResumeManagedCommandDoor trigger={trigger} variant="row" />
-        }
-        open={false}
-        onOpenChange={setOpen}
-        body={null}
-        tone="default"
-        stickyHeader={false}
-        expandable={false}
-        headerFindUnitId={null}
-        bodyFindUnitId={null}
-        className="w-fit max-w-full"
-        footer={null}
-      />
-    );
-  }
   return (
-    <div className="w-full">
+    <div className="w-full max-w-[min(100%,48rem)]">
       <SegmentCard
         open={open}
         onOpenChange={setOpen}
         header={header}
-        headerAction={
-          <ResumeManagedCommandDoor trigger={trigger} variant="card" />
-        }
+        headerAction={<ResumeManagedCommandDoor trigger={props.trigger} />}
         collapsedPreview={preview}
         body={body}
         tone="default"
@@ -218,7 +158,6 @@ function ResumeCompletionCardBody(props: {
  */
 function ResumeManagedCommandDoor(props: {
   readonly trigger: AutonomousResumeTrigger;
-  readonly variant: "card" | "row";
 }) {
   const managedCommand = props.trigger.managedCommand;
   const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
@@ -229,18 +168,15 @@ function ResumeManagedCommandDoor(props: {
   });
   const openOutput = useManagedCommandDoor();
   if (managedCommand === null || openOutput === null) return null;
-  const door = (
-    <ManagedCommandTranscriptDoor
-      commandId={managedCommand.commandId}
-      gone={presence.kind === "absent"}
-      onOpen={openOutput}
-      testId={`resume-managed-command-door-${props.trigger.blockId}`}
-    />
-  );
-  return props.variant === "card" ? (
-    <SegmentCardHeaderActionCell>{door}</SegmentCardHeaderActionCell>
-  ) : (
-    door
+  return (
+    <SegmentCardHeaderActionCell>
+      <ManagedCommandTranscriptDoor
+        commandId={managedCommand.commandId}
+        gone={presence.kind === "absent"}
+        onOpen={openOutput}
+        testId={`resume-managed-command-door-${props.trigger.blockId}`}
+      />
+    </SegmentCardHeaderActionCell>
   );
 }
 
@@ -253,7 +189,9 @@ function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   // The NOUN is still accurate though - the generic "Command" is only for a
   // legacy trigger that names no kind at all, not for every live one.
   if (trigger.live) {
-    return `${noun} running`;
+    return trigger.managedCommand === null
+      ? "Command still running"
+      : `${noun} still running`;
   }
   switch (trigger.status) {
     case "completed":
@@ -312,18 +250,7 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
 function resumeStatusIcon(trigger: AutonomousResumeTrigger): ReactNode {
   const className = "size-3.5 shrink-0 text-foreground/60";
   // Neither a success check nor a failure cross: nothing has settled yet.
-  if (trigger.live) {
-    if (isShellDelivery(trigger)) {
-      return (
-        <ManagedCommandMonitorIcon
-          monitoring={trigger.managedCommand?.monitoring ?? true}
-          decorative
-          className={className}
-        />
-      );
-    }
-    return <Activity className={className} aria-hidden />;
-  }
+  if (trigger.live) return <Activity className={className} aria-hidden />;
   if (trigger.status !== "completed") {
     return <XCircle className={className} aria-hidden />;
   }

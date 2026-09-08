@@ -281,12 +281,14 @@ function stripAnswerSelection(value: unknown): unknown {
 /**
  * Drop `allowsCustomAnswer` from every question of one interview carrier.
  *
- * The field is `1.9`. It is stripped HERE - on the legacy path - and nowhere
- * else, because `1.7`/`1.8` take the projector's identity return by design
- * (`is identity on {1,7}`) and strip it in their own frozen contract instead
- * (`interviewQuestionSchemaPreCustomAnswer`). Adding a pre-`1.9` pass above
- * that return would break the identity those lines are built on, and buy
- * nothing: both routes end with the peer holding a question without the field.
+ * Stripped HERE - on the legacy path - and nowhere else. `1.7`+ take the
+ * projector's identity return by design (`is identity on {1,7}`) and observe
+ * the field, the same way they observe interview settlement; the freeze
+ * boundary for questions is `@1.6`, which is exactly the set this path serves.
+ *
+ * Without it the projected frame would carry a field the frozen `@1.6`
+ * contract then strips on parse, so `parse(projected)` would stop equalling
+ * `projected` - the invariant the compat suite pins.
  */
 function stripQuestionCustomAnswer(value: unknown): unknown {
   if (!Array.isArray(value)) return value;

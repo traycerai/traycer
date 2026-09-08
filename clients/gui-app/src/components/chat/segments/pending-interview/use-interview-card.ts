@@ -197,7 +197,26 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // interview stays pending), so the retained draft is retryable then - but not
   // an immediate double-submit while the first send is still live.
   const canAdvance = total > 0 && safeIndex < total - 1 && !isBusy;
-  const canSubmit = total > 0 && onSubmit !== null && !isBusy;
+  // A question with no options AND no free text has no answer channel at all.
+  // The raiser is not supposed to emit that pair (see `allowsCustomAnswer` in
+  // `content-blocks.ts`), and every producer refuses or downgrades it, but the
+  // schema tolerates it deliberately - rejecting there would drop a whole
+  // content block rather than one bad question - so the renderer is the
+  // documented fail-safe and has to actually be one.
+  //
+  // `question-page` already renders no input for such a question. Without this
+  // the card still offered an ENABLED Submit beside it, and Enter would send
+  // `values: []` down a channel that requires a listed option. Skip is the
+  // only honest exit, which is exactly what the schema comment promises.
+  //
+  // Scoped to the WHOLE interview, not the current page: one submission
+  // carries every question's answer, so an unanswerable question anywhere
+  // invalidates the submit rather than just its own page.
+  const hasUnanswerableQuestion = questions.some(
+    (q) => q.options.length === 0 && !questionAllowsCustomAnswer(q),
+  );
+  const canSubmit =
+    total > 0 && onSubmit !== null && !isBusy && !hasUnanswerableQuestion;
   const canSkip = onSkip !== null && !isBusy;
 
   // Read the LATEST canonical row at call time rather than trusting a
@@ -316,9 +335,16 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
 
   const submitDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) => {
     if (onSubmit === null || isBusy) return;
+    // Here rather than only on the button's `disabled`: `proceed()` reaches
+    // submit from Enter on the last page, and it checks `isBusy` alone - so a
+    // gate applied to `canSubmit` at the call site would leave the keyboard
+    // path open. This is the one choke point every submit passes through.
+    if (hasUnanswerableQuestion) return;
     clearAdvanceTimer();
-    // Submit is unconditional: unanswered questions go through with empty
-    // values (draftToAnswerValues returns [] for an empty draft).
+    // Submit is unconditional OTHERWISE: unanswered questions go through with
+    // empty values (draftToAnswerValues returns [] for an empty draft). The
+    // exception above is a question with no answer channel at all, which is
+    // not "unanswered" but unanswerABLE - see `hasUnanswerableQuestion`.
     const answers: InterviewAnswer[] = answersFromDrafts(answerDrafts);
     setPendingOptionIndex(null);
     // Fire and keep the draft: a returned client action id only proves the

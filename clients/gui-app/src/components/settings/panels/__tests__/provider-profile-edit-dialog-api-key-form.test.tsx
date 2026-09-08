@@ -65,11 +65,19 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
 const apiKeyMutation = vi.hoisted(() => ({
   set: { mutate: vi.fn(), reset: vi.fn(), isPending: false, used: vi.fn() },
   clear: { mutate: vi.fn(), reset: vi.fn(), isPending: false, used: vi.fn() },
+  // The MUTATION-level success callback each hook is handed. The draft clear
+  // lives here, not in a `mutate(vars, { onSuccess })` bag, so that it still
+  // runs when the form has unmounted behind the reauth panel.
+  onSuccess: { set: null, clear: null } as {
+    set: (() => void) | null;
+    clear: (() => void) | null;
+  },
 }));
 
 vi.mock("@/hooks/providers/use-set-provider-profile-api-key-mutation", () => ({
-  useSetProviderProfileApiKey: () => {
+  useSetProviderProfileApiKey: (onSuccess: (() => void) | undefined) => {
     apiKeyMutation.set.used();
+    apiKeyMutation.onSuccess.set = onSuccess ?? null;
     return {
       mutate: apiKeyMutation.set.mutate,
       reset: apiKeyMutation.set.reset,
@@ -81,8 +89,9 @@ vi.mock("@/hooks/providers/use-set-provider-profile-api-key-mutation", () => ({
 vi.mock(
   "@/hooks/providers/use-clear-provider-profile-api-key-mutation",
   () => ({
-    useClearProviderProfileApiKey: () => {
+    useClearProviderProfileApiKey: (onSuccess: (() => void) | undefined) => {
       apiKeyMutation.clear.used();
+      apiKeyMutation.onSuccess.clear = onSuccess ?? null;
       return {
         mutate: apiKeyMutation.clear.mutate,
         reset: apiKeyMutation.clear.reset,
@@ -357,15 +366,13 @@ describe("<ProfileEditDialog /> API-key submission", () => {
     expect(apiKeyMutation.set.mutate).toHaveBeenCalledTimes(1);
     // Asserted through the matcher rather than by destructuring
     // `mock.calls[0]`, which is an `any[]` and defeats the type-aware lint.
-    // `expect.anything()` stands in for the `{ onSuccess }` options argument.
-    expect(apiKeyMutation.set.mutate).toHaveBeenCalledWith(
-      {
-        providerId: PROVIDER_ID,
-        profileId: PROFILE_ID,
-        apiKey: "sk-live-abc",
-      },
-      expect.anything(),
-    );
+    // ONE argument: the success work moved to the hook's own options, so there
+    // is no per-`mutate` bag left to match loosely.
+    expect(apiKeyMutation.set.mutate).toHaveBeenCalledWith({
+      providerId: PROVIDER_ID,
+      profileId: PROFILE_ID,
+      apiKey: "sk-live-abc",
+    });
   });
 
   it("refuses a whitespace-only paste rather than sending it", () => {
@@ -400,17 +407,12 @@ describe("<ProfileEditDialog /> API-key submission", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove key" }));
 
     expect(apiKeyMutation.clear.mutate).toHaveBeenCalledTimes(1);
-    // The FIRST argument is what carries the request, and asserting it by
-    // object equality is what pins that it holds no key field. The second is
-    // the `{ onSuccess }` options bag (see the draft-clearing test below), so
-    // it is matched loosely rather than asserted absent.
-    expect(apiKeyMutation.clear.mutate).toHaveBeenCalledWith(
-      {
-        providerId: PROVIDER_ID,
-        profileId: PROFILE_ID,
-      },
-      expect.anything(),
-    );
+    // The sole argument carries the request, and asserting it by object
+    // equality is what pins that it holds no key field.
+    expect(apiKeyMutation.clear.mutate).toHaveBeenCalledWith({
+      providerId: PROVIDER_ID,
+      profileId: PROFILE_ID,
+    });
   });
 
   it("clears a typed replacement once the removal SUCCEEDS, so it cannot be re-armed", () => {
@@ -420,14 +422,18 @@ describe("<ProfileEditDialog /> API-key submission", () => {
     // button becomes an ENABLED "Add key" - one Enter away from storing the
     // credential the user was in the middle of removing.
     //
-    // FALSIFICATION: drop the `{ onSuccess: ... }` argument from
-    // `clearApiKey.mutate(...)` and this reddens while the CONTROL below
-    // stays green.
-    apiKeyMutation.clear.mutate.mockImplementation(
-      (_variables: unknown, options: { onSuccess: () => void } | undefined) => {
-        options?.onSuccess();
-      },
-    );
+    // The callback is driven from where the hook received it, which is the
+    // point: a per-`mutate` bag would be dropped by TanStack in exactly the
+    // Remove-then-Switch-account sequence this guards, because the form's
+    // observer is gone by the time the removal settles.
+    //
+    // FALSIFICATION: stop passing the clear to
+    // `useClearProviderProfileApiKey(...)` - or hand it to
+    // `clearApiKey.mutate(vars, { onSuccess })` instead - and this reddens
+    // while the CONTROL below stays green.
+    apiKeyMutation.clear.mutate.mockImplementation(() => {
+      apiKeyMutation.onSuccess.clear?.();
+    });
     renderDialog(profileWithApiKey({ supported: true, configured: true }));
 
     const field = keyField();

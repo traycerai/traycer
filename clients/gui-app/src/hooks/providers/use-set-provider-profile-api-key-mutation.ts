@@ -40,7 +40,12 @@ import { providersMutationKeys } from "@/lib/query-keys";
  * this one has no host-scoped caller (the add-profile dialog does not paste a
  * key), and an exported wrapper with no call site is dead code.
  */
-export function useSetProviderProfileApiKey(): UseMutationResult<
+export function useSetProviderProfileApiKey(
+  // Mutation-level for the reason spelled out on the clear hook: the form
+  // unmounts behind the reauth panel, and a per-`mutate` callback would be
+  // dropped exactly when the draft most needs clearing.
+  onSuccess: (() => void) | undefined,
+): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.setProfileApiKey">,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.setProfileApiKey">,
@@ -54,5 +59,6 @@ export function useSetProviderProfileApiKey(): UseMutationResult<
     // Serializes this pair against each other - see the scope's own note for
     // why `fifo` in the policy table cannot.
     scope: PROFILE_API_KEY_MUTATION_SCOPE,
+    onSuccess: onSuccess === undefined ? undefined : () => onSuccess(),
   });
 }

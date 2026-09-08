@@ -246,8 +246,23 @@ function ProfileApiKeyForm(props: {
   readonly onDraftChange: (draft: string) => void;
 }): ReactNode {
   const inputId = useId();
-  const setApiKey = useSetProviderProfileApiKey();
-  const clearApiKey = useClearProviderProfileApiKey();
+  // Both clears are MUTATION-level, not `mutate(vars, { onSuccess })`.
+  //
+  // This section unmounts while the reauth panel is up (`switchingAccount` in
+  // `profileApiKeyFormState`), and TanStack drops the per-`mutate` callbacks of
+  // an observer that has lost its listeners - so Remove key followed by Switch
+  // account would settle with the draft never cleared. Cancelling reauth then
+  // remounts the form on a now-unconfigured profile with the removed secret
+  // still in the field and an ENABLED "Add key": one Enter restores exactly
+  // what was just deleted.
+  //
+  // The draft lives on the dialog, which stays mounted throughout, so the
+  // callback still has somewhere to write after this section is gone.
+  const onSaved = (): void => {
+    props.onDraftChange("");
+  };
+  const setApiKey = useSetProviderProfileApiKey(onSaved);
+  const clearApiKey = useClearProviderProfileApiKey(onSaved);
 
   const apiKey = props.apiKey;
   const providerLabel = PROVIDER_DISPLAY_NAMES[props.providerId];
@@ -266,14 +281,11 @@ function ProfileApiKeyForm(props: {
     // rendered underneath a profile whose state contradicts it. Only the most
     // recently attempted mutation should be able to speak.
     clearApiKey.reset();
-    setApiKey.mutate(
-      {
-        providerId: props.providerId,
-        profileId: props.profile.profileId,
-        apiKey: trimmed,
-      },
-      { onSuccess: () => props.onDraftChange("") },
-    );
+    setApiKey.mutate({
+      providerId: props.providerId,
+      profileId: props.profile.profileId,
+      apiKey: trimmed,
+    });
   };
 
   return (
@@ -328,19 +340,10 @@ function ProfileApiKeyForm(props: {
               // Mirror of `onSave`: the sibling's stale failure must not
               // survive this attempt.
               setApiKey.reset();
-              clearApiKey.mutate(
-                {
-                  providerId: props.providerId,
-                  profileId: props.profile.profileId,
-                },
-                // Same success-only clear as `onSave`. A replacement typed but
-                // not saved, followed by Remove, otherwise leaves that secret
-                // sitting in a live field: the row flips to "Not set", the
-                // button becomes an ENABLED "Add key", and the next Enter
-                // stores the very credential the user was removing. On
-                // failure the draft is kept, because nothing was removed.
-                { onSuccess: () => props.onDraftChange("") },
-              );
+              clearApiKey.mutate({
+                providerId: props.providerId,
+                profileId: props.profile.profileId,
+              });
             }}
             disabled={busy}
           >

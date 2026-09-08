@@ -5289,21 +5289,6 @@ export const epicSchemaSurfaceBaseline = {
                                   "type": "string",
                                   "const": "autonomous_resume"
                                 },
-                                "deliveryPlacement": {
-                                  "default": null,
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "enum": [
-                                        "turn_start",
-                                        "in_turn"
-                                      ]
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
                                 "triggers": {
                                   "type": "array",
                                   "items": {
@@ -13770,21 +13755,6 @@ export const epicSchemaSurfaceBaseline = {
                                   "type": "string",
                                   "const": "autonomous_resume"
                                 },
-                                "deliveryPlacement": {
-                                  "default": null,
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "enum": [
-                                        "turn_start",
-                                        "in_turn"
-                                      ]
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
                                 "triggers": {
                                   "type": "array",
                                   "items": {
@@ -13915,7 +13885,6 @@ export const epicSchemaSurfaceBaseline = {
                                 "status",
                                 "timestamp",
                                 "type",
-                                "deliveryPlacement",
                                 "triggers"
                               ],
                               "additionalProperties": false
