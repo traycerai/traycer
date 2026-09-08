@@ -26,6 +26,10 @@ export function invalidateWorktreeChangedCaches(
   hostId: string,
   scopes: WorktreeChangedAccumulatedScopes,
 ): void {
+  void queryClient.invalidateQueries({
+    queryKey: hostQueryKeys.methodScope(hostId, "workspace.getAppearance"),
+    refetchType: "active",
+  });
   const listAllScope = hostQueryKeys.methodScope(
     hostId,
     "worktree.listAllForHost",

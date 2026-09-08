@@ -21,6 +21,7 @@ import {
   type ImageBytesResult,
 } from "@/lib/attachments/image-blob-cache";
 import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -551,15 +552,33 @@ export function useFileAsset(
   request: FileAssetRequest | null,
 ): UseFileAssetResult {
   const hostId = useTabHostId();
+  const focused = usePaneFocused();
+  return useHostFileAsset({ hostId, request, focused, refreshKey: 0 });
+}
+
+export function useHostFileAsset(args: {
+  readonly hostId: string | null;
+  readonly request: FileAssetRequest | null;
+  readonly focused: boolean;
+  readonly refreshKey: number;
+}): UseFileAssetResult {
+  const { hostId, request, focused: paneFocused } = args;
+  const refreshKey = args.refreshKey;
+  const accountId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
+  const assetHostScope = JSON.stringify([accountId, hostId]);
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
   // The full binding, not just its `.client` (Codex re-review) - the shared
   // subscription coalescing layer needs `pin`/`unpin` too, see
   // `acquireSharedAssetSubscription`'s call site below.
   const streamBinding = useHostStreamClientBindingFor(target, auth);
-  const paneFocused = usePaneFocused();
 
-  const requestKey = request === null ? null : requestKeyFor(request);
+  const requestKey =
+    request === null
+      ? null
+      : JSON.stringify([assetHostScope, requestKeyFor(request), refreshKey]);
   const latestRequestRef = useRef(request);
   useEffect(() => {
     latestRequestRef.current = request;
@@ -677,7 +696,11 @@ export function useFileAsset(
       requestKeyRef.current = null;
       return;
     }
-    const requestKey = requestKeyFor(normalizedRequest);
+    const requestKey = JSON.stringify([
+      assetHostScope,
+      requestKeyFor(normalizedRequest),
+      refreshKey,
+    ]);
     // Derived inside the effect from ITS request (not the component-scope
     // `renderKind`) so the closure can never pair a stale kind with a new
     // request's callbacks.
@@ -728,7 +751,7 @@ export function useFileAsset(
         });
 
         const key = buildFileAssetCacheKey({
-          hostId,
+          hostId: assetHostScope,
           source: assetSourceFor(normalizedRequest),
           location: locationFor(normalizedRequest),
           filePath: normalizedRequest.filePath,
@@ -864,7 +887,7 @@ export function useFileAsset(
 
     const acquired = acquireSharedAssetSubscription(
       sharedSubscriptionKeyFor(
-        hostId,
+        JSON.stringify([assetHostScope, refreshKey]),
         normalizedRequest,
         focusRefreshGeneration,
       ),
@@ -904,7 +927,13 @@ export function useFileAsset(
       if (!usedForFetch) sharedSubscription.release();
       releaseLease?.();
     };
-  }, [requestKey, streamBinding, hostId, focusRefreshGeneration]);
+  }, [
+    requestKey,
+    streamBinding,
+    assetHostScope,
+    focusRefreshGeneration,
+    refreshKey,
+  ]);
 
   const state =
     resolved !== null && resolved.key === requestKey

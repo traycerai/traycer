@@ -1,3 +1,7 @@
+import {
+  appearanceWallpaperSchema,
+  type WorkspaceAppearance,
+} from "@traycer/protocol/host/workspace/appearance-schemas";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
@@ -116,7 +120,17 @@ export const DEFAULT_CODE_FONT_SIZE = 12;
 // source of truth.
 export const DEFAULT_WORKTREE_BRANCH_PREFIX = "traycer/";
 
+export type GlobalWallpaper = NonNullable<
+  WorkspaceAppearance["wallpaper"]
+> | null;
+
 export interface SettingsState {
+  globalWallpaper: GlobalWallpaper;
+  showGreeting: boolean;
+  showRecentHistory: boolean;
+  setGlobalWallpaper: (wallpaper: GlobalWallpaper) => void;
+  setShowGreeting: (visible: boolean) => void;
+  setShowRecentHistory: (visible: boolean) => void;
   theme: ThemeMode;
   themePreset: ThemePreset;
   defaultSelection: HarnessModelSelection;
@@ -269,6 +283,9 @@ export interface SettingsState {
 
 type PersistedSettingsState = Pick<
   SettingsState,
+  | "globalWallpaper"
+  | "showGreeting"
+  | "showRecentHistory"
   | "theme"
   | "themePreset"
   | "defaultSelection"
@@ -343,6 +360,9 @@ function clampCodeFontSize(value: number): number {
 
 function partializeSettingsState(state: SettingsState): PersistedSettingsState {
   return {
+    globalWallpaper: state.globalWallpaper,
+    showGreeting: state.showGreeting,
+    showRecentHistory: state.showRecentHistory,
     theme: state.theme,
     themePreset: state.themePreset,
     defaultSelection: state.defaultSelection,
@@ -385,6 +405,12 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
+      globalWallpaper: null,
+      showGreeting: true,
+      showRecentHistory: true,
+      setGlobalWallpaper: makeSetter(set, "globalWallpaper"),
+      setShowGreeting: makeSetter(set, "showGreeting"),
+      setShowRecentHistory: makeSetter(set, "showRecentHistory"),
       theme: "system",
       themePreset: DEFAULT_THEME_PRESET,
       defaultSelection: DEFAULT_SELECTION,
@@ -561,6 +587,17 @@ export const useSettingsStore = create<SettingsState>()(
         const merged: SettingsState = { ...currentState, ...persisted };
         return {
           ...merged,
+          globalWallpaper:
+            appearanceWallpaperSchema.safeParse(persisted.globalWallpaper)
+              .data ?? null,
+          showGreeting:
+            typeof persisted.showGreeting === "boolean"
+              ? persisted.showGreeting
+              : true,
+          showRecentHistory:
+            typeof persisted.showRecentHistory === "boolean"
+              ? persisted.showRecentHistory
+              : true,
           worktreeBranchPrefix:
             typeof merged.worktreeBranchPrefix === "string" &&
             worktreeBranchPrefixError(merged.worktreeBranchPrefix) === null
@@ -765,3 +802,9 @@ function resolvePersistedAgentTabSurfacing(
   if (legacy === "pip" || legacy === "tile") return "surface";
   return DEFAULT_AGENT_TAB_SURFACING;
 }
+
+window.addEventListener("storage", (event) => {
+  if (event.key === null || event.key === persistKey(STORE_KEYS.settings)) {
+    void useSettingsStore.persist.rehydrate();
+  }
+});

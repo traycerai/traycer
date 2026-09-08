@@ -10,6 +10,7 @@ import {
   linkOpenModeForKind,
   tilePlacementForCategory,
   useSettingsStore,
+  type GlobalWallpaper,
 } from "@/stores/settings/settings-store";
 
 /** Seeds localStorage with one persisted payload and rehydrates from it. */
@@ -40,6 +41,9 @@ function resetSettingsStore(): void {
     worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+    globalWallpaper: null,
+    showGreeting: true,
+    showRecentHistory: true,
   });
 }
 
@@ -875,5 +879,141 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
       DEFAULT_WORKTREE_BRANCH_PREFIX,
     );
+  });
+
+  it("defaults the global wallpaper to null and greeting/history to shown", () => {
+    expect(useSettingsStore.getState().globalWallpaper).toBeNull();
+    expect(useSettingsStore.getState().showGreeting).toBe(true);
+    expect(useSettingsStore.getState().showRecentHistory).toBe(true);
+  });
+
+  it("persists and rehydrates a global wallpaper image set via the setter", async () => {
+    const wallpaper = {
+      kind: "image",
+      path: "appearance/global.png",
+      focalPoint: [0.5, 0.5],
+      treatment: "original",
+      dimming: 0.2,
+      strength: 0.8,
+    } satisfies GlobalWallpaper;
+    useSettingsStore.getState().setGlobalWallpaper(wallpaper);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"appearance/global.png"');
+    if (persisted === null) throw new Error("expected persisted settings");
+    // Confirm the actual stored JSON (not just a substring) carries the real
+    // wallpaper object at the protocol's `state.` path.
+    const parsedPersisted: unknown = JSON.parse(persisted);
+    expect(
+      (parsedPersisted as { state: { globalWallpaper: unknown } }).state
+        .globalWallpaper,
+    ).toEqual(wallpaper);
+
+    useSettingsStore.setState({ globalWallpaper: null });
+    // `setState` writes through the persist middleware too, so it just
+    // clobbered `persisted` in storage with the reset value - restore the
+    // captured JSON before rehydrating, or rehydrate only re-reads the
+    // clobbered `null`.
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().globalWallpaper).toEqual(wallpaper);
+  });
+
+  it("persists and rehydrates showGreeting/showRecentHistory independently via their setters", async () => {
+    useSettingsStore.getState().setShowGreeting(false);
+    useSettingsStore.getState().setShowRecentHistory(false);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    if (persisted === null) throw new Error("expected persisted settings");
+    const parsedPersisted: unknown = JSON.parse(persisted);
+    expect(
+      (
+        parsedPersisted as {
+          state: { showGreeting: unknown; showRecentHistory: unknown };
+        }
+      ).state,
+    ).toEqual(
+      expect.objectContaining({
+        showGreeting: false,
+        showRecentHistory: false,
+      }),
+    );
+
+    useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
+    // `setState` writes through the persist middleware too, clobbering the
+    // just-captured storage with the reset values - restore it before
+    // rehydrating.
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().showGreeting).toBe(false);
+    expect(useSettingsStore.getState().showRecentHistory).toBe(false);
+  });
+
+  it("rehydrates a malformed persisted wallpaper to null rather than trusting it verbatim", async () => {
+    await rehydrateFrom({ globalWallpaper: { kind: "image" } });
+
+    expect(useSettingsStore.getState().globalWallpaper).toBeNull();
+  });
+
+  it("rehydrates old settings without the appearance fields to their defaults", async () => {
+    await rehydrateFrom({ artifactIconColorMode: "none" });
+
+    expect(useSettingsStore.getState().globalWallpaper).toBeNull();
+    expect(useSettingsStore.getState().showGreeting).toBe(true);
+    expect(useSettingsStore.getState().showRecentHistory).toBe(true);
+  });
+
+  it("rehydrates a persisted 'none' wallpaper (not just 'image')", async () => {
+    await rehydrateFrom({ globalWallpaper: { kind: "none" } });
+
+    expect(useSettingsStore.getState().globalWallpaper).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("picks up another window's settings write via the cross-window storage listener", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({ state: { showGreeting: false }, version: 1 }),
+    );
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "traycer-gui-app:settings" }),
+    );
+    // The listener's rehydrate is fire-and-forget (`void ... rehydrate()`).
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useSettingsStore.getState().showGreeting).toBe(false);
+  });
+
+  it("treats a storage event with a null key (localStorage.clear()) as a rehydrate signal too", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({ state: { showRecentHistory: false }, version: 1 }),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: null }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useSettingsStore.getState().showRecentHistory).toBe(false);
+  });
+
+  it("ignores a storage event for an unrelated key", async () => {
+    useSettingsStore.getState().setShowGreeting(false);
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({ state: { showGreeting: true }, version: 1 }),
+    );
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "some-other-app:settings" }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Still false: the mismatched-key event must not have triggered a rehydrate.
+    expect(useSettingsStore.getState().showGreeting).toBe(false);
   });
 });
