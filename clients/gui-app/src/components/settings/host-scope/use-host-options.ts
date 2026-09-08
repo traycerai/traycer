@@ -23,6 +23,9 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 import { hostListReadiness } from "@/components/settings/host-scope/host-scope-status";
 
+/** The cadence relative-time labels in the host pickers refresh at. */
+const HOST_OPTION_LABEL_TICK_MS = 60_000;
+
 /**
  * THE answer to "what hosts does this account have, and can I reach them".
  *
@@ -129,7 +132,9 @@ export function useHostOptions(): HostOptions {
   // hook - narrators take this one, gates take that one - and this file is a
   // narrator in all four of its consumers.
   const activeHostId = useEffectiveHostId();
-  const nowMs = useNowMs();
+  // A minute: this clock only feeds relative-time labels, which are allowed to
+  // be up to a tick behind. Nothing here holds a gate on it.
+  const nowMs = useNowMs(HOST_OPTION_LABEL_TICK_MS);
 
   const directoryQuery = useHostDirectoryList();
   const registryQuery = useRegisteredHosts();

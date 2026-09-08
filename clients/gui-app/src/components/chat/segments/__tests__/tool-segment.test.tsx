@@ -167,18 +167,26 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
       />,
     );
 
-    expect(screen.getByText("Sent message")).toBeTruthy();
+    // The direction label is for assistive tech only: the icon plus "to"
+    // already say it, and the visible words were crowding the receiver name
+    // out of narrow headers.
+    expect(screen.getByText("Sent message").className).toContain("sr-only");
+    expect(screen.getByText("to")).toBeTruthy();
+    expect(screen.queryByText("to agent")).toBeNull();
     expect(screen.getByText("Receiver Agent")).toBeTruthy();
     expect(screen.getByText(/Please inspect the failing test/)).toBeTruthy();
-    // The badge sits in the always-visible header next to the receiver link,
-    // so it's already present before the card is expanded.
-    expect(screen.getByText("reply expected")).toBeTruthy();
+    // Reply-expected is a compact icon in the always-visible header; the
+    // spelled-out line only appears once the card is expanded.
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.queryByText("Reply expected")).toBeNull();
+    expect(screen.queryByText("reply expected")).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
     expect(screen.getByRole("button", { name: "Receiver Agent" })).toBeTruthy();
-    expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.getByText("Reply expected")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
     expect(screen.getByText("Please inspect the failing test.")).toBeTruthy();
     expect(
@@ -228,7 +236,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open sent A2A" }));
 
     expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
-    expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.getByText("Reply expected")).toBeTruthy();
   });
 
   it("opens sent A2A cards through find-force and releases on manual collapse", () => {

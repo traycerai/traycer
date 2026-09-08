@@ -2365,16 +2365,57 @@ async function stopService(
   // host DOWN after a "restart" (and `host stop` reporting success
   // while the host keeps serving). Waiting for real exit here is what
   // makes both commands actually take effect.
-  const before = await readHostPidMetadata(label.environment);
+  //
+  // EVIDENCE, not the folding read. `readHostPidMetadata` collapses "no record
+  // was published" and "the record could not be read" into one `null`, and the
+  // line below used to return SUCCESS on both - so a `pid.json` that was torn
+  // or momentarily unreadable as the signal landed made `host stop` and `host
+  // restart` report a stop they never confirmed, which is precisely the no-op
+  // stop this whole snapshot exists to prevent. Same reader, same misuse, and
+  // the same correction `refuseIfPublishedHostAlive` took in an earlier round
+  // (traycer#1761 round 7); `linux.ts`'s restart ladder is the sibling site.
+  const before = await readHostPidMetadataEvidence(label.environment);
   await run("launchctl", ["kill", "TERM", `${guiDomain()}/${label.id}`], {
     env: undefined,
     cwd: undefined,
     timeoutMs: 10_000,
     tolerateNonZeroExit: true,
   });
-  if (before === null) return;
+  // Nothing was published, so there is no exit to confirm and no host this
+  // stop could have failed to take effect on.
+  if (before.kind === "absent") return;
+  if (before.kind === "unreadable") {
+    // No pid to poll, so the ordinary wait cannot run - but ignorance is not
+    // confirmation, and returning here is what reported the unconfirmed stop.
+    // Serve the SAME grace the pid wait would have, then ask the record once
+    // more.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, STOP_EXIT_TIMEOUT_MS);
+    });
+    const after = await readHostPidMetadataEvidence(label.environment);
+    // GONE is the only answer that confirms. The host removes its `pid.json`
+    // on exit, so an absent record after the grace is the same evidence the
+    // branch above already trusts.
+    //
+    // A record that now READS is deliberately NOT accepted: it cannot be bound
+    // to the instance we signalled - launchd is armed and may already have
+    // started a replacement - and confirming a stop against a replacement's
+    // pid is the exact confusion the `before` snapshot exists to prevent.
+    if (after.kind === "absent") return;
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: `host pid metadata at ${hostPidMetadataPath(label.environment)} could not be read (${before.cause}), so the host's exit could not be confirmed within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop-not-confirmed. Re-run the command; if it persists and the host is still serving, re-run with --force to escalate to SIGKILL.`,
+      details: {
+        label: label.id,
+        record: hostPidMetadataPath(label.environment),
+        cause: before.cause,
+        timeoutMs: STOP_EXIT_TIMEOUT_MS,
+      },
+      exitCode: 1,
+    });
+  }
   const exited = await waitForPidExit(
-    before.pid,
+    before.metadata.pid,
     STOP_EXIT_TIMEOUT_MS,
     STOP_EXIT_POLL_MS,
   );
@@ -2385,10 +2426,10 @@ async function stopService(
   if (!exited) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `host (pid=${before.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop did not take effect. Re-run with --force to escalate to SIGKILL.`,
+      message: `host (pid=${before.metadata.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop did not take effect. Re-run with --force to escalate to SIGKILL.`,
       details: {
         label: label.id,
-        pid: before.pid,
+        pid: before.metadata.pid,
         timeoutMs: STOP_EXIT_TIMEOUT_MS,
       },
       exitCode: 1,
@@ -2610,6 +2651,20 @@ const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
 const DESKTOP_APP_BUNDLE_ID = "ai.traycer.desktop";
 
 /**
+ * The plist's `ThrottleInterval`, in SECONDS, and the reason it is a named
+ * export rather than an inline literal in the template below.
+ *
+ * launchd will not respawn this agent more often than this, so it is the
+ * earliest a `KeepAlive` relaunch can possibly reappear - which every caller
+ * that avoids `kickstart -k` already reasons about (see `registerService` and
+ * the eviction repair), and which the host-update verify leg must wait out
+ * before it may conclude that a failed service start means the host is never
+ * coming back. Two places deriving that bound from one number cannot drift;
+ * two places writing `10` can, and silently.
+ */
+export const LAUNCHD_THROTTLE_INTERVAL_SECONDS = 10;
+
+/**
  * The PATH to bake into the host's LaunchAgent. launchd would otherwise
  * give the host a bare PATH that can't see provider CLIs installed via
  * nvm/Homebrew/asdf/etc. `host install` is normally invoked from the
@@ -2674,7 +2729,7 @@ ${programArgsXml}
     <true/>
   </dict>
   <key>ThrottleInterval</key>
-  <integer>10</integer>
+  <integer>${LAUNCHD_THROTTLE_INTERVAL_SECONDS}</integer>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>SoftResourceLimits</key>

@@ -83,6 +83,7 @@ describe("readHostPidMetadataEvidence", () => {
     expect(evidence.metadata).toMatchObject({
       ...VALID_RECORD,
       processStartIdentity: null,
+      processStartIdentityRead: "absent",
       layer0: null,
       layer0Slot: null,
     });

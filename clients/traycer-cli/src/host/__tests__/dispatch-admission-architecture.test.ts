@@ -34,10 +34,11 @@ const DEFINING_MODULE = "host/update-executor.ts";
 /**
  * Production files permitted to reach `dispatchAttemptExecutor`.
  *
- * **Empty today, and that is the assertion, not a placeholder.** Nothing in
- * production admits a new schema-v2 attempt before Ticket 07's cutover. When
- * the cutover adds the new-attempt dispatcher, exactly that one admission
- * owner joins this list - and a second entry should be a conversation, not a
+ * **Empty, and that is the assertion, not a placeholder.** Nothing in
+ * production admits a new schema-v2 attempt through the parent/child dispatch
+ * transport - the executor cutover did NOT change that: `host update` runs the
+ * segment IN PROCESS (it is the child), so it joins the continuation owners
+ * below rather than this list. An entry here should be a conversation, not a
  * diff.
  */
 const ALLOWED_DISPATCH_IMPORTERS: readonly string[] = [];
@@ -45,8 +46,15 @@ const ALLOWED_DISPATCH_IMPORTERS: readonly string[] = [];
 /**
  * Files that own a CONTINUATION or RECOVERY flow. Each must reach the segment
  * and must never reference dispatch.
+ *
+ * `host/update-run.ts` joined at the cutover: it owns every `host update` arm,
+ * including the two resumed continuations (`resume-apply` and `activate`), and
+ * it reaches them through the same in-process segment the verifier uses.
  */
-const CONTINUATION_OWNERS: readonly string[] = ["host/update-verify.ts"];
+const CONTINUATION_OWNERS: readonly string[] = [
+  "host/update-run.ts",
+  "host/update-verify.ts",
+];
 
 const DISPATCH_IDENTIFIER = /\bdispatchAttemptExecutor\b/;
 const SEGMENT_IDENTIFIER = /\brunLocalAttemptExecutorSegment\b/;
