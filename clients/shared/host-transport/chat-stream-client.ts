@@ -12,7 +12,6 @@ import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subs
 import {
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
-  normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   supportsInterviewSettlementActions,
   type ProjectedChatSubscribeClientFrame,
@@ -606,16 +605,20 @@ export class ChatStreamClient {
       // envelope is validated deeply against the FROZEN `1.6` shapes, so this
       // is exact rather than permissive; the histories stay structural.
       //
-      // `1.6` lacks interview settlement and browser payload fields. The
-      // message history is structural on this path, so normalize those fields
-      // in place; then run the live SHALLOW schema to apply bounded defaults
-      // (notably queue payloads) and recover the exact live consumer type.
+      // `1.6` lacks interview settlement and browser payload fields. BOTH
+      // histories are structural on this path - `chat.events` is
+      // `z.custom(isStructuralRecord)` exactly like `chat.messages` - so
+      // neither parse strips anything inside them, and a chat event's
+      // `metadata` is where interview settlement reaches a subscriber the
+      // second way. Hence the whole-frame pass rather than the message-only
+      // one: it delegates the messages to `normalizeV16MessagesInShallowSnapshot`
+      // and walks the event log beside them. Then run the live SHALLOW schema
+      // to apply bounded defaults (notably queue payloads) and recover the
+      // exact live consumer type.
       const shallowV16 =
         chatSubscribeSnapshotServerFrameShallowSchemaV16.safeParse(envelope);
       if (shallowV16.success) {
-        normalizeV16MessagesInShallowSnapshot(
-          shallowV16.data.snapshot.chat.messages,
-        );
+        normalizeV16InterviewFieldsInFrame(shallowV16.data);
         const upgraded =
           chatSubscribeSnapshotServerFrameShallowSchema.safeParse(
             shallowV16.data,

@@ -2513,13 +2513,21 @@ export const chatSubscribeV16 = defineStreamRpcContract({
  * change they cannot observe. So the fast path is retained per-line, not
  * per-"is this the newest line".
  *
- * `1.6` lacks interview settlement and browser payload fields inside
- * `chat.messages`, which this schema does not walk. So this is deliberately
- * paired with `normalizeV16MessagesInShallowSnapshot`: a targeted pass over
- * user-authored payloads and interview blocks. Callers MUST run it before
- * handing the snapshot to consumers, or those consumers read fields typed as
+ * `1.6` lacks interview settlement and browser payload fields, and this schema
+ * walks NEITHER history that can carry them: `chat.messages` holds the
+ * interview blocks, and `chat.events` holds the same settlement facts as
+ * metadata on a durable event. Both are `z.custom(isStructuralRecord)` below,
+ * so nothing here validates or strips what is inside either.
+ *
+ * So this is deliberately paired with `normalizeV16InterviewFieldsInFrame`,
+ * which covers both — it delegates the message history to
+ * `normalizeV16MessagesInShallowSnapshot` and walks the event log beside it.
+ * Callers MUST run it on the whole frame before handing the snapshot to
+ * consumers. Pairing this schema with the message pass ALONE is a live bug,
+ * not a lesser version of the same thing: consumers then read fields typed as
  * present that are genuinely missing — the exact hazard the live schema's doc
- * above describes.
+ * above describes — and the event log reaches them carrying `1.7` facts this
+ * line cannot express.
  *
  * Every bounded envelope field is still validated deeply, against the FROZEN
  * `1.6` shapes, which is what makes this exact rather than merely permissive.

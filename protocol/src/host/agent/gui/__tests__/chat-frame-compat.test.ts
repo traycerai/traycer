@@ -855,6 +855,38 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
     expect(asRecord(normalized[0], "q").allowsCustomAnswer).toBeNull();
   });
 
+  /**
+   * A real `interviewDeliveryProjectionSchema` value, so a lifecycle fixture
+   * carrying it SURVIVES the live parse. An invented `{ state, attempts }`
+   * would not: `delivery` is applied without a `.catch`, so the frame would be
+   * rejected at `safeParse` and never reach the pass in production, leaving
+   * the arm proving only that the helper assigns null to a field.
+   */
+  function liveDeliveryProjection(): Record<string, unknown> {
+    return {
+      deliveryId: "dlv-1",
+      status: "delivering",
+      retryable: true,
+      generation: 2,
+    };
+  }
+
+  /**
+   * Parse a lifecycle frame through the LIVE union the way the client does,
+   * then hand the parsed frame to the pass. Everything downstream of this is
+   * the production shape, defaults applied - not a hand-built object that
+   * happens to have the right keys.
+   */
+  function liveParsed(frame: Record<string, unknown>): Record<string, unknown> {
+    const parsed = chatSubscribeServerFrameSchema.safeParse(frame);
+    if (!parsed.success) {
+      throw new Error(
+        `fixture is not a live frame: ${JSON.stringify(parsed.error.issues)}`,
+      );
+    }
+    return asRecord(parsed.data, "parsed frame");
+  }
+
   it("neutralizes the interviewAnswered lifecycle frame's OWN 1.7 fields", () => {
     // The dedicated lifecycle frames are their own carriers - not a message,
     // not a blockDelta - so no pass beside this one can see them, and
@@ -862,9 +894,12 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
     // evidence. The outbound projector has had a case for this frame all
     // along; that asymmetry is what proves the inbound gap was a gap.
     //
-    // FALSIFICATION: delete the `interviewAnswered` arm and every expectation
-    // below reddens while the blockDelta arms above stay green.
-    const frame: Record<string, unknown> = {
+    // FALSIFICATION: delete the `interviewAnswered` arm and the four
+    // neutralization assertions redden while the blockDelta arms above stay
+    // green. The `values` / `blockId` / `resolvedAt` expectations below are
+    // preservation checks and survive that mutation by design - they are here
+    // to catch a pass that over-reaches, not to detect its absence.
+    const frame = liveParsed({
       kind: "interviewAnswered",
       hasBinaryPayload: false,
       epicId: "epic-1",
@@ -874,8 +909,11 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
       resolvedAt: 20,
       settlementId: "gui-1",
       settlementSource: "gui",
-      delivery: { state: "delivering", attempts: 2 },
-    };
+      delivery: liveDeliveryProjection(),
+    });
+    // The fixture reached the pass the way production does, so the delivery
+    // it is about to drop is a real projection the live schema accepted.
+    expect(asRecord(frame.delivery, "delivery").deliveryId).toBe("dlv-1");
 
     normalizeV16InterviewFieldsInFrame(frame);
 
@@ -900,9 +938,12 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
     // would leave behind the one combination that schema rejects - drafts
     // under a null outcome - so the pass clears the pair together.
     //
-    // FALSIFICATION: drop `frame.draftAnswers = []` and the drafts survive to
-    // a renderer that would show the user saved work this line never had.
-    const frame: Record<string, unknown> = {
+    // FALSIFICATION: drop `frame.draftAnswers = []` and the neutralized frame
+    // stops being a legal one - re-parsing it fails the refinement, which is
+    // the assertion below. (The GUI would not visibly show the drafts: with
+    // `outcome` nulled it selects `[]` itself. The harm is the pass producing
+    // a frame the live schema rejects, not a rendered one.)
+    const frame = liveParsed({
       kind: "interviewErrored",
       hasBinaryPayload: false,
       epicId: "epic-1",
@@ -914,8 +955,8 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
       draftAnswers: [{ ...ENHANCED_ANSWER }],
       settlementId: "gui-1",
       settlementSource: "gui",
-      delivery: { state: "failed", attempts: 3 },
-    };
+      delivery: liveDeliveryProjection(),
+    });
 
     normalizeV16InterviewFieldsInFrame(frame);
 
@@ -927,6 +968,10 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
     // `reason` is the user-visible text this frame has carried since 1.4 and
     // is not a settlement fact; it must come through byte for byte.
     expect(frame.reason).toBe("Interview skipped");
+    // The pair invariant, executed rather than described: the neutralized
+    // frame is still a legal live frame. Clearing `outcome` alone would leave
+    // drafts under a null outcome, which this re-parse rejects.
+    expect(chatSubscribeServerFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("neutralizes the durable event log on BOTH frames that carry it", () => {
@@ -946,9 +991,12 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
         [INTERVIEW_DELIVERY_METADATA_KEY]: { outboxId: "ob-1" },
       }),
     );
+    // Seeded with BOTH keys, like the appended one: an assertion that a key is
+    // gone proves nothing on a fixture that never carried it.
     const inSnapshot = chatEventWith("e-resolved", 20, "interview.resolved", {
       ...resolvedAnswersMetadata(),
       [INTERVIEW_SETTLEMENT_METADATA_KEY]: nestedSettlementFacts(),
+      [INTERVIEW_DELIVERY_METADATA_KEY]: { outboxId: "ob-2" },
     });
 
     normalizeV16InterviewFieldsInFrame(appended);
@@ -981,12 +1029,15 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
   });
 
   it("normalizes a snapshot's events even when its messages are malformed", () => {
-    // The two histories are guarded independently. Chained behind one `&&`,
-    // a `messages` the live union would have rejected silently suppressed the
-    // event-log pass beside it - a malformed half disarming the other.
+    // The two histories are guarded independently, and this pins that
+    // property of the helper - NOT a production bypass: every route that
+    // reaches this pass parses both histories as `z.array(...)` first, so a
+    // non-array `messages` is refused before it gets here. What is being kept
+    // out is the coupling itself, since this function's contract is `unknown`
+    // and one malformed history must not silence the other.
     //
-    // FALSIFICATION: re-chain the guards and this reddens while the
-    // well-formed snapshot arms stay green.
+    // FALSIFICATION: chain the guards behind one `&&` and this reddens while
+    // the well-formed snapshot arms stay green.
     const event = chatEventWith("e-resolved", 20, "interview.resolved", {
       [INTERVIEW_SETTLEMENT_METADATA_KEY]: nestedSettlementFacts(),
     });
@@ -1008,11 +1059,20 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
     // The one interview frame with no arm, and that is a fact about the frame
     // rather than an omission: its live shape is `blockId` + `requestedAt`,
     // identical to its pre-1.7 shape, because questions live on the block.
-    // Pinned against the frozen contracts, which is what keeps that fact from
-    // going stale: a future field added to the live frame with a value on the
-    // wire - required, or defaulted like every settlement field on the sibling
-    // frames - survives the live parse and is stripped by the frozen one, so
-    // it reddens here instead of arriving on a 1.4-1.6 line.
+    // Pinned TWO ways, because either alone can be fooled.
+    //
+    // The frozen-contract comparison catches a field added to the live union
+    // alone - the live parse materializes it, the frozen parse strips it, the
+    // two stop agreeing. It CANNOT catch a field added to the shared factory
+    // (`buildChatSubscribeCommonServerFrameSchemas` builds this frame for the
+    // live line AND for 1.4-1.6), because that adds it to both sides and they
+    // still agree. So the literal key set below is the independent oracle: it
+    // reddens on any materialized addition, wherever it was declared.
+    //
+    // Neither catches a purely optional field that materializes nothing when
+    // absent. That is the honest limit of a fixture-based pin; a defaulted
+    // field - which is how every settlement field on the sibling frames was
+    // added - is caught.
     const frame = {
       kind: "interviewRequested",
       hasBinaryPayload: false,
@@ -1025,6 +1085,14 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
       chatSubscribeServerFrameSchema.parse(frame),
       "live interviewRequested",
     );
+    expect(Object.keys(live).sort()).toEqual([
+      "blockId",
+      "chatId",
+      "epicId",
+      "hasBinaryPayload",
+      "kind",
+      "requestedAt",
+    ]);
     for (const contract of frozenServerContracts()) {
       expect(contract.parse(frame)).toEqual(live);
     }

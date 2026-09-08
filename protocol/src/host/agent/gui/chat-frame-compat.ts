@@ -273,52 +273,63 @@ export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
 }
 
 /**
- * Neutralize the `1.7`-only interview fields on a frame that arrived on a
- * pre-`1.7` line and was parsed with the LIVE union.
+ * Neutralize the `1.7`-only interview fields on a frame received on a
+ * pre-`1.7` line.
  *
- * The third receive door, and the one the two passes above do not reach.
- * `normalizeV16BrowserPayloadsInFrame` owns the USER-authored browser payloads;
- * `normalizeV16MessagesInShallowSnapshot` is wired only to the exact-`1.6`
- * snapshot fast path. Everything else on a pre-`1.7` line falls through to the
- * live parse, so a mislabeled, stale or hostile peer's `1.7` interview fields
- * arrive VALIDATED - the same smuggling the two passes above refuse, through
- * the doors beside them.
+ * The interview half of receive-side `1.7` compatibility, and the one the two
+ * passes above do not reach: `normalizeV16BrowserPayloadsInFrame` owns the
+ * USER-authored browser payloads, and `normalizeV16MessagesInShallowSnapshot`
+ * neutralizes a message history but nothing beside it. A pre-`1.7` peer's
+ * interview fields otherwise arrive VALIDATED - the same smuggling the two
+ * passes above refuse, through the doors beside them.
+ *
+ * TWO ROUTES REACH THIS, and the second is easy to lose. Most frames fall
+ * through to the generic live parse and are handed here after it. But the
+ * exact-`1.6` snapshot takes its own fast path in `ChatStreamClient`, and
+ * BOTH schemas on that path leave `chat.messages` and `chat.events`
+ * structural (`z.custom(isStructuralRecord)`) - so neither parse strips
+ * anything inside either history, and that route calls this pass directly on
+ * the frame it just parsed. Wiring it to the message-only pass instead is
+ * what left the shipped `1.6` cohort's event log open.
  *
  * EVERY carrier of an interview, because a pass written for one of them
  * silently leaves the rest open - which is the exact defect the outbound
  * projector's `blockDelta` case was fixed for, and this is its inbound mirror.
  *
- * "Mirror" is the completeness argument, not a figure of speech.
- * `projectChatServerFrameForVersion` is the authoritative list of server
- * frames whose live shape differs from a pre-`1.7` line's - a frame missing
- * from it has no `1.7` field to arrive with - so the enumeration below is its
- * INTERVIEW-bearing cases, one for one. Adding a case there without one here
- * reopens a door. Its three remaining cases are accounted for and are not
+ * "Mirror" is how the enumeration below was DERIVED rather than recalled:
+ * `projectChatServerFrameForVersion` already had to decide, frame by frame,
+ * what a pre-`1.7` peer may see, so its interview-bearing cases are the list,
+ * one for one, and adding a case there without one here reopens a door. It is
+ * a strong heuristic, not a proof - two hand-written switches agreeing is not
+ * an independent oracle, and the projector is not exhaustive over every
+ * live/frozen difference (`turnStateChanged`'s `activeTurn` differs by line
+ * with no case at all). What is checked here is the INTERVIEW surface, against
+ * the schemas and the receive call sites.
+ *
+ * Its three non-interview cases are accounted for by name rather than by
  * silence: `queueChanged` carries browser payloads, owned by
  * `normalizeV16BrowserPayloadsInFrame` beside this; `managedCommandsChanged`
- * has no interview surface at all; and `actionAck` differs only by the
+ * has no interview surface at all; and `actionAck`'s only `1.7` delta is the
  * `interviewDeliveryRetry` value in its `action` enum, which no consumer
  * dispatches on - the GUI matches an ack to its OWN `pendingActions` by
- * `clientActionId`, and a client on this line cannot have queued that action
- * to match. That one the projector refuses outright rather than projecting,
- * which is why it has no field to neutralize here.
+ * `clientActionId` and never reads `action`, and a client on this line cannot
+ * have queued that action to match. That one the projector refuses outright
+ * rather than projecting, which is why it has no field to neutralize here.
  *
- * Only this direction needs a pass at all. The host parses a client frame with
- * the negotiated contract's OWN `clientFrameSchema` - `chatSubscribeV14` and
- * its siblings each carry one - so a pre-`1.7` client's `1.7` field is dropped
- * as an unknown key before any resolver sees it. A client has no such luxury:
- * it parses every server frame with the live union whatever line it negotiated,
- * which is precisely the asymmetry these passes exist to cover.
+ * Only this direction needs a pass at all. A host resolver selects the
+ * negotiated contract's OWN `clientFrameSchema` and parses against it, so a
+ * pre-`1.7` client's `1.7` field is dropped as an unknown key before the
+ * session handler runs. A client cannot mirror that: apart from the two
+ * snapshot fast paths and the windowed union, it parses server frames with the
+ * live union whatever line it negotiated - which is precisely the asymmetry
+ * these passes exist to cover.
  *
- * - `snapshot` on `1.0`-`1.5`. Those minors match NEITHER snapshot fast path
- *   (one is exact-current, the other exact-`1.6`), so their snapshots reach the
- *   generic parse with every interview block intact. BOTH histories it carries:
+ * - `snapshot`, on both routes. `1.0`-`1.5` match NEITHER fast path (one is
+ *   exact-current, the other exact-`1.6`) and reach the generic parse whole;
+ *   exact-`1.6` arrives from its fast path. BOTH histories it carries:
  *   `chat.messages` holds the blocks, and `chat.events` is the second place
  *   settlement reaches a subscriber - the one the outbound `projectSnapshot`
  *   calls "the easier to miss", and it was missed here.
- * - `messageAccepted`, whose `message` is the live message union - an assistant
- *   message with interview blocks is well-formed there even though the frame
- *   means "your send was accepted".
  * - `eventAppended`, the single-event door onto the same durable log.
  * - `interviewAnswered` and `interviewErrored`, the dedicated lifecycle frames.
  *   Both gained `1.7` fields of their own (`delivery`, `settlementId`,
@@ -327,6 +338,12 @@ export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
  *   has a straight path in that no message-level pass can see.
  * - `blockDelta`, on BOTH its arms: questions ride `interview.requested`,
  *   answer selection rides `interview.resolved`.
+ * - `messageAccepted` is DEFENSIVE, not a live carrier, and the difference is
+ *   worth stating because the arm reads like the others: its `message` binds
+ *   `userMessageSchema`, whose `role` is the literal `"user"`, so a parsed
+ *   frame cannot hold an assistant message with interview blocks. The arm
+ *   costs one delegation and covers the unparsed and malformed inputs this
+ *   helper also accepts; it is not what closes a hole.
  *
  * `interviewRequested` alone needs nothing, and this is a fact about the frame
  * rather than an omission: its live shape is `blockId` + `requestedAt`, byte
@@ -352,7 +369,12 @@ export function normalizeV16InterviewFieldsInFrame(frame: unknown): void {
       if (!isRecord(chat)) return;
       // Independently guarded, not `&&`-chained: a snapshot whose `messages`
       // is not an array must still have its `events` neutralized, and vice
-      // versa. Chaining them made a malformed half suppress the other.
+      // versa. Defensive rather than a live bypass - both production routes
+      // parse these as `z.array(...)`, so a non-array half fails before it
+      // reaches here - but this function takes `unknown` by contract, and a
+      // guard that lets one malformed history silence the other is the kind
+      // of coupling that becomes a bypass the first time a caller hands it
+      // something less validated.
       if (Array.isArray(chat.messages)) {
         normalizeV16MessagesInShallowSnapshot(chat.messages);
       }
@@ -805,16 +827,24 @@ function projectChatEvent(event: unknown): unknown {
  * peer through `snapshot.chat.events` and `eventAppended` unless it is
  * stripped here") is now true in both directions.
  *
- * The settlement and delivery keys are DELETED, where every other field this
- * pass touches is nulled. The difference is the carrier, not the intent:
- * `metadata` is an open record, so no consumer type promises those keys and
- * ABSENT is exactly the state a conforming pre-`1.7` peer produces - the same
- * state `projectChatEvent` hands one. A block field, by contrast, is declared
- * present on the live type, so "unstated" there has to be spelled `null`.
+ * The settlement and delivery keys are DELETED, where the typed fields this
+ * pass touches take their live neutral default instead (`null`, `[]` or `{}`,
+ * per field). The difference is the carrier, not the intent: `metadata` is an
+ * open record, so no consumer type promises those keys and ABSENT is exactly
+ * the state a conforming pre-`1.7` peer produces - the same state
+ * `projectChatEvent` hands one. A block or frame field, by contrast, is
+ * declared present on the live type, so "unstated" there has to be spelled
+ * with a value.
  *
- * `selection` inside `metadata.answers` goes through the shared answer helper
- * for that reason: `runtimeInterviewAnswerSchema` defaults it to `null`, so
- * wherever those answers are parsed, null is what a stripped answer becomes.
+ * `selection` inside `metadata.answers` is NULLED rather than deleted, and
+ * that is deliberate canonicalization rather than a default this parse
+ * supplies. `chatEventSchema.metadata` is `record(string, unknown)`, so those
+ * answers never pass through `runtimeInterviewAnswerSchema` and a projected
+ * legacy event leaves `selection` absent, not null. Null is chosen because it
+ * is the one value the live answer schema calls "no evidence" wherever an
+ * answer IS parsed, so every reader sees the same neutral whichever carrier it
+ * came from. No consumer distinguishes absent from null here today; if one
+ * ever must, delete it and this comment is the reason to revisit.
  *
  * Mutates in place, matching the rest of the receive-side passes. The
  * projector rebuilds because it must not touch the host's own frame; a
