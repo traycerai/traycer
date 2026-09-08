@@ -1,40 +1,11 @@
 /**
- * Geometry model for header-strip tab dragging.
+ * Tab-strip geometry in content coordinates. Swap decisions use measured
+ * layout slots and provisional order, excluding animated transforms so moving
+ * a neighbour cannot feed back into its own hit-test.
  *
- * Chrome does not hit-test droppables to decide a reorder, and neither does
- * this: the insertion index is a pure function of the pointer's x against tab
- * widths measured once at drag start. That is what makes the result stable.
- * Resolving against live droppables re-enters the loop it is driving - the
- * provisional order moves a tab under the pointer, which changes the hit, which
- * changes the provisional order - and the strip oscillates.
- *
- * Two properties are load-bearing and both fall out of the swap rule rather
- * than being tuned in:
- *
- * - **Monotonicity.** A monotone pointer sweep yields a monotone index.
- * - **Hysteresis.** After a swap the neighbour's centre has moved, so reversing
- *   requires re-crossing `sourceWidth` - see `swapHysteresisPx`. Note this is
- *   the SOURCE's width, not the mean of the pair: the two coincide only for
- *   equal-width items, and a split group is one strip item of its own width.
- *
- * Merge (pair-into-split) and reorder divide a hovered neighbour at its centre.
- * The approaching half is the merge target; crossing the midpoint starts the
- * reorder. This gives both actions a large, deterministic target without
- * requiring pixel-perfect placement, and it makes the state a pure function of
- * position: nothing is ever held in time, so there is no dwell to explain and
- * no timer to keep alive.
- *
- * Both zones are resolved against the DRAGGED TAB'S CENTRE
- * (`pointer - grabOffset + width/2`), never against the raw pointer - the same
- * reference Chrome uses for its swap rule. The user watches the tab in their
- * hand, not the invisible pointer, and the two can disagree by up to a full
- * tab width: grab a tab by its trailing edge and drag toward its leading side,
- * and the tab visibly sits ON TOP of the neighbour while the pointer is still
- * back over the source slot. Pointer-resolved zones make that gesture a dead
- * zone - the tab overlaps the target, nothing highlights, nothing swaps -
- * which reads as the drag simply not working. The centre moves 1:1 with the
- * pointer, so monotonicity and hysteresis are unaffected by the choice; what
- * changes is that every boundary sits where the visible tab says it is.
+ * The outer strip resolves edge-based reordering. Canvas strips resolve the
+ * dragged centre and may offer a merge on an approaching neighbour's half.
+ * Both account for the original grab offset and the strip's scroll position.
  */
 
 export interface StripSlot {
@@ -304,12 +275,14 @@ function previousTargetIndex(
  * boundary swaps rather than one jump - which is what keeps every displaced
  * neighbour animating instead of teleporting.
  */
-function settleTargetIndex(
-  geometry: StripDragGeometry,
-  contentOriginX: number,
-  startIndex: number,
-  centreX: number,
-): number {
+function settleTargetIndex(input: {
+  readonly geometry: StripDragGeometry;
+  readonly contentOriginX: number;
+  readonly startIndex: number;
+  readonly centreX: number;
+  readonly edgeOffsetX: number;
+}): number {
+  const { geometry, contentOriginX, startIndex, centreX, edgeOffsetX } = input;
   const lastIndex = geometry.slots.length - 1;
   let index = Math.min(Math.max(startIndex, 0), Math.max(lastIndex, 0));
   // Bounded by the slot count: each iteration moves the index one step and the
@@ -318,14 +291,14 @@ function settleTargetIndex(
     const laidOut = layOutProvisional(geometry, contentOriginX, index);
     if (index + 1 < laidOut.length) {
       const right = laidOut[index + 1];
-      if (centreX > right.centreX) {
+      if (centreX + edgeOffsetX > right.centreX) {
         index += 1;
         continue;
       }
     }
     if (index - 1 >= 0) {
       const left = laidOut[index - 1];
-      if (centreX < left.centreX) {
+      if (centreX - edgeOffsetX < left.centreX) {
         index -= 1;
         continue;
       }
@@ -398,12 +371,13 @@ export function resolveStripDragState(
   // this and not the raw pointer.
   const draggedCentreX =
     pointerX - geometry.grabOffsetX + geometry.sourceWidth / 2;
-  const targetIndex = settleTargetIndex(
+  const targetIndex = settleTargetIndex({
     geometry,
     contentOriginX,
-    previousTargetIndex(geometry, previous),
-    draggedCentreX,
-  );
+    startIndex: previousTargetIndex(geometry, previous),
+    centreX: draggedCentreX,
+    edgeOffsetX: 0,
+  });
   const candidate = mergeCandidate(
     geometry,
     contentOriginX,
@@ -420,6 +394,28 @@ export function resolveStripDragState(
     targetIndex,
     targetItemId: candidate.slot.itemId,
     targetSide: candidate.side,
+  };
+}
+
+/**
+ * Reorder when the dragged edge crosses a neighbour's midpoint. A small inset
+ * on each edge keeps pointer jitter from reversing a swap at the same boundary.
+ * Merge eligibility does not affect this gesture.
+ */
+export function resolveStripReorderState(
+  input: ResolveStripDragInput,
+): StripDragState {
+  const { geometry, contentOriginX, pointerX, previous } = input;
+  const centreX = pointerX - geometry.grabOffsetX + geometry.sourceWidth / 2;
+  return {
+    kind: "reorder",
+    targetIndex: settleTargetIndex({
+      geometry,
+      contentOriginX,
+      startIndex: previousTargetIndex(geometry, previous),
+      centreX,
+      edgeOffsetX: Math.max(0, geometry.sourceWidth / 2 - 6),
+    }),
   };
 }
 

@@ -34,6 +34,7 @@ import {
   disarmHeaderStripCommitHandoff,
   handoffTransformFor,
   runHeaderStripCommitHandoff,
+  settleHeaderStripItemFrom,
   type HeaderStripHandoffReport,
 } from "../header-strip-commit-handoff";
 import { HEADER_STRIP_SCROLL_TEST_ID } from "../header-strip-geometry";
@@ -471,5 +472,93 @@ describe("header strip commit handoff", () => {
       });
       expect(c.next + carried).toBeCloseTo(c.previous + c.applied, 6);
     }
+  });
+
+  describe("settleHeaderStripItemFrom (release-point continuity)", () => {
+    it("jumps the source to the exact release-point offset, discarding whatever position the spring was still animating from", () => {
+      slots = slotsForOrder(["a", "b"]);
+      render(
+        <Strip
+          nodeEpoch={0}
+          items={[
+            // Mid-flight: the spring was still short of its target when the
+            // gesture ended.
+            { id: "a", offsetX: -50, opacity: 0, registered: true, tag: "div" },
+            { id: "b", offsetX: 0, opacity: 1, registered: true, tag: "div" },
+          ]}
+        />,
+      );
+      const read = values.get("a");
+      if (read === undefined) throw new Error("item a did not register");
+      expect(read()).toBeCloseTo(-50, 6);
+
+      act(() => {
+        settleHeaderStripItemFrom({ itemId: "a", offsetX: 137.42 });
+      });
+      // Exactly the release point, not merely closer to it than -50 was -
+      // `jump` discards the in-flight animation outright.
+      expect(read()).toBeCloseTo(137.42, 6);
+    });
+
+    it("does nothing for an itemId with no registered node - never throws", () => {
+      slots = slotsForOrder(["a"]);
+      render(
+        <Strip
+          nodeEpoch={0}
+          items={[
+            { id: "a", offsetX: 0, opacity: 1, registered: true, tag: "div" },
+          ]}
+        />,
+      );
+      expect(() =>
+        act(() => {
+          settleHeaderStripItemFrom({ itemId: "does-not-exist", offsetX: 42 });
+        }),
+      ).not.toThrow();
+    });
+
+    it("on cancel, an unarmed commit-handoff pass does not itself re-touch the settled value", () => {
+      // Cancel leaves the handoff unarmed, but the container's layout effect
+      // still runs it. An unchanged layout must preserve the seeded value.
+      slots = slotsForOrder(["a", "b"]);
+      const view = render(
+        <Strip
+          nodeEpoch={0}
+          items={[
+            { id: "a", offsetX: -50, opacity: 0, registered: true, tag: "div" },
+            { id: "b", offsetX: 0, opacity: 1, registered: true, tag: "div" },
+          ]}
+        />,
+      );
+      const read = values.get("a");
+      if (read === undefined) throw new Error("item a did not register");
+
+      act(() => {
+        settleHeaderStripItemFrom({ itemId: "a", offsetX: 137.42 });
+      });
+      expect(read()).toBeCloseTo(137.42, 6);
+
+      // Same order, same slots: nothing moved, and the handoff was never
+      // armed - a re-render here is the "cancel already ran" steady state.
+      act(() => {
+        view.rerender(
+          <Strip
+            nodeEpoch={0}
+            items={[
+              {
+                id: "a",
+                offsetX: -50,
+                opacity: 0,
+                registered: true,
+                tag: "div",
+              },
+              { id: "b", offsetX: 0, opacity: 1, registered: true, tag: "div" },
+            ]}
+          />,
+        );
+      });
+      expect(report.rebased).toEqual([]);
+      expect(read()).toBeCloseTo(137.42, 6);
+    });
   });
 });

@@ -457,20 +457,23 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
                 className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-center text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
               />
             ) : (
-              <>
-                <span className="min-w-0 flex-1 text-center">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
+              <span
+                className="header-tab-label relative min-w-0 flex-1 text-center"
+                data-leader-visible={leaderBadge !== null}
+              >
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="block w-full">
                       <span
                         data-testid={`tab-title-${tab.kind}-${tab.id}`}
-                        className="inline-block max-w-full truncate align-bottom"
+                        className="header-tab-title block truncate"
                       >
                         {displayName}
                       </span>
-                    </TooltipTrigger>
-                    <TooltipContent>{displayName}</TooltipContent>
-                  </Tooltip>
-                </span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>{displayName}</TooltipContent>
+                </Tooltip>
                 <TabTrailingSlot
                   label={`Close ${displayName}`}
                   testId={`tab-close-${tab.kind}-${tab.id}`}
@@ -479,7 +482,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
                   active={isActive}
                   disabled={!canClose}
                 />
-              </>
+              </span>
             )}
           </span>
           <HeaderTabSeparator visible={showSeparatorAfter} />
@@ -721,16 +724,8 @@ interface TabTrailingSlotProps {
 }
 
 /**
- * Inline trailing slot that defaults to zero width so compact tabs stay
- * icon-first. A container query reveals the close button only after the tab is
- * wide enough to spare the room, and only when one of:
- * - the user hovers a non-compact tab
- * - keyboard focus enters a non-compact tab
- * - the leader modifier is held (renders the digit badge)
- *
- * The collapsed close button stays mounted (just zero-width and
- * hidden) so the same `<Button>` keeps its focus + click behavior
- * across the hover transition.
+ * Overlaid close control or leader badge. The title makes room only while the
+ * control is visible; its tooltip anchor keeps a stable width across hover.
  */
 function TabTrailingSlot(props: TabTrailingSlotProps) {
   const { label, testId, onClose, leaderBadge, active, disabled } = props;
@@ -738,7 +733,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
   return (
     <span
       className={cn(
-        "z-20 flex shrink-0 items-center justify-center overflow-hidden transition-[width,opacity] duration-150 ease-spring [-webkit-app-region:no-drag]",
+        "absolute right-0 top-1/2 z-20 flex -translate-y-1/2 items-center justify-center overflow-hidden transition-opacity duration-150 ease-spring [-webkit-app-region:no-drag]",
         showLeader ? "w-fit opacity-100" : "header-tab-trailing-slot",
       )}
     >
