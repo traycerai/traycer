@@ -95,6 +95,86 @@ export function isProcessFatal(): boolean {
   return processFatal;
 }
 
+// Whether the runner is inside a command's body right now. Set by
+// `runCommand` around the one `await fn(ctx)`; read by the process-fatal path
+// below to decide who finishes the process.
+let commandInFlight = false;
+
+/** The runner is about to hand control to a command body. */
+export function markCommandStarted(): void {
+  commandInFlight = true;
+}
+
+/** The command body has settled (returned or thrown); the runner owns the exit again. */
+export function markCommandSettled(): void {
+  commandInFlight = false;
+  if (fatalInFlightCeiling !== null) {
+    clearTimeout(fatalInFlightCeiling);
+    fatalInFlightCeiling = null;
+  }
+}
+
+/**
+ * How long a command may keep running after a process-fatal handler fired
+ * inside it before this module ends the process anyway.
+ *
+ * Sized for the command's WORK, not for a drain: a `host update` that took
+ * the fatal mid-download may still have the rest of the download, the
+ * install-directory swap, the service restart and the health probe ahead of
+ * it, each bounded by its own timeout. The ceiling exists for the command
+ * that never settles at all - the callback that threw was the one that would
+ * have resolved the promise the runner awaits, and a keep-alive socket holds
+ * the loop open - and it is deliberately far above swap-plus-restart so that
+ * it lands there only for a command that was already stuck.
+ */
+const FATAL_IN_FLIGHT_CEILING_MS = 10 * 60_000;
+let fatalInFlightCeiling: NodeJS.Timeout | null = null;
+
+/**
+ * Finish the process after a process-fatal handler has fired - at once when
+ * no command is in flight, and otherwise no sooner than the command's work.
+ *
+ * The handlers used to fire-and-forget `finishAndExit(1)` on the spot. That
+ * ARMS THE DRAIN WATCHDOG, a `process.exit` in `DRAIN_WATCHDOG_MS`, while the
+ * interrupted command keeps running by design. As long as the fatal also tore
+ * the network out from under the command (see `closeNetworkClients`), the
+ * command died at its next request and the watchdog only ever ended a process
+ * with nothing left to do. Once the dispatcher stays open on the fatal path,
+ * the command can REACH ITS WORK: the real-host matrix watched a `host update`
+ * take an undici assertion mid download, carry on, and finish the
+ * install-directory swap and the service restart at 14 s - one second inside
+ * the watchdog. A slower disk and that `process.exit` lands between "stopping
+ * service" and "starting service", with the host down and the install
+ * half-replaced. The fatal handler cannot know what the command is in the
+ * middle of; the command can.
+ *
+ * So while a command is in flight this records the code and NOTHING ELSE.
+ * The code is recorded here and now because it cannot interrupt anything and
+ * because its absence has a failure of its own: a command whose resolver died
+ * with the throw never settles, and once its last handle closes the loop
+ * drains and the process exits with whatever `process.exitCode` holds - 0,
+ * for a process that printed a fatal (B, round 8). The watchdog is what waits:
+ * the runner checks `isProcessFatal()` when the body settles, emits the
+ * process-fatal envelope instead of `ok`, and calls `finishAndExit(1)` itself,
+ * which arms it after the work the command owns is done. Behind that sits
+ * `FATAL_IN_FLIGHT_CEILING_MS` for the command that never settles. With no
+ * command in flight - a fatal during bootstrap or teardown - nothing will
+ * finish the process for us, and this does what the handler always did.
+ */
+export function finishAfterProcessFatal(): Promise<void> {
+  if (!commandInFlight) return finishAndExit(1);
+  recordExitCode(1);
+  if (fatalInFlightCeiling === null) {
+    const timer = setTimeout(() => {
+      fatalInFlightCeiling = null;
+      void finishAndExit(1);
+    }, FATAL_IN_FLIGHT_CEILING_MS);
+    timer.unref();
+    fatalInFlightCeiling = timer;
+  }
+  return Promise.resolve();
+}
+
 /**
  * Finish the process: record the code, arm the backstop, flush output, shut
  * down what we own, then let the event loop end naturally.
@@ -124,10 +204,12 @@ export async function finishAndExit(exitCode: number): Promise<void> {
  * Arbitrate between codes when more than one path finishes the process.
  *
  * Monotonic towards failure: the first non-zero code sticks. The process-fatal
- * handler (`exitAfterUnhandledFailure`) fire-and-forgets `finishAndExit(1)`
- * and draining lets the interrupted command keep running, so without this a
- * command that went on to emit an `ok` result would overwrite the fatal 1 with
- * a 0 and report success for a process that failed.
+ * handler (`exitAfterUnhandledFailure`, via `finishAfterProcessFatal`) records
+ * a 1 the moment it fires and draining lets the interrupted command keep
+ * running, so without this a command that went on to finish with a 0 - the
+ * runner's own teardown after a fatal that fired during it, or any caller
+ * that does not consult `isProcessFatal()` - would overwrite the fatal 1 and
+ * report success for a process that failed.
  */
 function recordExitCode(exitCode: number): void {
   if (recordedExitCode === null || (recordedExitCode === 0 && exitCode !== 0)) {
@@ -201,11 +283,16 @@ async function closeNetworkClients(): Promise<void> {
   // goes quiet) would park here indefinitely.
   //
   // Not on the process-fatal path, and that exception is the whole reason this
-  // step is guarded rather than unconditional. There the exit was
-  // fire-and-forgotten out of an `uncaughtException` / `unhandledRejection`
-  // handler and the interrupted command KEEPS RUNNING by design (see
-  // `markProcessFatal`) - still fetching through this very dispatcher, because
-  // there is only one. undici's `DispatcherBase` rejects every dispatch after a
+  // step is guarded rather than unconditional. A fatal lets the interrupted
+  // work KEEP RUNNING by design (see `markProcessFatal`): a runner command
+  // reaches this step only after its body settled (`finishAfterProcessFatal`
+  // defers the whole exit to the runner while one is in flight), but the
+  // paths that run OUTSIDE the runner - `monitor`, the relocation parent
+  // waiting on its child, `maintenance-lease` - take the fatal handler's own
+  // `finishAndExit(1)` at once and are still fetching through this very
+  // dispatcher, because there is only one. And once this step has been
+  // skipped it stays skipped (below), so a runner command that settles after
+  // a fatal never closes it either. undici's `DispatcherBase` rejects every dispatch after a
   // close with `ClientClosedError`, which `fetch` surfaces as a bare
   // `TypeError: fetch failed`. So closing here does not tidy up after the
   // failure, it MANUFACTURES a second one: an in-flight host download burns its
@@ -214,13 +301,13 @@ async function closeNetworkClients(): Promise<void> {
   // reads and reports, not the real fault. Giving the sockets up unclosed costs
   // nothing here - the process is ending with a failure code either way, and
   // `DRAIN_WATCHDOG_MS` above already bounds a loop that will not end on its
-  // own. A normal exit - one that never marked the process fatal - is
-  // unchanged. Note the reach of the skip: `finishAndExit` memoizes this
-  // teardown, so once the fatal call has taken this early return, the
-  // interrupted command's own later `finishAndExit` reuses the settled
-  // promise and the dispatcher is never closed for the rest of that process.
-  // That is the intent (the process is ending on the watchdog either way),
-  // stated so nobody reads "skipped once" into it.
+  // own once the command has settled and armed it (see
+  // `finishAfterProcessFatal` for why the fatal itself no longer arms it). A
+  // normal exit - one that never marked the process fatal - is unchanged. Note
+  // the reach of the skip: `finishAndExit` memoizes this teardown, so once a
+  // fatal has taken this early return, a later `finishAndExit` reuses the
+  // settled promise and the dispatcher is never closed for the rest of that
+  // process. That is the intent, stated so nobody reads "skipped once" into it.
   if (processFatal) return;
 
   const dispatcher = getGlobalDispatcher();

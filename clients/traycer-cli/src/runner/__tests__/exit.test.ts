@@ -155,9 +155,10 @@ describe("finishAndExit", () => {
     it("does not let a later success downgrade a fatal code", async () => {
       const { finishAndExit } = await import("../exit");
 
-      // The process-fatal handler fire-and-forgets `finishAndExit(1)`, and
+      // The process-fatal handler records a 1 the moment it fires, and
       // draining lets the interrupted command keep running. Without
-      // arbitration its `ok` result would report success for a failed process.
+      // arbitration a later finish with 0 would report success for a failed
+      // process.
       await finishAndExit(1);
       await finishAndExit(0);
 
@@ -249,8 +250,9 @@ describe("finishAndExit", () => {
     });
 
     it("does not close the global dispatcher when the exit is process-fatal", async () => {
-      // The fatal handlers fire-and-forget `finishAndExit(1)` and the
-      // interrupted command KEEPS RUNNING. It shares this one dispatcher, and
+      // A fatal lets the interrupted work KEEP RUNNING (a non-runner path
+      // takes this exit at once; a runner command reaches it after settling,
+      // and the skip is memoized). It shares this one dispatcher, and
       // undici answers every dispatch after a close with `ClientClosedError`,
       // so closing here does not clean up after the failure - it invents a
       // second one, and the invented one (a registry download that never
@@ -268,6 +270,122 @@ describe("finishAndExit", () => {
       expect(sentryClose).toHaveBeenCalledTimes(1);
       expect(destroySentryTransportRequests).toHaveBeenCalledTimes(1);
       expect(process.exitCode).toBe(1);
+    });
+
+    it("a fatal while a command is in flight records the 1 but arms nothing; the command's own finish arms the watchdog", async () => {
+      // The real-host matrix watched `host update` take an undici assertion
+      // mid-download, carry on, and complete the install-directory swap and
+      // service restart 14 s later - one second inside a watchdog the fatal
+      // handler had armed. Ablation: make `finishAfterProcessFatal` call
+      // `finishAndExit(1)` unconditionally and the no-exit / no-teardown
+      // assertions redden; drop its `recordExitCode(1)` and the first one does.
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const {
+        finishAfterProcessFatal,
+        finishAndExit,
+        markCommandSettled,
+        markCommandStarted,
+        markProcessFatal,
+      } = await import("../exit");
+
+      markCommandStarted();
+      markProcessFatal();
+      await finishAfterProcessFatal();
+
+      // The code is recorded at once - a command whose resolver died with the
+      // throw never settles, and the drained loop would otherwise exit 0 - but
+      // nothing is armed: a full watchdog period passes and the process is
+      // still the command's to finish.
+      expect(process.exitCode).toBe(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(sentryClose).not.toHaveBeenCalled();
+
+      // The runner's own finish, after the command's work: watchdog armed
+      // from HERE.
+      markCommandSettled();
+      await finishAndExit(1);
+      expect(process.exitCode).toBe(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("a command that never settles after a fatal is ended at the in-flight ceiling, not left forever", async () => {
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const { finishAfterProcessFatal, markCommandStarted, markProcessFatal } =
+        await import("../exit");
+
+      markCommandStarted();
+      markProcessFatal();
+      await finishAfterProcessFatal();
+      // A second fatal inside the same command arms no second ceiling.
+      await finishAfterProcessFatal();
+
+      // Well past any swap-plus-restart and still the command's process.
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+      expect(exitSpy).not.toHaveBeenCalled();
+      // The ceiling finishes the process the way the runner would have: the
+      // watchdog is armed from there and fires 15 s later with the fatal 1.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(exitSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(exitSpy).toHaveBeenCalledTimes(1);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("the runner brackets the command body: a fatal inside it is deferred to the runner's own finish", async () => {
+      // The two rows above call `markCommandStarted` by hand; this one pins
+      // that `runCommand` is what calls it. Ablation: delete the
+      // `markCommandStarted()` in runner.ts and the in-body assertion reddens.
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      vi.spyOn(process.stdout, "write").mockImplementation(((
+        _chunk: string | Uint8Array,
+        callback: (() => void) | undefined,
+      ) => {
+        if (callback !== undefined) callback();
+        return true;
+      }) as never);
+      const { finishAfterProcessFatal, markProcessFatal } =
+        await import("../exit");
+      const { runCommand } = await import("../runner");
+
+      let exitsInsideBody = -1;
+      await runCommand(
+        async () => {
+          markProcessFatal();
+          await finishAfterProcessFatal();
+          await vi.advanceTimersByTimeAsync(60_000);
+          exitsInsideBody = exitSpy.mock.calls.length;
+          return { data: { ok: true }, human: "ok", exitCode: 0 };
+        },
+        { json: true, quiet: null, noProgress: null, noBootstrap: null },
+      );
+
+      expect(exitsInsideBody).toBe(0);
+      // The runner's process-fatal envelope path armed the watchdog.
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("a fatal with no command in flight finishes the process itself, as the handler always did", async () => {
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const { finishAfterProcessFatal, markProcessFatal } =
+        await import("../exit");
+
+      markProcessFatal();
+      await finishAfterProcessFatal();
+
+      expect(process.exitCode).toBe(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
     it("closes the global dispatcher on a failing exit that is NOT process-fatal", async () => {

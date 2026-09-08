@@ -986,9 +986,10 @@ describe("fetch watchdogs and heartbeat semantics", () => {
 });
 
 describe("HTTP client shutdown", () => {
-  // The CLI has one global undici dispatcher and its exit path closes it. On
-  // the process-fatal path that exit is fire-and-forgotten while the
-  // interrupted command keeps running, so a live registry request meets a
+  // The CLI has one global undici dispatcher and its normal exit path closes
+  // it. A command still running when some exit closed the client (the
+  // process-fatal path now leaves it open for the interrupted command, so
+  // this is a non-runner path or a fatal after the command settled) meets a
   // closed client on its next attempt. Retrying that is not just wasted - it
   // ends in `E_REGISTRY_UNAVAILABLE`, and a registry that was never asked gets
   // blamed for a failure that happened inside this process.

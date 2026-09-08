@@ -126,7 +126,11 @@ import {
   wellKnownSlotRefreshHasConverged,
 } from "./store/well-known-cli";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
-import { finishAndExit, markProcessFatal } from "./runner/exit";
+import {
+  finishAfterProcessFatal,
+  finishAndExit,
+  markProcessFatal,
+} from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
@@ -3487,10 +3491,15 @@ function exitAfterUnhandledFailure(
   writeStderr(
     `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}] (${describeErrorOrigin(error)})\n`,
   );
-  // Routed through the same terminator as every other exit. This is the one
-  // path where an abrupt teardown could be argued for - the process is already
-  // in an unknown state - but that is exactly the state the win32 abort fires
-  // in, and `finishAndExit`'s watchdog bounds how long a wedged handle can
-  // hold it. See exit.ts.
-  void finishAndExit(1);
+  // Routed through the same terminator as every other exit - but only when no
+  // command is in flight to finish the process itself. While one is, the
+  // code is recorded at once and the watchdog is armed by the runner AFTER
+  // the command's work (an install-directory swap, a service restart) is
+  // done; a watchdog armed here fired one second after that swap on the
+  // real-host matrix. This is the one path where an abrupt teardown could be
+  // argued for - the process is already in an unknown state - but that is
+  // exactly the state the win32 abort fires in, and the watchdog still bounds
+  // how long a wedged handle can hold it once armed. See
+  // `finishAfterProcessFatal` in exit.ts.
+  void finishAfterProcessFatal();
 }

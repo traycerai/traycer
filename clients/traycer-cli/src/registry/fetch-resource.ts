@@ -645,9 +645,11 @@ function isCliError(err: unknown): err is Error {
 // disappear: once `Agent.close()` or `.destroy()` has been called, every
 // subsequent dispatch rejects with `ClientClosedError` / `ClientDestroyedError`
 // for the life of the process. The CLI has exactly one global dispatcher, and
-// its exit path closes it - so a command still running through a drained exit
-// (the process-fatal path leaves the interrupted command alive by design; see
-// runner/exit.ts) meets these on its very next request.
+// its normal exit path closes it. The process-fatal path no longer does (it
+// leaves the interrupted command alive by design and the dispatcher open for
+// it; see runner/exit.ts), so a request meets these only when some other exit
+// closed the client first - the non-runner paths, or a fatal that fired after
+// the command settled - and the classification stays for exactly those.
 //
 // `fetch` does not surface them directly. It reports its own opaque
 // `TypeError: fetch failed` and hangs the real error off `cause`, so the code
