@@ -231,7 +231,7 @@ export function mergedUnreadCount(input: {
 /** Every merged row, newest-first across the active feed plus renderer-local
  * failures - the shared base the id/Attention/Recent projections all derive
  * from without recomputing their own source subscriptions. */
-function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
+export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
   const activeHostId = useAddressableHostId();
   const hostIds = useHostNotificationIds();

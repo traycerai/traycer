@@ -1,0 +1,52 @@
+import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+
+export type FocusPromptKind = "approval" | "interview" | "browser";
+export interface FocusPromptRow {
+  readonly key: string; // notification feedId
+  readonly kind: FocusPromptKind;
+  readonly epicId: string | null;
+  readonly chatId: string | null;
+  readonly taskTitle: string | null; // from history query or mounted epic; null if unknown
+  readonly title: string; // notification title
+  readonly body: string;
+  readonly createdAt: number;
+  readonly originHostId: string | null;
+  readonly activation: MergedNotificationRow; // handed to useNotificationActivation
+}
+export interface FocusAgentRow {
+  readonly agentId: string;
+  readonly title: string | null; // null when the epic is not mounted here
+  readonly surface: "chat" | "terminal-agent" | null;
+  readonly tier: "turn" | "background";
+  readonly parentId: string | null; // null when unknown
+  readonly hostId: string | null; // the agent's host when known
+}
+export interface FocusTaskRow {
+  readonly epicId: string;
+  readonly taskTitle: string | null;
+  readonly mountedHere: boolean; // agent names + background available
+  readonly agents: ReadonlyArray<FocusAgentRow>; // running only, turn first
+  readonly needsYou: boolean; // indicator flags or a prompt row for this epic
+  readonly stoppable: boolean; // every running agent's host is active or reachable
+}
+export interface FocusBackgroundRow {
+  readonly key: string;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly taskTitle: string | null;
+  readonly label: string; // managed command description or background item title
+  readonly kind: "managed-command" | "background-item";
+  readonly startedAtMs: number | null; // managed commands only
+  readonly stoppable: boolean;
+}
+export interface FocusModel {
+  readonly prompts: ReadonlyArray<FocusPromptRow>; // attention order (blocking first, newest first)
+  readonly tasks: ReadonlyArray<FocusTaskRow>; // tasks with ≥1 running agent; needsYou first, then most agents in turn
+  readonly background: ReadonlyArray<FocusBackgroundRow>;
+  readonly coverage: {
+    readonly activity: "live" | "reconnecting" | "disconnected" | "unknown";
+    readonly notifications: "local" | "cloud";
+    readonly backgroundIsMountedOnly: true;
+  };
+  readonly badgeCount: number; // prompts.length
+}
