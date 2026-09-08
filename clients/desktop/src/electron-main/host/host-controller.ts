@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { app } from "electron";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -14,7 +15,7 @@ import {
   type ParkedRegistrationTakeover,
   type RegisterHostLoginItemResult,
 } from "../app/host-login-item";
-import { resolveBundledCliPath } from "../cli/cli-discovery";
+import { readCliManifest, resolveBundledCliPath } from "../cli/cli-discovery";
 import {
   runBundledTraycerCliJson,
   streamBundledTraycerCliJson,
@@ -37,7 +38,10 @@ import {
 import {
   readUpdateAttemptRecord,
   commitAttemptMutationWithCapability,
+  deriveAttemptLiveness,
   isTerminalRetentionExpired,
+  probeAttemptHolder,
+  RECOMMENDED_ATTEMPT_STALENESS_MS,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRecord,
   type UpdateMutationCapability,
@@ -98,11 +102,13 @@ import {
   type ApplyStagedTrigger,
   type BusyContinuation,
   type ConvergeReadyOk,
+  type ConvergeReadyVersionPolicy,
   type DownloadLaneStatus,
   type GuardedMutationOutcome,
   type HostControllerIntent,
   type HostControllerStatus,
   type LocalAttemptFacts,
+  type LocalAttemptLiveness,
   type InstallVersionOk,
   type LifecycleAdmissionBlock,
   type MutationKind,
@@ -159,6 +165,45 @@ const CLI_LOCK_BUSY_CODE = "E_CLI_LOCK_BUSY";
 const HOST_BUSY_CODE = "E_HOST_BUSY";
 const HOST_UPDATE_ATTEMPT_ACTIVE_CODE = "E_HOST_UPDATE_ATTEMPT_ACTIVE";
 const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
+
+/**
+ * How long `readLocalAttemptFacts` may reuse a holder verdict for an UNCHANGED
+ * lock file (D13: "the probe cache TTL is bounded").
+ *
+ * Bounded on BOTH sides, and both bounds matter:
+ *
+ *   - above the broadcaster's 750 ms live cadence, so a status read during an
+ *     update does not spawn a liveness probe per tick (`tasklist` on Windows);
+ *   - well under the renderer's 5 s proof window, so a cached POSITIVE cannot
+ *     outlive the proof it feeds — a stale `live` served from here would extend
+ *     the gate the proof deadline exists to bound.
+ *
+ * Only a crashed holder can be served stale at all: the cache is fingerprinted
+ * on the holder's identity and dropped outright when the lock file is gone, so
+ * a normal release (executor finishes, unlinks) is observed on the next read
+ * however warm the entry is.
+ */
+const LOCAL_ATTEMPT_HOLDER_CACHE_TTL_MS = 2_000;
+
+/** The published shape, built in one place so its three call sites cannot drift. */
+function localAttemptFacts(
+  record: HostUpdateAttemptRecord,
+  liveness: LocalAttemptLiveness,
+  livenessObservedAtMs: number | null,
+): LocalAttemptFacts {
+  return {
+    attemptId: record.attemptId,
+    generation: record.generation,
+    sequence: record.sequence,
+    targetVersion: record.targetVersion,
+    phase: record.phase,
+    continuation: record.continuation,
+    updatedAt: record.updatedAt,
+    error: record.error,
+    liveness,
+    livenessObservedAtMs,
+  };
+}
 
 class HostReadinessError extends Error {
   constructor(message: string) {
@@ -984,16 +1029,24 @@ export class HostController {
    * has no observation at all — so a mid-flight update renders as a blank
    * "state unknown" and the user cannot tell it from an idle machine.
    *
-   * Facts only. This method deliberately does NOT decide whether the attempt is
-   * live, stale, or progressing: that judgement belongs to the renderer's
-   * existing qualified-stale projector, and a second copy of it here would
-   * drift from the one the live path uses.
+   * Facts only, plus ONE probed observation. This method deliberately does NOT
+   * decide whether the attempt is stale or progressing: that judgement belongs
+   * to the renderer's existing qualified-stale projector, and a second copy of
+   * it here would drift from the one the live path uses. `liveness` is the one
+   * thing the projector cannot derive from the record — a file saying
+   * `restarting` proves an executor once wrote that, never that one is still
+   * carrying it — so it is gathered here, where the lock is, and gathered as
+   * EVIDENCE (D13).
    *
    * An unreadable or absent record both answer `null`, and the field's contract
    * says `null` means "cannot say" rather than "nothing running" — the caller
    * must not turn a failed read into a claim of idleness.
    */
   private async readLocalAttemptFacts(): Promise<LocalAttemptFacts | null> {
+    // ONE clock for the whole read: the retention bound, the probe and the
+    // published `livenessObservedAtMs` must describe the same instant, or the
+    // renderer ages a proof against a deadline computed from a different one.
+    const nowMs = Date.now();
     const read = await readUpdateAttemptRecord(this.layout.rootDir);
     if (read.kind !== "valid") return null;
     const record = read.value;
@@ -1006,16 +1059,73 @@ export class HostController {
     // same as absent) rather than resurfacing a week-old failure as the
     // freshest available fact. The record file itself is left for the next
     // contender's prune; a facts read must not grow a write path.
-    if (isTerminalRetentionExpired(record, Date.now())) return null;
-    return {
-      attemptId: record.attemptId,
-      generation: record.generation,
-      sequence: record.sequence,
-      targetVersion: record.targetVersion,
-      phase: record.phase,
-      continuation: record.continuation,
-      updatedAt: record.updatedAt,
-    };
+    if (isTerminalRetentionExpired(record, nowMs)) return null;
+
+    // Parked and terminal records are not probed at all. `deriveAttemptLiveness`
+    // resolves both without consulting a holder — a park is DEFINED by the
+    // absence of one — so a probe cannot change the answer, and neither maps to
+    // `live` under any evidence. Skipping it keeps the steady state (no
+    // attempt, or a terminal one) at zero probes per poll.
+    if (record.execution !== "active") {
+      return localAttemptFacts(record, "unknown", null);
+    }
+
+    const holder = await probeAttemptHolder({
+      hostHomeDir: this.layout.rootDir,
+      nowMs,
+      cacheTtlMs: LOCAL_ATTEMPT_HOLDER_CACHE_TTL_MS,
+    });
+
+    // ---- Join the record to the lock -------------------------------------
+    //
+    // The record and the lock are two files read at two different instants,
+    // and the window between them is exactly when a finishing executor is
+    // busiest: it writes its terminal record and THEN releases the lock, and a
+    // continuing one advances the record while holding it. Pair the pre-probe
+    // record with the post-probe lock state and the evidence describes two
+    // different worlds.
+    //
+    // This is the host observer's own rule, re-implemented rather than
+    // imported (`traycer-host` is not reachable from this package): re-read,
+    // and require the record to have held STILL across the probe. Ordering is
+    // by identity (`attemptId + generation + sequence`), never by timestamp — a
+    // reader must not be able to win, or lose, a race on a clock.
+    const confirmed = await readUpdateAttemptRecord(this.layout.rootDir);
+    if (confirmed.kind !== "valid") return null;
+    const fresh = confirmed.value;
+    if (
+      fresh.attemptId !== record.attemptId ||
+      fresh.generation !== record.generation ||
+      fresh.sequence !== record.sequence
+    ) {
+      // It moved. The re-read is the newer record, but the holder evidence was
+      // gathered against the older one, so this pairing establishes nothing:
+      // publish the FRESHER facts with an explicitly unknown liveness rather
+      // than pairing mismatched evidence or looping. The next poll is
+      // milliseconds away, and `unknown` can never hold the lifecycle gate.
+      if (isTerminalRetentionExpired(fresh, nowMs)) return null;
+      return localAttemptFacts(fresh, "unknown", nowMs);
+    }
+
+    const derived = deriveAttemptLiveness({
+      current: read,
+      holder,
+      nowMs,
+      stalenessMs: RECOMMENDED_ATTEMPT_STALENESS_MS,
+    });
+    // `live` is minted from the PROBE, never from the derivation's `active`
+    // arm. That arm is also reached for a recent — or future-dated — record
+    // whose holder is dead or absent, which is a grace period that keeps a
+    // young attempt from reading as interrupted, not proof that anything is
+    // running. Promoting it here would put an indeterminate bar and a
+    // lifecycle gate behind a record nobody is carrying.
+    const liveness: LocalAttemptLiveness =
+      holder.kind === "holder-live"
+        ? "live"
+        : derived.kind === "interrupted"
+          ? "interrupted"
+          : "unknown";
+    return localAttemptFacts(record, liveness, nowMs);
   }
 
   async getStatus(): Promise<HostControllerStatus> {
@@ -2759,6 +2869,7 @@ export class HostController {
   async convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>> {
     return this.enqueueMutation<GuardedMutationOutcome<ConvergeReadyOk>>(
       "ensure",
@@ -2769,8 +2880,11 @@ export class HostController {
       // coalescing bug, where the joiner's policy was discarded in favour of
       // the occupant's. Two repairs for DIFFERENT hosts are likewise not the
       // same job: joining would hand the newcomer the occupant's guard, which
-      // then refuses it for naming a different host.
-      `ensure:${force}:${this.reprovisionCoalesceKeySuffix(intent)}`,
+      // then refuses it for naming a different host. The version policy is in
+      // the key for the same reason: a version-seeking "Install host" repair
+      // that joined a queued liveness converge would inherit its
+      // `--keep-installed` and report applied having moved nothing.
+      `ensure:${force}:${versionPolicy}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
         const abandoned = await this.admitReprovision(intent);
         if (abandoned !== null) return abandoned;
@@ -2780,10 +2894,29 @@ export class HostController {
         if (intent.kind === "background" && (await isHostRemovedByUser())) {
           return { kind: "ok", value: { running: false, version: null } };
         }
+        // `keep-installed` (`host ensure --keep-installed`, the `viability`
+        // policy) is every implicit converge - background AND Doctor's
+        // `converge-ready` alike. That is the liveness path: it brings a down
+        // host back up on WHATEVER non-yanked version is installed and never
+        // moves the version as a matter of client preference (version
+        // movement is the channel's / an explicit update's job). This is also
+        // what makes it race-free against a deliberate downgrade: `viability`
+        // re-reads the installed version UNDER the CLI mutation lock, so
+        // there is no stale desktop-side "is it held?" sample a terminal
+        // downgrade could slip past between the sample and the CLI acquiring
+        // its lock (finding 3, Doctor path). A genuinely absent/yanked install
+        // still gets the pinned host (first-install bootstrap), since
+        // viability is only satisfied by an existing usable install.
+        //
+        // `pinned-minimum` is the one EXPLICIT, version-seeking converge:
+        // Doctor's `converge-latest`, behind "Install host" on a host that is
+        // too old to serve this client. Liveness would keep exactly that host
+        // and call the repair applied - see `ConvergeReadyVersionPolicy`.
+        const keepInstalled = versionPolicy === "keep-installed";
         if (await this.isPackagedMacOwned()) {
-          return this.convergeReadyPackagedMac(force);
+          return this.convergeReadyPackagedMac(force, keepInstalled);
         }
-        return this.convergeReadyCliOwned(force);
+        return this.convergeReadyCliOwned(force, keepInstalled);
       },
     );
   }
@@ -2850,13 +2983,18 @@ export class HostController {
 
   private async convergeReadyCliOwned(
     force: boolean,
+    keepInstalled: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
     const bundledHostFrom = await resolveWindowsBundledHostArchive();
+    // `--keep-installed` and `--from` coexist deliberately: on this (Windows)
+    // route `--from` is only the FIRST-INSTALL source, so a viable install is
+    // kept and the bundled archive is used only when nothing is installed.
     const args = [
       "host",
       "ensure",
       ...(force ? ["--force"] : []),
+      ...(keepInstalled ? ["--keep-installed"] : []),
       ...(bundledHostFrom !== null ? ["--from", bundledHostFrom] : []),
     ];
     let raw: unknown;
@@ -2907,14 +3045,17 @@ export class HostController {
 
   private async convergeReadyPackagedMac(
     force: boolean,
+    keepInstalled: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     let raw: unknown;
     try {
-      raw = await this.streamBundled<unknown>(
-        force
-          ? ["host", "ensure", "--force", "--no-service-register"]
-          : ["host", "ensure", "--no-service-register"],
-      );
+      raw = await this.streamBundled<unknown>([
+        "host",
+        "ensure",
+        ...(force ? ["--force"] : []),
+        ...(keepInstalled ? ["--keep-installed"] : []),
+        "--no-service-register",
+      ]);
     } catch (err) {
       return this.classifyEnsureLikeError(err);
     }
@@ -3409,6 +3550,15 @@ export class HostController {
     await this.downloadTail;
   }
 
+  /**
+   * The outcome of a CLI `host apply` that changed nothing - nothing was
+   * staged by the time it ran, or `--respect-hold` kept the deliberately-held
+   * install instance. Reachable host => `ok` with `applied: false`, so the
+   * launch reconcile can fall through to its activation arm. Unreachable host
+   * => `installedNotConverged` (a failure), so the reconcile's ordinary
+   * failed-apply recovery starts the installed bytes via a keep-installed
+   * converge; that is how a held host that is DOWN gets started.
+   */
   private async noOpApplyOutcome(
     appliedVersion: string,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
@@ -3418,12 +3568,12 @@ export class HostController {
     );
     if (runningRuntimeVersion === null) {
       return this.installedNotConverged(
-        "No staged host update was available, but the current host is not reachable. Open Doctor or run 'traycer host doctor' to recover.",
+        "The installed host was left unchanged (nothing to apply, or the installed version is deliberately held), but it is not reachable. Open Doctor or run 'traycer host doctor' to recover.",
       );
     }
     return {
       kind: "ok",
-      value: { appliedVersion, runningActivated: true },
+      value: { appliedVersion, runningActivated: true, applied: false },
     };
   }
 
@@ -3474,10 +3624,22 @@ export class HostController {
                 message: HOST_REMOVED_BY_USER_MESSAGE,
               };
             }
+            // An implicit LAUNCH apply respects the hold under the CLI lock
+            // (the desktop preflight in `runLaunchHostConvergeReconcile` can be
+            // stale against a terminal downgrade that raced the staging
+            // window). A `manual` "Update now" is explicit and always applies.
+            const respectHold = trigger === "launch";
             if (await this.isPackagedMacOwned()) {
-              return this.applyStagedPackagedMac(eligibleStage.fingerprint);
+              return this.applyStagedPackagedMac(
+                eligibleStage.fingerprint,
+                respectHold,
+              );
             }
-            return this.applyStagedCliOwned(force, eligibleStage.fingerprint);
+            return this.applyStagedCliOwned(
+              force,
+              eligibleStage.fingerprint,
+              respectHold,
+            );
           });
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
@@ -3493,6 +3655,7 @@ export class HostController {
   private async applyStagedCliOwned(
     force: boolean,
     expectedStageFingerprint: string,
+    respectHold: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
     let raw: unknown;
@@ -3503,6 +3666,7 @@ export class HostController {
         "--expected-stage-fingerprint",
         expectedStageFingerprint,
         ...(force ? ["--force"] : []),
+        ...(respectHold ? ["--respect-hold"] : []),
       ]);
     } catch (err) {
       await this.reloadAfterServiceCycleFailure();
@@ -3547,12 +3711,14 @@ export class HostController {
       value: {
         appliedVersion: result.version ?? "",
         runningActivated: result.runningActivated,
+        applied: true,
       },
     };
   }
 
   private async applyStagedPackagedMac(
     expectedStageFingerprint: string,
+    respectHold: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
     let raw: unknown;
     try {
@@ -3562,6 +3728,7 @@ export class HostController {
         "--no-service",
         "--expected-stage-fingerprint",
         expectedStageFingerprint,
+        ...(respectHold ? ["--respect-hold"] : []),
       ]);
     } catch (err) {
       // `--no-service` never busy-checks CLI-side, so any error here is a
@@ -3593,6 +3760,7 @@ export class HostController {
       value: {
         appliedVersion: result.version ?? "",
         runningActivated: activation.value.activated,
+        applied: true,
       },
     };
   }
@@ -3608,13 +3776,26 @@ export class HostController {
 
   activateInstalled(
     force: boolean,
+    // When false, activate the installed bytes only and NEVER promote a ready
+    // newer stage, even when `updateReady` is true. The implicit launch
+    // reconcile passes false for EVERY launch activation: otherwise this
+    // method's "ready update supersedes activation debt" branch is an INDIRECT
+    // apply, and a stage that becomes ready across its internal `stageLatest()`
+    // could revert a deliberately-held downgrade (a held host with activation
+    // debt and no stage at the first sample reads `updateReady === false`). A
+    // known-ready update is applied by the launch reconcile's own
+    // `applyStaged("launch")` branch under the CLI `--respect-hold` guard.
+    // Explicit callers (the GUI activate/Update click) pass true and keep that
+    // supersede-debt optimisation. Part of the coalesce/lane key so an implicit
+    // and an explicit activation never collapse into one job.
+    promoteReadyStage: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
     // Fixup A6: reconcile BEFORE entering the exclusive mutation lane, same
     // reasoning as `applyStaged` - determining whether a ready update
     // supersedes activation debt needs fresh `updateReady` state, and
     // fetching it must never hold the lane hostage across a WAN download.
     return this.coalesceIntent<ActivateInstalledOk>(
-      `activate:${force}`,
+      `activate:${force}:${promoteReadyStage}`,
       async () => {
         // Match `applyStaged`'s at-most-once freshness retry: the first
         // fingerprint can be invalidated by a replacement stage after the
@@ -3627,14 +3808,17 @@ export class HostController {
 
           const outcome = await this.enqueueMutation<
             MutationOutcome<ActivateInstalledOk>
-          >("activate", `activate:${force}`, async () => {
+          >("activate", `activate:${force}:${promoteReadyStage}`, async () => {
             // A ready update supersedes activation debt - prevents the
             // restart-old -> stamp -> restart-new double cycle. The reconcile
             // already ran above; this only re-reads the (now-fresh) state and
             // performs the apply/activate choreography, no further download.
+            // Skipped entirely when `promoteReadyStage` is false (a held host):
+            // the caller wants the installed bytes activated, never the stage.
             const installed = await readDesktopHostInstallRecord(this.layout);
             const staged = await readDesktopHostStagedRecord(this.layout);
             if (
+              promoteReadyStage &&
               deriveUpdateReady(
                 installed?.version ?? null,
                 staged?.version ?? null,
@@ -3648,11 +3832,20 @@ export class HostController {
                     "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
                 };
               }
+              // `respectHold: false` - this promotion is reached only via the
+              // explicit IPC activate/Update path. Every launch activation
+              // passes `promoteReadyStage: false`, so this branch never runs
+              // implicitly, and a known-ready update at launch goes through the
+              // reconcile's own `applyStaged("launch")` guarded by --respect-hold.
               const applied = (await this.isPackagedMacOwned())
-                ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
+                ? await this.applyStagedPackagedMac(
+                    eligibleStage.fingerprint,
+                    false,
+                  )
                 : await this.applyStagedCliOwned(
                     force,
                     eligibleStage.fingerprint,
+                    false,
                   );
               if (applied.kind === "stage-fingerprint-mismatch") {
                 return applied;
@@ -4212,6 +4405,17 @@ export class HostController {
       {
         layout: this.layout,
         substrate: owner.substrate,
+        // Read at the decision rather than captured earlier: the CLI install
+        // manifest is on disk and can move under a long-lived controller.
+        // `null` when no CLI is installed beside this host, which the fence
+        // ADMITS by documented asymmetry - this signal detects an old
+        // *installed* CLI and is structurally silent about one invoked from
+        // elsewhere on `PATH`, so refusing on absence would only refuse
+        // machines that have no CLI at all.
+        readCompatibilityIdentities: async () => ({
+          installedCliVersion: (await readCliManifest())?.version ?? null,
+          desktopVersion: app.getVersion(),
+        }),
         contender: {
           hostHomeDir: this.layout.rootDir,
           lockPath: this.lockPath,

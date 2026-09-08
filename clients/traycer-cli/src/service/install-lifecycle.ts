@@ -1,4 +1,8 @@
-import type { InstallHostLifecycle, SwapLockRecovery } from "../installer";
+import type {
+  InstallHostLifecycle,
+  InstallPhaseHooks,
+  SwapLockRecovery,
+} from "../installer";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
@@ -133,6 +137,20 @@ export interface CreateServiceInstallLifecycleOptions {
    * tracking the boundary.
    */
   readonly onWillStopHost: (() => void) | null;
+  // The caller's two swap barriers (`installer/install.ts`'s
+  // `InstallPhaseHooks`). `beforeSwapCommit` becomes the lifecycle member of
+  // the same name verbatim; `afterSwap` runs at the TOP of this lifecycle's
+  // own `afterSwap`, before any retire/kickstart/register work, so a
+  // caller's write always precedes the start request. Callers driving no
+  // attempt record pass `NO_INSTALL_PHASE_HOOKS`.
+  //
+  // Distinct from `onWillStopHost`, which sits a few lines away in
+  // `beforeSwap`: that one ANNOUNCES the disruption boundary and may not
+  // fail the install, while `beforeSwapCommit` is a durable record advance
+  // the executor must land before the swap. They also fire in different
+  // places - `onWillStopHost` immediately before the stop actuator,
+  // `beforeSwapCommit` only once that stop has RESOLVED.
+  readonly hooks: InstallPhaseHooks;
 }
 
 // Build the lifecycle hooks `installHost` needs to keep the OS
@@ -160,6 +178,8 @@ export function createServiceInstallLifecycle(
     setHostStartAdoptionPublisher: (publish) => {
       publishHostStartAdoption = publish;
     },
+    // The stop below either resolved or threw; a denial never reaches this.
+    beforeSwapCommit: () => options.hooks.beforeSwapCommit(),
     beforeSwap: async () => {
       const status = await controller.status(label);
       state.priorState = status.state;
@@ -224,207 +244,258 @@ export function createServiceInstallLifecycle(
       }
     },
     afterSwap: async () => {
-      if (state.priorState === "externally-managed") {
-        // Traycer Desktop's SMAppService owns registration here. Any
-        // launchctl bootstrap/bootout (or manifest rewrite) against ITS
-        // label would corrupt the BTM registration it manages -
-        // `installService` refuses exactly that. Leave the service alone:
-        // the swapped bytes go live at Desktop's next SMAppService register
-        // cycle (ensure fast path / pending-revision monitor / relaunch).
-        state.postSwapAction = "none";
-        // ...but a COMPETING CLI-label registration is a different object
-        // from the one Desktop owns, and leaving it alone is what produced
-        // the dual-host bug. Retire it here rather than merely declining to
-        // add another: this is the one routine flow that both reaches a
-        // poisoned machine (`host install` / `host update` on a
-        // desktop-owned host) and is already an explicit host-lifecycle
-        // operation the user asked for. `retireCompetingRegistration`
-        // re-probes ownership itself and no-ops unless Desktop's agent is
-        // the registered owner and the CLI label is genuinely a competitor
-        // - `externally-managed` alone cannot distinguish that from a
-        // pre-split machine whose CLI label IS Desktop's registration.
-        // This is a destructive service edge even though it is a repair. It
-        // must consume the exact same live verifier as the swap itself; do
-        // not catch-and-log a lost capability and continue into a later
-        // registration edge.
-        try {
-          await withServiceMutationAuthority(verifyMutationCapability, () =>
-            controller.retireCompetingRegistration(label),
-          );
-        } catch (cause) {
-          // An unexpected best-effort repair error keeps the historical
-          // post-swap doctor path. Authority loss is different: it is a hard
-          // stop and must never be converted into that best-effort outcome.
-          if (isServiceMutationAuthorityError(cause)) throw cause;
-          createCliLogger(options.environment).warn(
-            "Competing-registration repair threw unexpectedly; the host install itself was unaffected.",
-            { cause: cause instanceof Error ? cause.message : String(cause) },
-          );
-        }
-        if (process.platform === "darwin") {
-          // Bring the host up on the NEW bytes now instead of leaving the
-          // machine hostless until Desktop's next register cycle. Both
-          // routes kickstart the agent label - the bundle-owned definition
-          // is unchanged by a host-bytes swap, so this is not the cached-
-          // definition staleness case that forbids start-after-swap on
-          // CLI-owned registrations.
-          //
-          // Unconditional on purpose, NOT gated on whether beforeSwap's
-          // stop stopped anything. The gated version left a machine whose
-          // host was already down (a prior `host stop --force` purges
-          // pid.json, so the pre-swap stop throws no-metadata and degrades)
-          // with a completed install, a printed "starting service", and no
-          // host until someone ran `host restart` by hand.
-          //
-          // Which kickstart depends on what the stop PROVED, and the split
-          // is `stoppedBeforeSwap` exactly:
-          //   - the stop RESOLVED: the host child is proven gone, but its
-          //     supervisor can outlive it through the whole post-mortem
-          //     (stderr drain; crash-report scan after a forced kill), and
-          //     a plain kickstart against a job launchd still considers
-          //     running is a silent no-op - the machine would stay
-          //     hostless. Recycle (`kickstart -k`) instead: it starts a
-          //     stopped job and replaces a winding-down supervisor, and
-          //     the only thing it can kill is a supervisor whose child is
-          //     already dead (same reasoning as `stopServiceForRestart`).
-          //   - the stop THREW (degraded): a host MAY still be live and
-          //     was never asked/consented to die, so recycling would kill
-          //     live work. Plain kickstart: starts a genuinely stopped
-          //     job, silent no-op on a live one, which then picks the new
-          //     bytes up at its next restart.
-          //
-          // A failure must not abort the completed install - record it and
-          // steer to doctor like every other post-swap error.
+      // At the TOP, before every branch below: the bytes are committed and
+      // nothing has been asked to start yet. That holds on every prior
+      // state, `externally-managed` included - which does NOT mean nothing
+      // starts there. That branch declines to re-register Desktop's
+      // SMAppService label, but on darwin it still kickstarts it below
+      // (`relaunchAfterRestart` with `forcedRecycle` after a resolved stop,
+      // `controller.start` after a degraded one) and records
+      // `postSwapAction: "start"`. A caller marking "restarting" here is
+      // therefore naming a CLI-requested relaunch in the ordinary case; the
+      // machine waits for Desktop's own register cycle only when that
+      // kickstart throws (`postSwapError`, `postSwapAction` left "none").
+      //
+      // The hook is CAPTURED here rather than allowed to propagate
+      // (CodeRabbit T6). It runs at the top, so a rejection from it used to
+      // skip every actuator below - leaving the machine on NEW bytes with
+      // nothing registered and nothing started, because a durable
+      // bookkeeping write was refused. The bytes are already committed by
+      // now; bringing the host back is not optional, and the error is
+      // rethrown once the actuators have run.
+      let hookFailure: unknown = null;
+      try {
+        await options.hooks.afterSwap();
+      } catch (err) {
+        hookFailure = err;
+      }
+      // Extracted verbatim so the branches keep their early returns; every
+      // one of them has to stay reachable with a hook failure pending.
+      const runPostSwapActuators = async (): Promise<void> => {
+        if (state.priorState === "externally-managed") {
+          // Traycer Desktop's SMAppService owns registration here. Any
+          // launchctl bootstrap/bootout (or manifest rewrite) against ITS
+          // label would corrupt the BTM registration it manages -
+          // `installService` refuses exactly that. Leave the service alone:
+          // the swapped bytes go live at Desktop's next SMAppService register
+          // cycle (ensure fast path / pending-revision monitor / relaunch).
+          state.postSwapAction = "none";
+          // ...but a COMPETING CLI-label registration is a different object
+          // from the one Desktop owns, and leaving it alone is what produced
+          // the dual-host bug. Retire it here rather than merely declining to
+          // add another: this is the one routine flow that both reaches a
+          // poisoned machine (`host install` / `host update` on a
+          // desktop-owned host) and is already an explicit host-lifecycle
+          // operation the user asked for. `retireCompetingRegistration`
+          // re-probes ownership itself and no-ops unless Desktop's agent is
+          // the registered owner and the CLI label is genuinely a competitor
+          // - `externally-managed` alone cannot distinguish that from a
+          // pre-split machine whose CLI label IS Desktop's registration.
+          // This is a destructive service edge even though it is a repair. It
+          // must consume the exact same live verifier as the swap itself; do
+          // not catch-and-log a lost capability and continue into a later
+          // registration edge.
           try {
             await withServiceMutationAuthority(verifyMutationCapability, () =>
-              (async () => {
-                await runWithPublishedHostStartAdoption(
-                  publishHostStartAdoption,
-                  controller,
-                  label,
-                  async () =>
-                    state.stoppedBeforeSwap
-                      ? controller.relaunchAfterRestart(label, {
-                          forcedRecycle: true,
-                        })
-                      : controller.start(label),
-                );
-              })(),
+              controller.retireCompetingRegistration(label),
             );
-            state.postSwapAction = "start";
+          } catch (cause) {
+            // An unexpected best-effort repair error keeps the historical
+            // post-swap doctor path. Authority loss is different: it is a hard
+            // stop and must never be converted into that best-effort outcome.
+            if (isServiceMutationAuthorityError(cause)) throw cause;
+            createCliLogger(options.environment).warn(
+              "Competing-registration repair threw unexpectedly; the host install itself was unaffected.",
+              { cause: cause instanceof Error ? cause.message : String(cause) },
+            );
+          }
+          if (process.platform === "darwin") {
+            // Bring the host up on the NEW bytes now instead of leaving the
+            // machine hostless until Desktop's next register cycle. Both
+            // routes kickstart the agent label - the bundle-owned definition
+            // is unchanged by a host-bytes swap, so this is not the cached-
+            // definition staleness case that forbids start-after-swap on
+            // CLI-owned registrations.
+            //
+            // Unconditional on purpose, NOT gated on whether beforeSwap's
+            // stop stopped anything. The gated version left a machine whose
+            // host was already down (a prior `host stop --force` purges
+            // pid.json, so the pre-swap stop throws no-metadata and degrades)
+            // with a completed install, a printed "starting service", and no
+            // host until someone ran `host restart` by hand.
+            //
+            // Which kickstart depends on what the stop PROVED, and the split
+            // is `stoppedBeforeSwap` exactly:
+            //   - the stop RESOLVED: the host child is proven gone, but its
+            //     supervisor can outlive it through the whole post-mortem
+            //     (stderr drain; crash-report scan after a forced kill), and
+            //     a plain kickstart against a job launchd still considers
+            //     running is a silent no-op - the machine would stay
+            //     hostless. Recycle (`kickstart -k`) instead: it starts a
+            //     stopped job and replaces a winding-down supervisor, and
+            //     the only thing it can kill is a supervisor whose child is
+            //     already dead (same reasoning as `stopServiceForRestart`).
+            //   - the stop THREW (degraded): a host MAY still be live and
+            //     was never asked/consented to die, so recycling would kill
+            //     live work. Plain kickstart: starts a genuinely stopped
+            //     job, silent no-op on a live one, which then picks the new
+            //     bytes up at its next restart.
+            //
+            // A failure must not abort the completed install - record it and
+            // steer to doctor like every other post-swap error.
+            try {
+              await withServiceMutationAuthority(verifyMutationCapability, () =>
+                (async () => {
+                  await runWithPublishedHostStartAdoption(
+                    publishHostStartAdoption,
+                    controller,
+                    label,
+                    async () =>
+                      state.stoppedBeforeSwap
+                        ? controller.relaunchAfterRestart(label, {
+                            forcedRecycle: true,
+                          })
+                        : controller.start(label),
+                  );
+                })(),
+              );
+              state.postSwapAction = "start";
+            } catch (cause) {
+              if (isServiceMutationAuthorityError(cause)) throw cause;
+              state.postSwapError =
+                cause instanceof Error ? cause.message : String(cause);
+            }
+          }
+          return;
+        }
+        if (state.priorState === "not-installed") {
+          if (options.bootstrap === null) {
+            // Update / non-bootstrap callers leave registration to the
+            // operator (`traycer host service install`).
+            state.postSwapAction = "none";
+            return;
+          }
+          state.postSwapAction = "install";
+          try {
+            await registerService({
+              controller,
+              label,
+              environment: options.environment,
+              bootstrap: options.bootstrap,
+              preservedCli: null,
+              verifyMutationCapability,
+              publishHostStartAdoption,
+            });
           } catch (cause) {
             if (isServiceMutationAuthorityError(cause)) throw cause;
+            // No rollback - the new host stays in place. The command
+            // surfaces this as a warning and steers the user toward
+            // `traycer host doctor` / `traycer host service install`
+            // for recovery.
             state.postSwapError =
               cause instanceof Error ? cause.message : String(cause);
           }
-        }
-        return;
-      }
-      if (state.priorState === "not-installed") {
-        if (options.bootstrap === null) {
-          // Update / non-bootstrap callers leave registration to the
-          // operator (`traycer host service install`).
-          state.postSwapAction = "none";
           return;
         }
+        // Existing registration: rewrite the OS service manifest and
+        // re-load it so the supervisor picks up definition changes
+        // (descriptor soft limits, ProgramArguments, env, ...). Plain
+        // start/restart only instructs the already-loaded job to run -
+        // on macOS that is launchctl kickstart of a cached definition.
+        // Linux/Windows install paths already daemon-reload / recreate
+        // the unit/task, so re-registering is the common cross-platform
+        // post-swap action for both stopped and previously-running
+        // services (the process was stopped in beforeSwap when needed).
         state.postSwapAction = "install";
         try {
+          // `host update` (bootstrap null) refreshes the DEFINITION of an
+          // existing registration (descriptor limits, env), but must not
+          // silently REPOINT it: on macOS, re-resolving the CLI here can
+          // prefer a stale staged `~/.traycer/cli` binary over the brew /
+          // manual binary the registered plist actually invokes. Reuse the
+          // registered command when it still exists; fall through to normal
+          // resolution when the manifest is missing/unreadable or its
+          // command is gone. Explicit `host install` (bootstrap non-null)
+          // keeps re-resolving - a reinstall is allowed to repoint.
+          //
+          // Deliberately darwin-only (accepted trade-off, not an oversight):
+          // Linux/Windows updates DO re-resolve, so the same repoint hazard
+          // exists there in principle - but the affected cohort (a manual /
+          // package-manager CLI install that ALSO once ran Desktop's setup,
+          // leaving a stale staged binary) is overwhelmingly a
+          // macOS/Homebrew phenomenon, and preserving would need bespoke
+          // systemd-unit / Scheduled-Task-XML parsers for a failure mode
+          // whose worst case is the service running a stale-but-functional
+          // CLI. Revisit with real parsers if a non-macOS cohort surfaces.
+          //
+          // One registration is never worth preserving: the self-naming
+          // `<SEA> traycer host start` vector the pre-fix packaged fallback
+          // emitted, which cannot launch at all. Preserving it is how a
+          // machine that registered under `cli-v1.2.0-rc.1` would stay broken
+          // across every subsequent `host update` - `launchctl kickstart`
+          // reports success as soon as the binary spawns, so no failure path
+          // downstream ever rewrites it. Dropping it here falls through to
+          // normal resolution, which emits the corrected vector.
+          const registeredCli =
+            options.bootstrap === null && process.platform === "darwin"
+              ? await readRegisteredCliInvocation(label)
+              : null;
+          const preservedCli =
+            registeredCli !== null &&
+            (await isSelfNamingCliInvocation(registeredCli))
+              ? null
+              : registeredCli;
           await registerService({
             controller,
             label,
             environment: options.environment,
-            bootstrap: options.bootstrap,
-            preservedCli: null,
+            // host update leaves bootstrap null (it must not invent a
+            // registration on a clean machine). For an already-registered
+            // service, reuse the caller's bootstrap flags when present;
+            // otherwise re-resolve the CLI with linger off and self-
+            // invocation permitted. Manifest / well-known bin still win
+            // when present (cli-binary.ts steps 1–2); self-invocation is
+            // only the Brew/manual fallback documented there. Without it,
+            // host update stops an existing service and then fails to
+            // re-register on installs that never staged ~/.traycer/cli.
+            bootstrap: options.bootstrap ?? {
+              enableLinger: false,
+              allowSelfInvocation: true,
+            },
+            preservedCli,
             verifyMutationCapability,
             publishHostStartAdoption,
           });
         } catch (cause) {
           if (isServiceMutationAuthorityError(cause)) throw cause;
-          // No rollback - the new host stays in place. The command
-          // surfaces this as a warning and steers the user toward
-          // `traycer host doctor` / `traycer host service install`
-          // for recovery.
+          // No rollback. New host is in place; surface the failure
+          // so the command can warn the user and Doctor can flag it.
           state.postSwapError =
             cause instanceof Error ? cause.message : String(cause);
         }
-        return;
-      }
-      // Existing registration: rewrite the OS service manifest and
-      // re-load it so the supervisor picks up definition changes
-      // (descriptor soft limits, ProgramArguments, env, ...). Plain
-      // start/restart only instructs the already-loaded job to run -
-      // on macOS that is launchctl kickstart of a cached definition.
-      // Linux/Windows install paths already daemon-reload / recreate
-      // the unit/task, so re-registering is the common cross-platform
-      // post-swap action for both stopped and previously-running
-      // services (the process was stopped in beforeSwap when needed).
-      state.postSwapAction = "install";
+      };
       try {
-        // `host update` (bootstrap null) refreshes the DEFINITION of an
-        // existing registration (descriptor limits, env), but must not
-        // silently REPOINT it: on macOS, re-resolving the CLI here can
-        // prefer a stale staged `~/.traycer/cli` binary over the brew /
-        // manual binary the registered plist actually invokes. Reuse the
-        // registered command when it still exists; fall through to normal
-        // resolution when the manifest is missing/unreadable or its
-        // command is gone. Explicit `host install` (bootstrap non-null)
-        // keeps re-resolving - a reinstall is allowed to repoint.
-        //
-        // Deliberately darwin-only (accepted trade-off, not an oversight):
-        // Linux/Windows updates DO re-resolve, so the same repoint hazard
-        // exists there in principle - but the affected cohort (a manual /
-        // package-manager CLI install that ALSO once ran Desktop's setup,
-        // leaving a stale staged binary) is overwhelmingly a
-        // macOS/Homebrew phenomenon, and preserving would need bespoke
-        // systemd-unit / Scheduled-Task-XML parsers for a failure mode
-        // whose worst case is the service running a stale-but-functional
-        // CLI. Revisit with real parsers if a non-macOS cohort surfaces.
-        //
-        // One registration is never worth preserving: the self-naming
-        // `<SEA> traycer host start` vector the pre-fix packaged fallback
-        // emitted, which cannot launch at all. Preserving it is how a
-        // machine that registered under `cli-v1.2.0-rc.1` would stay broken
-        // across every subsequent `host update` - `launchctl kickstart`
-        // reports success as soon as the binary spawns, so no failure path
-        // downstream ever rewrites it. Dropping it here falls through to
-        // normal resolution, which emits the corrected vector.
-        const registeredCli =
-          options.bootstrap === null && process.platform === "darwin"
-            ? await readRegisteredCliInvocation(label)
-            : null;
-        const preservedCli =
-          registeredCli !== null &&
-          (await isSelfNamingCliInvocation(registeredCli))
-            ? null
-            : registeredCli;
-        await registerService({
-          controller,
-          label,
-          environment: options.environment,
-          // host update leaves bootstrap null (it must not invent a
-          // registration on a clean machine). For an already-registered
-          // service, reuse the caller's bootstrap flags when present;
-          // otherwise re-resolve the CLI with linger off and self-
-          // invocation permitted. Manifest / well-known bin still win
-          // when present (cli-binary.ts steps 1–2); self-invocation is
-          // only the Brew/manual fallback documented there. Without it,
-          // host update stops an existing service and then fails to
-          // re-register on installs that never staged ~/.traycer/cli.
-          bootstrap: options.bootstrap ?? {
-            enableLinger: false,
-            allowSelfInvocation: true,
-          },
-          preservedCli,
-          verifyMutationCapability,
-          publishHostStartAdoption,
-        });
+        await runPostSwapActuators();
       } catch (cause) {
-        if (isServiceMutationAuthorityError(cause)) throw cause;
-        // No rollback. New host is in place; surface the failure
-        // so the command can warn the user and Doctor can flag it.
-        state.postSwapError =
-          cause instanceof Error ? cause.message : String(cause);
+        // An actuator throw is only ever an authority loss here - every other
+        // failure above is recorded as `postSwapError` instead. That is the
+        // harder stop, so it wins the throw; the captured hook error is
+        // logged rather than dropped, so neither fact is lost.
+        if (hookFailure !== null) {
+          createCliLogger(options.environment).error(
+            "The install phase hook rejected and a post-swap actuator then failed; surfacing the actuator error.",
+            {
+              hookFailure:
+                hookFailure instanceof Error
+                  ? hookFailure.message
+                  : String(hookFailure),
+            },
+            hookFailure instanceof Error ? hookFailure : null,
+          );
+        }
+        throw cause;
       }
+      if (hookFailure !== null) throw hookFailure;
     },
   };
   return { state, lifecycle };
@@ -443,6 +514,10 @@ export function createServiceInstallLifecycle(
 export function createBytesOnlyInstallLifecycle(
   controller: ServiceController,
   label: ServiceLabel,
+  // Same contract as `CreateServiceInstallLifecycleOptions.hooks`. This
+  // lifecycle starts nothing, so its `afterSwap` is the caller's barrier and
+  // nothing else - the swap is committed and no relaunch follows from here.
+  hooks: InstallPhaseHooks,
 ): InstallHostLifecycle {
   let verifyMutationCapability = async (): Promise<void> => {};
   return {
@@ -456,7 +531,8 @@ export function createBytesOnlyInstallLifecycle(
         controller.stop(label, { force: false }),
       );
     },
-    afterSwap: (): Promise<void> => Promise.resolve(),
+    beforeSwapCommit: () => hooks.beforeSwapCommit(),
+    afterSwap: () => hooks.afterSwap(),
   };
 }
 

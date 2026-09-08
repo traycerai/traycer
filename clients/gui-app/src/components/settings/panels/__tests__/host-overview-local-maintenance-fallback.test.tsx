@@ -518,7 +518,14 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       });
     });
     expect(management.installVersion).not.toHaveBeenCalled();
-    expect(management.getHostControllerStatus).not.toHaveBeenCalled();
+    // `getHostControllerStatus` is deliberately NOT asserted absent any more.
+    // It used to stand in for "this dispatch did not fall back to the legacy
+    // desktop lane", but the Overview now reads the controller status for a
+    // reason that has nothing to do with dispatching: the durable-record leg
+    // (D13), which is how a Desktop-local card can still say what an update was
+    // doing while the host is down. `installVersion` above is the assertion
+    // that actually carries the old meaning — it is the legacy lane's own
+    // verb, and it is still untouched.
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(
         `Updating Local Host to v${BRIDGE_CHECK_VERSION}`,
@@ -1144,7 +1151,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
   });
 
-  it("Install host (HOST_NOT_INSTALLED) dispatches runDoctorRepairIfIdle converge-ready with the captured local id", async () => {
+  it("Install host (HOST_NOT_INSTALLED) dispatches runDoctorRepairIfIdle converge-latest with the captured local id", async () => {
     const { management } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
@@ -1168,7 +1175,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
 
     await waitFor(() => {
       expect(management.runDoctorRepairIfIdle).toHaveBeenCalledWith({
-        repair: "converge-ready",
+        repair: "converge-latest",
         expectedHostId: HOST_ID,
       });
     });

@@ -1,16 +1,20 @@
 import {
   attemptIdentityOf,
   decideAttemptClaim,
+  decideCompatibilityFence,
   isTerminalPhase,
   readUpdateAttemptRecord,
+  SHIPPED_COMPATIBILITY_FLOORS,
   type AttemptClaimAction,
   type AttemptClaimRequest,
   type AttemptCommitOutcome,
   type HostUpdateAttemptIdentity,
   type HostUpdateTrigger,
+  type CompatibilityFenceInput,
   type PublicAttemptMutationIntent,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
+import { log } from "../app/logger";
 import type { HostServiceSubstrate } from "./host-owner";
 import type { HostFsLayout } from "./host-paths";
 import {
@@ -169,6 +173,17 @@ export interface DesktopActivationRequest {
 export interface DesktopActivationDeps {
   readonly layout: HostFsLayout;
   readonly substrate: HostServiceSubstrate;
+  /**
+   * The two identities Ticket 07's compatibility fence orders against the
+   * shipped floors, read at admission.
+   *
+   * A function rather than two fields because `installedCliVersion` comes off
+   * the CLI install manifest on disk, and reading it belongs at the moment of
+   * the decision rather than whenever these deps were assembled - the same
+   * reason the supervisor-relaunch admission reads the install record under
+   * the lock instead of reusing a pre-contention read.
+   */
+  readonly readCompatibilityIdentities: () => Promise<CompatibilityFenceInput>;
   readonly contender: Omit<WithDesktopUpdateSegmentOptions, "admission">;
   readonly nowIso: () => string;
   readonly drain: () => Promise<DesktopDrainVerdict>;
@@ -343,6 +358,46 @@ export async function runDesktopActivationSegment(
   if (!(await hasAdoptedActivationContinuation(deps))) {
     if (decideDesktopUpdateExecutorCohort(deps.substrate).kind !== "eligible") {
       return { kind: "rejected", reason: "cohort-disabled" };
+    }
+    // Ticket 07's PREVENTIVE half, and this is the admission its header names:
+    // "may a new attempt be admitted on this machine?". It sits INSIDE the
+    // same `hasAdoptedActivationContinuation` guard as the cohort gate, and
+    // for the same ruled reason - it stops new attempts and must never strand
+    // one already adopted, which is a property of the RECORD rather than of
+    // this entry point.
+    //
+    // ## Why the fence lives here and not on the CLI's admission
+    //
+    // Its input is `{installedCliVersion, desktopVersion}`, and the single
+    // combination it exists for is a user-invoked OLD CLI on `PATH` running
+    // concurrently with a NEW Desktop. A Desktop always spawns its bundled
+    // CLI, so a new Desktop cannot drive an old one; the danger is the other
+    // direction, and only a machine that HAS a Desktop can be in it.
+    //
+    // That placement is also what satisfies the cutover's hard constraint by
+    // construction: the fence must not refuse the upgrade path itself, and the
+    // E8v rows - 1.0.0/1.1.5/1.1.8/1.1.11 CLIs updating to the flipped release
+    // - are CLI-only machines that never reach this function at all. A fence
+    // wired into the CLI's own admission would have refused exactly the legs
+    // the cutover has to keep working.
+    const verdict = decideCompatibilityFence(
+      await deps.readCompatibilityIdentities(),
+      SHIPPED_COMPATIBILITY_FLOORS,
+    );
+    if (verdict.kind !== "admit") {
+      return { kind: "rejected", reason: `fence-${verdict.reason}` };
+    }
+    // A waiver is EVIDENCE, never silence. A staging or unreleased build is
+    // admitted without an ordering comparison because it is a build of a
+    // lock-aware tree by construction - but "admitted without comparison" and
+    // "compared and passed" must be distinguishable afterwards, or the fence's
+    // own matrix runs cannot be told apart from released ones.
+    for (const waiver of verdict.waived) {
+      log.info("[host-update] compatibility fence waived a non-release build", {
+        actor: waiver.actor,
+        version: waiver.version,
+        identity: waiver.identity,
+      });
     }
   }
 
@@ -527,6 +582,12 @@ async function claim(
     // the drain runs before `restarting`, and a fresh attempt starts there
     // because this executor never downloads.
     initialPhase: "preparing",
+    // Desktop records neither creation fact. It has no under-lock reading of
+    // the install tree to build a baseline from - that evidence belongs to the
+    // CLI claimant - and a baseline it could not attest would be worse than
+    // none: a later resume would be authorized against a fact nobody checked.
+    initialContinuation: null,
+    claim: null,
     nowIso: deps.nowIso(),
   };
   const decision = decideAttemptClaim({
@@ -604,6 +665,11 @@ async function terminalize(
       continuation: null,
       progress: null,
       error: { code: reason, message: cause, phase: "restarting" },
+      // Carried unchanged. Desktop never re-reads the install tree under this
+      // lock, so it has nothing to refresh a baseline with - and a terminal
+      // write is not the place to restate one anyway.
+      claimRefresh: null,
+      verification: null,
       nowIso: deps.nowIso(),
     },
   });
@@ -637,6 +703,11 @@ async function advance(
       continuation: to.continuation,
       progress: null,
       error: null,
+      // Carried unchanged, park included: refreshing a baseline means proving
+      // the install tree is still the one the claim was made against, and this
+      // executor reads no install record at all.
+      claimRefresh: null,
+      verification: null,
       nowIso: deps.nowIso(),
     },
   });
