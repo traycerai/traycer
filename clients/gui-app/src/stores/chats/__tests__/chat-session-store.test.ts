@@ -13346,36 +13346,6 @@ describe("preSnapshotRetries", () => {
     harness.handle.dispose();
   });
 
-  it("records the host's code and reason from a retryable close, not just a fatalError", () => {
-    // Previously only `fatalError` folded a code/reason into the streak, so a
-    // `retryableClose` - the shape a pre-1.3 host answers an unreadable chat
-    // store with, forever - left `code`/`reason` null. See
-    // `WsStreamClient`'s `pendingRetryableClose` for where this reason comes
-    // from.
-    const harness = createHarness();
-    const callbacks = harness.callbacks();
-
-    callbacks.onConnectionStatus("reconnecting", {
-      kind: "retryableClose",
-      details: {
-        code: "CHAT_OPEN_FAILED",
-        reason: "Chat store was written by a newer build",
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-        retryable: true,
-      },
-    });
-
-    const retries = preSnapshotRetries(harness);
-    expect(retries).toEqual({
-      count: 1,
-      firstAt: retries.firstAt,
-      code: "CHAT_OPEN_FAILED",
-      reason: "Chat store was written by a newer build",
-    });
-    harness.handle.dispose();
-  });
-
   it("resets to null once a snapshot lands, and a later reconnect is not counted as a stalled load", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();

@@ -1422,16 +1422,6 @@ class StreamSession<
    */
   private lastRetryableCloseFingerprint: string | null = null;
   /**
-   * The retryable close this drop is carrying to the consumer, or `null`.
-   *
-   * Set where the close is handled and consumed by the one
-   * `transitionTo("reconnecting", …)` that follows it, then cleared - so an
-   * ordinary socket drop later in the session cannot inherit a stale host
-   * verdict. Every other reconnect path leaves it null and reports `null`,
-   * exactly as before.
-   */
-  private pendingRetryableClose: FatalErrorDetails | null = null;
-  /**
    * Bounds the rare "valid-but-rejected" loop: AuthnV3 keeps accepting the
    * bearer (revalidation returns "rotated") yet the host keeps rejecting the
    * open frame with `UNAUTHORIZED` because the token never actually changed
@@ -2439,16 +2429,6 @@ class StreamSession<
         this.lastRetryableCloseFingerprint = retryableClose.fingerprint;
         console.warn(retryableClose.line);
       }
-      // Carried to the consumer on the reconnecting transition below, from the
-      // SAME bounded pieces the line is built from. Until this existed the
-      // details died here, so a session that kept redialing could show its
-      // reader nothing about what the host had said on the way out.
-      this.pendingRetryableClose = {
-        code: retryableClose.code,
-        reason: retryableClose.reason,
-        incompatibleMethods: details.incompatibleMethods,
-        upgradeGuidance: details.upgradeGuidance,
-      };
       this.teardownSocket(1000, "host-retryable");
       this.onTransportDrop();
       return;
@@ -2935,15 +2915,7 @@ class StreamSession<
     this.supportsHostCredentialProvision = false;
     this.phase = "idle";
     this.pendingBinaryEnvelope = null;
-    // Consumed exactly once: whatever set it did so for THIS drop.
-    const retryableClose = this.pendingRetryableClose;
-    this.pendingRetryableClose = null;
-    this.transitionTo(
-      "reconnecting",
-      retryableClose === null
-        ? null
-        : { kind: "retryableClose", details: retryableClose },
-    );
+    this.transitionTo("reconnecting", null);
   }
 
   private scheduleReconnect(): void {
