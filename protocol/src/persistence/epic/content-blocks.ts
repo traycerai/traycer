@@ -1070,6 +1070,30 @@ export const interviewQuestionSchema = z.object({
   header: z.string().nullable(),
   options: z.array(interviewQuestionOptionSchema),
   multiSelect: z.boolean(),
+  /**
+   * Whether this question can be answered with free text ("Other"), as opposed
+   * to a listed option only.
+   *
+   * Set by whoever raised the interview, because it is a property of the
+   * ANSWER CHANNEL rather than of the question's wording. An interview that
+   * rides an ACP `session/request_permission` is the case that needs it: that
+   * request's answer carries an option id and nothing else, so free text has
+   * nowhere to travel. Offering "Other" there produces a question the user can
+   * type into and whose answer cannot be delivered - the text is silently
+   * dropped on the way back to the agent.
+   *
+   * Additive + nullable, like `sender` above: questions persisted before this
+   * field parse to `null`, and `null` means "unstated", which every renderer
+   * treats exactly as it did before - free text offered. Only an explicit
+   * `false` withdraws it, so no existing transcript changes shape and a host
+   * that never sets the field keeps today's behaviour.
+   *
+   * INVARIANT for the raiser: do not combine `false` with an empty `options`.
+   * Options are then the only surviving answer channel and there are none, so
+   * the question cannot be answered at all - the renderer offers no input for
+   * that pair, leaving Skip as the only exit.
+   */
+  allowsCustomAnswer: z.boolean().nullable().default(null),
 });
 export type InterviewQuestion = z.infer<typeof interviewQuestionSchema>;
 

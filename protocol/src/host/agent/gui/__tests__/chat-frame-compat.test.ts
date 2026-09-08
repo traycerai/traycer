@@ -976,6 +976,23 @@ const STRIPPED_INTERVIEW_BLOCK_KEYS = [
 function populatedInterviewBlock(blockId: string): Record<string, unknown> {
   return {
     ...legacyInterviewBlock(blockId),
+    // The CURRENT question shape, unlike `legacyInterviewBlock`'s deliberately
+    // pre-1.7 one: every field the live schema defaults is written out, so
+    // parsing a projection of this block is a no-op and the round-trip
+    // assertions below compare projection against projection. `sender` on
+    // `userMessage()` is spelled out for the same reason. A new `.default()`
+    // on a question field belongs here too, or those assertions fail with the
+    // parser's fill-in as the only difference.
+    questions: [
+      {
+        questionId: "q1",
+        question: "Which library?",
+        header: "Library",
+        options: [{ label: "date-fns", description: null, preview: null }],
+        multiSelect: false,
+        allowsCustomAnswer: null,
+      },
+    ],
     outcome: "answered",
     draftAnswers: [
       {

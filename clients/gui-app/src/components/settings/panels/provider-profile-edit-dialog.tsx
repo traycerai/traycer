@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { ChevronRight, RefreshCw, Trash2 } from "lucide-react";
 import {
@@ -6,6 +6,7 @@ import {
   type ProviderCliState,
   type ProviderProfile,
   type ProviderProfileAccentColor,
+  type ProviderProfileApiKeyState,
 } from "@traycer/protocol/host/provider-schemas";
 import { CopyTextButton } from "@/components/copy-text-button";
 import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
@@ -26,8 +27,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useClearProviderProfileApiKey } from "@/hooks/providers/use-clear-provider-profile-api-key-mutation";
+import { useSetProviderProfileApiKey } from "@/hooks/providers/use-set-provider-profile-api-key-mutation";
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
@@ -177,6 +181,183 @@ function ProfileLaunchCommandBlock(props: {
   );
 }
 
+/**
+ * THE THREE-STATE GATE for the per-profile API-key form. Returns the state to
+ * render a form FROM, or null for "no form here". The states are not
+ * interchangeable:
+ *
+ * - **absent or `null` -> UNKNOWN.** The field is
+ *   `.nullable().catch(null).optional()`, so a host that predates it decodes to
+ *   `undefined` and a malformed one to `null`. Both mean "this host never told
+ *   us", and such a host also predates `providers.setProfileApiKey` /
+ *   `clearProfileApiKey` - which sit OFF the released floor and answer
+ *   `E_HOST_UNSUPPORTED`. Rendering a form here would be offered-then-failed.
+ * - **`supported: false` -> no form.** `supported` is a property of the
+ *   provider-and-kind pair, not of the account: a provider whose key method
+ *   exists only for Traycer-owned directories reports false on its AMBIENT row,
+ *   because writing a key there would reconfigure a config directory shared
+ *   with the user's other clients. So the gate reads this flag and never the
+ *   provider id.
+ * - **`supported: true` -> form**, with `configured` choosing Replace/Remove
+ *   over Add.
+ *
+ * A PURE FUNCTION the DIALOG applies, rather than an early return inside the
+ * form component, and that placement is load-bearing: it makes the gate a MOUNT
+ * decision, so the two mutation hooks below only ever run on a host that has
+ * the methods. A form component that gated itself would still have called
+ * `useQueryClient` on every profile in every surface that opens this dialog -
+ * which is exactly what broke the sibling panel suites, none of which wrap this
+ * dialog in a `QueryClientProvider` because no profile in their fixtures has a
+ * key method.
+ */
+function profileApiKeyFormState(
+  profile: ProviderProfile,
+  switchingAccount: boolean,
+): ProviderProfileApiKeyState | null {
+  // `switchingAccount` belongs to this decision rather than to the JSX: while
+  // the reauth panel is up, the form must not be on screen at all (two
+  // sign-in mechanisms at once), and that is the same "should this mount"
+  // question as the three states below - not a separate rendering concern.
+  if (switchingAccount) return null;
+  const apiKey = profile.apiKey ?? null;
+  if (apiKey === null || !apiKey.supported) return null;
+  return apiKey;
+}
+
+/**
+ * Per-profile API-key paste form. Only mounted for a `supported: true` state -
+ * see `profileApiKeyFormState`, which is the gate.
+ *
+ * A stored key is never echoed back - `providerProfileApiKeyStateSchema`
+ * carries two booleans and nothing else - so the field starts empty on every
+ * open and the placeholder, not a masked value, is what says one is stored.
+ *
+ * The draft is OWNED BY THE DIALOG for the same reason `ProviderApiKeySection`
+ * pushes its draft up to `ProviderDetail`: this section unmounts while the
+ * reauth panel is up, and a locally-held draft would silently blank a key the
+ * user had already pasted.
+ */
+function ProfileApiKeyForm(props: {
+  readonly providerId: ProviderId;
+  readonly profile: ProviderProfile;
+  readonly apiKey: ProviderProfileApiKeyState;
+  readonly disabled: boolean;
+  readonly draft: string;
+  readonly onDraftChange: (draft: string) => void;
+}): ReactNode {
+  const inputId = useId();
+  const setApiKey = useSetProviderProfileApiKey();
+  const clearApiKey = useClearProviderProfileApiKey();
+
+  const apiKey = props.apiKey;
+  const providerLabel = PROVIDER_DISPLAY_NAMES[props.providerId];
+  const trimmed = props.draft.trim();
+  const busy = setApiKey.isPending || clearApiKey.isPending || props.disabled;
+  const saveLabel = apiKey.configured ? "Replace key" : "Add key";
+  const error = setApiKey.error ?? clearApiKey.error;
+
+  const onSave = (): void => {
+    // `min(1)` on the wire: an empty paste is a slip, and the host refuses it
+    // rather than reading it as a clear. Refuse it here too so the slip never
+    // becomes a round trip.
+    if (busy || trimmed.length === 0) return;
+    setApiKey.mutate(
+      {
+        providerId: props.providerId,
+        profileId: props.profile.profileId,
+        apiKey: trimmed,
+      },
+      { onSuccess: () => props.onDraftChange("") },
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <label
+          htmlFor={inputId}
+          className="text-ui-sm font-medium text-foreground"
+        >
+          API key
+        </label>
+        <span className="text-ui-xs text-muted-foreground">
+          {apiKey.configured ? "Key set" : "Not set"}
+        </span>
+      </div>
+      <div className="flex w-full flex-wrap items-center gap-2">
+        <Input
+          id={inputId}
+          type="password"
+          autoComplete="off"
+          className="w-full min-w-0 flex-1 basis-48 font-mono text-ui-sm"
+          placeholder={
+            apiKey.configured
+              ? "Replace stored key…"
+              : `Paste your ${providerLabel} API key`
+          }
+          value={props.draft}
+          onChange={(event) => props.onDraftChange(event.target.value)}
+          disabled={busy}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onSave();
+          }}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={onSave}
+          disabled={busy || trimmed.length === 0}
+        >
+          {setApiKey.isPending ? <MutedAgentSpinner /> : null}
+          {saveLabel}
+        </Button>
+        {apiKey.configured ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="text-destructive"
+            onClick={() => {
+              if (busy) return;
+              clearApiKey.mutate({
+                providerId: props.providerId,
+                profileId: props.profile.profileId,
+              });
+            }}
+            disabled={busy}
+          >
+            {clearApiKey.isPending ? <MutedAgentSpinner /> : null}
+            Remove key
+          </Button>
+        ) : null}
+      </div>
+      {/*
+        "Stored encrypted on this device" is the PROVIDER-level section's exact
+        claim, and it is reused verbatim because it describes the same
+        mechanism (`encryptSecret`, AES-256-GCM). Two different sentences about
+        one mechanism would be worse than either.
+
+        It deliberately stops there. This is encryption at rest against casual
+        disclosure - the key sits beside the ciphertext it opens - so do not
+        grow this into a claim about anyone who can already read the host's
+        config directory.
+
+        No "falls back to <ENV_VAR>" clause, unlike the provider-level copy: a
+        per-profile key has no env fallback, which is also why the profile's
+        state carries no `source`.
+      */}
+      <p className="text-pretty text-ui-xs leading-relaxed text-muted-foreground">
+        Stored encrypted on this device and used only by this profile. The key
+        is never shown again after you save it.
+      </p>
+      {error === null ? null : (
+        <p className="text-ui-xs text-destructive">{error.message}</p>
+      )}
+    </div>
+  );
+}
+
 function ProfileEditAccountSection(props: {
   readonly providerId: ProviderId;
   readonly state: ProviderCliState;
@@ -278,6 +459,8 @@ export function ProfileEditDialog(props: {
   >(null);
   const switchingAccount = switchingAccountOverride ?? props.startInReauth;
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
+  // Held here, not inside `ProfileApiKeyForm` - see that component's note.
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [labelOverride, setLabel] = useState<string | null>(null);
   const [committedLabelOverride, setCommittedLabel] = useState<string | null>(
     null,
@@ -313,6 +496,10 @@ export function ProfileEditDialog(props: {
   );
   const enablementPending = props.profileEnablementPending(
     profileCommitId(props.profile),
+  );
+  const apiKeyFormState = profileApiKeyFormState(
+    props.profile,
+    switchingAccount,
   );
 
   const commitProfile = (onSuccess: () => void): void => {
@@ -411,6 +598,17 @@ export function ProfileEditDialog(props: {
                 )
               }
             />
+
+            {apiKeyFormState === null ? null : (
+              <ProfileApiKeyForm
+                providerId={providerId}
+                profile={props.profile}
+                apiKey={apiKeyFormState}
+                disabled={savePending}
+                draft={apiKeyDraft}
+                onDraftChange={setApiKeyDraft}
+              />
+            )}
 
             <ProfileEditAccountSection
               providerId={providerId}

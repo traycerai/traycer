@@ -101,7 +101,14 @@ export function QuestionPage(props: QuestionPageProps) {
 
   // A question with no options is pure free-text: a single textarea that
   // focuses itself so the user can type right away.
+  //
+  // Withdrawing free text leaves such a question with no answer channel at
+  // all, which the raiser is not supposed to produce (see
+  // `allowsCustomAnswer`) - options are the only other channel and there are
+  // none. Render no input rather than a field whose contents provably cannot
+  // be delivered; Skip stays available, so the card is still resolvable.
   if (question.options.length === 0) {
+    if (question.allowsCustomAnswer === false) return null;
     return (
       <textarea
         ref={focusFieldIfActive}
@@ -139,14 +146,16 @@ export function QuestionPage(props: QuestionPageProps) {
           );
         })}
       </ul>
-      <OtherRow
-        selected={draft.otherSelected}
-        value={draft.otherText}
-        disabled={disabled}
-        inputRef={focusFieldIfActive}
-        onSelect={onToggleOther}
-        onValueChange={onOtherTextChange}
-      />
+      {question.allowsCustomAnswer === false ? null : (
+        <OtherRow
+          selected={draft.otherSelected}
+          value={draft.otherText}
+          disabled={disabled}
+          inputRef={focusFieldIfActive}
+          onSelect={onToggleOther}
+          onValueChange={onOtherTextChange}
+        />
+      )}
     </div>
   );
 }

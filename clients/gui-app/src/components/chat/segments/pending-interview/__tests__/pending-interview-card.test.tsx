@@ -352,6 +352,7 @@ function singleSelect(
       preview: null,
     })),
     multiSelect: false,
+    allowsCustomAnswer: null,
   };
 }
 
@@ -361,6 +362,15 @@ function multiSelect(
   labels: ReadonlyArray<string>,
 ): InterviewQuestion {
   return { ...singleSelect(id, question, labels), multiSelect: true };
+}
+
+/**
+ * A question whose answer channel cannot carry free text - what an interview
+ * riding an ACP `session/request_permission` looks like, since that request's
+ * answer is an option id and nothing else.
+ */
+function withoutCustomAnswer(question: InterviewQuestion): InterviewQuestion {
+  return { ...question, allowsCustomAnswer: false };
 }
 
 function renderCard(
@@ -889,6 +899,62 @@ describe("PendingInterviewCard keyboard navigation", () => {
         { selected: [], otherText: "", otherSelected: false },
       ],
     });
+  });
+
+  it("withdraws the Other row when the question's answer channel cannot carry free text", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Choose", ["Alpha", "Beta"]))],
+      () => null,
+      () => null,
+    );
+
+    // Falsification: render `OtherRow` unconditionally again and this finds
+    // the button - a field the user can type into whose text the ACP
+    // permission answer has no room to carry, so it is dropped in silence.
+    expect(screen.queryByRole("button", { name: "Other" })).toBeNull();
+    // The listed options are still offered: withdrawing free text must not
+    // withdraw the answer channel that DOES work.
+    expect(screen.getByRole("button", { name: "1. Alpha" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "2. Beta" })).not.toBeNull();
+  });
+
+  it("CONTROL: the same question still offers Other when the field is unstated, so the assertion above is about the flag and not the fixture", () => {
+    renderCard(
+      [singleSelect("q1", "Choose", ["Alpha", "Beta"])],
+      () => null,
+      () => null,
+    );
+
+    expect(screen.getByRole("button", { name: "Other" })).not.toBeNull();
+  });
+
+  it("offers no input at all for a question with no options that also withdraws free text, rather than a field whose answer cannot be delivered", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Describe it", []))],
+      () => null,
+      () => null,
+    );
+
+    // The raiser is not supposed to produce this pair (see the schema's
+    // INVARIANT note); if it does, the card must not invite an answer it
+    // cannot deliver. Skip remains, so the card is still resolvable.
+    expect(
+      screen.queryByRole("textbox", { name: "Interview answer" }),
+    ).toBeNull();
+    // Name is a pattern: the button carries its `Esc` shortcut hint too.
+    expect(screen.getByRole("button", { name: /Skip/ })).not.toBeNull();
+  });
+
+  it("CONTROL: an option-less question with free text unstated still renders its textarea", () => {
+    renderCard(
+      [singleSelect("q1", "Describe it", [])],
+      () => null,
+      () => null,
+    );
+
+    expect(
+      screen.getByRole("textbox", { name: "Interview answer" }),
+    ).not.toBeNull();
   });
 
   it("natively disables the free-text and Other answer fields while isBusy", () => {
