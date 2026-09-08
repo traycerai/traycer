@@ -221,9 +221,13 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     // incident - but it has to be a decision recorded here, not a diff nobody
     // read.
     //
+    // `antigravity` is the second such id and takes the same side for the same
+    // reason: v7.0 is still released, so nothing about a later addition makes
+    // it representable there.
+    //
     // Add the next id to this list at the same time you add it to
     // `providerIdSchema`, and only after deciding it cannot ride major 7.
-    const POST_V70_PROVIDER_IDS = ["reasonix"] as const;
+    const POST_V70_PROVIDER_IDS = ["reasonix", "antigravity"] as const;
     expect([...providerIdSchema.options].sort()).toEqual(
       [...providerIdSchemaV70.options, ...POST_V70_PROVIDER_IDS].sort(),
     );
