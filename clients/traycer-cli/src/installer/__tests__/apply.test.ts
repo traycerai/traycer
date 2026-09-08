@@ -64,8 +64,7 @@ const mocks = vi.hoisted(() => ({
   // and a direct `applyHost` call does not.
   hostStartAdoptionPublisher: null as HostStartAdoptionPublisher | null,
   assertHostStoreFormatFloorMock: vi.fn(),
-  macosServiceMayRespawnMock: vi.fn(),
-  linuxServiceMayRespawnMock: vi.fn(),
+  serviceManagerMayRespawnMock: vi.fn(),
 }));
 
 // `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
@@ -83,34 +82,24 @@ vi.mock("node:os", async (importOriginal) => {
   };
 });
 
-// `observeSwapQuiescence`'s post-stop check shells out to `launchctl print` /
+// `observeSwapQuiescence`'s post-stop check asks `serviceManagerMayRespawn`
+// (the `service/index.ts` facade - `swap-quiescence.ts` never reaches into
+// `platforms/` directly), which shells out to `launchctl print` /
 // `systemctl --user is-active` for real when it reaches the "no process right
 // now" arms - unmocked, this suite reads the developer's OWN launchd/systemd
 // state, and on a machine with a loaded, crash-throttled Traycer agent that
 // refuses every commit this file drives. `false` keeps the existing fixtures
 // clearing as an ordinary quiescent machine would.
-vi.mock("../../service/platforms/macos", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/platforms/macos")>();
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
   return {
     ...actual,
-    macosServiceMayRespawn: (
-      ...callArgs: Parameters<typeof actual.macosServiceMayRespawn>
-    ) => mocks.macosServiceMayRespawnMock(...callArgs),
+    serviceManagerMayRespawn: (
+      ...callArgs: Parameters<typeof actual.serviceManagerMayRespawn>
+    ) => mocks.serviceManagerMayRespawnMock(...callArgs),
   };
 });
-vi.mock("../../service/platforms/linux", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/platforms/linux")>();
-  return {
-    ...actual,
-    linuxServiceMayRespawn: (
-      ...callArgs: Parameters<typeof actual.linuxServiceMayRespawn>
-    ) => mocks.linuxServiceMayRespawnMock(...callArgs),
-  };
-});
-mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
-mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
+mocks.serviceManagerMayRespawnMock.mockResolvedValue(false);
 
 vi.mock("../../host/busy-check", () => ({
   assertHostNotBusy: async () => {

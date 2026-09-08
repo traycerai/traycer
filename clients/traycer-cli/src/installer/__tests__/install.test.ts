@@ -65,8 +65,8 @@ const mocks = vi.hoisted(() => ({
   registryClient: null as RegistryClient | null,
   assertStoreFormatFloorAtCommitMock: vi.fn(),
   assertStoreFormatFloorAfterStopMock: vi.fn(),
-  macosServiceMayRespawnMock: vi.fn(),
-  linuxServiceMayRespawnMock: vi.fn(),
+  observeSwapQuiescenceMock: vi.fn(),
+  serviceManagerMayRespawnMock: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -133,7 +133,9 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
 
-// `observeSwapQuiescence`'s post-stop check shells out to `launchctl print` /
+// `observeSwapQuiescence`'s post-stop check asks `serviceManagerMayRespawn`
+// (the `service/index.ts` facade - `swap-quiescence.ts` never reaches into
+// `platforms/` directly), which shells out to `launchctl print` /
 // `systemctl --user is-active` for real when it reaches the "no process right
 // now" arms. Left unmocked, this suite reads the developer's OWN machine
 // state - on a machine with a loaded, crash-throttled Traycer agent, that is
@@ -141,30 +143,18 @@ vi.mock("node:os", async (importOriginal) => {
 // past the pre-commit gate gets refused by the operator's real launchd/systemd
 // state. Default to "cannot respawn" so the existing fixtures (which assume an
 // ordinary quiescent machine) keep clearing as before.
-vi.mock("../../service/platforms/macos", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/platforms/macos")>();
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
   return {
     ...actual,
-    macosServiceMayRespawn: (
-      ...callArgs: Parameters<typeof actual.macosServiceMayRespawn>
-    ) => mocks.macosServiceMayRespawnMock(...callArgs),
+    serviceManagerMayRespawn: (
+      ...callArgs: Parameters<typeof actual.serviceManagerMayRespawn>
+    ) => mocks.serviceManagerMayRespawnMock(...callArgs),
   };
 });
-vi.mock("../../service/platforms/linux", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/platforms/linux")>();
-  return {
-    ...actual,
-    linuxServiceMayRespawn: (
-      ...callArgs: Parameters<typeof actual.linuxServiceMayRespawn>
-    ) => mocks.linuxServiceMayRespawnMock(...callArgs),
-  };
-});
-// Nothing in this file resets these two - set once, module scope, and every
+// Nothing in this file resets this - set once, module scope, and every
 // test that never mentions respawn risk inherits "cannot respawn" silently.
-mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
-mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
+mocks.serviceManagerMayRespawnMock.mockResolvedValue(false);
 
 // Only `createDefaultRegistryClient` is replaced - `releaseDownloadSlot` and
 // the rest stay real, so the registry pin below exercises the same
@@ -238,6 +228,28 @@ vi.mock("../../host/store-format-floor", async (importOriginal) => {
       }
       mocks.assertStoreFormatFloorAfterStopMock(...callArgs);
       return actual.assertStoreFormatFloorAfterStop(...callArgs);
+    },
+  };
+});
+
+// Same pass-through-by-default shape as the floor mocks above - real by
+// default (an empty sandboxed `hostHome`, no pid.json), so every existing
+// test still exercises the genuine post-stop probe. Only the test proving
+// "a probe failure unrelated to the floor still triggers the restore, and
+// surfaces as ITSELF rather than a floor refusal" configures a rejection.
+vi.mock("../../host/swap-quiescence", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/swap-quiescence")>();
+  return {
+    ...actual,
+    observeSwapQuiescence: async (
+      ...callArgs: Parameters<typeof actual.observeSwapQuiescence>
+    ) => {
+      if (mocks.observeSwapQuiescenceMock.getMockImplementation()) {
+        return mocks.observeSwapQuiescenceMock(...callArgs);
+      }
+      mocks.observeSwapQuiescenceMock(...callArgs);
+      return actual.observeSwapQuiescence(...callArgs);
     },
   };
 });
@@ -452,6 +464,7 @@ describe("sweepOldTrash", () => {
     mocks.renameCallCountByDestination.clear();
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     mocks.assertStoreFormatFloorAfterStopMock.mockReset();
+    mocks.observeSwapQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -502,6 +515,7 @@ describe("installHost", () => {
     mocks.renameCallCountByDestination.clear();
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     mocks.assertStoreFormatFloorAfterStopMock.mockReset();
+    mocks.observeSwapQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -577,6 +591,7 @@ describe("commitInstallFromSource", () => {
     mocks.renameCallCountByDestination.clear();
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     mocks.assertStoreFormatFloorAfterStopMock.mockReset();
+    mocks.observeSwapQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -786,6 +801,69 @@ describe("commitInstallFromSource", () => {
 
       // The ORIGINAL refusal, not the restart failure.
       expect(thrown).toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+      expect(restartAfterAbortedSwap).toHaveBeenCalledTimes(1);
+    });
+
+    it("a quiescence PROBE failure unrelated to the floor (a launchctl spawn error, a timeout, a revoked mutation capability) still triggers the restore, and surfaces as ITSELF - not a floor refusal, not the restore's own failure", async () => {
+      // `observeSwapQuiescence` used to be awaited BEFORE the try in
+      // `assertFloorAfterStopOrRestore`, so a throw from the probe itself
+      // (as opposed to a REFUSAL the floor decided) skipped the restore
+      // entirely and left a stopped host's machine hostless for a reason
+      // that has nothing to do with the floor. Moving the await inside the
+      // try is the fix; this pins that the restore still runs and that the
+      // PROBE's own error - not a synthesized floor refusal - is what the
+      // caller sees.
+      const sourceDir = join(sandboxRoot, "pre-staged");
+      writeLocalHostSource(sourceDir, "v2");
+      const executablePath = join(sourceDir, "traycer-host");
+      const probeFailure = Object.assign(
+        new Error("simulated launchctl spawn failure"),
+        { code: "ENOENT" },
+      );
+      mocks.observeSwapQuiescenceMock.mockRejectedValue(probeFailure);
+      const restartAfterAbortedSwap = vi.fn(async () => {});
+
+      let thrown: unknown;
+      try {
+        await commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: "1.0.0",
+          runtimeVersion: null,
+          source: { kind: "local-file", value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            beforeSwap: async () => {},
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            restartAfterAbortedSwap,
+            swapLockRecovery: null,
+          },
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      // The PROBE's own error - neither a floor refusal (no
+      // E_HOST_STORE_FORMAT_FLOOR code) nor a restore failure (the restore
+      // here never fails).
+      expect(thrown).toBe(probeFailure);
+      expect(mocks.observeSwapQuiescenceMock).toHaveBeenCalledTimes(1);
+      // `assertStoreFormatFloorAfterStop` never even ran - the probe threw
+      // before it could be reached.
+      expect(mocks.assertStoreFormatFloorAfterStopMock).not.toHaveBeenCalled();
       expect(restartAfterAbortedSwap).toHaveBeenCalledTimes(1);
     });
 
@@ -1877,6 +1955,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
     mocks.renameCallCountByDestination.clear();
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     mocks.assertStoreFormatFloorAfterStopMock.mockReset();
+    mocks.observeSwapQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 

@@ -267,6 +267,36 @@ describe("observeSwapQuiescence", () => {
     expect(mocks.readHostPidMetadataEvidenceMock).not.toHaveBeenCalled();
   });
 
+  it("is NOT established, with reason unseen-writers, for a SINGLE root that failed to ENUMERATE - and never even consults the pid record", async () => {
+    // A different shape than the multi-root case above: `roots.length` alone
+    // used to gate this, so `{roots: [one], enumerationFailed: true}` fell
+    // through to the pid read and could clear. `enumerationFailed` now
+    // triggers this arm on its own.
+    //
+    // The survey itself turns an unreadable enumeration into its own `*`
+    // failure, so on every path that actually consults this today the
+    // outcome would have refused anyway - this fix changes no observable
+    // behavior right now. It exists so quiescence answers HONESTLY as a
+    // standalone question ("I could not enumerate the roots" is not evidence
+    // that nothing is writing them), not because today's outcome would
+    // differ. Do not read the unchanged outcome as this being redundant.
+    mocks.readHostPidMetadataEvidenceMock.mockClear();
+    const logger = fakeLogger();
+
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        {
+          roots: [{ path: "/tmp/host-home", label: "host" }],
+          enumerationFailed: true,
+        },
+        logger,
+      ),
+    ).resolves.toEqual({ established: false, reason: "unseen-writers" });
+
+    expect(mocks.readHostPidMetadataEvidenceMock).not.toHaveBeenCalled();
+  });
+
   describe("service-may-respawn (the throttle-window gap)", () => {
     afterEach(() => {
       // Restore the "will not respawn" default so a test order change
@@ -416,6 +446,55 @@ describe("observeSwapQuiescence", () => {
             logger,
           ),
         ).resolves.toEqual({ established: true });
+      });
+    });
+
+    it("fresh RESTART intent + live supervisor -> service-may-respawn, NOT quiesced", async () => {
+      // A `restart` intent means a NEW host is expected - the opposite of
+      // winding down - so a live supervisor here is exactly the writer this
+      // check exists to catch, not one to wave through.
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(true);
+      await writeStopIntent(ENVIRONMENT, "restart");
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence(
+            ENVIRONMENT,
+            singleChatStoreSurveyRoot("/tmp/host-home"),
+            logger,
+          ),
+        ).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
+      });
+    });
+
+    it("fresh UNINSTALL intent + live supervisor -> service-may-respawn, NOT quiesced", async () => {
+      // Not this flow at all - a stop intent this check cannot name as a
+      // deliberate `stop` is not one it should vouch for.
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(true);
+      await writeStopIntent(ENVIRONMENT, "uninstall");
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence(
+            ENVIRONMENT,
+            singleChatStoreSurveyRoot("/tmp/host-home"),
+            logger,
+          ),
+        ).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
       });
     });
 

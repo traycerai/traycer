@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   // merely that it was handed to the lifecycle (D-15's assertion, upgraded:
   // the real lifecycle actually calls it).
   adoptionPublishedFor: [] as string[],
+  serviceManagerMayRespawnMock: vi.fn(),
 }));
 
 vi.mock("node:os", async (importOriginal) => {
@@ -129,8 +130,19 @@ vi.mock("../../service", async (importOriginal) => {
       environment,
       devSlot: null,
     }),
+    // `observeSwapQuiescence`'s post-stop check asks this facade (never
+    // `platforms/` directly), which shells out to `launchctl print` /
+    // `systemctl --user is-active` for real when it reaches the "no process
+    // right now" arm - on a machine with a loaded, crash-throttled Traycer
+    // agent, that reads the developer's own launchd/systemd state and
+    // refuses the commit. `false` keeps every existing fixture here clearing
+    // as an ordinary quiescent machine would.
+    serviceManagerMayRespawn: (
+      ...callArgs: Parameters<typeof actual.serviceManagerMayRespawn>
+    ) => mocks.serviceManagerMayRespawnMock(...callArgs),
   };
 });
+mocks.serviceManagerMayRespawnMock.mockResolvedValue(false);
 
 vi.mock("../../service/cli-binary", () => ({
   resolveServiceCliInvocation: async () => ({
@@ -139,22 +151,19 @@ vi.mock("../../service/cli-binary", () => ({
   }),
 }));
 
-// Reads the invoking user's REAL LaunchAgent plist on darwin.
-// `macosServiceMayRespawn` shells out to `launchctl print` for real when
-// `observeSwapQuiescence`'s post-stop check reaches the "no process right
-// now" arm - on a machine with a loaded, crash-throttled Traycer agent, that
-// reads the developer's own launchd state and refuses the commit. `false`
-// keeps every existing fixture here clearing as an ordinary quiescent
-// machine would.
-vi.mock("../../service/platforms/macos", () => ({
-  readRegisteredCliInvocation: async () => null,
-  macosServiceMayRespawn: async () => false,
-}));
-
-// Same hazard, systemd side: `systemctl --user is-active` for real.
-vi.mock("../../service/platforms/linux", () => ({
-  linuxServiceMayRespawn: async () => false,
-}));
+// Reads the invoking user's REAL LaunchAgent plist on darwin. Partial mocks
+// (not wholesale replacements) - `service/index.ts` imports
+// `createMacosController` / `createLinuxController` from these same modules,
+// and a wholesale factory here would silently drop them, working only by
+// luck of what a given test happens to touch (CodeRabbit finding).
+vi.mock("../../service/platforms/macos", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/macos")>();
+  return {
+    ...actual,
+    readRegisteredCliInvocation: async () => null,
+  };
+});
 
 // Shell out to schtasks / powershell / taskkill.
 vi.mock("../../service/platforms/windows", () => ({

@@ -68,7 +68,8 @@ export type SwapQuiescenceGap =
   /** `pid.json` exists but could not be read, so nothing can be concluded. */
   | "writer-unknown"
   /**
-   * The survey spans a data root this process cannot see the writer of.
+   * The survey covers a data root this process cannot see the writer of - or
+   * could not list the roots at all.
    *
    * `pid.json` is SLOT-scoped while the chat stores are IDENTITY-scoped (see
    * the host's `paths.ts`: the slot home holds "pid.json, logs, crash
@@ -117,14 +118,32 @@ export async function observeSwapQuiescence(
   logger: ILogger,
 ): Promise<SwapQuiescence> {
   // The pid record this process can read belongs to ONE root - the host home
-  // it was handed. Every additional root the survey covers is a store whose
-  // writer lives somewhere this process cannot look, so its silence proves
-  // nothing. Production always resolves exactly one root, so the shipped path
-  // is untouched; only a dev machine with a slot or an identity pool has more.
-  if (surveyRoots.roots.length > 1) {
+  // it was handed. Two shapes put a store beyond that record, and both mean
+  // the same thing here:
+  //
+  //   - MORE ROOTS than the one whose writer we can see. Every extra root is
+  //     a store whose writer lives somewhere this process cannot look, so its
+  //     silence proves nothing.
+  //   - A root set that could not be fully ENUMERATED. Then the count itself
+  //     is unreliable and there may be a root - hence a writer - we never
+  //     listed at all.
+  //
+  // The survey turns `enumerationFailed` into its own `*` failure and would
+  // refuse on that anyway, so this arm changes no outcome today. It is here
+  // because quiescence is asked as its own question and must answer honestly
+  // on its own: "I could not enumerate the roots" is not evidence that
+  // nothing is writing them.
+  //
+  // Production always resolves exactly one root and never fails to enumerate,
+  // so the shipped path is untouched.
+  if (surveyRoots.enumerationFailed || surveyRoots.roots.length > 1) {
     logger.info(
-      "Host store-format floor cannot establish quiescence: the survey spans data roots whose writers this process cannot see",
-      { environment, surveyedRoots: surveyRoots.roots.length },
+      "Host store-format floor cannot establish quiescence: this process cannot account for every host data root on this machine",
+      {
+        environment,
+        surveyedRoots: surveyRoots.roots.length,
+        enumerationFailed: surveyRoots.enumerationFailed,
+      },
     );
     return { established: false, reason: "unseen-writers" };
   }
@@ -196,6 +215,12 @@ async function deliberateStopInFlight(
 ): Promise<boolean> {
   const intent = await readStopIntent(environment);
   if (intent === null) return false;
+  // ONLY `stop`. A fresh `restart` intent means the opposite of what this
+  // function is asked: the supervisor has been told a new host IS expected, so
+  // a writer is on its way rather than winding down. `uninstall` is excluded
+  // for the weaker reason that it is not this flow at all, and a stop we
+  // cannot name is not a stop we should vouch for.
+  if (intent.reason !== "stop") return false;
   return isStopIntentFresh(intent, Date.now());
 }
 
@@ -208,7 +233,7 @@ export function describeQuiescenceGap(reason: SwapQuiescenceGap): string {
     return "no host is running, but the service manager is set to restart one after its recent crash, so it can stamp a store before the swap lands";
   }
   if (reason === "unseen-writers") {
-    return "they span more than one host data root on this machine and only one publishes a process record here, so another host could still be writing them";
+    return "this CLI cannot account for every host data root on this machine - only one of them publishes a process record here - so another host could still be writing them";
   }
   return "this CLI could not read the host's pid record, so it cannot tell whether a host is still writing them";
 }

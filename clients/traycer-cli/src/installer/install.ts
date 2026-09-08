@@ -818,12 +818,17 @@ async function assertFloorAfterStopOrRestore(
   operands: CommitFloorOperands,
   logger: ILogger,
 ): Promise<void> {
-  const quiescence = await observeSwapQuiescence(
-    opts.environment,
-    operands.surveyRoots,
-    logger,
-  );
   try {
+    // INSIDE the try, not before it. By the time this runs `beforeSwap` may
+    // have stopped the host, and the probe shells out to the service manager -
+    // a spawn failure, a timeout, or a revoked mutation capability all throw.
+    // Outside the try that throw skipped the restore and left the machine
+    // hostless for a reason that has nothing to do with the floor.
+    const quiescence = await observeSwapQuiescence(
+      opts.environment,
+      operands.surveyRoots,
+      logger,
+    );
     await assertStoreFormatFloorAfterStop({
       environment: opts.environment,
       surveyRoots: operands.surveyRoots,
