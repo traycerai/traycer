@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { formatHex8, parse, rgb, wcagContrast } from "culori";
-import { THEME_PRESETS, type ThemePreset } from "@/lib/theme-presets";
+import { THEME_PRESETS, type ThemePreset } from "../theme-presets";
 
 /** The editable contract. Only literal colors and these semantic roles cross the import boundary. */
 export const themeTokens = [

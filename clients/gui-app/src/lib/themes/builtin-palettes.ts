@@ -1,4 +1,4 @@
-import type { ThemePreset } from "@/lib/theme-presets";
+import type { ThemePreset } from "../theme-presets";
 import type { ThemeToken } from "./theme-definition";
 
 /** Built-in overrides, migrated verbatim from the former CSS selectors. */

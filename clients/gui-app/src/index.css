@@ -5,6 +5,7 @@
 @import "./editor-core/styles/editor.css";
 @import "./styles/usage-analytics-chart.css";
 @import "./styles/image-preview.css";
+@import "./styles/theme-fallback.css";
 @import "./styles/theme-surfaces.css";
 
 @custom-variant dark (&:is(.dark *));
