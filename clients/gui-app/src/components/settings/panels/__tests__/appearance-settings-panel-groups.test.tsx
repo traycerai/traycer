@@ -17,7 +17,8 @@ vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
 }));
 
 const GROUP_TITLES = [
-  "Theme",
+  "Color scheme",
+  "Themes",
   "Interface",
   "Typography",
   "Terminal",
@@ -51,10 +52,14 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     resetAppearanceSettings();
   });
 
-  it("renders the five named group headings in order", () => {
+  it("renders the named group headings in order", () => {
     renderPanel(queryClient);
 
-    const theme = screen.getByRole("heading", { level: 2, name: "Theme" });
+    const colorScheme = screen.getByRole("heading", {
+      level: 2,
+      name: "Color scheme",
+    });
+    const themes = screen.getByRole("heading", { level: 2, name: "Themes" });
     const iface = screen.getByRole("heading", {
       level: 2,
       name: "Interface",
@@ -72,7 +77,8 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       name: "Artifact icons",
     });
 
-    expect(documentPosition(theme, iface)).toBe("before");
+    expect(documentPosition(colorScheme, themes)).toBe("before");
+    expect(documentPosition(themes, iface)).toBe("before");
     expect(documentPosition(iface, typography)).toBe("before");
     expect(documentPosition(typography, terminal)).toBe("before");
     expect(documentPosition(terminal, artifactIcons)).toBe("before");
@@ -105,9 +111,13 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       expect(section?.contains(heading)).toBe(true);
     }
 
-    const themeHeading = screen.getByRole("heading", {
+    const colorSchemeHeading = screen.getByRole("heading", {
       level: 2,
-      name: "Theme",
+      name: "Color scheme",
+    });
+    const themesHeading = screen.getByRole("heading", {
+      level: 2,
+      name: "Themes",
     });
     const interfaceHeading = screen.getByRole("heading", {
       level: 2,
@@ -126,9 +136,8 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       name: "Artifact icons",
     });
 
-    // Representative rows live inside each section's card, not the heading.
-    const themeRow = rowLabel("Theme");
-    const preset = screen.getByText("Preset");
+    const schemeButton = screen.getByRole("button", { name: "System" });
+    const preset = screen.getByRole("button", { name: "Use Neutral light" });
     const pointerCursors = screen.getByText("Use pointer cursors");
     const uiFont = screen.getByText("UI font");
     const codeFont = screen.getByText("Code font");
@@ -137,17 +146,12 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     const blinkCursor = screen.getByText("Blink cursor");
     const artifactIconColors = screen.getByText("Artifact icon colors");
 
-    // Heading and its rows do NOT share the closest bordered card.
-    expect(themeHeading.closest("div.rounded-lg")).toBeNull();
-    expect(themeRow.closest("div.rounded-lg")).not.toBeNull();
-    expect(themeRow.closest("div.rounded-lg")).not.toBe(
-      themeHeading.closest("div.rounded-lg"),
+    expect(colorSchemeHeading.closest("div.rounded-lg")).toBeNull();
+    expect(themesHeading.closest("div.rounded-lg")).toBeNull();
+    expect(schemeButton.closest("section")).toBe(
+      colorSchemeHeading.closest("section"),
     );
-
-    // Two rows in the same group DO share the bordered card.
-    expect(themeRow.closest("div.rounded-lg")).toBe(
-      preset.closest("div.rounded-lg"),
-    );
+    expect(preset.closest("section")).toBe(themesHeading.closest("section"));
     expect(uiFont.closest("div.rounded-lg")).toBe(
       codeFont.closest("div.rounded-lg"),
     );
@@ -159,7 +163,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     );
 
     // Rows from different groups do NOT share a card.
-    expect(themeRow.closest("div.rounded-lg")).not.toBe(
+    expect(preset.closest("div.rounded-lg")).not.toBe(
       pointerCursors.closest("div.rounded-lg"),
     );
     expect(pointerCursors.closest("div.rounded-lg")).not.toBe(
@@ -173,7 +177,9 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     );
 
     // Each heading's section owns its representative row.
-    expect(themeHeading.closest("section")).toBe(themeRow.closest("section"));
+    expect(colorSchemeHeading.closest("section")).toBe(
+      themesHeading.closest("section"),
+    );
     expect(interfaceHeading.closest("section")).toBe(
       pointerCursors.closest("section"),
     );
@@ -188,7 +194,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     );
 
     // Distinct sections per group.
-    expect(themeHeading.closest("section")).not.toBe(
+    expect(themesHeading.closest("section")).not.toBe(
       interfaceHeading.closest("section"),
     );
     expect(interfaceHeading.closest("section")).not.toBe(
@@ -205,7 +211,11 @@ describe("<AppearanceSettingsPanel /> groups", () => {
   it("places representative rows under the correct section headers", () => {
     renderPanel(queryClient);
 
-    const theme = screen.getByRole("heading", { level: 2, name: "Theme" });
+    const colorScheme = screen.getByRole("heading", {
+      level: 2,
+      name: "Color scheme",
+    });
+    const themes = screen.getByRole("heading", { level: 2, name: "Themes" });
     const iface = screen.getByRole("heading", {
       level: 2,
       name: "Interface",
@@ -223,8 +233,8 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       name: "Artifact icons",
     });
 
-    const themeRow = rowLabel("Theme");
-    const preset = screen.getByText("Preset");
+    const schemeButton = screen.getByRole("button", { name: "System" });
+    const preset = screen.getByRole("button", { name: "Use Neutral light" });
     const pointerCursors = screen.getByText("Use pointer cursors");
     const uiFont = screen.getByText("UI font");
     const codeFont = screen.getByText("Code font");
@@ -233,16 +243,16 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     const blinkCursor = screen.getByText("Blink cursor");
     const artifactIconColors = screen.getByText("Artifact icon colors");
 
-    // Theme rows sit between that header and Interface.
-    expect(documentPosition(theme, themeRow)).toBe("before");
-    expect(documentPosition(themeRow, preset)).toBe("before");
+    // Theme controls sit between the gallery headings and Interface.
+    expect(documentPosition(colorScheme, schemeButton)).toBe("before");
+    expect(documentPosition(themes, preset)).toBe("before");
     expect(documentPosition(preset, iface)).toBe("before");
 
     // Interface rows sit between that header and Typography.
     expect(documentPosition(iface, pointerCursors)).toBe("before");
     expect(documentPosition(pointerCursors, typography)).toBe("before");
     // Pointer cursors is not still in Theme.
-    expect(documentPosition(theme, pointerCursors)).toBe("before");
+    expect(documentPosition(themes, pointerCursors)).toBe("before");
     expect(documentPosition(pointerCursors, iface)).not.toBe("before");
 
     // Typography: UI font and Code font before Terminal.
@@ -397,19 +407,6 @@ function terminalPreviewRoot(): HTMLElement {
     throw new Error('expected terminal preview root with aria-hidden="true"');
   }
   return previewRoot;
-}
-
-/**
- * SettingsRow label for "Theme" (not the group <h2>). The panel has both an
- * h2 "Theme" and a row label "Theme"; filter to the non-heading text node.
- */
-function rowLabel(label: string): HTMLElement {
-  const matches = screen.getAllByText(label);
-  const row = matches.find((el) => el.tagName !== "H2");
-  if (row === undefined) {
-    throw new Error(`expected SettingsRow label "${label}"`);
-  }
-  return row;
 }
 
 function colorInput(name: string): HTMLInputElement {

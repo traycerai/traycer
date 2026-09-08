@@ -1,6 +1,8 @@
 /**
  * Patch cache key and diff theme name resolution for the Git Diff panel.
  */
+import { registerCustomTheme, type DiffsThemeNames } from "@pierre/diffs";
+import { getActiveSyntaxTheme } from "@/lib/themes/syntax-theme";
 import { contentFingerprint } from "@/lib/text-hash";
 
 /**
@@ -17,11 +19,19 @@ export function buildPatchCacheKey(patch: string, scope: string): string {
   return `${scope}:${contentFingerprint(patch.trim())}`;
 }
 
-/**
- * Resolves a light/dark theme to a Pierre diff theme name.
- */
+const registeredThemes = new Set<string>();
+
+/** Registers imported TextMate rules once before the diff worker resolves them. */
 export function resolveDiffThemeName(
   resolvedTheme: "light" | "dark",
-): "pierre-light" | "pierre-dark" {
+): DiffsThemeNames {
+  const custom = getActiveSyntaxTheme();
+  if (custom?.name !== undefined) {
+    if (!registeredThemes.has(custom.name)) {
+      registerCustomTheme(custom.name, () => Promise.resolve(custom));
+      registeredThemes.add(custom.name);
+    }
+    return custom.name;
+  }
   return resolvedTheme === "dark" ? "pierre-dark" : "pierre-light";
 }

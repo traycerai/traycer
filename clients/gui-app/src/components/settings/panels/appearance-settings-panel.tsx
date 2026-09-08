@@ -1,3 +1,4 @@
+import { AppearanceDetails } from "@/components/settings/themes/appearance-details";
 import { useMemo } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -8,9 +9,8 @@ import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-ico
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
 import { NullableFontSizeInput } from "@/components/settings/controls/nullable-font-size-input";
 import { FontPicker } from "@/components/settings/controls/font-picker";
-import { ThemeModeToggle } from "@/components/settings/controls/theme-mode-toggle";
+import { ThemeGallery } from "@/components/settings/themes/theme-gallery";
 import { TerminalCursorStylePicker } from "@/components/settings/controls/terminal-cursor-style-picker";
-import { ThemePresetPicker } from "@/components/settings/controls/theme-preset-picker";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
@@ -56,10 +56,6 @@ function trackAppearanceSetting(setting: AnalyticsSetting): void {
 }
 
 export function AppearanceSettingsPanel() {
-  const theme = useSettingsStore((state) => state.theme);
-  const setTheme = useSettingsStore((state) => state.setTheme);
-  const themePreset = useSettingsStore((state) => state.themePreset);
-  const setThemePreset = useSettingsStore((state) => state.setThemePreset);
   const pointerCursors = useSettingsStore((state) => state.pointerCursors);
   const setPointerCursors = useSettingsStore(
     (state) => state.setPointerCursors,
@@ -125,40 +121,14 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Appearance"
-      description="Theme, typography, and focused visual customization."
+      description="Make Traycer feel like yours. Choose a theme, bring your favorites, or create something new."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
-        <SettingsGroup
-          title="Theme"
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <SettingsRow
-            label="Theme"
-            description="Use light, dark, or match your system."
-            control={
-              <ThemeModeToggle
-                value={theme}
-                onChange={trackedAppearanceSetter("theme", setTheme)}
-              />
-            }
-          />
-          <SettingsRow
-            label="Preset"
-            description="Pick a named palette. Full-palette presets override the base surface."
-            control={
-              <ThemePresetPicker
-                value={themePreset}
-                onChange={trackedAppearanceSetter(
-                  "themePreset",
-                  setThemePreset,
-                )}
-              />
-            }
-          />
-        </SettingsGroup>
+      <div
+        className={cn("@container flex flex-col", compact ? "gap-6" : "gap-10")}
+      >
+        <ThemeGallery />
+        <AppearanceDetails />
 
         <SettingsGroup
           title="Interface"

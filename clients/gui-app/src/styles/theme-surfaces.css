@@ -1,0 +1,83 @@
+/* Semantic surface bridge. Palette values are owned by lib/themes/builtin-palettes.ts. */
+[data-epic-sidebar-panel],
+[data-slot="sidebar-inner"],
+[data-slot="sidebar"][data-sidebar="sidebar"],
+[data-settings-sidebar] {
+  background-color: var(--sidebar);
+  color: var(--sidebar-foreground);
+}
+
+[data-slot="dialog-content"],
+[data-slot="alert-dialog-content"],
+[data-slot="popover-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="select-content"] {
+  background-color: color-mix(
+    in srgb,
+    var(--popover) calc(var(--glass-opacity, 1) * 100%),
+    transparent
+  );
+  backdrop-filter: blur(16px);
+}
+[data-composer-shell] {
+  background-color: color-mix(
+    in srgb,
+    var(--canvas) calc(var(--glass-opacity, 1) * 100%),
+    transparent
+  );
+  backdrop-filter: blur(16px);
+}
+[data-composer-editor] {
+  font-family: var(--traycer-font-prompt, var(--traycer-font-ui));
+  font-size: var(--prompt-font-size, inherit);
+  font-variant-ligatures: var(--appearance-ligatures, normal);
+}
+pre,
+code,
+.cm-editor {
+  font-variant-ligatures: var(--appearance-ligatures, normal);
+}
+:root[data-reduce-panel-motion]
+  :is(
+    [data-slot="dialog-content"],
+    [data-slot="sheet-content"],
+    [data-slot="sidebar-gap"],
+    [data-slot="sidebar-container"],
+    [data-slot="popover-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="select-content"]
+  ) {
+  animation-duration: 0s;
+  transition-duration: 0s;
+}
+
+:root:not([data-reduce-panel-motion])
+  :is(
+    [data-slot="dialog-content"],
+    [data-slot="sheet-content"],
+    [data-slot="sidebar-gap"],
+    [data-slot="sidebar-container"],
+    [data-slot="popover-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="select-content"]
+  ) {
+  animation-duration: var(--panel-animation-duration, 100ms);
+  transition-duration: var(--panel-animation-duration, 100ms);
+}
+
+:root[data-theme-sidebar-artwork]
+  :is(
+    [data-epic-sidebar-panel],
+    [data-slot="sidebar-inner"],
+    [data-settings-sidebar]
+  ) {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--sidebar) 92%, transparent),
+      color-mix(in srgb, var(--sidebar) 88%, transparent)
+    ),
+    url("../assets/brand/gradient-bg.jpg");
+  background-size: cover;
+  background-position: center;
+}
