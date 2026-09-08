@@ -173,27 +173,6 @@ export const GENERAL = defineSettingsSection("general", {
       "suspend",
     ],
   },
-  // Layout lives here only until the app grows a page of its own for it; the
-  // row moves there wholesale, store key, entry and all.
-  layout: {
-    kind: "group",
-    search: { anchor: "general-layout" },
-    label: "Layout",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["tabs", "tab strip", "chrome"],
-  },
-  homeTab: {
-    kind: "row",
-    group: "layout",
-    search: { anchor: "general-home-tab" },
-    label: "Home tab",
-    description:
-      "Show a fixed Home tab with everything running across your tasks.",
-    availableWhen: alwaysAvailable,
-    keywords: ["home", "tab strip", "overview", "focus view", "running"],
-  },
   worktrees: {
     kind: "group",
     search: { anchor: "general-worktrees" },

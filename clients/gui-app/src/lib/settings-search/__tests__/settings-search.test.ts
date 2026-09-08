@@ -172,6 +172,7 @@ describe("settings search", () => {
       expect(landingsFor("navigator resource stats", DESKTOP)).toContain(
         "layout#layout-sidebar-resource-chips",
       );
+      expect(landingFor("home tab", DESKTOP)).toBe("layout#layout-home-tab");
       // The header resource-monitor row renders only under header placement,
       // so its old name reaches the Status bar group rather than a row.
       expect(landingsFor("global resources button", DESKTOP)).toContain(

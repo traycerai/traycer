@@ -20,26 +20,31 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *     `useTabHostClient()` and its host `useTabHostId()`. It has no `HostScope`
  *     to hand this hook, so it structurally cannot use it.
  *
- * TEN surfaces re-provide `HostRuntimeContext` in total: the eight through
- * this hook (`rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
- * `app-status-bar` — the bottom strip, which re-provides for the host it
- * watches — `layout`, which re-provides around its WHOLE Status bar group: the
- * live preview at the top of it and the per-provider toggles below describe one
- * machine, and resolving the watch pick twice is how they would come to
- * describe two, and the onboarding TOUR) plus those two. Anything reading
- * `useHostClient()` / `useAddressableHostId()` beneath any of them gets that
- * surface's host.
+ * ELEVEN surfaces re-provide `HostRuntimeContext` in total. The count is one
+ * formula — NINE through this hook, plus the two exceptions above — stated
+ * once here so a surface added later moves both halves of it rather than
+ * leaving a headline and a list disagreeing about how many there are. The nine:
  *
- * The tour (`onboarding-page.tsx`) is the eighth, and the first outside
- * Settings-shaped surfaces: its two host-dependent acts read one machine -
+ *   `rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
+ *   `app-status-bar` (the bottom strip, re-providing for the host it watches),
+ *   `layout` (around its WHOLE Status bar group: the live preview at the top of
+ *   it and the per-provider toggles below describe one machine, and resolving
+ *   the watch pick twice is how they would come to describe two), the
+ *   onboarding TOUR, and the session-import DIALOG.
+ *
+ * Anything reading `useHostClient()` / `useAddressableHostId()` beneath any of
+ * the eleven gets that surface's host.
+ *
+ * The tour (`onboarding-page.tsx`) is the first of them outside a
+ * Settings-shaped surface: its two host-dependent acts read one machine -
  * the session scan lists what is on it, the agent guide is stored on it - so
  * a person with several hosts can run the tour once and still import into,
  * and write a guide for, whichever machine they name. It re-provides BOTH
  * contexts for that reason, and it is safe for the positional reason below:
  * the tour has no composer, and so no path to the microphone.
  *
- * The session-import DIALOG (`session-import-dialog.tsx`) is the ninth, for
- * the same reason as the tour's import act: it carries its own host picker,
+ * The session-import DIALOG (`session-import-dialog.tsx`) joined for the same
+ * reason as the tour's import act: it carries its own host picker,
  * and the scan it shows and the run it starts belong to the machine that
  * picker names. It also re-provides BOTH contexts, and contains no composer.
  *
@@ -49,8 +54,10 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * audio, so pointing it at a pinned host ships a user's voice to a machine they
  * only picked to administer. Today it is safe only because no re-provider
  * happens to sit above a composer — a positional fact, not an invariant, which
- * is why it is written down here where the tenth re-provider gets added. The
- * two most recent are the bottom strip and Layout's status-bar group, and both
+ * is why it is written down here, where the NEXT re-provider gets added - an
+ * ordinal in that sentence is one more number to keep in step, and this note
+ * only ever meant "the one you are about to add". The two most recent are the
+ * bottom strip and Layout's Status bar group, and both
  * are safe for that same positional reason: a 24px strip holds usage segments
  * and a readout, a Settings group holds toggles, and no composer will ever be a
  * child of either.
@@ -62,13 +69,13 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * `useWsStreamClient()`. So the stream context is literally the transport a
  * user's microphone rides, and a stream re-provider above a composer is the
  * voice-to-the-wrong-machine outcome directly rather than by implication.
- * That population is no longer a single surface: `resource-monitor-popover`
- * was the only stream re-provider, and the epic sidebar's file tree, the git
- * diff PANEL and the git diff TILE (two surfaces, not one - a pinned panel body
- * and a canvas tile), the HOST OVERVIEW (`host-settings-panel.tsx`, whose
- * `StreamRuntimeContext.Provider` carries `useScopedStreamBinding`), the
- * onboarding TOUR and `app-status-bar` are now six more, and the session-import
- * DIALOG a seventh. The Overview joined the list for its Data & migration
+ * That population is no longer a single surface: there are EIGHT stream
+ * re-providers. `resource-monitor-popover` was the only one, and the epic
+ * sidebar's file tree, the git diff PANEL and the git diff TILE (two surfaces,
+ * not one - a pinned panel body and a canvas tile), the HOST OVERVIEW
+ * (`host-settings-panel.tsx`, whose `StreamRuntimeContext.Provider` carries
+ * `useScopedStreamBinding`), the onboarding TOUR, `app-status-bar` and the
+ * session-import DIALOG are the other seven. The Overview joined the list for its Data & migration
  * group: both rows move ONE machine's local data over a stream, so the stream
  * has to be the named host's. The tour joined it for the same reason one act
  * down — the session scan and the run it starts are that machine's — and the

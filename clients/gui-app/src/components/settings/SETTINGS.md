@@ -1285,10 +1285,10 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   Appearance because its controls answer "where does this live", not "what does
   it look like" - and because a per-provider, per-window rate-limit list needs
   room Appearance does not have. Group order is fixed so a control keeps its
-  place as groups arrive: **Status bar** · **Composer** · **Chat** ·
+  place as groups arrive: **Status bar** · **Tabs** · **Composer** · **Chat** ·
   **Sidebar**.
   - **Ownership.** This page is where a layout control belongs from now on, and
-    three rows were relocated onto it from General and one from Appearance.
+    four rows were relocated onto it from General and one from Appearance.
     Store keys and setters are unchanged (`settings-store`), so there is no
     migration and nothing persisted moved - only the surface did. Their
     analytics ids are unchanged too, but they are now reported under the
@@ -1297,6 +1297,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     | Row                                 | Was                       | Now        |
     | ----------------------------------- | ------------------------- | ---------- |
     | Show resource monitor in header     | General ▸ Running agents  | Status bar |
+    | Home tab                            | General ▸ Layout          | Tabs       |
     | Pin context breakdown               | General ▸ Chat & composer | Chat       |
     | Minimap side                        | Appearance                | Chat       |
     | Show resource chips on sidebar rows | General ▸ Running agents  | Sidebar    |
@@ -1305,6 +1306,10 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     (`lib/settings-search/settings-search-entries.ts`), each keeping its old
     General or Appearance name as a keyword, so a query for either name lands
     under Layout and nowhere else.
+
+    `Home tab` landed in General only because this page was on an unmerged
+    branch while the Home work was built; it has no other history there, and
+    the group it landed in there was called Layout for the same reason.
 
   - **One file per group, mounted from the page on one line**
     (`panels/layout/*.tsx`). A group here grows a preview, a nested list or a
@@ -1502,6 +1507,17 @@ md:top-0`): positioned against the nearest scrollport - the settings
     plus a `-z-10` `card/40` pseudo) rather than one flat token - repainting a
     pinned child opaque inside a `bg-card/40` pane is what cost the
     model-providers tab its sticky search.
+  - **Tabs** (`panels/layout/tabs-layout-group.tsx`) - what the top-level tab
+    strip carries. One row today: `Home tab`
+    (`settings-store.homeTabEnabled`, default off), the fixed Home tab and its
+    focus view. It is a GROUP with one row rather than a row inside Status bar,
+    because a tab is not part of the footer and the two collapse differently:
+    nothing in this group keys on `isMobileApp()`, since that build has no
+    strip but does draw what the row governs, as the first entry in the nav
+    drawer. Parking it under Status bar would have made it the one row there
+    that survives that group's collapse for a reason unrelated to the header -
+    a second exception with a different argument behind it, in the group that
+    already carries one.
   - **Composer** (`panels/layout/composer-layout-group.tsx`, its own file - the
     page mounts it with one line, so groups landing beside each other do not
     contend for the panel). Seven elements, a closed list rather than a

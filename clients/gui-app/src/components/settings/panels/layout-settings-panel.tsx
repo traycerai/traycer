@@ -6,6 +6,7 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { ComposerLayoutGroup } from "@/components/settings/panels/layout/composer-layout-group";
 import { SidebarLayoutGroup } from "@/components/settings/panels/layout/sidebar-layout-group";
 import { StatusBarLayoutGroup } from "@/components/settings/panels/layout/status-bar-layout-group";
+import { TabsLayoutGroup } from "@/components/settings/panels/layout/tabs-layout-group";
 import { trackLayoutSetting } from "@/components/settings/panels/layout/track-layout-setting";
 import {
   Select,
@@ -27,8 +28,9 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * Appearance's ("where does this live", not "what does it look like") and
  * because they accumulate: a per-provider, per-window visibility list needs
  * room, and General and Appearance were already collecting layout toggles one
- * at a time. Group order is fixed - Status bar, then Composer when it has rows,
- * then Chat, then Sidebar - so a control keeps its place as groups arrive.
+ * at a time. Group order is fixed - Status bar, then Tabs, then Composer when it
+ * has rows, then Chat, then Sidebar - so a control keeps its place as groups
+ * arrive.
  *
  * Each group is one file, mounted here on one line. That is what lets a group
  * grow a preview, a nested list or a host binding of its own without this file
@@ -45,6 +47,7 @@ export function LayoutSettingsPanel(): ReactNode {
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <StatusBarLayoutGroup />
+        <TabsLayoutGroup />
         <ComposerLayoutGroup />
         <ChatLayoutGroup />
         <SidebarLayoutGroup />

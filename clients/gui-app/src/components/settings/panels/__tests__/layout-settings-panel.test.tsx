@@ -268,13 +268,13 @@ describe("<LayoutSettingsPanel />", () => {
   });
 
   it("renders the groups in their fixed order, Status bar first and Sidebar last", () => {
-    // The order a control keeps as groups arrive: Status bar, then Composer
-    // when it has rows, then Chat, then Sidebar. Asserted on the rendered
-    // document rather than trusted to a JSX read, since each group is now its
-    // own file mounted from one line here.
+    // The order a control keeps as groups arrive: Status bar, then Tabs, then
+    // Composer when it has rows, then Chat, then Sidebar. Asserted on the
+    // rendered document rather than trusted to a JSX read, since each group is
+    // now its own file mounted from one line here.
     render(<LayoutSettingsPanel />);
 
-    const order = ["status-bar", "chat", "sidebar"].map((group) =>
+    const order = ["status-bar", "tabs", "chat", "sidebar"].map((group) =>
       screen.getByTestId(`layout-${group}-group`),
     );
 
@@ -729,6 +729,59 @@ describe("<LayoutSettingsPanel />", () => {
       const { container } = render(<LayoutSettingsPanel />);
 
       assertSettingsSearchTargets("layout", context, container);
+    });
+  });
+
+  // Its own group, not a row borrowed by the footer's: a tab is not part of
+  // the status bar, and the status bar group collapses on a build where this
+  // row still applies.
+  describe("Tabs", () => {
+    it("renders and writes 'Home tab' in the Tabs group, tracking the analytics id", () => {
+      render(<LayoutSettingsPanel />);
+      const tabsGroup = screen.getByTestId("layout-tabs-group");
+
+      expect(useSettingsStore.getState().homeTabEnabled).toBe(false);
+      const toggle = within(tabsGroup).getByRole("switch", {
+        name: "Home tab",
+      });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+      fireEvent.click(toggle);
+
+      expect(useSettingsStore.getState().homeTabEnabled).toBe(true);
+      // The row moved off General with its key and its setting id; only the
+      // section follows the page.
+      expect(trackSettingChanged).toHaveBeenCalledWith(
+        "layout",
+        "homeTabEnabled",
+      );
+    });
+
+    it("reflects a Home tab value already in the store", () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      render(<LayoutSettingsPanel />);
+
+      expect(
+        screen
+          .getByRole("switch", { name: "Home tab" })
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+    });
+
+    // No `isMobileApp()` gate anywhere in this group: that build has no strip
+    // but it does draw the Home tab, as the first entry in the nav drawer.
+    it("renders whole in the installed mobile app, where the Status bar group collapses", () => {
+      setMobileApp(true);
+      render(<LayoutSettingsPanel />);
+
+      expect(screen.getByText("Status bar is desktop-only")).toBeTruthy();
+      const tabsGroup = screen.getByTestId("layout-tabs-group");
+
+      fireEvent.click(
+        within(tabsGroup).getByRole("switch", { name: "Home tab" }),
+      );
+
+      expect(useSettingsStore.getState().homeTabEnabled).toBe(true);
     });
   });
 });

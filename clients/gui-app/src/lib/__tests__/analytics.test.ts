@@ -1249,12 +1249,16 @@ describe("Layout page settings analytics", () => {
     }
   });
 
-  it("tracks the relocated layout settings (chat, sidebar, resource monitor rows) under the layout section", async () => {
+  it("tracks the relocated layout settings (chat, sidebar, Home tab, resource monitor rows) under the layout section", async () => {
     const { AnalyticsEvent, sanitizeAnalyticsProperties } =
       await import("@/lib/analytics");
 
+    // `homeTabEnabled` is here rather than under `general` because the row
+    // moved to the Layout page; the setting id itself never changed, which is
+    // what keeps its history joinable across the move.
     const relocatedSettings = [
       "chatTurnMinimapSide",
+      "homeTabEnabled",
       "pinContextUsageBreakdown",
       "showGlobalResourceMonitor",
       "showNavigatorResourceStats",

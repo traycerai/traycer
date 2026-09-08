@@ -20,7 +20,6 @@ import {
 } from "vitest";
 import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { setMobileApp } from "@/lib/mobile-app";
 import {
   isExperimentalGroupAvailable,
@@ -379,9 +378,11 @@ describe("GeneralSettingsPanel", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
-  // The pinned context breakdown and the two resource-visibility rows now live
-  // on Settings > Layout, beside the rest of the chrome placement controls.
-  // Their `settings-store` keys did not move, so only the rendering did.
+  // The pinned context breakdown, the two resource-visibility rows and the
+  // Home tab switch now live on Settings > Layout, beside the rest of the
+  // chrome placement controls. Their `settings-store` keys did not move, so
+  // only the rendering did - which is why this asserts on the rows and the
+  // group heading rather than on the store.
   it("no longer renders the rows that moved to the Layout page", () => {
     renderPanel();
 
@@ -394,74 +395,8 @@ describe("GeneralSettingsPanel", () => {
     expect(
       screen.queryByRole("switch", { name: "Show navigator resource stats" }),
     ).toBeNull();
-  });
-
-  // The Layout group holds the fixed Home tab switch behind
-  // `homeTabEnabled`, off by default. Mirrors the surrounding switch-row
-  // tests: the control reflects store state on render, and reflects it again
-  // after the store value changes underneath it.
-  it("reflects the Home tab store value under the Layout group", () => {
-    renderPanel();
-
-    expect(screen.getByText("Layout")).toBeTruthy();
-    expect(useSettingsStore.getState().homeTabEnabled).toBe(false);
-    expect(
-      screen
-        .getByRole("switch", { name: "Home tab" })
-        .getAttribute("aria-checked"),
-    ).toBe("false");
-
-    cleanup();
-    useSettingsStore.setState({ homeTabEnabled: true });
-    renderPanel();
-
-    expect(
-      screen
-        .getByRole("switch", { name: "Home tab" })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
-  });
-
-  // Established elsewhere in the codebase (e.g.
-  // `components/report-issue/__tests__/report-issue-action-analytics.test.tsx`)
-  // as the way to observe a real `setting_changed` call: spy on the real
-  // `Analytics.getInstance().track`, which still runs the sanitizer in test
-  // mode even though PostHog capture itself is disabled. Nothing in this file
-  // tracked `setting_changed` before this row, so there was no in-file
-  // assertion shape to mirror; this follows the codebase-wide one instead of
-  // inventing a new one.
-  it("toggles the Home tab setting and tracks setting_changed for it", () => {
-    const track = vi.spyOn(Analytics.getInstance(), "track");
-    renderPanel();
-
-    expect(useSettingsStore.getState().homeTabEnabled).toBe(false);
-    const toggle = screen.getByRole("switch", { name: "Home tab" });
-
-    fireEvent.click(toggle);
-
-    expect(useSettingsStore.getState().homeTabEnabled).toBe(true);
-    const settingChangedCalls = track.mock.calls
-      .filter((call) => call[0] === AnalyticsEvent.SettingChanged)
-      .map((call) => call[1]);
-    expect(settingChangedCalls).toEqual([
-      { source: "direct_ui", section: "general", setting: "homeTabEnabled" },
-    ]);
-  });
-
-  // Exercises the real allowlist path a `setting_changed` call for
-  // `homeTabEnabled` travels through: `Analytics.getInstance().track` runs
-  // `sanitizeAnalyticsProperties`, which validates `setting` against the
-  // runtime `ANALYTICS_SETTINGS` set unconditionally (even with PostHog
-  // capture disabled in test mode) and reports back through the boolean
-  // return. This calls the real consuming function rather than reaching into
-  // `ANALYTICS_SETTINGS` directly.
-  it("passes homeTabEnabled through the setting_changed allowlist", () => {
-    const accepted = Analytics.getInstance().track(
-      AnalyticsEvent.SettingChanged,
-      { source: "direct_ui", section: "general", setting: "homeTabEnabled" },
-    );
-
-    expect(accepted).toBe(true);
+    expect(screen.queryByRole("switch", { name: "Home tab" })).toBeNull();
+    expect(screen.queryByText("Layout")).toBeNull();
   });
 
   it("renders the quote reply row and toggles the setting", () => {

@@ -142,6 +142,27 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["provider", "codex", "claude", "watched host", "unreachable"],
   },
+  // Every build draws what this group governs - the mobile app has no strip,
+  // but its nav drawer leads with the Home tab - so nothing here is gated.
+  tabs: {
+    kind: "group",
+    search: { anchor: "layout-tabs" },
+    label: "Tabs",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["tab strip", "tab bar", "top-level tabs"],
+  },
+  homeTab: {
+    kind: "row",
+    group: "tabs",
+    search: { anchor: "layout-home-tab" },
+    label: "Home tab",
+    description:
+      "Show a fixed Home tab with everything running across your tasks.",
+    availableWhen: alwaysAvailable,
+    keywords: ["home", "tab strip", "overview", "focus view", "running"],
+  },
   composer: {
     kind: "group",
     search: { anchor: "layout-composer" },
