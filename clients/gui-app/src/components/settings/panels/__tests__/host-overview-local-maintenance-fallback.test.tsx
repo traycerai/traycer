@@ -1151,7 +1151,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
   });
 
-  it("Install host (HOST_NOT_INSTALLED) dispatches runDoctorRepairIfIdle converge-ready with the captured local id", async () => {
+  it("Install host (HOST_NOT_INSTALLED) dispatches runDoctorRepairIfIdle converge-latest with the captured local id", async () => {
     const { management } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
@@ -1175,7 +1175,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
 
     await waitFor(() => {
       expect(management.runDoctorRepairIfIdle).toHaveBeenCalledWith({
-        repair: "converge-ready",
+        repair: "converge-latest",
         expectedHostId: HOST_ID,
       });
     });

@@ -321,6 +321,9 @@ export async function applyHost(
     onProgress: opts.onProgress,
     lifecycle: lifecycleHandle?.lifecycle ?? null,
     onCommitted: () => {},
+    // Apply only ever moves FORWARD (the stage is newer than the install), so
+    // it records no version hold at the swap boundary.
+    onSwapCommitted: null,
     verifyMutationCapability: opts.verifyMutationCapability,
     onWillSwap: opts.onWillDisruptHost,
   });

@@ -41,6 +41,7 @@ import {
 } from "@traycer/protocol/config/installation";
 import {
   backgroundMutationOutcome,
+  type ConvergeReadyVersionPolicy,
   type GuardedMutationOutcome,
   type LifecycleAdmissionBlock,
   type MutationOutcome,
@@ -1033,6 +1034,18 @@ async function refreshRegistryUpdateStateSerial(
   return state;
 }
 
+// The version policy a Doctor converge repair carries into the controller.
+// `converge-ready` is liveness-only - it keeps whatever non-yanked host is
+// installed, so it can never revert a deliberate downgrade. `converge-latest`
+// is the explicit, version-seeking repair behind "Install host" for a host
+// that is too old to serve this client (or has no usable install at all):
+// liveness would keep exactly that host and report the repair applied.
+function convergeVersionPolicyForRepair(
+  repair: "converge-ready" | "converge-latest",
+): ConvergeReadyVersionPolicy {
+  return repair === "converge-latest" ? "pinned-minimum" : "keep-installed";
+}
+
 // An explicit user-driven (re)provision - install host, update host, register
 // service - means the user wants the host back on this device. Clear the
 // removal sentinel so the host stops being treated as removed; otherwise the
@@ -1066,9 +1079,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // Narrowed before crossing IPC: the renderer's contract is plain
       // `MutationOutcome`, and a guardless intent cannot be abandoned.
       return backgroundMutationOutcome(
-        await bridge.options.hostController.convergeReady(force, {
-          kind: "background",
-        }),
+        await bridge.options.hostController.convergeReady(
+          force,
+          { kind: "background" },
+          "keep-installed",
+        ),
       );
     },
   );
@@ -1112,7 +1127,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostActivateInstalled,
     async (_event, raw: unknown) => {
       const force = optionalBoolean(raw, "force");
-      return bridge.options.hostController.activateInstalled(force);
+      // Explicit user activate/Update: keep the "ready update supersedes
+      // activation debt" promotion (`promoteReadyStage: true`). Only the
+      // implicit launch reconcile suppresses promotion, and it does so for
+      // every launch activation.
+      return bridge.options.hostController.activateInstalled(force, true);
     },
   );
 
@@ -1531,6 +1550,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const repair = optionalString(raw, "repair");
       if (
         repair !== "converge-ready" &&
+        repair !== "converge-latest" &&
         repair !== "register-service" &&
         repair !== "restart"
       ) {
@@ -1585,9 +1605,13 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // ok-value types and this handler never reads the value - it only
       // classifies the kind.
       const outcome: GuardedMutationOutcome<unknown> =
-        repair === "converge-ready"
-          ? await bridge.options.hostController.convergeReady(false, intent)
-          : await bridge.options.hostController.registerService(intent);
+        repair === "register-service"
+          ? await bridge.options.hostController.registerService(intent)
+          : await bridge.options.hostController.convergeReady(
+              false,
+              intent,
+              convergeVersionPolicyForRepair(repair),
+            );
       // A guard refusal is NOT a failure. It arrives as the `abandoned` arm
       // of the SHARED settled outcome, so a caller that coalesced onto
       // another window's identical repair classifies it exactly like the
@@ -1614,19 +1638,25 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     async (_event, raw: unknown): Promise<DoctorRepairDispatch> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
       const repair = optionalString(raw, "repair");
-      if (repair !== "converge-ready" && repair !== "register-service") {
+      if (
+        repair !== "converge-ready" &&
+        repair !== "converge-latest" &&
+        repair !== "register-service"
+      ) {
         throw new Error(`Unknown doctor repair: ${String(repair)}`);
       }
       const identity = await checkLocalHostIsStill(bridge, expectedHostId);
       if (!identity.ok) {
         return { kind: "host-changed", message: identity.message };
       }
-      // The Doctor sheet's two LIFECYCLE repairs, refused rather than queued
-      // for the same reason a watched restart is: `convergeReady` converges to
-      // LATEST and `registerService` adds a service cycle, so either one
-      // landing after a pinned install overrides the version the person
-      // actually chose. The page cannot gate this on its own — its lifecycle
-      // state cannot see a lane the background reconciler armed.
+      // The Doctor sheet's LIFECYCLE repairs, refused rather than queued for
+      // the same reason a watched restart is: `converge-latest` converges to
+      // this build's pinned host, `registerService` adds a service cycle, and
+      // even a liveness-only `converge-ready` restarts the host, so any of
+      // them landing after a pinned install disturbs - or, for the
+      // version-seeking one, overrides - what the person actually chose. The
+      // page cannot gate this on its own — its lifecycle state cannot see a
+      // lane the background reconciler armed.
       //
       // Atomic: the lane test and the submission have no await between them.
       // The sentinel clear that this repair also needs is NOT done here for
@@ -1644,9 +1674,13 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       }
       const intent = userRepairIntent(bridge, expectedHostId);
       const outcome: GuardedMutationOutcome<unknown> =
-        repair === "converge-ready"
-          ? await bridge.options.hostController.convergeReady(false, intent)
-          : await bridge.options.hostController.registerService(intent);
+        repair === "register-service"
+          ? await bridge.options.hostController.registerService(intent)
+          : await bridge.options.hostController.convergeReady(
+              false,
+              intent,
+              convergeVersionPolicyForRepair(repair),
+            );
       // Same rule as the queued twin: a late identity refusal is reported as
       // the identity refusal it is, using the dispatch shape this channel
       // already has for one caught before submission - and it rides the

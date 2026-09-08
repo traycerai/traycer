@@ -421,6 +421,10 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--force", mandatory: false },
       { flags: "--from <path>", mandatory: false },
       { flags: "--json", mandatory: false },
+      // Liveness-only convergence (downgrade-revert RCA): keep any
+      // installed, non-yanked host rather than reinstalling this build's
+      // pin. The desktop passes it for its background intent.
+      { flags: "--keep-installed", mandatory: false },
       { flags: "--no-linger", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--no-service-register", mandatory: false },
@@ -1253,6 +1257,11 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "traycer host install --if-idle",
         "traycer host apply --expected-stage-fingerprint",
         "traycer host apply --no-service",
+        // Implicit-apply hold check (version-hold design): the desktop's
+        // launch-time apply passes this so a terminal downgrade that lands
+        // during the stage's download/eligibility window is not reverted.
+        // An explicit "Update now" apply never sets it.
+        "traycer host apply --respect-hold",
         "traycer host download --automatic",
       ].sort(),
     );

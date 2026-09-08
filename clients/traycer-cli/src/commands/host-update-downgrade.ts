@@ -5,6 +5,7 @@ import {
   type InstallPhaseHooks,
 } from "../installer/install";
 import { readHostInstallRecord } from "../manifest/host-install";
+import { holdVersionOnSwapCommitted } from "../host/held-host-version";
 import { assertHostNotBusy } from "../host/busy-check";
 import {
   requireCliUpdateMutationCapability,
@@ -147,6 +148,14 @@ export async function installHostDowngradeInSegment(
           onWillStopHost: input.onWillDisruptHost,
           hooks: input.hooks,
         });
+        // Version hold recorded via the committer's post-swap observer, at the
+        // TRUE successful-swap boundary (under this `withCliAttemptMutation`
+        // span, right after the atomic swap and BEFORE the post-swap lifecycle
+        // bookkeeping, which can reject with the bytes committed and the host
+        // restarting - T6). Keyed on the ACTUAL committed vs previous records,
+        // strict compare, so an explicit different-build-but-comparator-EQUAL
+        // swap (`2.0.0+foo -> 2.0.0+bar`), which also routes through this arm,
+        // is NOT held.
         const result = await commitHostInstallSourceWithAttempt(
           capability,
           contenderOptions,
@@ -156,6 +165,7 @@ export async function installHostDowngradeInSegment(
             onProgress: input.onProgress,
             lifecycle: handle.lifecycle,
             onWillSwap: input.onWillDisruptHost,
+            onSwapCommitted: holdVersionOnSwapCommitted(input.environment),
           },
         );
         return {
