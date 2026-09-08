@@ -8,20 +8,27 @@ import { useReducedMotion, type Transition } from "motion/react";
  * non-components (which would cost it fast refresh).
  */
 export const TAB_CLASS_BASE =
-  "group/tab relative flex h-9 w-full min-w-0 items-center gap-1.5 pl-6 pr-[clamp(0.75rem,10%,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
+  "group/tab relative flex h-9 w-full min-w-0 items-center gap-1.5 px-6 text-ui-sm transition-[color,transform] duration-300 ease-spring";
 
-/** Neighbour movement settles quickly without overshooting its open slot. */
+export const SPLIT_MEMBER_CLASS = "gap-1 px-5";
+export const SPLIT_TAB_CONTROL_CLASS =
+  "relative z-20 mr-1 flex h-7 w-10 shrink-0 items-center justify-center rounded-md";
+
+/**
+ * Neighbour displacement while a tab is being dragged past it.
+ *
+ * A short, monotone tween deliberately replaces the previous overdamped
+ * spring. The spring needed ~174ms to settle, so a quick adjacent gesture could
+ * end before the neighbour visibly reached its new position and the tab read
+ * as "chasing" the pointer. Chrome's displacement is strictly decaying with no
+ * overshoot; this curve preserves that character while completing within the
+ * duration of a fast one-slot gesture.
+ */
 export const HEADER_TAB_REORDER_TRANSITION = {
   type: "tween",
-  duration: 0.16,
+  duration: 0.09,
   ease: [0.2, 0, 0, 1],
 } satisfies Transition;
-
-const HEADER_TAB_DISPLACEMENT_TRANSITION: Transition = {
-  ...HEADER_TAB_REORDER_TRANSITION,
-  opacity: { duration: 0 },
-};
-const HEADER_TAB_REDUCED_MOTION_TRANSITION: Transition = { duration: 0 };
 
 /**
  * Transition for a tab frame's displacement while a sibling is dragged past it.
@@ -35,6 +42,6 @@ const HEADER_TAB_REDUCED_MOTION_TRANSITION: Transition = { duration: 0 };
 export function useHeaderTabDisplacementTransition(): Transition {
   const reduceMotion = useReducedMotion() === true;
   return reduceMotion
-    ? HEADER_TAB_REDUCED_MOTION_TRANSITION
-    : HEADER_TAB_DISPLACEMENT_TRANSITION;
+    ? { duration: 0 }
+    : { ...HEADER_TAB_REORDER_TRANSITION, opacity: { duration: 0 } };
 }

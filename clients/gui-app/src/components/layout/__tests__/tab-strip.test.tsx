@@ -1012,7 +1012,7 @@ describe("<TabStrip />", () => {
     expect(rightPane?.getAttribute("fill")).toBe("currentColor");
     expect(leftUnderline.className).toContain("bg-primary");
     expect(rightUnderline.className).not.toContain("bg-primary");
-    expect(leftTab.className).toContain("px-1.5");
+    expect(leftTab.className).toContain("px-5");
     expect(rightTab.className).toContain("px-5");
     expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(

@@ -1,6 +1,9 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EpicRootDragOverlayContent } from "@/components/epic-canvas/dnd/drag-overlay-chip";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
 import type {
   EpicCanvasArtifactTabDragData,
   EpicCanvasGitDiffTileDragData,
@@ -288,6 +291,216 @@ describe("<EpicRootDragOverlayContent />", () => {
 
       const marker = overlayMarker();
       expect(marker.contains(screen.getByText(panel.title))).toBe(true);
+    });
+  });
+
+  describe("header-tab drag overlay for a split group", () => {
+    const LEFT: TabRef = { kind: "epic", id: "epic-left" };
+    const RIGHT: TabRef = { kind: "epic", id: "epic-right" };
+
+    function seedSplitGroup(
+      focusedSide: "left" | "right",
+      right: { readonly kind: "tab" } | { readonly kind: "unavailable" },
+    ): void {
+      useEpicCanvasStore
+        .getState()
+        .seedEpic("epic-left", { tabId: "epic-left", name: "Left Epic" }, []);
+      if (right.kind === "tab") {
+        useEpicCanvasStore
+          .getState()
+          .seedEpic(
+            "epic-right",
+            { tabId: "epic-right", name: "Right Epic" },
+            [],
+          );
+      }
+      useTabsStore.setState({
+        version: 2,
+        items: [
+          {
+            kind: "split",
+            id: "split-1",
+            left: { kind: "tab", ref: LEFT },
+            right:
+              right.kind === "tab"
+                ? { kind: "tab", ref: RIGHT }
+                : {
+                    kind: "unavailable",
+                    previousRef: RIGHT,
+                    label: "Tab unavailable",
+                  },
+            focusedSide,
+            routeBackingSide: focusedSide,
+            leftRatio: 0.5,
+          },
+        ],
+        activeItemId: "split-1",
+        stripOrder: right.kind === "tab" ? [LEFT, RIGHT] : [LEFT],
+        systemTabs: { history: null, settings: null },
+      });
+    }
+
+    afterEach(() => {
+      useTabsStore.setState(useTabsStore.getInitialState(), true);
+      useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    });
+
+    it("keeps both members' titles at the measured group width, instead of collapsing to one stretched title", () => {
+      seedSplitGroup("left", { kind: "tab" });
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "split-1",
+          tabKind: "epic",
+          tabId: "epic-left",
+          index: 0,
+        },
+        480,
+      );
+      render(<EpicRootDragOverlayContent />);
+
+      const overlay = screen.getByTestId("header-tab-drag-overlay");
+      expect(within(overlay).getByText("Left Epic")).toBeTruthy();
+      expect(within(overlay).getByText("Right Epic")).toBeTruthy();
+      expect(overlay.style.width).toBe("480px");
+    });
+
+    it("shows the focus icon and underline for the side the store says is focused", () => {
+      seedSplitGroup("right", { kind: "tab" });
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "split-1",
+          tabKind: "epic",
+          tabId: "epic-right",
+          index: 0,
+        },
+        480,
+      );
+      render(<EpicRootDragOverlayContent />);
+
+      const overlay = screen.getByTestId("header-tab-drag-overlay");
+      const indicator = within(overlay).getByTestId(
+        "split-focus-indicator-split-1",
+      );
+      expect(indicator.dataset.focusedSide).toBe("right");
+      const underline = within(overlay).getByTestId(
+        "split-tab-group-underline-right-split-1",
+      );
+      expect(underline.className).not.toContain("bg-primary");
+    });
+
+    it("preserves an unavailable placeholder member instead of collapsing it", () => {
+      seedSplitGroup("left", { kind: "unavailable" });
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "split-1",
+          tabKind: "epic",
+          tabId: "epic-left",
+          index: 0,
+        },
+        480,
+      );
+      render(<EpicRootDragOverlayContent />);
+
+      const overlay = screen.getByTestId("header-tab-drag-overlay");
+      expect(within(overlay).getByText("Left Epic")).toBeTruthy();
+      expect(within(overlay).getByText("Tab unavailable")).toBeTruthy();
+    });
+
+    function rect(left: number, top: number, right: number, bottom: number) {
+      return {
+        x: left,
+        y: top,
+        left,
+        top,
+        right,
+        bottom,
+        width: right - left,
+        height: bottom - top,
+        toJSON: () => ({}),
+      };
+    }
+
+    it("offsets the preview root by the grabbed right member's position within the group frame", () => {
+      seedSplitGroup("right", { kind: "tab" });
+
+      // Supply the source nodes without mounting the full interactive strip.
+      const frame = document.createElement("div");
+      frame.setAttribute("data-strip-item-id", "split-1");
+      const member = document.createElement("div");
+      member.setAttribute("data-tab-kind", "epic");
+      member.setAttribute("data-testid", "tab-epic-epic-right");
+      frame.appendChild(member);
+      document.body.appendChild(frame);
+      const frameRectSpy = vi
+        .spyOn(frame, "getBoundingClientRect")
+        .mockReturnValue(rect(100, 0, 101, 40));
+      const memberRectSpy = vi
+        .spyOn(member, "getBoundingClientRect")
+        .mockReturnValue(rect(340, 0, 341, 40));
+
+      try {
+        useEpicDndStore.getState().headerTabDragStarted(
+          {
+            kind: "header-tab",
+            stripItemId: "split-1",
+            tabKind: "epic",
+            tabId: "epic-right",
+            index: 0,
+          },
+          480,
+        );
+        render(<EpicRootDragOverlayContent />);
+
+        const overlay = screen.getByTestId("header-tab-drag-overlay");
+        // frame.left (100) - member.left (340): the preview paints back at the
+        // group's origin instead of the grabbed member's own, narrower slot.
+        expect(overlay.style.transform).toBe("translateX(-240px)");
+        expect(overlay.style.width).toBe("480px");
+        expect(within(overlay).getByText("Left Epic")).toBeTruthy();
+        expect(within(overlay).getByText("Right Epic")).toBeTruthy();
+      } finally {
+        frameRectSpy.mockRestore();
+        memberRectSpy.mockRestore();
+        frame.remove();
+      }
+    });
+
+    it("still renders the plain single-title overlay for an ordinary (non-split) tab drag", () => {
+      useEpicCanvasStore
+        .getState()
+        .seedEpic("epic-solo", { tabId: "epic-solo", name: "Solo Epic" }, []);
+      useTabsStore.setState({
+        version: 2,
+        items: [
+          {
+            kind: "tab",
+            id: "tab:epic:epic-solo",
+            ref: { kind: "epic", id: "epic-solo" },
+          },
+        ],
+        activeItemId: "tab:epic:epic-solo",
+        stripOrder: [{ kind: "epic", id: "epic-solo" }],
+        systemTabs: { history: null, settings: null },
+      });
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "tab:epic:epic-solo",
+          tabKind: "epic",
+          tabId: "epic-solo",
+          index: 0,
+        },
+        220,
+      );
+      render(<EpicRootDragOverlayContent />);
+
+      const overlay = screen.getByTestId("header-tab-drag-overlay");
+      expect(within(overlay).getByText("Solo Epic")).toBeTruthy();
+      expect(screen.queryByTestId("split-focus-indicator-split-1")).toBeNull();
+      expect(overlay.style.width).toBe("220px");
     });
   });
 });

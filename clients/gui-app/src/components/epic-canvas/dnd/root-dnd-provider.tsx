@@ -66,10 +66,13 @@ import {
   TOP_LEVEL_FILLABLE_TARGET,
   readTopLevelTabDropTarget,
   resolveValidatedTopLevelTabDrop,
+  stripPairTargetForIndex,
   type TopLevelFillableTarget,
+  type TopLevelStripPairTarget,
   type TopLevelTabDropTarget,
 } from "@/components/layout/tabs/top-level-tab-dnd";
 import {
+  activatePreparedPairTabIntent,
   existingEpicTabIntent,
   navigateToTabIntent,
 } from "@/lib/tab-navigation";
@@ -82,6 +85,7 @@ import { type SplitStripItem } from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
+import { v4 as uuidv4 } from "uuid";
 import {
   DndContext,
   DragOverlay,
@@ -105,8 +109,8 @@ import {
   overlayLeftForPointer,
   remapGeometryToSlots,
   resolveStripDragState,
-  resolveStripReorderState,
   stripOffsetsFor,
+  type MergeSide,
   type StripDragGeometry,
   type StripDragState,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
@@ -125,7 +129,6 @@ import { appLogger } from "@/lib/logger";
 import {
   armHeaderStripCommitHandoff,
   disarmHeaderStripCommitHandoff,
-  settleHeaderStripItemFrom,
 } from "@/components/layout/tabs/header-strip-commit-handoff";
 import {
   armTileStripCommitHandoff,
@@ -313,45 +316,24 @@ const rootDragOverlayModifier: Modifier = (args) => {
   }
   const geometry = activeHeaderStripGeometry;
   const pointerX = latestPointerX ?? getLastCollisionPointerPoint()?.x ?? null;
+  // Sprint 01 is single-mode: the tab stays in the strip row for the whole
+  // gesture, so crossing the tear-off threshold introduces no discontinuity.
   if (geometry === null || pointerX === null) {
     return { ...args.transform, y: 0 };
   }
-  const left = headerOverlayLeft(geometry, pointerX);
-  return { ...args.transform, x: left - geometry.sourceInitialLeft, y: 0 };
-};
-
-function headerOverlayLeft(
-  geometry: StripDragGeometry,
-  pointerX: number,
-): number {
   const strip = document.querySelector(
     `[data-testid="${HEADER_STRIP_SCROLL_TEST_ID}"]`,
   );
   const stripRect = strip === null ? null : strip.getBoundingClientRect();
-  return overlayLeftForPointer({
+  const left = overlayLeftForPointer({
     pointerX,
     grabOffsetX: geometry.grabOffsetX,
     sourceWidth: geometry.sourceWidth,
     stripLeft: stripRect?.left ?? Number.NEGATIVE_INFINITY,
     stripRight: stripRect?.right ?? Number.POSITIVE_INFINITY,
   });
-}
-
-function settleHeaderDragSource(geometry: StripDragGeometry | null): void {
-  const pointerX = latestPointerX ?? getLastCollisionPointerPoint()?.x ?? null;
-  const contentOriginX = readHeaderStripContentOriginX();
-  if (geometry === null || pointerX === null || contentOriginX === null) return;
-  if (geometry.sourceIndex < 0 || geometry.sourceIndex >= geometry.slots.length)
-    return;
-  const source = geometry.slots[geometry.sourceIndex];
-  settleHeaderStripItemFrom({
-    itemId: source.itemId,
-    offsetX:
-      headerOverlayLeft(geometry, pointerX) -
-      contentOriginX -
-      source.contentLeft,
-  });
-}
+  return { ...args.transform, x: left - geometry.sourceInitialLeft, y: 0 };
+};
 
 const ROOT_DRAG_OVERLAY_MODIFIERS = [rootDragOverlayModifier];
 
@@ -626,7 +608,7 @@ function updateTileStripPreview(
 /**
  * Header-tab preview. The fillable-slot target still comes from droppable
  * hit-testing - it is a content-pane target with no source slot under it - but
- * the strip's own reorder is resolved from the geometry model instead.
+ * the strip's own reorder/merge is resolved from the geometry model instead.
  * Hit-testing the strip cannot work once a provisional order moves the dragged
  * tab's own placeholder beneath the pointer.
  */
@@ -683,11 +665,13 @@ function updateHeaderTabSourcePreview(input: {
 
 /** Resolve the model at `pointerX` and publish it. */
 function publishHeaderStripDragState(input: {
+  readonly headerTab: HeaderTabDragData;
   readonly geometry: StripDragGeometry | null;
   readonly pointerX: number;
 }): void {
   const dndStore = useEpicDndStore.getState();
   const contentOriginX = readHeaderStripContentOriginX();
+  const { headerTab } = input;
   const geometry =
     input.geometry === null
       ? null
@@ -701,20 +685,57 @@ function publishHeaderStripDragState(input: {
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
-  const next = resolveStripReorderState({
+  const next = resolveStripDragState({
     geometry,
     contentOriginX,
     pointerX: input.pointerX,
     previous: dndStore.headerStripDragState,
   });
   dndStore.headerStripDragStateChanged(next);
+  // Explicit per-item displacement, the same mechanism the tile strip uses.
+  // No layout projection means no projection can be left mid-flight.
   dndStore.headerStripOffsetsChanged(
     stripOffsetsFor(geometry, next.targetIndex),
   );
-  // The moving tabs and their open slot show the reorder destination.
-  // Insertion lines are reserved for tiles arriving from the canvas.
-  dndStore.headerStripDropIndexChanged(null);
-  dndStore.topLevelStripPairPreviewChanged(null);
+  // A merge shows the pair highlight and nothing else - an insertion line
+  // beside a highlighted merge target advertises two different outcomes for
+  // one release. Plain reorder shows the line at the settled model boundary,
+  // where the displacement gap is opening.
+  dndStore.headerStripDropIndexChanged(
+    next.kind !== "reorder" || next.targetIndex === geometry.sourceIndex
+      ? null
+      : insertionIndexForTarget(geometry.sourceIndex, next.targetIndex),
+  );
+  const pairTarget =
+    next.kind === "merge"
+      ? resolveStripPairTarget(headerTab, geometry, next)
+      : null;
+  dndStore.topLevelStripPairPreviewChanged(
+    next.kind !== "merge" || pairTarget === null
+      ? null
+      : { targetRef: pairTarget.targetRef, side: next.targetSide },
+  );
+}
+
+/**
+ * The validated pair target a merge refers to, or null when the tabs-store
+ * layout no longer permits pairing with that item.
+ */
+function resolveStripPairTarget(
+  headerTab: HeaderTabDragData,
+  geometry: StripDragGeometry,
+  state: StripDragState,
+): TopLevelStripPairTarget | null {
+  if (state.kind !== "merge") {
+    return null;
+  }
+  const index = geometry.slots.findIndex(
+    (slot) => slot.itemId === state.targetItemId,
+  );
+  if (index < 0) return null;
+  const target = stripPairTargetForIndex(index, layoutFromTabsStore());
+  if (target === null) return null;
+  return resolveLiveTopLevelDrop(headerTab, target) === null ? null : target;
 }
 
 function layoutFromTabsStore() {
@@ -792,7 +813,25 @@ function commitHeaderTabDrop(input: {
   ) {
     return;
   }
-  settleHeaderDragSource(input.geometry);
+  // A merge beats the reorder it is sitting on: both describe the same pointer
+  // position, and which half of the neighbour the dragged tab's centre is on
+  // is what distinguishes "combine with this tab" from "move next to it".
+  if (input.dragState.kind === "merge") {
+    const pairTarget = resolveStripPairTarget(
+      headerTab,
+      input.geometry,
+      input.dragState,
+    );
+    if (pairTarget !== null) {
+      commitHeaderStripPair(
+        headerTab,
+        pairTarget,
+        input.dragState.targetSide,
+        input.navigate,
+      );
+      return;
+    }
+  }
   if (input.dragState.targetIndex === input.geometry.sourceIndex) return;
   // Arm BEFORE the reorder is written: the strip items re-base their transform
   // against the new baseline in the layout effect of the render this causes, so
@@ -805,6 +844,39 @@ function commitHeaderTabDrop(input: {
       input.dragState.targetIndex,
     ),
   });
+}
+
+/**
+ * Dropping A onto B pairs them with A on its APPROACH side - the side of B the
+ * pointer was hovering, which is also the side the preview highlighted.
+ * Dragging rightward onto B yields `A | B`; leftward yields `B | A`. The
+ * dragged tab takes focus either way.
+ */
+function commitHeaderStripPair(
+  headerTab: HeaderTabDragData,
+  target: TopLevelStripPairTarget,
+  side: MergeSide,
+  navigate: UseNavigateResult<string>,
+): void {
+  const validDrop = resolveLiveTopLevelDrop(headerTab, target);
+  if (validDrop === null) return;
+  const sourceRef = validDrop.source;
+  const sourceTab = getHeaderTabs().find(
+    (tab) => tab.kind === sourceRef.kind && tab.id === sourceRef.id,
+  );
+  if (sourceTab === undefined) return;
+  activatePreparedPairTabIntent(
+    navigate,
+    {
+      left: side === "left" ? sourceRef : target.targetRef,
+      right: side === "left" ? target.targetRef : sourceRef,
+      focusedRef: sourceRef,
+      splitId: `split:${uuidv4()}`,
+      leftRatio: 0.5,
+    },
+    tabResolveIntent(sourceTab),
+    undefined,
+  );
 }
 
 /**
@@ -1055,12 +1127,16 @@ export function RootDndProvider(props: RootDndProviderProps) {
   const lastResolvedDropRef = useRef<ResolvedEpicCanvasDrop | null>(null);
   const lastReparentDropRef = useRef<LastReparentDrop | null>(null);
   const springLoadRef = useRef<SpringLoadEntry | null>(null);
-  const publishStripState = useCallback((pointerX: number) => {
-    publishHeaderStripDragState({
-      geometry: activeHeaderStripGeometry,
-      pointerX,
-    });
-  }, []);
+  const publishStripState = useCallback(
+    (headerTab: HeaderTabDragData, pointerX: number) => {
+      publishHeaderStripDragState({
+        headerTab,
+        geometry: activeHeaderStripGeometry,
+        pointerX,
+      });
+    },
+    [],
+  );
 
   // Stable bundle (the inner refs never change identity) so the preview helpers
   // take one object instead of three positional ref params.
@@ -1090,7 +1166,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         // without an intermediate onDragMove. The capture stream is the raw
         // pointer source already used for release; publish the same point live
         // so neighbours move before pointer-up too.
-        publishStripState(event.clientX);
+        publishStripState(headerTab, event.clientX);
         return;
       }
       const source = store.activeSource;
@@ -1200,7 +1276,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         // captured before activation instead of waiting for another move that
         // a quick gesture may never produce.
         if (geometry !== null && latestPointerX !== null) {
-          publishStripState(latestPointerX);
+          publishStripState(headerTab, latestPointerX);
         }
       }
     },
@@ -1229,7 +1305,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
           event,
           point,
           publishStripState: (pointerX) => {
-            publishStripState(pointerX);
+            publishStripState(headerTab, pointerX);
           },
         });
       }
@@ -1411,7 +1487,6 @@ export function RootDndProvider(props: RootDndProviderProps) {
   );
 
   const handleDragCancel = useCallback(() => {
-    settleHeaderDragSource(activeHeaderStripGeometry);
     // Cancel means cancel: undo the drag-start promotion so no state survives
     // a gesture the user abandoned.
     restorePromotedPreview();

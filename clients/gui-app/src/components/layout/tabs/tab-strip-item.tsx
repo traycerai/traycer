@@ -63,9 +63,11 @@ import {
 } from "@/components/ui/leader-digit-shortcuts";
 import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
 import { TabChromeBackground } from "@/components/layout/tabs/tab-chrome-background";
+import { SplitMemberChrome } from "./split-tab-chrome";
 import {
   useHeaderTabDisplacementTransition,
   TAB_CLASS_BASE,
+  SPLIT_MEMBER_CLASS,
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
@@ -426,7 +428,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             // A split half shares the group's silhouette and only has half the
             // width, so it trades the tab's generous side padding for enough
             // room to still show an icon plus a readable title.
-            chrome === "member" && cn("gap-1", isActive ? "px-5" : "px-1.5"),
+            chrome === "member" && SPLIT_MEMBER_CLASS,
             tabStateClass(isActive),
             NO_DRAG_CLASS,
             "cursor-pointer",
@@ -837,31 +839,6 @@ function StripPairPreview(props: {
         "pointer-events-none absolute inset-y-1 z-30 rounded-sm bg-primary/20 ring-2 ring-primary",
         side === "left" ? "left-1 right-1/2" : "left-1/2 right-1",
       )}
-    />
-  );
-}
-
-/**
- * Selection treatment for one member of a split group. The focused member uses
- * the same raised silhouette as an ordinary selected tab; group membership is
- * communicated independently by the split group's accent underline.
- */
-export function SplitMemberChrome(props: { readonly focused: boolean }) {
-  if (props.focused) {
-    return (
-      <TabChromeBackground
-        fill="var(--color-background)"
-        borderColor="var(--color-primary)"
-        coversBaseline
-        className={undefined}
-      />
-    );
-  }
-
-  return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
     />
   );
 }

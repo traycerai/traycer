@@ -24,7 +24,8 @@ import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
-import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import { SplitTabDragOverlay } from "@/components/layout/tabs/split-tab-drag-overlay";
+import { useHeaderStripItem } from "@/stores/tabs/use-header-tabs";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -185,15 +186,14 @@ function HeaderTabOverlayChip(props: {
   readonly tab: HeaderTabDragData;
   readonly width: number | null;
 }) {
-  const allTabs = useHeaderTabs();
-  const tab =
-    allTabs.find(
-      (candidate) =>
-        candidate.kind === props.tab.tabKind &&
-        candidate.id === props.tab.tabId,
-    ) ?? null;
-  if (tab === null) return null;
-  return <HeaderTabDragOverlay tab={tab} width={props.width} />;
+  const item = useHeaderStripItem(props.tab.stripItemId);
+  if (item === null) return null;
+  if (item.kind === "split") {
+    return (
+      <SplitTabDragOverlay item={item} width={props.width} source={props.tab} />
+    );
+  }
+  return <HeaderTabDragOverlay tab={item.tab} width={props.width} />;
 }
 
 function EpicCanvasNodeDragOverlay(props: {

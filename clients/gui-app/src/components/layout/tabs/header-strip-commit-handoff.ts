@@ -114,19 +114,6 @@ export function syncHeaderStripItem(input: {
   entry.transition = input.transition;
 }
 
-/** Continue the source tab's motion from the position where it was released. */
-export function settleHeaderStripItemFrom(input: {
-  readonly itemId: string;
-  readonly offsetX: number;
-}): void {
-  for (const entry of entries.values()) {
-    if (entry.node?.dataset.stripItemId !== input.itemId) continue;
-    entry.value.jump(input.offsetX);
-    animate(entry.value, entry.targetX, entry.transition);
-    return;
-  }
-}
-
 /**
  * Whether a strip commit is mid-flight.
  *
