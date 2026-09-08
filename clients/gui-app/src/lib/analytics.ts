@@ -266,6 +266,7 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
+  | "homeTabEnabled"
   | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
@@ -1136,6 +1137,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "defaultSelection",
   "defaultServiceTier",
   "diffViewerPreferences",
+  "homeTabEnabled",
   "linkOpen",
   "pinContextUsageBreakdown",
   "pointerCursors",

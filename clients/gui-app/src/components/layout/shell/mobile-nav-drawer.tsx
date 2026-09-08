@@ -1,6 +1,12 @@
 import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { LogOut, Pin, Settings, SquareArrowOutUpRight } from "lucide-react";
+import {
+  House,
+  LogOut,
+  Pin,
+  Settings,
+  SquareArrowOutUpRight,
+} from "lucide-react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -22,8 +28,10 @@ import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
 import {
   activateTabIntent,
+  homeTabIntent,
   openPhaseMigrationIntent,
 } from "@/lib/tab-navigation";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
@@ -62,6 +70,7 @@ export function MobileNavDrawer(): ReactNode {
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
   const installedApp = isMobileApp();
@@ -72,6 +81,10 @@ export function MobileNavDrawer(): ReactNode {
   const handleNewTask = () => {
     close();
     activateTabIntent(navigate, openNewEpicIntent(), undefined);
+  };
+  const handleHome = () => {
+    close();
+    activateTabIntent(navigate, homeTabIntent(), undefined);
   };
   const handleSettings = () => {
     close();
@@ -157,6 +170,22 @@ export function MobileNavDrawer(): ReactNode {
       {/* "New task" sits outside the scroll container so it stays pinned
             while the recent-task list below it scrolls. */}
       <nav className="flex min-h-0 flex-1 flex-col p-2">
+        {/* Above "New task": on the phone this row is the whole tab strip's
+            job - the one way back to what is happening across every task. It
+            stays a flat ghost row so the create action keeps the drawer's only
+            resting fill. */}
+        {homeTabEnabled ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className={cn(ROW_CLASS, "mb-1 shrink-0")}
+            data-testid="mobile-nav-home"
+            onClick={handleHome}
+          >
+            <House className="size-4" />
+            <span className="flex-1 text-left">Home</span>
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="default"

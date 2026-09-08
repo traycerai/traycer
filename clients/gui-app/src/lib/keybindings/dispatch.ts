@@ -13,6 +13,7 @@ import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { useTabsStore } from "@/stores/tabs/store";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
 import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
 import type {
   NavigateNestedFocus,
@@ -405,6 +406,13 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   },
   "app.history.open": (r) => {
     r.navigateToEpicList();
+    return true;
+  },
+  // Reports `false` while the Home tab is off, so the provider leaves the chord
+  // unhandled rather than swallowing it for a surface this build has not got.
+  "app.home.open": (r) => {
+    if (!isHomeTabEnabled()) return false;
+    r.navigateHome();
     return true;
   },
   "app.settings.open": (r) => {

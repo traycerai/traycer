@@ -94,6 +94,14 @@ vi.mock("@/components/home/terminal-panel/landing-terminal-host", () => ({
   LandingTerminalHost: () => <div data-testid="landing-terminal-host" />,
 }));
 
+// Lazily loaded by the "history" tab kind's descriptor; stubbed the same way
+// `top-level-tab-host.test.tsx` stubs it, so a real History tab can be seeded
+// here without pulling its full router-backed surface into this
+// provider-light shell test.
+vi.mock("@/components/epics/history-surface", () => ({
+  HistorySurface: () => <div data-testid="history-surface-body" />,
+}));
+
 import { AppShell } from "@/components/layout/app-shell";
 import {
   hostRpcRegistry,
@@ -101,6 +109,7 @@ import {
   type HostRpcRegistry,
 } from "@/lib/host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useTabsStore } from "@/stores/tabs/store";
 
 function renderAppShell(): QueryClient {
   const queryClient = new QueryClient({
@@ -163,7 +172,11 @@ describe("<AppShell />", () => {
         { userId: "user-1", username: "test-user" },
         [],
       );
-    useSettingsStore.setState({ showGlobalResourceMonitor: true });
+    useSettingsStore.setState({
+      showGlobalResourceMonitor: true,
+      homeTabEnabled: false,
+    });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
   afterEach(() => {
@@ -172,7 +185,11 @@ describe("<AppShell />", () => {
     queryClient = undefined;
     delete windowHost.runnerHost;
     useAuthStore.getState().setSignedOut();
-    useSettingsStore.setState({ showGlobalResourceMonitor: true });
+    useSettingsStore.setState({
+      showGlobalResourceMonitor: true,
+      homeTabEnabled: false,
+    });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
   it("renders the signed-in app shell around routed children", async () => {
@@ -243,5 +260,94 @@ describe("<AppShell />", () => {
     await screen.findByTestId("app-shell-child");
 
     expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
+  });
+
+  // `TopLevelTabHost` mounts the whole time - `AppShell` renders it directly,
+  // not through the routed `children` this suite otherwise stubs out - so the
+  // Home surface's mount/visibility contract can be exercised through a real
+  // signed-in shell render exactly like every other assertion in this file.
+  describe("Home tab surface", () => {
+    function homeSurface(): HTMLElement {
+      return screen.getByTestId("top-level-surface-home-home");
+    }
+
+    it("mounts the Home surface when the flag is on", async () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+
+      expect(homeSurface()).not.toBeNull();
+    });
+
+    it("shows the Home surface as visible when Home is the active tab", async () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      // `activeItemId: null` is the tabs store's own default (no tabs open
+      // yet), which is exactly what "Home is active" means while the flag is
+      // on - see `layoutHomeIsActive` in `stores/tabs/store.ts`. Set it
+      // explicitly so the test does not depend on that default staying
+      // unchanged.
+      useTabsStore.setState((state) => ({ ...state, activeItemId: null }));
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+
+      const surface = await screen.findByTestId("home-focus-view");
+      expect(surface).not.toBeNull();
+      expect(homeSurface().dataset.visible).toBe("true");
+      expect(homeSurface().getAttribute("aria-hidden")).toBe("false");
+    });
+
+    it("keeps the Home surface mounted but hidden while a real other tab is active", async () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      // A real, non-Home strip tab - seeded the way `top-level-tab-host.test.tsx`
+      // seeds a History tab (its own surface stubbed above, since this
+      // provider-light shell has no router for the real one to run under).
+      useTabsStore.setState((state) => ({
+        ...state,
+        items: [
+          {
+            kind: "tab",
+            id: "tab:history:history",
+            ref: { kind: "history", id: "history" },
+          },
+        ],
+        activeItemId: "tab:history:history",
+        stripOrder: [{ kind: "history", id: "history" }],
+        systemTabs: {
+          history: {
+            id: "history",
+            kind: "history",
+            name: "History",
+            lastPath: null,
+          },
+          settings: null,
+        },
+      }));
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+
+      // The other tab is the one actually visible...
+      const historySurface = await screen.findByTestId(
+        "top-level-surface-history-history",
+      );
+      expect(historySurface.dataset.visible).toBe("true");
+
+      // ...but Home stays in the DOM rather than unmounting - the whole point
+      // of hosting it outside the MRU cap - it is just hidden.
+      expect(homeSurface()).not.toBeNull();
+      expect(homeSurface().dataset.visible).toBe("false");
+      expect(homeSurface().getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("does not mount the Home surface when the flag is off", async () => {
+      useSettingsStore.setState({ homeTabEnabled: false });
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+
+      expect(screen.queryByTestId("top-level-surface-home-home")).toBeNull();
+    });
   });
 });

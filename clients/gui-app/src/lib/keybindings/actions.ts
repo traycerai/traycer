@@ -52,6 +52,7 @@ export const ACTION_IDS = [
   "app.rate-limits.open",
   "app.notifications.open",
   "app.history.open",
+  "app.home.open",
   "app.settings.open",
   "app.settings.section.byDigit",
   "app.palette.open",
@@ -539,6 +540,20 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     defaultChord: "mod+y",
     secondaryChord: undefined,
     terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+  },
+  "app.home.open": {
+    id: "app.home.open",
+    label: "Go to Home",
+    description:
+      "Show the Home tab: everything running, and everything waiting on you, across every task.",
+    category: "app",
+    kind: "chord",
+    // Free across this map and not a native-menu accelerator on any platform,
+    // in the same mod+shift family as the other global surface openers.
+    defaultChord: "mod+shift+h",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
   },
   "app.settings.open": {

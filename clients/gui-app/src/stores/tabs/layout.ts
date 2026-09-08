@@ -760,6 +760,11 @@ function validRef(ref: TabRef, isKnownTabKind: IsKnownTabKind): boolean {
   if (!isKnownTabKind(ref.kind) || ref.id.length === 0) return false;
   if (ref.kind === "history") return ref.id === "history";
   if (ref.kind === "settings") return ref.id === "settings";
+  // Home is a registered kind but never a strip item: it has no source record,
+  // is not persisted, and is rendered structurally beside the strip. Refusing
+  // it here is what keeps a persisted or hand-edited payload from materializing
+  // one as an ordinary, closable, draggable tab.
+  if (ref.kind === "home") return false;
   return true;
 }
 

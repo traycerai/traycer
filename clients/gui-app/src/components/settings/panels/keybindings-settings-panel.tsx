@@ -13,6 +13,7 @@ import {
 import { formatModifierChordForDisplay } from "@/lib/keybindings/chord";
 import { findConflict } from "@/lib/keybindings/conflicts";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { Kbd } from "@/components/ui/kbd";
 import { useSummonHotkey } from "@/hooks/runner/use-summon-hotkey";
 import { GLOBAL_SHORTCUT_DEFAULT_CHORDS } from "@traycer-clients/shared/keybindings/global-shortcuts";
@@ -43,8 +44,15 @@ export function KeybindingsSettingsPanel() {
   const clearBinding = useKeybindingStore((s) => s.clearBinding);
   const resetAll = useKeybindingStore((s) => s.resetAll);
 
+  const homeTabEnabled = useSettingsStore((s) => s.homeTabEnabled);
+  // A row here is a promise that the chord does something. `app.home.open`
+  // dispatches to nothing while the Home tab is off, so it would be a bindable
+  // row for a surface this build has not got - the same reason the command
+  // palette omits it.
   const primaryActionIds = ACTION_IDS.filter(
-    (id) => !SUB_LEADER_ACTION_SET.has(id),
+    (id) =>
+      !SUB_LEADER_ACTION_SET.has(id) &&
+      (homeTabEnabled || id !== "app.home.open"),
   );
 
   // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to

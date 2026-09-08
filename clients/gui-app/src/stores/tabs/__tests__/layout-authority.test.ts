@@ -45,6 +45,7 @@ import { epicTabModule } from "@/stores/tabs/kinds/epic";
 import { draftTabModule } from "@/stores/tabs/kinds/draft";
 import { historyTabModule } from "@/stores/tabs/kinds/history";
 import { settingsTabModule } from "@/stores/tabs/kinds/settings";
+import { homeTabModule } from "@/stores/tabs/kinds/home";
 import {
   EMPTY_LANDING_DRAFT_CONTENT,
   emptyLandingDraftWorkspaceSnapshot,
@@ -242,6 +243,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
       "draft",
       "epic",
       "history",
+      "home",
       "settings",
     ];
     expect(Object.keys(TAB_KINDS).length).toBe(expectedKinds.length);
@@ -255,6 +257,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     expectTypeOf(TAB_KINDS).toHaveProperty("draft");
     expectTypeOf(TAB_KINDS).toHaveProperty("history");
     expectTypeOf(TAB_KINDS).toHaveProperty("settings");
+    expectTypeOf(TAB_KINDS).toHaveProperty("home");
 
     expectTypeOf(tabSurfaceDescriptor("epic")).toEqualTypeOf<
       TabSurfaceDescriptor<"epic">
@@ -267,6 +270,9 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     >();
     expectTypeOf(tabSurfaceDescriptor("settings")).toEqualTypeOf<
       TabSurfaceDescriptor<"settings">
+    >();
+    expectTypeOf(tabSurfaceDescriptor("home")).toEqualTypeOf<
+      TabSurfaceDescriptor<"home">
     >();
 
     expectTypeOf(TAB_KINDS.epic.descriptor.surface).toExtend<
@@ -281,12 +287,16 @@ describe("TAB_KINDS surface exhaustiveness", () => {
     expectTypeOf(TAB_KINDS.settings.descriptor.surface).toExtend<
       TabSurfaceDescriptor<"settings">
     >();
+    expectTypeOf(TAB_KINDS.home.descriptor.surface).toExtend<
+      TabSurfaceDescriptor<"home">
+    >();
 
     const headerKinds: ReadonlyArray<HeaderTabKind> = [
       "epic",
       "draft",
       "history",
       "settings",
+      "home",
     ];
     headerKinds.forEach((kind) => {
       const surface = tabSurfaceDescriptor(kind);
@@ -337,6 +347,13 @@ describe("TAB_KINDS surface exhaustiveness", () => {
         tab: settingsTabModule.build(SETTINGS_SOURCE),
         surface: settingsTabModule.descriptor.surface,
         expectedNewWindow: "copy",
+      },
+      // The only kind that answers `none`: Home is fixed to its window, so
+      // both halves of the capability pair have to say so.
+      {
+        tab: homeTabModule.build(null),
+        surface: homeTabModule.descriptor.surface,
+        expectedNewWindow: "none",
       },
     ];
 

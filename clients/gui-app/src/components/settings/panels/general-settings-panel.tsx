@@ -65,6 +65,8 @@ export function GeneralSettingsPanel() {
   const setSteerOnModEnterEnabled = useSettingsStore(
     (s) => s.setSteerOnModEnterEnabled,
   );
+  const homeTabEnabled = useSettingsStore((s) => s.homeTabEnabled);
+  const setHomeTabEnabled = useSettingsStore((s) => s.setHomeTabEnabled);
   const compact = useSettingsDensity() === "compact";
   const featureSettings = useRunnerFeatureSettingsQuery();
   const setAgentRoles = useRunnerAgentRolesSet();
@@ -162,6 +164,30 @@ export function GeneralSettingsPanel() {
                   setShowNavigatorResourceStats(value);
                 }}
                 aria-label="Show navigator resource stats"
+              />
+            }
+          />
+        </SettingsGroup>
+
+        {/* Layout lives here only until the app grows a page of its own for
+            it; the row moves there wholesale, store key and all. */}
+        <SettingsGroup
+          title="Layout"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <SettingsRow
+            label="Home tab"
+            description="Show a fixed Home tab with everything running across your tasks."
+            control={
+              <Switch
+                checked={homeTabEnabled}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("homeTabEnabled");
+                  setHomeTabEnabled(value);
+                }}
+                aria-label="Home tab"
               />
             }
           />

@@ -13,7 +13,8 @@
  *   - `app.palette.open` (the opener itself would loop);
  *   - `composer.dictation.toggle` (no `dispatchAction` handler - it's a
  *     press-and-hold action owned by a capture-phase hook, so a palette
- *     entry would be inert; toggling it is the mic button's job).
+ *     entry would be inert; toggling it is the mic button's job);
+ *   - `app.home.open` while the Home tab setting is off.
  */
 import { useMemo } from "react";
 import {
@@ -23,26 +24,31 @@ import {
   type ActionMeta,
 } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
 
 export const actionsSource: ReactCommandSource = {
   id: "actions",
   useItems: () => {
     const bindings = useKeybindingStore((state) => state.bindings);
+    const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];
       for (const id of ACTION_IDS) {
         const meta = ACTION_META[id];
-        if (!isPaletteEligible(meta)) continue;
+        if (!isPaletteEligible(meta, homeTabEnabled)) continue;
         items.push(buildActionItem(meta, bindings[id] ?? null));
       }
       return items;
-    }, [bindings]);
+    }, [bindings, homeTabEnabled]);
   },
 };
 
-function isPaletteEligible(meta: ActionMeta): boolean {
+function isPaletteEligible(meta: ActionMeta, homeTabEnabled: boolean): boolean {
   if (meta.kind !== "chord") return false;
+  // Its handler no-ops while the Home tab is off, and a palette row that does
+  // nothing is worse than no row.
+  if (meta.id === "app.home.open" && !homeTabEnabled) return false;
   if (meta.id === "app.palette.open") return false;
   // No dispatchAction handler; handled by the capture-phase dictation hook.
   if (meta.id === "composer.dictation.toggle") return false;
