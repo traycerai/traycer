@@ -422,7 +422,7 @@ export const agentListProviderProfilesUpgradeV40ToV50 = defineUpgradePath<
   from: { major: 4, minor: 0 },
   to: { major: 5, minor: 0 },
   // Request shape is identical across both majors - only the response's
-  // `providerId` enum grows (reasonix).
+  // `providerId` enum grows (reasonix, antigravity).
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -467,7 +467,8 @@ export const agentListProviderProfilesDowngradeV50ToV30 = defineDowngradePath<
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     // Same fail-closed rule as the v5->v4 bridge, against the narrower v3.0
-    // enum: anything post-v6.0 (huggingface, reasonix) is unrepresentable here.
+    // enum: anything post-v6.0 (huggingface, reasonix, antigravity) is
+    // unrepresentable here.
     const parsed =
       agentListProviderProfilesResponseSchemaV3.safeParse(response);
     if (!parsed.success) {
@@ -493,7 +494,7 @@ export const agentListProviderProfilesDowngradeV50ToV20 = defineDowngradePath<
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     // Same fail-closed rule against the narrower v2.0 enum: anything post-v5.0
-    // (omp, huggingface, reasonix) is unrepresentable here.
+    // (omp, huggingface, reasonix, antigravity) is unrepresentable here.
     const parsed =
       agentListProviderProfilesResponseSchemaV2.safeParse(response);
     if (!parsed.success) {
@@ -519,7 +520,8 @@ export const agentListProviderProfilesDowngradeV50ToV10 = defineDowngradePath<
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     // Same fail-closed rule against the narrowest enum: anything post-v4.0
-    // (Hermes, omp, huggingface, reasonix) is unrepresentable here.
+    // (Hermes, omp, huggingface, reasonix, antigravity) is unrepresentable
+    // here.
     const parsed =
       agentListProviderProfilesResponseSchemaV1.safeParse(response);
     if (!parsed.success) {
@@ -959,7 +961,7 @@ export const agentGetProviderProfileRateLimitsUpgradeV40ToV50 =
     from: { major: 4, minor: 0 },
     to: { major: 5, minor: 0 },
     // Request shape is identical across both majors - only the response's
-    // `rateLimits.provider` enum grows (reasonix).
+    // `rateLimits.provider` enum grows (reasonix, antigravity).
     upgradeRequest: (request) => request,
     upgradeResponse: (response) => response,
   });
@@ -977,9 +979,9 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV40 =
       // keeps every available arm the live union carries at this cut (grok,
       // huggingface, opencode and cursor all shipped on 4.0), so an available
       // snapshot reparses as-is. Only a post-v7.0 provider is unrepresentable,
-      // and it can only ever arrive on the `available: false` arm - Reasonix
-      // exposes no queryable quota API and is outside
-      // `rateLimitCapableProviderIdSchema`. This response carries exactly one
+      // and it can only ever arrive on the `available: false` arm - neither
+      // Reasonix nor Antigravity exposes a queryable quota API, so both sit
+      // outside `rateLimitCapableProviderIdSchema`. This response carries one
       // provider, so fail closed rather than mis-decode. The message names no
       // provider so it stays honest as the enum grows.
       const parsed =
@@ -1009,7 +1011,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV30 =
     downgradeResponse: (response) => {
       // Same shape as the v4->v3 bridge: the frozen v3.0 union keeps grok, so
       // only OpenCode/cursor degrade, and anything post-v6.0 (huggingface,
-      // reasonix) fails closed.
+      // reasonix, antigravity) fails closed.
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse({
           ...response,
@@ -1041,8 +1043,9 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV20 =
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
       // Same rule against the narrower v2.0 enum: the frozen v2.0 union keeps
-      // grok, so only post-v5.0 providers (omp, huggingface, reasonix) fail
-      // closed. Cursor and OpenCode degrade as they do above.
+      // grok, so only post-v5.0 providers (omp, huggingface, reasonix,
+      // antigravity) fail closed. Cursor and OpenCode degrade as they do
+      // above.
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse({
           ...response,
@@ -1075,7 +1078,8 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV10 =
     downgradeResponse: (response) => {
       // Like the v4->v1 bridge this one also degrades grok: the frozen v1.0
       // union predates the grok available arm. Post-v4.0 providers (Hermes,
-      // omp, huggingface, reasonix) stay unrepresentable and fail closed.
+      // omp, huggingface, reasonix, antigravity) stay unrepresentable and fail
+      // closed.
       const rateLimits = mapGrokAvailableToUnavailable(
         mapCursorAvailableToUnavailable(
           mapOpenCodeAvailableToUnavailable(response.rateLimits),
@@ -1542,7 +1546,7 @@ export const agentConfigureUpgradeV40ToV50 = defineUpgradePath<
   to: { major: 5, minor: 0 },
   // Request shape is identical across both majors (both reuse
   // `agentConfigureRequestSchemaV20`) - only the response's `harnessId` enum
-  // grows (reasonix). Both upgrades are identity.
+  // grows (reasonix, antigravity). Both upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1587,8 +1591,8 @@ export const agentConfigureDowngradeV50ToV30 = defineDowngradePath<
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
-    // Fails closed for any post-v6.0 harness (huggingface, reasonix) - see the
-    // v5->v4 bridge above for the full reasoning.
+    // Fails closed for any post-v6.0 harness (huggingface, reasonix,
+    // antigravity) - see the v5->v4 bridge above for the full reasoning.
     const parsed = agentConfigureResponseSchemaV3.safeParse(response);
     if (!parsed.success) {
       return {
@@ -1612,7 +1616,8 @@ export const agentConfigureDowngradeV50ToV20 = defineDowngradePath<
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
-    // Fails closed for any post-v5.0 harness (omp, huggingface, reasonix).
+    // Fails closed for any post-v5.0 harness (omp, huggingface, reasonix,
+    // antigravity).
     const parsed = agentConfigureResponseSchemaV2.safeParse(response);
     if (!parsed.success) {
       return {
@@ -1647,7 +1652,7 @@ export const agentConfigureDowngradeV50ToV10 = defineDowngradePath<
   }),
   downgradeResponse: (response) => {
     // Fails closed for any post-v4.0 harness (Hermes, omp, huggingface,
-    // reasonix).
+    // reasonix, antigravity).
     const parsed = agentConfigureResponseSchemaV1.safeParse(response);
     if (!parsed.success) {
       return {

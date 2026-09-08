@@ -523,6 +523,23 @@ export type ReasonixChatSessionAnchor = z.infer<
   typeof reasonixChatSessionAnchorSchema
 >;
 
+// Antigravity (`agy_acp_server`) resumes at session granularity only —
+// `session/load` reloads the whole ACP session and there is no per-message
+// truncation/fork point — so the anchor carries just the ACP session id.
+// `sessionId` is that ACP session id.
+export const antigravityChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("antigravity"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type AntigravityChatSessionAnchor = z.infer<
+  typeof antigravityChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -544,17 +561,19 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   ompChatSessionAnchorSchema,
   huggingFaceChatSessionAnchorSchema,
   reasonixChatSessionAnchorSchema,
+  antigravityChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
 
-// Wire-freeze copy of the LIVE anchor union minus the Reasonix variant, bound
-// to every released line (`chat.subscribe@1.0–1.6`). It keeps every live
-// anchor field (including the Claude `turnTailUuid` - the released baseline
-// proves all of those minors shipped it) and drops only the discriminant a
-// released client cannot decode. A separate "pre-turnTailUuid" copy used to
-// serve `1.0–1.5` on the belief the field postdated them; the
-// released-line-narrowing test showed that transcription was a retroactive
-// narrowing of what actually shipped, and it was removed.
+// Wire-freeze copy of the LIVE anchor union minus every variant added since the
+// freeze (Reasonix, then Antigravity), bound to every released line
+// (`chat.subscribe@1.0–1.6`). It keeps every live anchor field (including the
+// Claude `turnTailUuid` - the released baseline proves all of those minors
+// shipped it) and drops only the discriminants a released client cannot
+// decode. A separate "pre-turnTailUuid" copy used to serve `1.0–1.5` on the
+// belief the field postdated them; the released-line-narrowing test showed
+// that transcription was a retroactive narrowing of what actually shipped,
+// and it was removed.
 export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
   "harnessId",
   [
