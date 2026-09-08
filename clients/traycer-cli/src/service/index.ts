@@ -186,6 +186,20 @@ export interface RestartStop {
 // this codebase can destroy live work should be answerable by grep.
 export interface StopServiceOptions {
   readonly force: boolean;
+  /**
+   * Fired by the route, at most once, when ITS OWN pid read finds a live
+   * published host it is about to address - before the signal, the claim or
+   * the kill, so it fires whether the stop then resolves or degrades.
+   *
+   * The one consumer is the install lifecycle's restore after a refused swap,
+   * which owes the machine a host only if this stop took one down. Nothing
+   * else can tell it that: `externally-managed` carries no pid, a `void`
+   * resolution covers both `stopped` and `no-host` (a record naming a process
+   * already dead), and a separate read taken before the stop misses a host
+   * that publishes in the gap. Optional because every other stop has no
+   * restore to inform.
+   */
+  readonly onHostAddressed?: () => void;
 }
 
 export interface ServiceController {

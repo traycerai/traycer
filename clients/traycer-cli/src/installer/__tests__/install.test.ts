@@ -1193,6 +1193,67 @@ describe("commitInstallFromSource", () => {
       ).toBe("binary-1.2.0-declared");
     });
 
+    it("judges a REGISTRY target by its declaration when the installed tree came from a local archive recorded under the same version (the `ensure --from` shape)", async () => {
+      // `host ensure --from` records a bundled local build under the CLI's
+      // own version. A registry artifact of that version landing over it is
+      // a same-string move between DIFFERENT bytes, so the version shortcut
+      // must not apply: the installed sidecar says format 10, the registry
+      // build declares 9, and a format-10 store is on disk.
+      const previousSource = join(sandboxRoot, "source-local-1.3.0");
+      writeLocalHostSource(previousSource, "local-1.3.0");
+      writeFileSync(
+        join(previousSource, "version.json"),
+        JSON.stringify({ version: "1.3.0", storeFormats: { chatDb: 10 } }),
+      );
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: previousSource },
+        onProgress: () => {},
+        lifecycle: null,
+        recordVersionOverride: "1.3.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-format-10", 10);
+      const sourceDir = join(sandboxRoot, "source-registry-1.3.0");
+      writeLocalHostSource(sourceDir, "registry-1.3.0");
+      writeFileSync(
+        join(sourceDir, "version.json"),
+        JSON.stringify({ version: "1.3.0", storeFormats: { chatDb: 9 } }),
+      );
+      const executablePath = join(sourceDir, "traycer-host");
+
+      await expect(
+        commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: "1.3.0",
+          runtimeVersion: "1.3.0",
+          source: { kind: "registry", value: "1.3.0" },
+          archiveSha256: "a".repeat(64),
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "key-1",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: null,
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(
+        readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
+      ).toBe("binary-local-1.3.0");
+    });
+
     it("commits an archive with no version.json at all - unchanged off-ladder behaviour", async () => {
       await setUpPreviousInstall();
       const sourceDir = join(sandboxRoot, "source-no-version-json");

@@ -778,6 +778,81 @@ describe("macosServiceMayRespawn (field parsing, real launchctl-print classifica
   });
 });
 
+describe("macosServiceMayRespawn (one deadline across both labels)", () => {
+  const label = {
+    id: "ai.traycer.host",
+    displayName: "Traycer Host",
+    environment: "production" as Environment,
+    devSlot: null,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: [...FAKED_TIMERS] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a first launchctl that spends most of the budget leaves the second only the rest - the probe cannot exceed its caller's budget", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+    const timeouts: number[] = [];
+    const runner = async (
+      _command: string,
+      _args: readonly string[],
+      options: { readonly timeoutMs: number },
+    ) => {
+      timeouts.push(options.timeoutMs);
+      // The CLI label's probe sits for nine of the ten seconds before
+      // answering "not loaded"; the Desktop label's must then get ~one.
+      const wait = timeouts.length === 1 ? 9_000 : 0;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, wait);
+      });
+      return { stdout: "Could not find service", stderr: "", exitCode: 113 };
+    };
+
+    const pending = macosServiceMayRespawn(label, runner, 10_000);
+    await vi.advanceTimersByTimeAsync(9_000);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe(false);
+
+    expect(timeouts[0]).toBe(10_000);
+    expect(timeouts[1] ?? Number.NaN).toBeLessThanOrEqual(1_000);
+    expect(timeouts[1] ?? Number.NaN).toBeGreaterThan(0);
+  });
+
+  it("a first launchctl that spends the WHOLE budget leaves the second a 1 ms probe, and its timeout reads as may-respawn - the unasked label is never cleared", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+    const timeouts: number[] = [];
+    const runner = async (
+      _command: string,
+      _args: readonly string[],
+      options: { readonly timeoutMs: number },
+    ) => {
+      timeouts.push(options.timeoutMs);
+      if (timeouts.length === 1) {
+        // Sits past the deadline before answering "not loaded".
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 12_000);
+        });
+        return { stdout: "Could not find service", stderr: "", exitCode: 113 };
+      }
+      // What `runCommand` returns for a probe that hit its timeout.
+      return { stdout: "", stderr: "", exitCode: -1 };
+    };
+
+    const pending = macosServiceMayRespawn(label, runner, 10_000);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe(true);
+
+    expect(timeouts).toEqual([10_000, 1]);
+  });
+});
+
 describe("linuxServiceMayRespawn (field parsing, real systemctl classification)", () => {
   // Checked by inspection that this shape was already covered: anything
   // that is not `inactive`/`failed`/`unknown` falls through to `true`,

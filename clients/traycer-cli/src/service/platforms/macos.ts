@@ -41,9 +41,11 @@ import {
 // masquerade as the job's plist path.
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
-  type CooperativeShutdownOutcome,
   forceStopHostProcess,
+  forceStopHostProcessReporting,
   requestCooperativeShutdown,
+  requestCooperativeShutdownReporting,
+  type CooperativeShutdownOutcome,
 } from "./desktop-agent-shutdown";
 import {
   classifyLaunchctlPrintResult,
@@ -126,7 +128,14 @@ export function createMacosController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label, run),
-    stop: (label, options) => stopService(label, run, options.force, "stop"),
+    stop: (label, options) =>
+      stopService(
+        label,
+        run,
+        options.force,
+        "stop",
+        options.onHostAddressed ?? null,
+      ),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
     hostStartAdoptionLabel: async (label) => {
@@ -1450,17 +1459,25 @@ function classifyLaunchdPrintOutput(printOutput: string): LaunchdOwnership {
 export async function macosServiceMayRespawn(
   label: ServiceLabel,
   runner: ProcessRunner | null,
-  // Per `launchctl print`; two labels are read, so one probe can spend twice
-  // this. The caller's settle loop sizes it from its remaining budget.
+  // ONE deadline for the whole probe, shared by both labels: the caller's
+  // settle loop sizes it from its remaining budget, and a first `launchctl`
+  // that spends most of it must leave the second only the rest.
   timeoutMs: number,
 ): Promise<boolean> {
   const run = runner ?? runCommand;
+  const deadline = performance.now() + timeoutMs;
   const targets = [
     `${guiDomain()}/${label.id}`,
     `${guiDomain()}/${smAppServiceAgentLabelId(label)}`,
   ];
   for (const target of targets) {
-    if (await launchdJobMayRespawn(target, run, timeoutMs)) return true;
+    // A spent budget hands the next label a 1 ms probe, which times out and
+    // reads as MAY RESPAWN (`launchdJobMayRespawn` on a negative exit). That
+    // is the fail-closed answer on purpose: a label this probe never got to
+    // ask has not been cleared, and the settle loop's own deadline - not a
+    // guess about the unasked label - decides the refusal.
+    const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
+    if (await launchdJobMayRespawn(target, run, remaining)) return true;
   }
   return false;
 }
@@ -1780,15 +1797,17 @@ async function stopDesktopManagedHost(
   label: ServiceLabel,
   agent: DesktopAgentOwnership,
   force: boolean,
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
   if (force) {
-    await forceStopDesktopManagedHost(label, agent);
+    await forceStopDesktopManagedHost(label, agent, onHostAddressed);
     return;
   }
-  const outcome = await requestCooperativeShutdown(
+  const outcome = await requestCooperativeShutdownReporting(
     label.environment,
     "stop",
     "shutdown",
+    onHostAddressed,
   );
   switch (outcome.kind) {
     case "stopped":
@@ -1850,8 +1869,13 @@ async function stopDesktopManagedHost(
 async function forceStopDesktopManagedHost(
   label: ServiceLabel,
   agent: DesktopAgentOwnership,
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
-  const outcome = await forceStopHostProcess(label.environment, "stop");
+  const outcome = await forceStopHostProcessReporting(
+    label.environment,
+    "stop",
+    onHostAddressed,
+  );
   switch (outcome.kind) {
     case "stopped":
     case "no-host":
@@ -2425,10 +2449,12 @@ async function stopService(
   run: ProcessRunner,
   force: boolean,
   operation: "stop" | "restart",
+  // See `StopServiceOptions.onHostAddressed`.
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
   if (desktopAgent !== null) {
-    await stopDesktopManagedHost(label, desktopAgent, force);
+    await stopDesktopManagedHost(label, desktopAgent, force, onHostAddressed);
     return;
   }
   if (force) {
@@ -2455,7 +2481,7 @@ async function stopService(
     // pid-identity gate and the instance-matched pid.json purge hold here
     // too, including when no endpoint is published at all (reported as
     // `no-metadata`, never as an unverified success).
-    await forceStopCliOwnedHost(label, operation);
+    await forceStopCliOwnedHost(label, operation, onHostAddressed);
     return;
   }
   // Snapshot the live host pid BEFORE signalling so we can confirm the
@@ -2475,6 +2501,9 @@ async function stopService(
   // the same correction `refuseIfPublishedHostAlive` took in an earlier round
   // (traycer#1761 round 7); `linux.ts`'s restart ladder is the sibling site.
   const before = await readHostPidMetadataEvidence(label.environment);
+  if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
+    onHostAddressed?.();
+  }
   await run("launchctl", ["kill", "TERM", `${guiDomain()}/${label.id}`], {
     env: undefined,
     cwd: undefined,
@@ -2544,8 +2573,13 @@ async function stopService(
 async function forceStopCliOwnedHost(
   label: ServiceLabel,
   operation: "stop" | "restart",
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
-  const outcome = await forceStopHostProcess(label.environment, operation);
+  const outcome = await forceStopHostProcessReporting(
+    label.environment,
+    operation,
+    onHostAddressed,
+  );
   switch (outcome.kind) {
     case "stopped":
     case "no-host":
@@ -2661,7 +2695,7 @@ async function stopServiceForRestart(
   // kickstart, and `kickstart -k` is correct either way - it recycles a running
   // job and starts a stopped one. All it costs is the tail of a deliberate
   // stop's diagnostics, which describe a shutdown nobody is debugging.
-  await stopService(label, run, force, "restart");
+  await stopService(label, run, force, "restart", null);
   return { forcedRecycle: true };
 }
 

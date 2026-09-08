@@ -206,10 +206,23 @@ export type StoreFloorApplicability =
  * store floor at all.
  *
  * Only a move to an OLDER build can leave data unreadable, so the floor is
- * skipped entirely - no table lookup, no disk walk - for exactly two moves:
- * the target version string is IDENTICAL to the installed one AND the target
- * declares no formats of its own, or the target is STRICTLY newer by SemVer
- * precedence.
+ * skipped entirely - no table lookup, no disk walk - for exactly two moves of
+ * a target identified by its VERSION: the string is IDENTICAL to the installed
+ * one, or it is STRICTLY newer by SemVer precedence.
+ *
+ * `targetDeclaredFormats` is for a target the caller CANNOT identify by
+ * version: a local archive (`host install --from`, a bundled desktop build)
+ * whose runtime `version.json` is its only word. Such a target can claim any
+ * string - the same as the installed one, or a newer one - while declaring an
+ * older format, so with a declaration present NEITHER string shortcut applies
+ * and the format comparison (or the survey) decides. A registry artifact is
+ * signed and its version is its identity; its caller passes `null` here even
+ * though the extracted tree declares formats too, and that declaration still
+ * resolves the target's FORMAT elsewhere. The CLI's commit tail makes that
+ * call from BOTH records' provenance (`StoreFloorTargetIdentity`, which also
+ * withholds `installedVersion` for a local install recorded under a version
+ * that is not its own) and names the cost that carries for desktop-provisioned
+ * hosts there; the GUI, which only ever offers registry rows, passes `null`.
  *
  * Equal precedence with a different string is not one of them. SemVer ignores
  * build metadata, so `2.0.0+old` over `2.0.0+new` compares equal while being a
@@ -263,40 +276,25 @@ export function storeFloorApplicability(
   // Do not "tighten" this by adding an `isReleasedHostVersion(targetVersion)`
   // test: it would be unreachable, and it would suggest the guarantee lives
   // here rather than in the guard that actually provides it.
-  // ...and only when the target has NOT declared its own formats. A string is
-  // identity for a registry artifact, whose bytes that version uniquely names.
-  // It is not identity for an archive that carries its own `version.json`:
-  // `host install --from` a repackaged tree can claim any version while
-  // declaring older formats, and everything else in this module treats that
-  // declaration as authoritative. Taking the shortcut there would skip the
-  // floor on the strength of a string the archive chose for itself. With a
-  // declaration present the comparison below - or the survey - decides, and a
-  // genuine same-build reinstall clears from formats alone, without walking
-  // any disk, whenever the installed side can be placed (its own sidecar, or
-  // the table). It cannot always be: a repair reinstall over an install whose
-  // `version.json` is unreadable, at a version above the table's ceiling,
-  // walks the disk here and can be refused on one unreadable store - loudly,
-  // with `--accept-store-format-loss` as the way past. That is the floor's
-  // bias everywhere (an unreadable store refuses), taken on purpose over the
-  // silent loss the shortcut would allow.
   //
-  // KNOWN LIMIT: the strictly-newer arm below does NOT take the same guard.
-  // A repackaged archive can claim a newer version than the installed one
-  // while declaring older formats, and precedence alone waves it through.
-  // Guarding it would send every ordinary upgrade through applicability - and
-  // where the installed side is known to neither its sidecar nor the table (a
-  // host installed by a CLI that predates the sidecar, at a version above the
-  // table's ceiling), that is a disk walk on the common path whose
-  // `indeterminate` verdict REFUSES an upgrade over one unreadable store.
-  // That cost is not worth the local-archive hole it closes; the hole is
-  // reachable only by `host install --from` an unsigned tree.
-  if (targetDeclaredFormats === null && targetVersion === installedVersion) {
+  // Both shortcuts below are for a target identified by its VERSION - see the
+  // docblock. A declaring target is a local archive whose string is not
+  // identity, so it evaluates whatever its string says. A same-build reinstall
+  // of one still clears from formats alone, without a disk walk, whenever the
+  // installed side can be placed (its own sidecar, or the table); over an
+  // install whose sidecar is unreadable at a version above the table's ceiling
+  // it walks and can be refused on one unreadable store - loudly, with
+  // `--accept-store-format-loss` as the way past, which is the floor's bias
+  // everywhere. A registry reinstall never arrives with a declaration and
+  // keeps the shortcut.
+  if (targetDeclaredFormats !== null) return { applies: true };
+  if (targetVersion === installedVersion) {
     return { applies: false, reason: "target-not-older" };
   }
-  const relation = compareHostVersions(targetVersion, installedVersion);
   // STRICTLY newer, and comparable. Everything else evaluates: older,
   // incomparable, and equal-precedence-different-identity alike. None of those
   // proves the target can read what the installed build wrote.
+  const relation = compareHostVersions(targetVersion, installedVersion);
   if (relation.comparable && relation.ordering === "greater") {
     return { applies: false, reason: "target-not-older" };
   }

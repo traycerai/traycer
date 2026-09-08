@@ -250,12 +250,11 @@ describe("store floor format helpers", () => {
       { chatDb: 9 },
       { applies: true },
     ],
-    // Codex: the identical-string shortcut is identity for a REGISTRY
-    // artifact, whose bytes that version uniquely names - it is not identity
-    // for `host install --from` a repackaged tree, which can claim any
-    // version in its `version.json` while declaring OLDER `storeFormats`.
-    // The shortcut now requires `targetDeclaredFormats === null`; the
-    // undeclared identical-string row above stays the registry reinstall.
+    // Codex + CodeRabbit: a version string is identity for a REGISTRY
+    // artifact, whose caller passes no declaration and keeps both shortcuts
+    // (the undeclared rows above). A declaring target is a local archive that
+    // can claim ANY string - identical or newer - while declaring an OLDER
+    // format, so with a declaration neither string shortcut applies.
     [
       "identical string, WITH an older declaration - the finding: no longer skipped",
       "1.3.0",
@@ -270,16 +269,19 @@ describe("store floor format helpers", () => {
       { chatDb: 9 },
       { applies: true },
     ],
-    // The documented KNOWN LIMIT, pinned so a change to it is deliberate: a
-    // strictly newer string stands aside on precedence alone even when the
-    // target declares an OLDER format. Guarding it would send every ordinary
-    // upgrade through applicability - see the docblock for the cost.
     [
-      "strictly newer string, WITH an older declaration - the known limit: still skipped",
+      "strictly newer string, WITH an older declaration - a repackaged local archive: evaluates",
       "1.4.0",
       "1.3.0",
       { chatDb: 8 },
-      { applies: false, reason: "target-not-older" },
+      { applies: true },
+    ],
+    [
+      "strictly newer string, WITH a matching declaration - evaluates too; formats clear it",
+      "1.4.0",
+      "1.3.0",
+      { chatDb: 9 },
+      { applies: true },
     ],
   ] as const)(
     "applicability (build-metadata / precedence): %s",
@@ -290,29 +292,20 @@ describe("store floor format helpers", () => {
     },
   );
 
-  // An identical RELEASED string still stands aside (the row above) - these
-  // three do not, and the reason is NOT the exact-match arm. It is the
-  // installed-side guard ABOVE it: `!isReleasedHostVersion(installedVersion)
-  // -> applies: true`. An identical unreleased string means both sides are
-  // the SAME unreleased string, so it never reaches the exact-match arm at
-  // all - the installed-side guard sends it to `applies: true` first. That
-  // makes this a property of two arms INTERACTING rather than of either
-  // alone: a future edit to either arm could silently remove it while every
-  // other test here stays green. If this fails, the real cause is the
-  // installed-side `isReleasedHostVersion` guard, not the string-equality
-  // check below it - and the fix is deliberately NOT to add an
-  // `isReleasedHostVersion(targetVersion)` test to the exact-match arm,
-  // which would be unreachable dead code (the off-ladder guard above already
-  // sends every unreleased TARGET out before the exact-match arm runs) and
-  // would misattribute where the guarantee actually lives.
-  //
-  // Each row declares a format ({chatDb: 9}) purely to satisfy that
-  // off-ladder guard for the TARGET side - a precondition to reach the
-  // installed-side guard at all, not the thing under test. The declaration
-  // has no bearing on the outcome: swap it for a different chatDb number and
-  // every row still resolves `applies: true` the same way, because the
-  // decision is made one arm earlier, on the INSTALLED side, before the
-  // target's own formats are ever consulted.
+  // An identical RELEASED string with no declaration stands aside (the row
+  // above); an identical UNRELEASED string never does. Two arms each make
+  // that so on their own, and the rows below pass through the first one they
+  // meet: an unreleased target must declare a format to get past the
+  // off-ladder guard at all, and a present declaration then evaluates before
+  // either string arm is reached. Were the declaration arm ever removed, the
+  // installed-side guard (`!isReleasedHostVersion(installedVersion)`) would
+  // send the same rows to `applies: true` next - that guard is pinned on its
+  // own by the "released target over the source-tree sentinel installed" row.
+  // So these rows pin the OUTCOME the team's daily local rebuilds depend on,
+  // two builds sharing a string and differing in format, and do not single
+  // out which arm provides it. The fix for a failure here is NOT an
+  // `isReleasedHostVersion(targetVersion)` test on the exact-match arm: the
+  // off-ladder guard already sends every unreleased target out before it.
   it.each([
     [
       "the source-tree sentinel repeated on both sides",

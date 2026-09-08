@@ -50,17 +50,25 @@ export function hostStoreFormatRestriction(
   // Read BEFORE the `storeFormats === null` return below, because whether the
   // floor APPLIES does not depend on what the host reported about its stores.
   //
-  // `null` for the declaration, deliberately. That argument is an ARCHIVE's
-  // own `version.json` - what lets `host install --from` a repackaged tree be
-  // judged by its formats rather than by a version string it chose for
-  // itself, so a declaring target that matches the running version string
-  // evaluates instead of standing aside. A catalog row is not that: it is a
+  // `null` for the declaration, deliberately. A present declaration makes
+  // `storeFloorApplicability` evaluate unconditionally - no identical-string
+  // shortcut, no strictly-newer shortcut - because it is an ARCHIVE's own
+  // `version.json`, the word of a tree that named itself (`host install
+  // --from`, a bundled desktop build). A catalog row is not that: it is a
   // signed registry artifact whose version IS its identity, and the manifest's
   // published formats describe it rather than override it. Passing them here
-  // would make the running version's own row read as a downgrade - withheld
-  // on a pre-floor peer, "Checking chat stores…" while a survey is pending.
-  // The published formats still resolve the target's format below, where they
-  // belong.
+  // would make EVERY row evaluate, the running version's own included -
+  // withheld on a pre-floor peer, "Checking chat stores…" while a survey is
+  // pending. The published formats still resolve the target's format below,
+  // where they belong.
+  //
+  // This is the REGISTRY-side estimate, and it is an estimate: the CLI judges
+  // the same move from both records' provenance (`StoreFloorTargetIdentity`),
+  // and over a bundled desktop install it may survey an upgrade this pre-check
+  // calls unrestricted, and refuse it on an unreadable store. That refusal
+  // arrives as the typed RPC restriction (`hostStoreFormatRestrictionFromRpc`)
+  // and is offered Install anyway from there; the GUI cannot see provenance
+  // and does not pretend to.
   const downgrade = storeFloorApplicability(
     input.version,
     input.runningVersion,

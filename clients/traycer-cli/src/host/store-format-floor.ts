@@ -99,8 +99,49 @@ export type StoreFormatFloorSite =
   | "host update"
   | "host apply";
 
+/**
+ * Whether the two builds a move compares are both IDENTIFIED BY VERSION, which
+ * decides whether the target's own declaration is what
+ * `storeFloorApplicability` judges.
+ *
+ * `registry-artifact`: the target is a signed archive the registry names by
+ * version, AND the installed build (if any) is too. Both strings are
+ * identities, the version shortcuts hold, and the target's declaration only
+ * resolves its format. `local-archive`: either end is a tree that named
+ * itself - `host install --from`, a bundled desktop build, a stage promoted
+ * from a local file - so a version string on one side or the other is not
+ * identity. The installed side matters as much as the target: `host ensure
+ * --from` records a local archive under the CLI's OWN version, so a registry
+ * artifact of that version landing over it is a same-string move between
+ * different bytes, and only the formats can say whether it is a downgrade.
+ * With this, applicability sees no installed version and the target's
+ * declaration (`applicabilityOperands`), so no string shortcut applies.
+ *
+ * KNOWN COST. A desktop provisions its host with `host ensure` from the
+ * bundled archive, so its install record is `local-file` under the CLI's
+ * version - and the first registry `host update` over it, like every
+ * desktop bump that re-ensures a bundled build over an older host, is a
+ * `local-archive` move that EVALUATES where the same strings between two
+ * registry artifacts would stand aside. Evaluating is free whenever both
+ * sides can be placed: the target's declaration or published formats and
+ * the installed side's sidecar or table row clear a forward move from
+ * formats alone, with no disk walk and no service probe. It costs the survey
+ * (and, at the commit tail, the settle wait) only when the installed side
+ * cannot be placed - a bundled build above the table's ceiling whose archive
+ * predates the sidecar writer - and there one unreadable store refuses a
+ * pure upgrade until `--accept-store-format-loss`, or the GUI's Install
+ * anyway, says otherwise. That is deliberate: an installed side nobody can
+ * place is exactly the one whose stores only a walk can vouch for, and the
+ * GUI's registry-side estimate (`hostStoreFormatRestriction`) does not see
+ * provenance, so its "unrestricted upgrade" is corrected by the CLI's typed
+ * refusal rather than by a second pre-check. After that first registry
+ * install the record is `registry` and the shortcuts return.
+ */
+export type StoreFloorTargetIdentity = "registry-artifact" | "local-archive";
+
 export interface StoreFormatFloorInput {
   readonly environment: Environment;
+  readonly targetIdentity: StoreFloorTargetIdentity;
   /**
    * Every host DATA root the target build could find stores in, from
    * `resolveChatStoreSurveyRoots`. More than one only on dev, where a pooled
@@ -165,10 +206,11 @@ export interface StoreFormatFloorInput {
 export async function assertHostStoreFormatFloor(
   input: StoreFormatFloorInput,
 ): Promise<void> {
+  const operands = applicabilityOperands(input);
   const applicability = storeFloorApplicability(
     input.targetVersion,
-    input.installedVersion,
-    input.declaredStoreFormats,
+    operands.installedVersion,
+    operands.declaredStoreFormats,
   );
   if (!applicability.applies) {
     logFloorNotApplicable({
@@ -543,6 +585,7 @@ export function storeFormatFloorTargetVersion(
  */
 export async function assertStoreFormatFloorAtCommit(args: {
   readonly environment: Environment;
+  readonly targetIdentity: StoreFloorTargetIdentity;
   /** See `StoreFormatFloorInput.surveyRoots`. */
   readonly surveyRoots: ChatStoreSurveyRoots;
   /**
@@ -599,6 +642,7 @@ export async function assertStoreFormatFloorAtCommit(args: {
   }
   await assertHostStoreFormatFloor({
     environment: args.environment,
+    targetIdentity: args.targetIdentity,
     surveyRoots: args.surveyRoots,
     targetVersion,
     publishedStoreFormats: publishedStoreFormatsForTarget(
@@ -615,6 +659,41 @@ export async function assertStoreFormatFloorAtCommit(args: {
     site: args.evidence.site,
     logger: args.logger,
   });
+}
+
+/**
+ * What `storeFloorApplicability` is allowed to see, by identity.
+ *
+ * Between two registry artifacts both versions are identities: applicability
+ * sees the installed version and no declaration, so the version shortcuts
+ * keep every ordinary registry upgrade and reinstall off the disk. With a
+ * local archive on either end, no version string is identity: applicability
+ * sees NO installed version (an unknown installed side always evaluates) and
+ * the target's own declaration (which alone can place an off-ladder target).
+ * Withholding the installed version rather than merely passing the
+ * declaration matters for a target that declares nothing - a shipped 1.2.0
+ * over an `ensure --from` install recorded as 1.2.0 would otherwise match
+ * by string and skip. Neither operand is withheld from the format resolution
+ * beside this; that always reads the real versions and sidecars.
+ */
+function applicabilityOperands(input: {
+  readonly targetIdentity: StoreFloorTargetIdentity;
+  readonly installedVersion: string | null;
+  readonly declaredStoreFormats: HostStoreFormats | null;
+}): {
+  readonly installedVersion: string | null;
+  readonly declaredStoreFormats: HostStoreFormats | null;
+} {
+  if (input.targetIdentity === "registry-artifact") {
+    return {
+      installedVersion: input.installedVersion,
+      declaredStoreFormats: null,
+    };
+  }
+  return {
+    installedVersion: null,
+    declaredStoreFormats: input.declaredStoreFormats,
+  };
 }
 
 /**
@@ -670,6 +749,7 @@ export function publishedStoreFormatsForTarget(
  */
 export async function assertStoreFormatFloorAfterStop(args: {
   readonly environment: Environment;
+  readonly targetIdentity: StoreFloorTargetIdentity;
   /** See `StoreFormatFloorInput.surveyRoots`. */
   readonly surveyRoots: ChatStoreSurveyRoots;
   /** Already resolved through {@link storeFormatFloorTargetVersion}. */
@@ -681,9 +761,9 @@ export async function assertStoreFormatFloorAfterStop(args: {
   readonly publishedStoreFormats: HostStoreFormats | null;
   /**
    * The quiescence probe, LAZY: asked only once applicability and formats
-   * have failed to settle the move. On macOS it can spend up to two
-   * sequential 10-second `launchctl print` waits, on Linux one `systemctl`
-   * wait - host downtime, since it runs after the stop - and an upgrade or a
+   * have failed to settle the move. It can wait out the service manager's
+   * settle window (`SERVICE_SETTLE_TIMEOUT_MS` in `swap-quiescence.ts`) with
+   * the host already stopped - host downtime - and an upgrade or a
    * same-format rollback must not pay it for an answer this function never
    * reads.
    */
@@ -692,10 +772,11 @@ export async function assertStoreFormatFloorAfterStop(args: {
   readonly site: StoreFormatFloorSite;
   readonly logger: ILogger;
 }): Promise<void> {
+  const operands = applicabilityOperands(args);
   const applicability = storeFloorApplicability(
     args.targetVersion,
-    args.installedVersion,
-    args.declaredStoreFormats,
+    operands.installedVersion,
+    operands.declaredStoreFormats,
   );
   if (!applicability.applies) {
     logFloorNotApplicable({
@@ -782,6 +863,7 @@ export async function assertStoreFormatFloorAfterStop(args: {
   // network round trip inside the swap window.
   await assertHostStoreFormatFloor({
     environment: args.environment,
+    targetIdentity: args.targetIdentity,
     surveyRoots: args.surveyRoots,
     targetVersion: args.targetVersion,
     publishedStoreFormats: args.publishedStoreFormats,
@@ -913,6 +995,15 @@ export async function gateStoreFormatFloor(args: {
     : null;
   await assertHostStoreFormatFloor({
     environment: args.environment,
+    // A pre-stage gate holds no archive tree and no install record yet - it
+    // names a version and nothing else, so the version shortcuts are all it
+    // can judge by. That is the right answer for a registry version and the
+    // provisional one for `host ensure`'s own-build minimum (a bundled
+    // archive the gate sees only as the CLI's version): the commit tail
+    // re-judges from the records' real provenance and the extracted tree.
+    // Judging here as a local archive would put the survey walk on every
+    // pre-stage gate for nothing the tail does not do better.
+    targetIdentity: "registry-artifact",
     surveyRoots: args.surveyRoots,
     targetVersion: args.targetVersion,
     publishedStoreFormats,

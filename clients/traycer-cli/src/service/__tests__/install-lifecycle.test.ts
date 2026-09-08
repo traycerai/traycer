@@ -3,6 +3,7 @@ import type {
   CompetingRegistrationRetirement,
   ServiceController,
   ServiceLabel,
+  StopServiceOptions,
 } from "../index";
 import {
   createBytesOnlyInstallLifecycle,
@@ -100,7 +101,15 @@ interface ControllerHarness {
   readonly install: Mock<() => Promise<void>>;
   readonly start: Mock<() => Promise<void>>;
   readonly restart: Mock<() => Promise<void>>;
-  readonly stop: Mock<() => Promise<void>>;
+  readonly stop: Mock<
+    (label: ServiceLabel, options: StopServiceOptions) => Promise<void>
+  >;
+  /**
+   * Whether the fake stop route reports a live host before acting
+   * (`StopServiceOptions.onHostAddressed`). `true` models every fixture's
+   * assumed running host; a test that models a stopped or dead one flips it.
+   */
+  stopAddressesHost: boolean;
   // The kickstart -k half of the post-swap externally-managed relaunch -
   // surfaced separately from `start` so tests can assert which of the two
   // kickstart routes the lifecycle actually took.
@@ -115,7 +124,18 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
   const install = vi.fn(async () => undefined);
   const start = vi.fn(async () => undefined);
   const restart = vi.fn(async () => undefined);
-  const stop = vi.fn(async () => undefined);
+  // A real route reports a live host only when its own pid read finds one:
+  // `running` and `externally-managed` fixtures model a host that is up, a
+  // `stopped` or unregistered one models none.
+  const harnessState = {
+    stopAddressesHost:
+      initialState === "running" || initialState === "externally-managed",
+  };
+  const stop = vi.fn(
+    async (_label: ServiceLabel, options: StopServiceOptions) => {
+      if (harnessState.stopAddressesHost) options.onHostAddressed?.();
+    },
+  );
   const relaunchAfterRestart = vi.fn(async () => {
     await start();
   });
@@ -136,8 +156,8 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
     stop,
     start,
     restart,
-    stopForRestart: vi.fn(async () => {
-      await stop();
+    stopForRestart: vi.fn(async (serviceLabel, options) => {
+      await stop(serviceLabel, options);
       return { forcedRecycle: false };
     }),
     relaunchAfterRestart,
@@ -155,6 +175,12 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
     stop,
     relaunchAfterRestart,
     retireCompetingRegistration,
+    get stopAddressesHost() {
+      return harnessState.stopAddressesHost;
+    },
+    set stopAddressesHost(value: boolean) {
+      harnessState.stopAddressesHost = value;
+    },
   };
 }
 
@@ -484,7 +510,10 @@ describe("service install lifecycle re-registration", () => {
         true,
       );
 
-      expect(harness.stop).toHaveBeenCalledWith(label, { force: true });
+      expect(harness.stop).toHaveBeenCalledWith(
+        label,
+        expect.objectContaining({ force: true }),
+      );
     },
   );
 
@@ -493,7 +522,10 @@ describe("service install lifecycle re-registration", () => {
     // forwards `options.force` on every platform.
     const { harness } = await runLifecycle("running", bootstrap, true);
 
-    expect(harness.stop).toHaveBeenCalledWith(label, { force: true });
+    expect(harness.stop).toHaveBeenCalledWith(
+      label,
+      expect.objectContaining({ force: true }),
+    );
   });
 
   it.runIf(process.platform === "darwin")(
@@ -1308,11 +1340,14 @@ describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
       // DISPATCH (`onWillStopHost` firing) instead of success is the fix.
       const harness = makeController("externally-managed");
       mocks.createServiceControllerMock.mockReturnValue(harness.controller);
-      harness.stop.mockRejectedValue(
-        Object.assign(new Error("simulated degraded stop"), {
+      // The route found the live host (and reports it) before the claim
+      // degraded - the shape of a commit whose acknowledgement was lost.
+      harness.stop.mockImplementation(async (_label, options) => {
+        options.onHostAddressed?.();
+        throw Object.assign(new Error("simulated degraded stop"), {
           code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        }),
-      );
+        });
+      });
       const handle = createServiceInstallLifecycle({
         environment: "production",
         bootstrap: null,
@@ -1513,5 +1548,112 @@ describe("InstallPhaseHooks forwarding", () => {
     // in its own logic (e.g. swallow their errors, or re-derive `afterSwap`
     // from `hooks.beforeSwapCommit`) and `calls` would stop matching the
     // exact identity/order pinned above.
+  });
+});
+
+// `externally-managed` says only that Desktop owns the loaded label -
+// `statusService` reports it with no pid - so it is as true of a Desktop host
+// the person deliberately stopped as of one that is serving. The restore after
+// a refused swap must not START the stopped one, and must not leave down one
+// this operation took down: only the stop route's own pid read can say which,
+// and it reports through `StopServiceOptions.onHostAddressed`.
+describe("restartAfterAbortedSwap (Desktop-managed: the stop route reports what it addressed)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+  });
+
+  function desktopLifecycle(harness: ControllerHarness) {
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    return createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+  }
+
+  it("does NOT restore when the route addressed no host and the stop degraded on no-metadata - a Desktop host the person had stopped", async () => {
+    const harness = makeController("externally-managed");
+    harness.stopAddressesHost = false;
+    harness.stop.mockImplementation(async () => {
+      throw new CliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "host stop: no host endpoint is published",
+        details: {},
+        exitCode: 1,
+      });
+    });
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+    expect(harness.stop).toHaveBeenCalledTimes(1);
+
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    expect(harness.start).not.toHaveBeenCalled();
+  });
+
+  it("does NOT restore when the stop RESOLVED without addressing a host - a stale record naming a dead process (`no-host`)", async () => {
+    const harness = makeController("externally-managed");
+    harness.stopAddressesHost = false;
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+    expect(handle.state.stoppedBeforeSwap).toBe(true);
+
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    expect(harness.start).not.toHaveBeenCalled();
+  });
+
+  it("restores a running Desktop-managed host the route addressed and stopped", async () => {
+    const harness = makeController("externally-managed");
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+    expect(harness.stop).toHaveBeenCalledWith(
+      label,
+      expect.objectContaining({ onHostAddressed: expect.any(Function) }),
+    );
+
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores when the route addressed a live host and the stop then DEGRADED - the claim may have committed with its acknowledgement lost", async () => {
+    const harness = makeController("externally-managed");
+    harness.stop.mockImplementation(async (_label, options) => {
+      options.onHostAddressed?.();
+      throw new CliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "host stop: the running host's RPC endpoint is unreachable",
+        details: {},
+        exitCode: 1,
+      });
+    });
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+    expect(handle.state.stoppedBeforeSwap).toBe(false);
+
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("a CLI-owned RUNNING service is restored on the status probe's word, and the route's report is passed along too", async () => {
+    const harness = makeController("running");
+    harness.stopAddressesHost = false;
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
   });
 });

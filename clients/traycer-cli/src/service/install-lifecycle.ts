@@ -46,16 +46,25 @@ function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
 
 /**
  * Whether a host was actually running before a pre-swap stop, and therefore
- * whether an abandoned swap owes the machine a restart.
+ * whether an abandoned swap owes the machine a restart - as far as the STATUS
+ * probe can say.
  *
  * `stopped` and `not-installed` are NOT this, even when a stop was issued:
  * Windows stops unconditionally to clear file handles the rename needs, so
  * "we called stop" and "there was a host to put back" are different facts.
  * Conflating them makes a refused install start a host the user had
  * deliberately stopped.
+ *
+ * `externally-managed` is the one state this cannot settle. It says Desktop
+ * owns the loaded label, and the probe reports it with no pid at all
+ * (`statusService` in `platforms/macos.ts`), so it is as true of a Desktop
+ * host the person stopped as of one that is serving. The service lifecycle
+ * therefore asks the stop route to report what it addressed
+ * (`StopServiceOptions.onHostAddressed`); this predicate answers only for the
+ * states the probe does decide, which is what the bytes-only lifecycle needs.
  */
 function hostWasRunningBefore(priorState: ServiceState): boolean {
-  return priorState === "running" || priorState === "externally-managed";
+  return priorState === "running";
 }
 
 // State captured by the lifecycle hooks so the command can render an
@@ -184,6 +193,18 @@ export function createServiceInstallLifecycle(
   // committed on the host while reporting failure here; see
   // `restartAfterAbortedSwap`.
   let stopDispatched = false;
+  // Whether the stop ADDRESSED A RUNNING HOST - what a refused swap's restore
+  // owes the machine. Reported by the stop route itself
+  // (`StopServiceOptions.onHostAddressed`), from the pid read it acts on, so
+  // it fires whether the stop then resolves or degrades: `externally-managed`
+  // carries no pid, a resolved stop covers both `stopped` and `no-host`, and
+  // a read of our own taken before the stop would miss a host that publishes
+  // in the gap. `running` also sets it, since that probe answered from a live
+  // record already.
+  let hostRunningBeforeStop = false;
+  const onHostAddressed = (): void => {
+    hostRunningBeforeStop = true;
+  };
   const state: ServiceInstallLifecycleState = {
     priorState: "not-installed",
     stoppedBeforeSwap: false,
@@ -213,10 +234,14 @@ export function createServiceInstallLifecycle(
       // open handles inside the install dir would fail the swap rename, so
       // it runs even when the service wasn't observed running.
       if (status.state === "running" || process.platform === "win32") {
+        hostRunningBeforeStop = hostWasRunningBefore(status.state);
         await withServiceMutationAuthority(verifyMutationCapability, () => {
           if (options.onWillStopHost !== null) options.onWillStopHost();
           stopDispatched = true;
-          return controller.stop(label, { force: options.force });
+          return controller.stop(label, {
+            force: options.force,
+            onHostAddressed,
+          });
         });
         state.stoppedBeforeSwap = true;
         return;
@@ -261,7 +286,13 @@ export function createServiceInstallLifecycle(
             // park arm - the one exit that never reads the boundary.
             if (options.onWillStopHost !== null) options.onWillStopHost();
             stopDispatched = true;
-            return controller.stop(label, { force: options.force });
+            // `externally-managed` says nothing about a process, so the
+            // route's own read is the only word on whether a host is being
+            // taken down here; see `onHostAddressed`.
+            return controller.stop(label, {
+              force: options.force,
+              onHostAddressed,
+            });
           });
           state.stoppedBeforeSwap = true;
         } catch (cause) {
@@ -305,8 +336,11 @@ export function createServiceInstallLifecycle(
      * because the stop there is a force-kill of stray processes whose handles
      * inside the install directory would fail the rename, not a host
      * shutdown. Restoring on that alone would START a host the user had
-     * deliberately stopped. So the prior state has to say a host was actually
-     * running: `running`, or `externally-managed`.
+     * deliberately stopped. So the stop has to have ADDRESSED a running host:
+     * the probe's `running`, or the stop route's own report that its pid
+     * read found a live host (`onHostAddressed`) - the only word there is for
+     * `externally-managed`, which the probe reports without a pid whether or
+     * not a Desktop host is up.
      *
      * The other gate is DISPATCH, not success, and the difference is a machine
      * left hostless. `stoppedBeforeSwap` is assigned only after
@@ -327,7 +361,7 @@ export function createServiceInstallLifecycle(
      */
     restartAfterAbortedSwap: async () => {
       if (!stopDispatched) return;
-      if (!hostWasRunningBefore(state.priorState)) return;
+      if (!hostRunningBeforeStop) return;
       await withServiceMutationAuthority(verifyMutationCapability, () =>
         runWithPublishedHostStartAdoption(
           publishHostStartAdoption,

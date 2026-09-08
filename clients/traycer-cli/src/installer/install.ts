@@ -36,6 +36,7 @@ import {
 } from "./version-sidecar";
 import {
   assertStoreFormatFloorAfterStop,
+  type StoreFloorTargetIdentity,
   assertStoreFormatFloorAtCommit,
   publishedStoreFormatsForTarget,
   storeFormatFloorTargetVersion,
@@ -792,6 +793,8 @@ export interface CommitInstallFromSourceResult {
 // bytes-with-no-record gap).
 /** The operands both store-format checks in the commit tail share. */
 interface CommitFloorOperands {
+  /** From both records' `source.kind`: see `StoreFloorTargetIdentity`. */
+  readonly targetIdentity: StoreFloorTargetIdentity;
   readonly surveyRoots: ChatStoreSurveyRoots;
   readonly declaredStoreFormats: HostStoreFormats | null;
   readonly installedVersion: string | null;
@@ -830,6 +833,7 @@ async function assertFloorAfterStopOrRestore(
     // to do with the floor.
     await assertStoreFormatFloorAfterStop({
       environment: opts.environment,
+      targetIdentity: operands.targetIdentity,
       surveyRoots: operands.surveyRoots,
       targetVersion: storeFormatFloorTargetVersion(
         opts.runtimeVersion,
@@ -887,6 +891,16 @@ export async function commitInstallFromSource(
   // for no gain - worse, it would let the two checks silently disagree about
   // which build is landing.
   const floorOperands: CommitFloorOperands = {
+    // A registry download is signature-verified bytes the registry names by
+    // version; anything else is a tree that names itself - and so is an
+    // INSTALLED tree that `host ensure --from` recorded under the CLI's
+    // version, which a registry artifact of that version must not read as
+    // the same build.
+    targetIdentity:
+      opts.source.kind === "registry" &&
+      (previous === null || previous.source.kind === "registry")
+        ? "registry-artifact"
+        : "local-archive",
     // Resolved once for both checks: on dev this can span a run slot AND the
     // pooled identity homes, and the two checks must judge the same machine.
     surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
@@ -909,6 +923,7 @@ export async function commitInstallFromSource(
   // anything: a refusal here has moved nothing and taken nothing down.
   await assertStoreFormatFloorAtCommit({
     environment: opts.environment,
+    targetIdentity: floorOperands.targetIdentity,
     surveyRoots: floorOperands.surveyRoots,
     committingVersion: opts.version,
     // The stamp the archive gave itself, which for `host install --from` is

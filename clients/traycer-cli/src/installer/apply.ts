@@ -323,6 +323,14 @@ export async function applyHost(
   );
   await assertHostStoreFormatFloor({
     environment: opts.environment,
+    // Both ends: a stage promoted from a signed registry download over an
+    // install that was one too keeps the version shortcuts; a local file on
+    // either end (an `ensure --from` install records the CLI's version) means
+    // the declaration judges.
+    targetIdentity:
+      staged.source.kind === "registry" && installed.source.kind === "registry"
+        ? "registry-artifact"
+        : "local-archive",
     surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
     targetVersion: floorTargetVersion,
     publishedStoreFormats: null,

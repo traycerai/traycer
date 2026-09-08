@@ -82,6 +82,28 @@ export async function requestCooperativeShutdown(
   operation: string,
   intent: ShutdownClaimIntent,
 ): Promise<CooperativeShutdownOutcome> {
+  return await requestCooperativeShutdownReporting(
+    environment,
+    operation,
+    intent,
+    null,
+  );
+}
+
+/**
+ * {@link requestCooperativeShutdown} with `StopServiceOptions.onHostAddressed`:
+ * fired from THIS function's own liveness read, once it knows a live host is
+ * about to be claimed and before any RPC - so it fires for `stopped`, `busy`,
+ * `unreachable` and `hung` alike, and never for `no-metadata` or `no-host`.
+ * The read the report comes from is the read the claim acts on; a separate
+ * read taken earlier by a caller would miss a host that publishes in between.
+ */
+export async function requestCooperativeShutdownReporting(
+  environment: Environment,
+  operation: string,
+  intent: ShutdownClaimIntent,
+  onHostAddressed: (() => void) | null,
+): Promise<CooperativeShutdownOutcome> {
   const logger = createCliLogger(environment);
   const metadata = await readHostPidMetadata(environment);
   if (metadata === null) {
@@ -92,6 +114,7 @@ export async function requestCooperativeShutdown(
   if (publishedHostProcessGone(metadata)) {
     return { kind: "no-host" };
   }
+  onHostAddressed?.();
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
     return {
       kind: "unreachable",
@@ -241,9 +264,28 @@ export async function forceStopHostProcess(
   environment: Environment,
   operation: string,
 ): Promise<ForcedShutdownOutcome> {
+  return await forceStopHostProcessReporting(environment, operation, null);
+}
+
+/**
+ * {@link forceStopHostProcess} with `StopServiceOptions.onHostAddressed`,
+ * fired by the signal engine once the record's pid is verified live and its
+ * identity current - immediately before SIGTERM. Never for `no-metadata` or
+ * `no-host`, nor for an identity the engine could not verify BEFORE that
+ * first signal. The re-check before SIGKILL can also answer
+ * `identity-unverified`, but by then SIGTERM has been delivered to a verified
+ * host, and the report - already made - stands: the outcome describes how
+ * the stop degraded, not whether a host was addressed.
+ */
+export async function forceStopHostProcessReporting(
+  environment: Environment,
+  operation: string,
+  onHostAddressed: (() => void) | null,
+): Promise<ForcedShutdownOutcome> {
   const logger = createCliLogger(environment);
   const { outcome, actedOn } = await signalHostForForcedStop(
     environment,
+    onHostAddressed,
     operation,
     logger,
   );
@@ -298,6 +340,7 @@ interface ForcedStopSignalResult {
 
 async function signalHostForForcedStop(
   environment: Environment,
+  onHostAddressed: (() => void) | null,
   operation: string,
   logger: ILogger,
 ): Promise<ForcedStopSignalResult> {
@@ -330,6 +373,8 @@ async function signalHostForForcedStop(
   } else if (!isProcessAlive(metadata.pid)) {
     return { outcome: { kind: "no-host" }, actedOn: metadata };
   }
+  // Verified live and current: this signal addresses a running host.
+  onHostAddressed?.();
   logger.warn("Force-stopping the running host", {
     environment,
     operation,

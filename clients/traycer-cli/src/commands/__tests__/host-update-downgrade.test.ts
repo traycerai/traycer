@@ -24,7 +24,25 @@ const mocks = vi.hoisted(() => ({
     readonly onWillStopHost: (() => void) | null;
   }>,
   gateStoreFormatFloorMock: vi.fn(),
+  serviceManagerMayRespawnMock: vi.fn(),
 }));
+
+// The commit tail's post-stop check asks `serviceManagerMayRespawn` (the
+// `service/index.ts` facade) and, since the settle-wait, POLLS it for up to
+// 15 s while it answers "may respawn". Left real it reads the developer's own
+// launchd/systemd state - on a machine with a loaded Traycer job every commit
+// here would sit through that window and time the test out. Stubbed to
+// "cannot respawn", the ordinary quiescent machine these fixtures assume.
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
+  return {
+    ...actual,
+    serviceManagerMayRespawn: (
+      ...callArgs: Parameters<typeof actual.serviceManagerMayRespawn>
+    ) => mocks.serviceManagerMayRespawnMock(...callArgs),
+  };
+});
+mocks.serviceManagerMayRespawnMock.mockResolvedValue(false);
 
 // Real by default (the sandboxed `hostHomeDir` below points it at an empty
 // temp tree, which the floor clears unconditionally) - mocked only for the
