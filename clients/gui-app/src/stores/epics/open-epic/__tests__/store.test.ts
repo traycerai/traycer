@@ -725,11 +725,23 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("keeps the retained local-home statement when a @1.6 peer's frame omits the key: that absence is unknown", () => {
-    // The @1.6 peer can say `cloud` positively, so a frame that does not is
-    // the indeterminate state the widening exists to express - and the
-    // retained statement is exactly what the structural gates fall back on
-    // while it is indeterminate.
+  it("clears the retained local-home statement when a @1.6 peer's frame omits the key: unknown is not still-local", () => {
+    // This case used to assert the OPPOSITE, on the reading that a `@1.6`
+    // omission is the indeterminate state the widening exists to express and
+    // that the retained statement is what the structural gates fall back on
+    // while it is indeterminate. That is right about the datum and wrong about
+    // the fallback, because of what the retained statement is FOR: every gate
+    // that reads it (`isLocalHomedEpicHandle`, the dispatch-time comment read
+    // and write gates, the attachment fetcher, the local-home registry) grants
+    // the local-home EXEMPTION on it - permission to spend the retained host
+    // credential with no cloud verdict. Falling back to a stale `local` there
+    // is absence licensing a positive claim, which is the one inference this
+    // minor exists to end; it just happens to point the other way.
+    //
+    // `currentOrRetainedDurabilityStatement` says the fallback holds "only
+    // while this cycle is silent", and the window it means is the beat between
+    // a reconnect clearing the cycle's own status and the next frame arriving.
+    // A frame that arrived and omitted the key is not that window.
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-a",
@@ -749,14 +761,64 @@ describe("createOpenEpicStore", () => {
       freshness: undefined,
       peerSpeaksDurabilityLegs: true,
     });
+    // Non-vacuity: the exemption really was granted off the retained pair
+    // before the omitting frame, so the assertion below is a withdrawal and
+    // not a state that was never reached.
+    expect(isLocalHomedEpicHandle(opened)).toBe(true);
+
     handle().callbacks.onCloudSyncStatus("connected", {
       ...NO_CLOUD_SYNC_DURABILITY,
       peerSpeaksDurabilityLegs: true,
     });
     expect(opened.store.getState()).toMatchObject({
       durabilityStatus: null,
-      retainedDurabilityStatus: "promoting",
+      retainedDurabilityStatus: null,
+      retainedDurabilityPauseReason: null,
       durabilityLegsNegotiated: true,
+      hasFreshCloudSyncStatus: true,
+    });
+    expect(isLocalHomedEpicHandle(opened)).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("keeps the retained local-home statement across a reconnect that has produced no frame yet", () => {
+    // The window the fallback exists for, and the control that keeps the case
+    // above from reading as "the retained pair is useless". A re-subscribe
+    // clears the cycle's own durability while deliberately keeping the
+    // retained pair, and no status frame has arrived to say anything: the
+    // gates hold the last positive statement through that beat, so a
+    // local-homed epic's comment surface does not blink shut on every
+    // reconnect.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "promoting",
+      pauseReason: undefined,
+      promotionState: "active",
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: true,
+    });
+    expect(isLocalHomedEpicHandle(opened)).toBe(true);
+
+    // Down and back up. The transition INTO `open` is what runs
+    // `startedSubscriptionCycle`; no status frame has arrived on the new cycle
+    // yet, so this is the silence the fallback is for.
+    handle().callbacks.onConnectionStatus("connecting", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true);
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: null,
+      retainedDurabilityStatus: "promoting",
     });
     expect(isLocalHomedEpicHandle(opened)).toBe(true);
 

@@ -1124,7 +1124,13 @@ describe("<EpicConnectionPill />", () => {
       ]);
     });
 
-    it("leaves the pill claiming synced when the durability plane is merely steady", () => {
+    it("leaves the LIGHT with the artifact leg when the durability plane is merely steady, and still says the plane's sentence", async () => {
+      // A steady plane never takes the light or the label - that part is
+      // unchanged. What it does NOT do any more is disappear: the plane
+      // decides for itself whether it has anything to say, so a sentence that
+      // reached this far rides the hover and the accessible name however calm
+      // it is. Dropping it is what left a mirror-first cloud epic's "Local
+      // copy · never synced" invisible behind `connected`.
       vi.useFakeTimers();
       mocks.durability = { severity: "steady", sentence: "Stored locally" };
       renderPill("synced");
@@ -1132,10 +1138,17 @@ describe("<EpicConnectionPill />", () => {
       act(() => {
         vi.advanceTimersByTime(750);
       });
+      vi.useRealTimers();
 
       const pill = screen.getByRole<HTMLButtonElement>("button");
       expect(pill.dataset.source).toBe("artifact");
-      expect(pillClaimsSynced()).toBe(true);
+      expect(pill.getAttribute("aria-label")).toBe(
+        "All changes synced Stored locally",
+      );
+      expect(await tooltipLines()).toEqual([
+        "All changes synced",
+        "Stored locally",
+      ]);
     });
 
     it("selects an activity durability plane over a synced artifact leg, with the idle pulse and no amber/red dot class", () => {

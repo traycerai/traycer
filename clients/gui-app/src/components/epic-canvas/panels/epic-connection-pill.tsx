@@ -298,38 +298,50 @@ interface SelectedIndicator {
   readonly source: PillSource;
   readonly indicator: PillIndicator;
   /**
-   * Every OTHER plane that is degraded (warning or worse) right now, in
-   * source order. The visible row stays the selected plane's alone - one
-   * light, at most one label - and these ride the hover and the accessible
-   * name, so a second outage is never hidden behind the first.
+   * Every OTHER plane with something to report right now, in source order.
+   * The visible row stays the selected plane's alone - one light, at most one
+   * label - and these ride the hover and the accessible name, so a second
+   * outage is never hidden behind the first.
+   *
+   * "Something to report" is degraded (warning or worse), PLUS the durability
+   * plane at any severity: that plane already decides for itself whether it
+   * has anything to say (`deriveEpicDurabilityPlane` returns null when it does
+   * not), and the state that forced this exception is a calm one - a
+   * mirror-first cloud epic whose freshness is `local-copy` produces a steady
+   * "Local copy · never synced" that loses the light to `connected`'s
+   * activity. Dropping it left the pill saying only "Connected" over a
+   * document the protocol had just stated has never been checked against the
+   * cloud, which is the one distinction the plane was added to expose. The
+   * severity stays steady on purpose - a local copy of a cloud epic is not a
+   * fault, and pulsing the dot for an ordinary mirror-first open would be.
    */
-  readonly alsoDegraded: ReadonlyArray<PillIndicator>;
+  readonly alsoReported: ReadonlyArray<PillIndicator>;
 }
 
 /**
  * The hover copy: the selected plane's sentence, then one line per other
- * degraded plane. A single-plane case stays a plain string so the tooltip
+ * reported plane. A single-plane case stays a plain string so the tooltip
  * reads exactly as it always has.
  */
 function tooltipFor(selected: SelectedIndicator): ReactNode {
-  if (selected.alsoDegraded.length === 0) return selected.indicator.tooltip;
-  // A real list, winner first: one entry per degraded plane, in the order
+  if (selected.alsoReported.length === 0) return selected.indicator.tooltip;
+  // A real list, winner first: one entry per reported plane, in the order
   // the accessible name reads them.
   return (
     <ul className="flex flex-col gap-1">
       <li>{selected.indicator.tooltip ?? selected.indicator.ariaLabel}</li>
-      {selected.alsoDegraded.map((other) => (
+      {selected.alsoReported.map((other) => (
         <li key={other.ariaLabel}>{other.tooltip ?? other.ariaLabel}</li>
       ))}
     </ul>
   );
 }
 
-/** The accessible name and live announcement: every degraded plane, selected first. */
+/** The accessible name and live announcement: every reported plane, selected first. */
 function accessibleNameFor(selected: SelectedIndicator): string {
   return [
     selected.indicator.ariaLabel,
-    ...selected.alsoDegraded.map((other) => other.ariaLabel),
+    ...selected.alsoReported.map((other) => other.ariaLabel),
   ].join(" ");
 }
 
@@ -514,17 +526,19 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
     }
   }
   // One light, at most one label: the others are not dropped, they move to
-  // the hover and the accessible name (see `SelectedIndicator.alsoDegraded`).
-  // Only degraded planes ride along - a plane that is merely busy ("Saving
-  // changes", "Backing up chats") is not a second outage to report.
-  const alsoDegraded = [artifact, ...secondary]
+  // the hover and the accessible name (see `SelectedIndicator.alsoReported`).
+  // Degraded planes ride along - a plane that is merely busy ("Saving
+  // changes", "Backing up chats") is not a second outage to report - and so
+  // does the durability plane at any severity, for the reason given there.
+  const alsoReported = [artifact, ...secondary]
     .filter(
       (candidate) =>
         candidate !== selected &&
-        SEVERITY_RANK[candidate.indicator.severity] >= SEVERITY_RANK.warning,
+        (SEVERITY_RANK[candidate.indicator.severity] >= SEVERITY_RANK.warning ||
+          candidate.source === "durability"),
     )
     .map((candidate) => candidate.indicator);
-  return { ...selected, alsoDegraded };
+  return { ...selected, alsoReported };
 }
 
 /**

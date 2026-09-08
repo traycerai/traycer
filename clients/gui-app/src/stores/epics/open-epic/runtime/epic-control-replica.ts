@@ -624,21 +624,35 @@ export function createEpicControlReplica(
     if (durabilityStatus !== null) {
       retainedDurabilityStatus = durabilityStatus;
       retainedDurabilityPauseReason = durabilityPauseReason;
-    } else if (
-      durabilityStatusNegotiated &&
-      !durable.peerSpeaksDurabilityLegs
-    ) {
-      // Through `@1.5` the durability enum has no `cloud` member, so a frame
-      // from a `@1.4`/`@1.5` peer that omits the key IS its positive cloud
-      // statement - the reading `useEpicCommentRoomAvailability` and
-      // `useEpicHomeCacheSync` already make of the same frame. It has to
-      // reach the retained pair too: a promotion that completes under such a
-      // peer ends in exactly this frame, and a `local`/`promoting` retained
-      // across it would keep every gate that reads the retained statement
-      // (`isLocalHomedEpicHandle`, the dispatch-time comment and attachment
-      // gates, the local-home registry) answering "local-homed" for an epic
-      // the host now serves from the cloud. A `@1.6` peer's omission means
-      // UNKNOWN and leaves the retained pair standing, as before.
+    } else {
+      // THE RETAINED PAIR ONLY SURVIVES SILENCE, and a frame is not silence.
+      //
+      // `currentOrRetainedDurabilityStatement` says it falls back "only while
+      // this cycle is silent", and the window it exists for is the beat
+      // between a reconnect clearing the cycle's own status and the next
+      // status frame arriving. Reaching this branch means that frame HAS
+      // arrived and did not carry `durability`, so whatever the omission
+      // means, it is not silence - and both readings of it agree that the
+      // retained `local`/`promoting` must go:
+      //
+      //  - A `@1.4`/`@1.5` peer (`!peerSpeaksDurabilityLegs`) cannot express
+      //    `cloud` at all, so its omission IS the positive cloud statement -
+      //    the reading `useEpicCommentRoomAvailability` and
+      //    `useEpicHomeCacheSync` already make of the same frame. A promotion
+      //    that completes under such a peer ends in exactly this frame.
+      //  - A `@1.6` peer's omission is the wire's stated UNKNOWN. Unknown is
+      //    not "still local": every gate that reads the retained statement
+      //    (`isLocalHomedEpicHandle`, the dispatch-time comment and
+      //    attachment gates, the local-home registry) grants the local-home
+      //    EXEMPTION on it, so retaining a stale `local` here kept those
+      //    gates answering "local-homed" - and dispatching on the retained
+      //    host credential after a demotion - for an epic whose home this
+      //    frame declined to state. `null` is the cloud direction, which is
+      //    the direction an unproven home has to fail in.
+      //
+      // The distinction between the two readings still matters for
+      // `durabilityStatus` itself and for `syncedClaimIsHonest`, which is why
+      // it survives in the branches above and not in this one.
       retainedDurabilityStatus = null;
       retainedDurabilityPauseReason = null;
     }

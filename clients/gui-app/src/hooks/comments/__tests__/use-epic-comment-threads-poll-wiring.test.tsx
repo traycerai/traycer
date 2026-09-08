@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   focusManager,
   QueryClient,
@@ -15,6 +15,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const EPIC_ID = "epic-1";
 const ARTIFACT_ID = "artifact-1";
@@ -33,10 +34,25 @@ const METHOD = "epic.listCommentThreads";
  * pinned here from the outside, on the query TanStack actually built.
  */
 describe("useEpicCommentThreadsForClient poll wiring", () => {
+  // The hook refuses a cloud-backed dispatch without a verdict (see
+  // `use-comment-thread-mutations-verdict.test.tsx`), and this suite's epic is
+  // not local-homed - so without a signed-in session every case below would
+  // measure a cadence on a query that never dispatched.
+  beforeEach(() => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+  });
+
   afterEach(() => {
     focusManager.setFocused(undefined);
     cleanup();
     vi.useRealTimers();
+    useAuthStore.getState().setSignedOut();
   });
 
   it("builds no refetch interval while the lane is UP", async () => {
