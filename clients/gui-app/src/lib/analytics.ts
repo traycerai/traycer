@@ -270,6 +270,7 @@ export type AnalyticsSetting =
   | "showNavigatorResourceStats"
   | "showRecentHistory"
   | "startPageWallpaper"
+  | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"

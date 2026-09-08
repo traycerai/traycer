@@ -1,9 +1,9 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The real hook reads the appearance blob store (IndexedDB) and the real
-// wallpaper paints a canvas; neither exists in jsdom and neither is what these
-// tests are about - which rows the group shows for a given wallpaper setting.
+// The real hook reads the appearance blob store (IndexedDB), which does not
+// exist in jsdom and is not what these tests are about - which rows the group
+// shows for a given wallpaper setting.
 const wallpaperMocks = vi.hoisted(() => ({
   image: { url: null as string | null, name: null as string | null },
 }));
@@ -12,10 +12,6 @@ vi.mock("@/lib/appearance/start-page-wallpaper", () => ({
   chooseStartPageWallpaper: vi.fn(),
   saveStartPageWallpaper: vi.fn(),
   useStartPageWallpaperImage: () => wallpaperMocks.image,
-}));
-
-vi.mock("@/components/home/appearance-wallpaper", () => ({
-  AppearanceWallpaper: () => null,
 }));
 
 import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
@@ -51,16 +47,26 @@ describe("StartPageSettingsSection", () => {
   it("shows Style and Intensity once a dithered wallpaper is set", () => {
     wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
     useSettingsStore.setState({
-      startPageWallpaper: { style: "dither", intensity: 0.6 },
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+      },
     });
     render(<StartPageSettingsSection />);
     expect(rowLabels()).toEqual([
       "Wallpaper",
       "Style",
       "Intensity",
+      "Tint with accent colour",
       "Greeting",
       "Recent tasks",
     ]);
+    expect(
+      screen
+        .getByRole("switch", { name: "Tint with accent colour" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
     expect(screen.getByText("ridge.png")).not.toBeNull();
     expect(
       screen.getByRole("slider", { name: "Intensity" }).getAttribute("value"),
@@ -70,7 +76,11 @@ describe("StartPageSettingsSection", () => {
   it("keeps Style but drops Intensity for the photo treatment", () => {
     wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
     useSettingsStore.setState({
-      startPageWallpaper: { style: "photo", intensity: 0.6 },
+      startPageWallpaper: {
+        style: "photo",
+        intensity: 0.6,
+        tintWithAccent: true,
+      },
     });
     render(<StartPageSettingsSection />);
     expect(rowLabels()).toEqual([
@@ -79,5 +89,38 @@ describe("StartPageSettingsSection", () => {
       "Greeting",
       "Recent tasks",
     ]);
+  });
+
+  it("keeps the tint switch off the grain treatment, which has no ramp", () => {
+    wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "grain",
+        intensity: 0.6,
+        tintWithAccent: true,
+      },
+    });
+    render(<StartPageSettingsSection />);
+    expect(rowLabels()).toEqual([
+      "Wallpaper",
+      "Style",
+      "Intensity",
+      "Greeting",
+      "Recent tasks",
+    ]);
+  });
+
+  it("renders no preview card: the start page itself is the preview", () => {
+    wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+      },
+    });
+    render(<StartPageSettingsSection />);
+    expect(screen.queryByTestId("start-page-preview")).toBeNull();
+    expect(document.querySelectorAll("canvas")).toHaveLength(0);
   });
 });

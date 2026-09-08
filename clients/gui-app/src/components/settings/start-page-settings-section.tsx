@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AppearanceWallpaper } from "@/components/home/appearance-wallpaper";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
@@ -30,11 +29,9 @@ const STYLES: ReadonlyArray<{
 ];
 
 /**
- * Settings > Appearance > Start page. Every row writes straight through to the
- * settings store (autosave, like the rest of the panel); the preview above them
- * is the real start-page wallpaper component over ghosts of the surfaces the
- * two switches control, so the card shows the actual treatment rather than an
- * illustration of it.
+ * Settings > Appearance > Start page. Plain rows like every other group in the
+ * panel; each one writes straight through to the settings store (autosave). The
+ * start page itself is the preview.
  */
 export function StartPageSettingsSection() {
   const wallpaper = useSettingsStore((state) => state.startPageWallpaper);
@@ -50,7 +47,6 @@ export function StartPageSettingsSection() {
   const image = useStartPageWallpaperImage();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
-  const [dragging, setDragging] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(
@@ -74,6 +70,7 @@ export function StartPageSettingsSection() {
           setWallpaper({
             style: "dither",
             intensity: DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
+            tintWithAccent: true,
           });
         }
       })
@@ -97,12 +94,6 @@ export function StartPageSettingsSection() {
     void saveStartPageWallpaper(null).catch(() => undefined);
   };
 
-  const onDrop = (event: DragEvent<HTMLDivElement>): void => {
-    event.preventDefault();
-    setDragging(false);
-    accept(event.dataTransfer.files.item(0));
-  };
-
   return (
     <SettingsGroup
       title="Start page"
@@ -110,55 +101,6 @@ export function StartPageSettingsSection() {
       dataTestId="start-page-settings-group"
       fill={false}
     >
-      <div className="px-5 pt-4 pb-1">
-        <div
-          data-testid="start-page-preview"
-          className={cn(
-            "relative isolate aspect-[16/7] w-full overflow-hidden rounded-lg border border-border/60 bg-background",
-            dragging && "outline-2 -outline-offset-2 outline-primary",
-          )}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => {
-            setDragging(false);
-          }}
-          onDrop={onDrop}
-        >
-          <AppearanceWallpaper
-            wallpaper={wallpaper}
-            url={image.url}
-            tint={null}
-          />
-          <div
-            className="absolute top-1/2 left-1/2 grid w-3/5 -translate-x-1/2 -translate-y-[30%] gap-1.5"
-            aria-hidden="true"
-          >
-            {showGreeting ? (
-              <div className="text-center text-ui-xs text-foreground/90">
-                What would you like to work on?
-              </div>
-            ) : null}
-            <div className="rounded-lg border border-border/60 bg-card/85 px-3 py-2 text-ui-xs text-muted-foreground backdrop-blur-sm">
-              Ask Traycer anything. @ mention for context
-            </div>
-            {showRecentHistory ? (
-              <div className="flex justify-center gap-1">
-                <i className="h-1 w-[26%] rounded-full bg-foreground/10" />
-                <i className="h-1 w-[26%] rounded-full bg-foreground/10" />
-                <i className="h-1 w-[26%] rounded-full bg-foreground/10" />
-              </div>
-            ) : null}
-          </div>
-          {wallpaper === null ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-3 text-center text-ui-xs text-muted-foreground">
-              Drop an image here to try the treatment
-            </div>
-          ) : null}
-        </div>
-      </div>
-
       <SettingsRow
         label="Wallpaper"
         description={image.name ?? "None"}
@@ -250,6 +192,23 @@ export function StartPageSettingsSection() {
                 });
               }}
               className="w-[min(40vw,10rem)] accent-primary"
+            />
+          }
+        />
+      )}
+
+      {wallpaper === null || wallpaper.style !== "dither" ? null : (
+        <SettingsRow
+          label="Tint with accent colour"
+          description="Off keeps the image's own colours."
+          control={
+            <Switch
+              checked={wallpaper.tintWithAccent}
+              onCheckedChange={(next) => {
+                trackSettingChanged("appearance", "startPageWallpaperTint");
+                setWallpaper({ ...wallpaper, tintWithAccent: next });
+              }}
+              aria-label="Tint with accent colour"
             />
           }
         />

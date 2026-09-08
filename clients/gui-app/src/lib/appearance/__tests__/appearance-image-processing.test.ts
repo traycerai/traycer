@@ -37,6 +37,7 @@ vi.mock("@/lib/images/bitmap-codec", () => ({
 import {
   APPEARANCE_INPUT_MAX_BYTES,
   ditherRows,
+  ditherRowsPerChannel,
   processAppearanceImage,
   validateAppearanceImage,
   type AppearanceRamp,
@@ -181,6 +182,40 @@ describe("ditherRows (real pixel math)", () => {
     ditherRows(bright, 8, RAMP);
     for (let i = 0; i < dark.data.length; i += 4)
       expect(bright.data[i]).toBeGreaterThanOrEqual(dark.data[i]);
+  });
+});
+
+describe("ditherRowsPerChannel (untinted, real pixel math)", () => {
+  /** A flat, decidedly non-grey colour: each channel must survive on its own. */
+  function flatColor(width: number, height: number): ImageData {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let offset = 0; offset < data.length; offset += 4) {
+      data[offset] = 20;
+      data[offset + 1] = 120;
+      data[offset + 2] = 220;
+      data[offset + 3] = 90;
+    }
+    return { width, height, data, colorSpace: "srgb" };
+  }
+
+  it("dithers each channel around its own value and forces alpha opaque", () => {
+    const pixels = flatColor(8, 8);
+    ditherRowsPerChannel(pixels, 4);
+    const steps = 3;
+    const quantum = 255 / steps;
+    for (let offset = 0; offset < pixels.data.length; offset += 4) {
+      // Every channel lands on one of the `levels` quantization steps, within
+      // one step of where it started - so the colour is kept, not remapped.
+      for (const [channel, source] of [20, 120, 220].entries()) {
+        const painted = pixels.data[offset + channel];
+        expect(painted % quantum).toBeLessThan(1);
+        expect(Math.abs(painted - source)).toBeLessThanOrEqual(quantum);
+      }
+      expect(pixels.data[offset + 3]).toBe(255);
+    }
+    // The ramp version would flatten this to one grey per tone; this one must
+    // keep the channels apart.
+    expect(pixels.data[0]).not.toBe(pixels.data[2]);
   });
 });
 

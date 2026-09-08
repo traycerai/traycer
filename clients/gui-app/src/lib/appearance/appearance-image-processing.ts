@@ -83,6 +83,31 @@ export function ditherRows(
   }
 }
 
+/**
+ * The untinted sibling of `ditherRows`: the same 8x8 Bayer threshold and the
+ * same `levels`, applied to each RGB channel on its own, so the image keeps its
+ * own colours instead of being repainted onto a ramp.
+ */
+export function ditherRowsPerChannel(pixels: ImageData, levels: number): void {
+  const steps = Math.max(2, Math.round(levels)) - 1;
+  const data = pixels.data;
+  for (let y = 0; y < pixels.height; y += 1) {
+    const bayerRow = (y % 8) * 8;
+    for (let x = 0; x < pixels.width; x += 1) {
+      const offset = (y * pixels.width + x) * 4;
+      const threshold = (BAYER_8[bayerRow + (x % 8)] + 0.5) / 64 - 0.5;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const quantized = Math.round(
+          (data[offset + channel] / 255) * steps + threshold,
+        );
+        data[offset + channel] =
+          (Math.max(0, Math.min(steps, quantized)) / steps) * 255;
+      }
+      data[offset + 3] = 255;
+    }
+  }
+}
+
 export async function yieldImageWork(signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve) => setTimeout(resolve, 0));

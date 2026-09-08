@@ -891,6 +891,7 @@ describe("useSettingsStore", () => {
     const wallpaper = {
       style: "dither",
       intensity: 0.8,
+      tintWithAccent: false,
     } satisfies StartPageWallpaper;
     useSettingsStore.getState().setStartPageWallpaper(wallpaper);
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
@@ -956,6 +957,19 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().startPageWallpaper).toEqual({
       style: "grain",
       intensity: 0.6,
+      tintWithAccent: true,
+    });
+  });
+
+  it("defaults a persisted wallpaper with no tint flag to tinting with the accent", async () => {
+    await rehydrateFrom({
+      startPageWallpaper: { style: "dither", intensity: 0.5 },
+    });
+
+    expect(useSettingsStore.getState().startPageWallpaper).toEqual({
+      style: "dither",
+      intensity: 0.5,
+      tintWithAccent: true,
     });
   });
 

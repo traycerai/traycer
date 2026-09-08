@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
   ditherRows,
+  ditherRowsPerChannel,
   yieldImageWork,
   type AppearanceRamp,
   type AppearanceRampColor,
@@ -47,6 +48,7 @@ export function AppearanceWallpaper(props: {
           url={url}
           intensity={wallpaper.intensity}
           tint={tint}
+          tintWithAccent={wallpaper.tintWithAccent}
         />
       ) : (
         <img
@@ -79,8 +81,9 @@ function DitheredWallpaper(props: {
   readonly url: string;
   readonly intensity: number;
   readonly tint: string | null;
+  readonly tintWithAccent: boolean;
 }) {
-  const { url, intensity, tint } = props;
+  const { url, intensity, tint, tintWithAccent } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // The theme is not readable as a value here - it lives in CSS custom
   // properties - so the mode/preset are subscribed to purely as a repaint
@@ -95,7 +98,12 @@ function DitheredWallpaper(props: {
     const image = new Image();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const paint = (): void => {
-      void renderDither(canvas, image, { intensity, tint }, controller.signal)
+      void renderDither(
+        canvas,
+        image,
+        { intensity, tint, tintWithAccent },
+        controller.signal,
+      )
         // Aborts (unmount, a newer pass) and a canvas-less environment are the
         // only failures here, and both mean "leave the last frame up".
         .catch(() => undefined);
@@ -122,7 +130,7 @@ function DitheredWallpaper(props: {
       if (timer !== null) clearTimeout(timer);
       image.onload = null;
     };
-  }, [url, intensity, tint, theme, themePreset]);
+  }, [url, intensity, tint, tintWithAccent, theme, themePreset]);
 
   return (
     <canvas ref={canvasRef} className="appearance-wallpaper-canvas size-full" />
@@ -132,7 +140,11 @@ function DitheredWallpaper(props: {
 async function renderDither(
   canvas: HTMLCanvasElement,
   image: HTMLImageElement,
-  style: { readonly intensity: number; readonly tint: string | null },
+  style: {
+    readonly intensity: number;
+    readonly tint: string | null;
+    readonly tintWithAccent: boolean;
+  },
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
@@ -141,8 +153,8 @@ async function renderDither(
   if (image.naturalWidth === 0 || image.naturalHeight === 0) return;
   const context = canvas.getContext("2d");
   if (context === null) return;
-  const ramp = resolveRamp(canvas, style.tint);
-  if (ramp === null) return;
+  const ramp = style.tintWithAccent ? resolveRamp(canvas, style.tint) : null;
+  if (style.tintWithAccent && ramp === null) return;
   canvas.width = width;
   canvas.height = height;
   const cover = Math.max(
@@ -163,7 +175,7 @@ async function renderDither(
   const levels = 2 + Math.round((1 - style.intensity) * 8);
   if (width * height <= SYNCHRONOUS_PIXEL_BUDGET) {
     const pixels = context.getImageData(0, 0, width, height);
-    ditherRows(pixels, levels, ramp);
+    ditherPixels(pixels, levels, ramp);
     context.putImageData(pixels, 0, 0);
     return;
   }
@@ -175,9 +187,19 @@ async function renderDither(
       width,
       Math.min(BAND_ROWS, height - row),
     );
-    ditherRows(band, levels, ramp);
+    ditherPixels(band, levels, ramp);
     context.putImageData(band, 0, row);
   }
+}
+
+/** With a ramp the tones are accent-tinted; without one each channel dithers. */
+function ditherPixels(
+  pixels: ImageData,
+  levels: number,
+  ramp: AppearanceRamp | null,
+): void {
+  if (ramp === null) ditherRowsPerChannel(pixels, levels);
+  else ditherRows(pixels, levels, ramp);
 }
 
 /** Page background -> tint -> a 55% lift of the tint toward white. */

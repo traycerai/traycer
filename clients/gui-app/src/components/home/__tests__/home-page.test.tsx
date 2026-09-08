@@ -444,6 +444,15 @@ function setGlobalWorkspaceFolders(
   });
 }
 
+function composerPlacement(): string | null {
+  return (
+    screen
+      .getByTestId("landing-composer")
+      .closest("[data-composer-placement]")
+      ?.getAttribute("data-composer-placement") ?? null
+  );
+}
+
 describe("<HomePage />", () => {
   beforeEach(() => {
     homeMocks.tabActivity = { visible: true, focused: true };
@@ -1187,6 +1196,24 @@ describe("<HomePage />", () => {
       queryClient.clear();
     });
 
+    it("keeps the composer top-anchored when only the greeting is hidden", () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      useSettingsStore.setState({
+        showGreeting: false,
+        showRecentHistory: true,
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <HomePage />
+        </QueryClientProvider>,
+      );
+
+      expect(composerPlacement()).toBe("top");
+      queryClient.clear();
+    });
+
     it("toggling greeting/history visibility moves no other surface: same composer instance, appearance stays mounted", () => {
       const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -1202,6 +1229,7 @@ describe("<HomePage />", () => {
       expect(
         screen.getByTestId("home-hero").parentElement?.className,
       ).not.toContain("invisible");
+      expect(composerPlacement()).toBe("top");
       expect(homeMocks.appearanceEvents).toEqual(["mount"]);
       const composerSubmit = screen.getByTestId("landing-submit");
       composerSubmit.focus();
@@ -1221,6 +1249,9 @@ describe("<HomePage />", () => {
       expect(
         screen.getByTestId("home-hero").parentElement?.className,
       ).toContain("invisible");
+      // Nothing above or below the composer any more, so it centres itself in
+      // the surface instead of staying anchored to the top of its row.
+      expect(composerPlacement()).toBe("centered");
       expect(screen.queryByTestId("epics-list-panel")).toBeNull();
       expect(screen.getByTestId("landing-composer").dataset.instanceId).toBe(
         composerInstanceId,
@@ -1238,6 +1269,7 @@ describe("<HomePage />", () => {
       expect(
         screen.getByTestId("home-hero").parentElement?.className,
       ).not.toContain("invisible");
+      expect(composerPlacement()).toBe("top");
       expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
       expect(screen.getByTestId("landing-composer").dataset.instanceId).toBe(
         composerInstanceId,

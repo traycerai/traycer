@@ -134,6 +134,11 @@ export interface StartPageWallpaper {
   readonly style: StartPageWallpaperStyle;
   /** 0..1. Applies to `dither` and `grain` only. */
   readonly intensity: number;
+  /**
+   * `dither` only: paint the tones from the accent ramp. Off dithers each RGB
+   * channel on its own, so the image keeps its own colours.
+   */
+  readonly tintWithAccent: boolean;
 }
 
 export interface SettingsState {
@@ -663,6 +668,8 @@ function parseStartPageWallpaper(value: unknown): StartPageWallpaper | null {
       intensity <= 1
         ? intensity
         : DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
+    tintWithAccent:
+      typeof value.tintWithAccent === "boolean" ? value.tintWithAccent : true,
   };
 }
 

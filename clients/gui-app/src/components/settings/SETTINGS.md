@@ -753,16 +753,16 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     `theme`/`setTheme`) and Preset (`ThemePresetPicker`,
     `themePreset`/`setThemePreset`) - broad color/surface choices lead.
   - **Start page** (`start-page-settings-section.tsx`): the personal landing
-    backdrop. A 16:7 preview card renders the REAL `AppearanceWallpaper` over
-    ghosts of the greeting, composer, and recent-task rows, and is itself a
-    drop target for an image file - so the card shows the actual treatment
-    rather than an illustration of it. Rows: Wallpaper (thumbnail + "Choose
+    backdrop. Plain rows only, like every other group here - the start page
+    itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose
     image..." + Remove; secondary text is the stored file name, or "None"),
     Style (segmented Photo / Dither / Grain, only once a wallpaper is set),
-    Intensity (0..100 range input, only for Dither and Grain), Greeting and
-    Recent tasks (`showGreeting` / `showRecentHistory` switches). The style and
-    intensity live in the settings store (`startPageWallpaper`); the bytes live
-    only in the appearance blob store
+    Intensity (0..100 range input, only for Dither and Grain), Tint with
+    accent colour (`Switch`, Dither only; off dithers each RGB channel on its
+    own so the image keeps its own colours), Greeting and
+    Recent tasks (`showGreeting` / `showRecentHistory` switches). The style,
+    intensity and tint live in the settings store (`startPageWallpaper`); the
+    bytes live only in the appearance blob store
     (`lib/appearance/start-page-wallpaper.ts`), stored as a `File` so the row
     can name the image without a second settings key shadowing it. The start
     page's own `Paintbrush` button opens this panel - there is no separate
