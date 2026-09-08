@@ -344,6 +344,439 @@ describe("useLandingBrowserOpenLink", () => {
     );
   });
 
+  // The FOREGROUND arm has the same obligation the background one does, and
+  // used to have none of the protection: it landed through `addTab`, which
+  // activates whatever it adds. A reader who switched rows while the device
+  // was answering was pulled onto a popup they had already navigated away
+  // from - the very race `fulfillPlaceholder` refuses for the direct open.
+  it("does not pull the reader off the row they switched to while a foreground popup was in flight", async () => {
+    const deferred = deferredOpenTab();
+    const { result } = renderOpener(
+      sessionsState({ openTab: deferred.openTab }),
+    );
+    const store = useLandingPanelStore.getState();
+    store.addTab(RAISING_TAB);
+    store.addTab({
+      kind: "browser",
+      instanceId: "other-instance",
+      hostId: HOST_ID,
+      sessionId: "other-session",
+      tabId: "other-tab",
+      name: "other.example",
+      titleSource: "default",
+    });
+    store.activateTab(RAISING_TAB.instanceId);
+
+    await act(async () => {
+      result.current.open(
+        RAISING_TAB,
+        "https://example.com/next",
+        "foreground",
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(deferred.calls).toHaveLength(1);
+    });
+
+    // The reader moves AFTER the ask went out and BEFORE the device answers.
+    act(() => {
+      useLandingPanelStore.getState().activateTab("other-instance");
+    });
+
+    await act(async () => {
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
+      await Promise.resolve();
+    });
+
+    // The popup still lands - a tab with no row would be unreachable - it just
+    // does not take a selection that is no longer the one it was asked from.
+    await waitFor(() => {
+      expect(browserTabs()).toHaveLength(3);
+    });
+    expect(browserTabs().map((tab) => tab.tabId)).toContain("popup-tab");
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "other-instance",
+    );
+  });
+
+  // A chooser the reader opened is a LATER choice than the popup, exactly as
+  // it is for a rowless `fulfillPlaceholder` ask: taking the selection would
+  // move it off the row they are looking at and orphan the unpicked row.
+  it("does not take the selection from a chooser opened while a foreground popup was in flight", async () => {
+    const deferred = deferredOpenTab();
+    const { result } = renderOpener(
+      sessionsState({ openTab: deferred.openTab }),
+    );
+    useLandingPanelStore.getState().addTab(RAISING_TAB);
+
+    await act(async () => {
+      result.current.open(
+        RAISING_TAB,
+        "https://example.com/next",
+        "foreground",
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(deferred.calls).toHaveLength(1);
+    });
+
+    act(() => {
+      useLandingPanelStore.getState().openPlaceholder("placeholder-1", 1);
+    });
+
+    await act(async () => {
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(browserTabs()).toHaveLength(2);
+    });
+    expect(useLandingPanelStore.getState().placeholder?.instanceId).toBe(
+      "placeholder-1",
+    );
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "placeholder-1",
+    );
+  });
+
+  // The other half of the same rule, and the reason it is not simply "refuse
+  // whenever the selection differs": closing the opener does not express a
+  // preference about the popup. The store had to put the selection SOMEWHERE,
+  // and a foreground popup is still what the reader asked for. The revision
+  // is what makes that a fact rather than an inference - a close moves the
+  // selection without touching it, so this needs no special case.
+  it("still fronts a foreground popup when the row it was asked from was closed mid-open", async () => {
+    const deferred = deferredOpenTab();
+    const { result } = renderOpener(
+      sessionsState({ openTab: deferred.openTab }),
+    );
+    const store = useLandingPanelStore.getState();
+    store.addTab({
+      kind: "browser",
+      instanceId: "other-instance",
+      hostId: HOST_ID,
+      sessionId: "other-session",
+      tabId: "other-tab",
+      name: "other.example",
+      titleSource: "default",
+    });
+    store.addTab(RAISING_TAB);
+    store.activateTab(RAISING_TAB.instanceId);
+
+    await act(async () => {
+      result.current.open(
+        RAISING_TAB,
+        "https://example.com/next",
+        "foreground",
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(deferred.calls).toHaveLength(1);
+    });
+
+    act(() => {
+      useLandingPanelStore
+        .getState()
+        .closeTab(LANDING_PAGE_ID, RAISING_TAB.instanceId);
+    });
+    // The store's own fallback, not a row the reader picked.
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "other-instance",
+    );
+
+    await act(async () => {
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(browserTabs()).toHaveLength(2);
+    });
+    const popup = browserTabs().find((tab) => tab.tabId === "popup-tab");
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      popup?.instanceId,
+    );
+  });
+
+  // Both moves at once, which is what a row comparison cannot survive: the
+  // opener goes away AND the reader then picks somewhere deliberately. The
+  // opener's absence used to be read as "the store moved this, so the popup
+  // may still front" - and the row the reader chose afterwards was taken.
+  it("does not front a foreground popup when the reader picks a row after the opener was closed", async () => {
+    const deferred = deferredOpenTab();
+    const { result } = renderOpener(
+      sessionsState({ openTab: deferred.openTab }),
+    );
+    const store = useLandingPanelStore.getState();
+    // `fallback-instance` is what closing the opener selects; `chosen-instance`
+    // is where the reader then goes. Two rows, so the two are distinguishable.
+    store.addTab({
+      kind: "browser",
+      instanceId: "fallback-instance",
+      hostId: HOST_ID,
+      sessionId: "fallback-session",
+      tabId: "fallback-tab",
+      name: "fallback.example",
+      titleSource: "default",
+    });
+    store.addTab({
+      kind: "browser",
+      instanceId: "chosen-instance",
+      hostId: HOST_ID,
+      sessionId: "chosen-session",
+      tabId: "chosen-tab",
+      name: "chosen.example",
+      titleSource: "default",
+    });
+    store.addTab(RAISING_TAB);
+    store.activateTab(RAISING_TAB.instanceId);
+
+    await act(async () => {
+      result.current.open(
+        RAISING_TAB,
+        "https://example.com/next",
+        "foreground",
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(deferred.calls).toHaveLength(1);
+    });
+
+    act(() => {
+      useLandingPanelStore
+        .getState()
+        .closeTab(LANDING_PAGE_ID, RAISING_TAB.instanceId);
+      useLandingPanelStore.getState().activateTab("chosen-instance");
+    });
+
+    await act(async () => {
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(browserTabs()).toHaveLength(3);
+    });
+    expect(browserTabs().map((tab) => tab.tabId)).toContain("popup-tab");
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "chosen-instance",
+    );
+  });
+
+  // The serialised queue's own version of the same hole. The reader navigates
+  // while the FIRST popup is in flight; the second is only asked for after
+  // that one settles, so anything sampled at dispatch re-baselines against the
+  // row they navigated to and the second popup takes it.
+  it("does not front a queued popup that was raised before the reader navigated", async () => {
+    const settles: Array<(identity: BrowserOpenedTab) => void> = [];
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserOpenedTab>((resolve) => {
+          settles.push(resolve);
+        }),
+    );
+    const { result } = renderOpener(sessionsState({ openTab }));
+    const store = useLandingPanelStore.getState();
+    store.addTab(RAISING_TAB);
+    store.addTab({
+      kind: "browser",
+      instanceId: "chosen-instance",
+      hostId: HOST_ID,
+      sessionId: "chosen-session",
+      tabId: "chosen-tab",
+      name: "chosen.example",
+      titleSource: "default",
+    });
+    store.activateTab(RAISING_TAB.instanceId);
+
+    // Both raised by the page before the reader does anything.
+    await act(async () => {
+      result.current.open(RAISING_TAB, "https://example.com/a", "foreground");
+      result.current.open(RAISING_TAB, "https://example.com/b", "foreground");
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      useLandingPanelStore.getState().activateTab("chosen-instance");
+    });
+
+    // The first settles - correctly quiet - and only THEN is the second asked.
+    await act(async () => {
+      settles[0]?.({
+        sessionId: "raising-session",
+        tabId: "popup-a",
+        handoffToken: null,
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(2);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "chosen-instance",
+    );
+
+    await act(async () => {
+      settles[1]?.({
+        sessionId: "raising-session",
+        tabId: "popup-b",
+        handoffToken: null,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(browserTabs()).toHaveLength(4);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "chosen-instance",
+    );
+  });
+
+  // A CREATION is a choice too, and naming the two selection actions rather
+  // than the property left this out. `claimAskedRow` returns null without
+  // opening a chooser when the strip already has rows, so `app.terminal.new`
+  // lands its terminal through `fulfillPlaceholder(tab, null)` - which takes
+  // the selection while no chooser is up. With only `activateTab` and
+  // `openPlaceholder` bumping, the revision sat still and the late popup took
+  // the terminal the reader had just asked for.
+  it("does not front a popup over a terminal created while it was in flight", async () => {
+    const deferred = deferredOpenTab();
+    const { result } = renderOpener(
+      sessionsState({ openTab: deferred.openTab }),
+    );
+    const store = useLandingPanelStore.getState();
+    store.addTab(RAISING_TAB);
+    store.activateTab(RAISING_TAB.instanceId);
+
+    await act(async () => {
+      result.current.open(
+        RAISING_TAB,
+        "https://example.com/next",
+        "foreground",
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(deferred.calls).toHaveLength(1);
+    });
+
+    // Exactly the call `addTerminalTab` makes when `claimAskedRow()` answered
+    // `null`: no chooser was ever opened, so nothing in the old writer set
+    // ran.
+    act(() => {
+      useLandingPanelStore.getState().fulfillPlaceholder(
+        {
+          kind: "terminal",
+          instanceId: "created-terminal",
+          sessionId: "created-session",
+          hostId: HOST_ID,
+          cwd: "/tmp",
+          name: "zsh",
+          titleSource: "default",
+        },
+        null,
+      );
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "created-terminal",
+    );
+
+    await act(async () => {
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(browserTabs()).toHaveLength(2);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "created-terminal",
+    );
+  });
+
+  // The same shape through the other creation writer the enumeration turned
+  // up: a provider sign-in's "Start again" lands its terminal with `addTab`,
+  // which activates and never went near a chooser either.
+  it("does not front a popup over a tab added by an explicit create", async () => {
+    const deferred = deferredOpenTab();
+    const { result } = renderOpener(
+      sessionsState({ openTab: deferred.openTab }),
+    );
+    const store = useLandingPanelStore.getState();
+    store.addTab(RAISING_TAB);
+    store.activateTab(RAISING_TAB.instanceId);
+
+    await act(async () => {
+      result.current.open(
+        RAISING_TAB,
+        "https://example.com/next",
+        "foreground",
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(deferred.calls).toHaveLength(1);
+    });
+
+    act(() => {
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
+        instanceId: "sign-in-terminal",
+        sessionId: "sign-in-session",
+        hostId: HOST_ID,
+        cwd: "/tmp",
+        name: "Claude sign-in",
+        titleSource: "manual",
+        origin: "provider-login",
+      });
+    });
+
+    await act(async () => {
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(browserTabs()).toHaveLength(2);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "sign-in-terminal",
+    );
+  });
+
   // A page can emit two `window.open` calls in one tick. A single pending SLOT
   // let the second overwrite the first before either was dispatched, so one of
   // the two popups vanished with no refusal and no toast.

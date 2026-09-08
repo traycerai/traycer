@@ -590,6 +590,36 @@ export function browserSessionsRefusal(
 }
 
 /**
+ * What main answers an open with when the window already holds its allowance
+ * of `browser.sessions` streams.
+ *
+ * Shared rather than a literal in main, because the renderer has to tell this
+ * `failed` apart from every other one and the difference decides what a
+ * failure MEANS for the window's capacity. A cap refusal is answered before a
+ * stream is created, so it can never have freed anything; a failure to OPEN is
+ * reported by a stream main admitted and is dropping, which hands its place
+ * back to the window. The renderer re-asks the refused on the second and must
+ * not on the first - re-asking on a refusal that freed nothing is a spin
+ * between two coordinators that can only refuse each other.
+ *
+ * It is a sufficient condition and not an exact one, deliberately: a fatal the
+ * HOST closed the stream with also reads as "not a cap refusal" while main
+ * still holds the registration. That costs one open per failure and cannot
+ * spin, because the refusal it produces is this message again - which sweeps
+ * nothing. The reverse mistake could not be made safe, so this is the side to
+ * be imprecise on.
+ */
+export const BROWSER_SESSIONS_WINDOW_CAP_MESSAGE =
+  "This window has too many browser sessions open.";
+
+/** Was this `failed` the per-window stream cap turning an open away? */
+export function isBrowserSessionsWindowCapRefusal(
+  errorMessage: string | null,
+): boolean {
+  return errorMessage === BROWSER_SESSIONS_WINDOW_CAP_MESSAGE;
+}
+
+/**
  * The renderer's name for one stream. Main keys its own streams by this plus
  * the sender's window id, and never dedupes across windows: one subscriber is
  * one Electron lifecycle owner, so collapsing two windows onto one would put

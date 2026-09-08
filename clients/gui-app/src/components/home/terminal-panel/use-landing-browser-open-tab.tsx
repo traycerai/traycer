@@ -12,7 +12,10 @@ import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-s
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
+import {
+  useLandingPanelStore,
+  type LandingBrowserTabRef,
+} from "@/stores/home/landing-panel-store";
 import type { LandingBrowserSessionEntries } from "./landing-terminal-authority-fleet";
 import { LandingBrowserLinkOpener } from "./landing-browser-link-opener";
 import { defaultLandingBrowserTitle } from "./use-landing-browser-reconciliation";
@@ -310,6 +313,15 @@ export interface LandingBrowserLinkRequest {
   readonly sessionId: string;
   readonly url: string;
   readonly disposition: LandingBrowserLinkDisposition;
+  /**
+   * `selectionRevision` as the page raised this ask, which is what decides
+   * whether the answer may still take the selection. Recorded HERE and not
+   * where the request is dispatched: asks are serialised per device, so a
+   * popup waiting behind another one is dispatched after the reader may have
+   * navigated, and reading the revision there would re-baseline against a row
+   * this ask has nothing to do with.
+   */
+  readonly selectionRevision: number;
   /** Distinguishes a second identical ask from the first one. */
   readonly requestId: string;
 }
@@ -384,6 +396,8 @@ export function useLandingBrowserOpenLink(args: {
       url: string,
       disposition: LandingBrowserLinkDisposition,
     ): void => {
+      const selectionRevision =
+        useLandingPanelStore.getState().selectionRevision;
       setQueues((current) => {
         const pending = current[tab.hostId] ?? [];
         if (pending.length >= MAX_PENDING_LINK_OPENS_PER_HOST) return current;
@@ -396,6 +410,7 @@ export function useLandingBrowserOpenLink(args: {
               sessionId: tab.sessionId,
               url,
               disposition,
+              selectionRevision,
               requestId: uuidv4(),
             },
           ],

@@ -1983,20 +1983,21 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       expect(mocks.browserStreamHostIds).toEqual(["host-3", "host-4"]);
     });
 
-    // The other half of the lease. Rotation is a remedy for silence, so a
-    // device that IS answering must not be rotated away from the tombstones it
-    // is in the middle of draining - and a device that stops answering has to
-    // be picked up on that later edge, not only at the moment it mounts.
-    it("leaves an answering device alone, and rotates it away once it goes quiet", async () => {
-      vi.useFakeTimers();
-      const hostIds = ["host-1", "host-2", "host-3"];
-      mocks.entries = hostIds.map(dialable);
-      for (const hostId of hostIds) tombstoneBrowserTab(hostId);
-      // An inventory that still carries the tombstoned tab, and a close that
-      // never settles. The device answers, so it earns its slot - and its
-      // tombstone stays outstanding, which is the only way an ANSWERING device
-      // holds one long enough to starve the queue behind it.
-      const answering = (hostId: string): unknown => ({
+    /**
+     * A device that answers and cannot discharge its tombstones: the
+     * inventory still carries the tab, and the close is refused every time.
+     *
+     * The shape the whole lease turns on. Its close is REFUSED rather than
+     * left hanging because that is what the drain records permanently - the
+     * attempted mark is written against the ready generation, so a rejection
+     * leaves nothing to re-send until a new stream incarnation, and the only
+     * thing that produces one for a device holding a slot is this rotation.
+     */
+    function unclosable(
+      hostId: string,
+      closes: string[],
+    ): Record<string, unknown> {
+      return {
         lifecycle: "live",
         inventoryReady: true,
         items: [
@@ -2007,12 +2008,37 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
             tabs: [{ tabId: `tab-${hostId}` }],
           },
         ],
-        closeTab: () => new Promise<void>(() => undefined),
-      });
-      mocks.browserSessionsByHost = {
-        "host-1": answering("host-1"),
-        "host-2": answering("host-2"),
+        closeTab: () => {
+          closes.push(hostId);
+          return Promise.reject(new Error("the device refused the close"));
+        },
       };
+    }
+
+    /** The same device, but its close is accepted - so its tombstone retires. */
+    function closeable(
+      hostId: string,
+      closes: string[],
+    ): Record<string, unknown> {
+      return {
+        ...unclosable(hostId, closes),
+        closeTab: () => {
+          closes.push(hostId);
+          return Promise.resolve();
+        },
+      };
+    }
+
+    // The other half of the lease. Reaching a device is worth a full budget to
+    // drain in - it is what the budget is sized for - so an inventory arriving
+    // part-way through has to buy the cohort a fresh one rather than let it
+    // expire on the deadline it inherited from its silence.
+    it("gives a device that answers late a fresh budget to drain in", async () => {
+      vi.useFakeTimers();
+      const hostIds = ["host-1", "host-2", "host-3"];
+      mocks.entries = hostIds.map(dialable);
+      for (const hostId of hostIds) tombstoneBrowserTab(hostId);
+      const closes: string[] = [];
       const view = render(<LandingTerminalTombstoneRecoveryBridge />);
       const settle = async (ms: number): Promise<void> => {
         await act(async () => {
@@ -2026,19 +2052,140 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       await settle(0);
       expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
 
-      // Both are publishing, so `host-3` waits however long that takes.
-      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS * 4);
-      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
-
-      // `host-1`'s stream drops. Its lease is not renewed, and this edge -
-      // long after it mounted - is what has to re-arm the rotation.
-      delete mocks.browserSessionsByHost["host-1"];
+      // A third of the way in, one of them finally publishes.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS / 3);
+      mocks.browserSessionsByHost = {
+        "host-1": unclosable("host-1", closes),
+      };
       mocks.browserSessionsRevision += 1;
       await settle(0);
+
+      // Exactly ON the deadline the silent cohort was carrying, which is the
+      // moment it would have rotated, and the slots have not moved: the
+      // answer bought this cohort a budget of its own.
+      await settle((LANDING_BROWSER_RECOVERY_ATTEMPT_MS * 2) / 3);
       expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
 
+      // And no more than one. The budget answering bought runs out on time.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS / 2);
+      expect(mocks.browserStreamHostIds).toEqual(["host-3", "host-1"]);
+    });
+
+    // Answering is not tenure. A slot is for DRAINING, and a device can
+    // publish a perfectly good inventory and still refuse every close in it -
+    // at which point the drain's attempted mark holds until a new stream
+    // incarnation, and this rotation is the only thing that produces one. Two
+    // devices in that state used to hold both slots for the life of the
+    // window, with the lease cancelled outright because everyone had
+    // "answered", and every device behind them waited on a rotation that was
+    // no longer armed.
+    it("rotates an answering device away when its budget runs out with its tombstone still outstanding", async () => {
+      vi.useFakeTimers();
+      const hostIds = ["host-1", "host-2", "host-3"];
+      mocks.entries = hostIds.map(dialable);
+      for (const hostId of hostIds) tombstoneBrowserTab(hostId);
+      const closes: string[] = [];
+      mocks.browserSessionsByHost = {
+        "host-1": unclosable("host-1", closes),
+        "host-2": unclosable("host-2", closes),
+      };
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+      const settle = async (ms: number): Promise<void> => {
+        await act(async () => {
+          vi.advanceTimersByTime(ms);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      };
+      await settle(0);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+      // Both were asked, and both said no - so neither tombstone drained and
+      // neither device is going to leave the candidate list on its own.
+      expect([...closes].sort()).toEqual(["host-1", "host-2"]);
+
+      // Redden: with the lease cancelled on "everyone answered", `host-3`
+      // never mounts and its tombstones can never drain.
       await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS);
-      expect(mocks.browserStreamHostIds).toEqual(["host-2", "host-3"]);
+      expect(mocks.browserStreamHostIds).toEqual(["host-3", "host-1"]);
+    });
+
+    // CONVERGENCE, which is where the rotation cannot help at all: with one
+    // device there is nothing to rotate, the effect returns before arming
+    // anything, and a healthy live stream need never reconnect - so the ready
+    // generation the mark was set against never moves again. Reading the lease
+    // as the retry trigger stranded this tab for the life of the window.
+    it("retries a refused close for the only device, with no contention to rotate on", async () => {
+      vi.useFakeTimers();
+      mocks.entries = [dialable("host-1")];
+      tombstoneBrowserTab("host-1");
+      const closes: string[] = [];
+      mocks.browserSessionsByHost = {
+        "host-1": unclosable("host-1", closes),
+      };
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+      const settle = async (ms: number): Promise<void> => {
+        await act(async () => {
+          vi.advanceTimersByTime(ms);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      };
+      await settle(0);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1"]);
+      expect(closes).toHaveLength(1);
+
+      // No rotation is owed and none happens - the device still holds its slot
+      // for the whole run, because nobody else wants it.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS * 2);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1"]);
+      // Redden: without the drain's own ladder this stays at one forever.
+      expect(closes.length).toBeGreaterThan(1);
+    });
+
+    // The same convergence reached from the other side: three devices, two of
+    // them drain successfully, and the third loses its rotation precisely
+    // BECAUSE the queue behind it emptied. Its refused close still has to be
+    // re-sent.
+    it("retries a refused close once the other devices drain and the contention is gone", async () => {
+      vi.useFakeTimers();
+      const hostIds = ["host-1", "host-2", "host-3"];
+      mocks.entries = hostIds.map(dialable);
+      for (const hostId of hostIds) tombstoneBrowserTab(hostId);
+      const closes: string[] = [];
+      // `host-1` refuses; the other two accept, which retires their tombstones
+      // and takes them out of the candidate list.
+      mocks.browserSessionsByHost = {
+        "host-1": unclosable("host-1", closes),
+        "host-2": closeable("host-2", closes),
+        "host-3": closeable("host-3", closes),
+      };
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+      const settle = async (ms: number): Promise<void> => {
+        await act(async () => {
+          vi.advanceTimersByTime(ms);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      };
+      // No time passes here: each pass is a device draining and the next
+      // taking its slot, which is a re-render rather than a deadline.
+      for (let pass = 0; pass < 4; pass += 1) await settle(0);
+
+      // Only `host-1` is left holding a tombstone, so it is the only candidate
+      // and the lease correctly arms nothing.
+      expect(mocks.browserStreamHostIds).toEqual(["host-1"]);
+      const before = closes.filter((hostId) => hostId === "host-1").length;
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS * 2);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1"]);
+      expect(
+        closes.filter((hostId) => hostId === "host-1").length,
+      ).toBeGreaterThan(before);
     });
   });
 });

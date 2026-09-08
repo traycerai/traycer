@@ -52,12 +52,6 @@ export function LandingBrowserLinkOpener(props: {
         throw new Error(landingBrowserCapMessage());
       }
       const opened = await sessions.openTab(pending.sessionId, pending.url);
-      // Read AFTER the await, not before it: the reader can move to another
-      // row - or close the one they were on - while the device is answering,
-      // and "the tab being read" is the row that is active when the popup
-      // ARRIVES, not the one that was active when it was asked for.
-      const previousActiveInstanceId =
-        useLandingPanelStore.getState().activeInstanceId;
       const store = useLandingPanelStore.getState();
       const tab: LandingBrowserTabRef = {
         kind: "browser",
@@ -68,18 +62,20 @@ export function LandingBrowserLinkOpener(props: {
         name: pending.url,
         titleSource: "default",
       };
-      store.addTab(tab);
-      // `addTab` activates what it adds, which is right for a foreground open
-      // and wrong for a background one - so the background arm puts the
-      // selection back where the reader left it. `activateTab` ignores an id
-      // the store no longer holds, so a row closed mid-open leaves the new tab
-      // active rather than nothing.
-      if (
-        pending.disposition === "background" &&
-        previousActiveInstanceId !== null
-      ) {
-        store.activateTab(previousActiveInstanceId);
-      }
+      // Not `addTab`, which activates whatever it adds. A foreground popup
+      // may only take a selection the reader has not moved since the ask -
+      // the same protection `fulfillPlaceholder` gives the direct open, which
+      // page popups were bypassing - and a background one never takes it at
+      // all, so the strip is written once rather than activated and put back.
+      //
+      // The revision rides on the request from where the page raised it. Not
+      // read here: this runs when the ask reaches the head of its device's
+      // queue, which is after any popup ahead of it has landed and after
+      // anything the reader did in the meantime.
+      store.addPageOpenedTab(tab, {
+        foreground: pending.disposition === "foreground",
+        selectionRevision: pending.selectionRevision,
+      });
       return tab;
     },
     onError: (cause: Error) => {

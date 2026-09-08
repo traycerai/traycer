@@ -5,6 +5,7 @@ import {
   type FakeStreamSession,
 } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { BROWSER_SESSIONS_WINDOW_CAP_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
   acquireBrowserSessionsCoordinator,
@@ -302,6 +303,97 @@ describe("browser sessions coordinator registry", () => {
     });
     bystander.release();
     expect(harness.clients).toHaveLength(4);
+  });
+
+  // The OTHER edge main frees a slot on, and the one nothing in this renderer
+  // used to watch. A stream main had already ADMITTED - it recorded its
+  // identity, so it was counting against the window - can fail while resolving
+  // the directory, and main drops it from its registry there. That hands a
+  // place back with no consumer having been released, so a coordinator the cap
+  // refused stayed failed until some unrelated provider happened to unmount.
+  it("re-asks a cap-refused coordinator when an admitted stream fails to open", () => {
+    const harness = createTransportHarness();
+    const refused = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: harness.openTransport,
+    });
+    soleSession(soleClient(harness.clients)).emitFatal(
+      BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
+    );
+    expect(browserSessionsCoordinatorState(refused.key)?.lifecycle).toBe(
+      "failed",
+    );
+
+    const admitted = acquire({
+      scope: epicScope("epic-2"),
+      openTransport: harness.openTransport,
+    });
+    expect(harness.clients).toHaveLength(2);
+    const admittedClient = harness.clients.at(1);
+    if (admittedClient === undefined) {
+      throw new Error("expected a second client");
+    }
+    // Not the cap message: main admitted this stream and is dropping it, so
+    // the window is one stream lighter than it was.
+    soleSession(admittedClient).emitFatal("This host is not in the directory.");
+    expect(browserSessionsCoordinatorState(admitted.key)?.lifecycle).toBe(
+      "failed",
+    );
+
+    expect(harness.clients).toHaveLength(3);
+    expect(browserSessionsCoordinatorState(refused.key)?.lifecycle).toBe(
+      "live",
+    );
+  });
+
+  // The refusal itself frees nothing - main answers it before it creates a
+  // stream - so it must sweep nothing. Two coordinators the cap turned away
+  // would otherwise refuse each other in a loop the renderer never leaves.
+  it("does not re-ask on a cap refusal, and re-asks only what the cap refused", () => {
+    const harness = createTransportHarness();
+    const first = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: harness.openTransport,
+    });
+    const second = acquire({
+      scope: epicScope("epic-2"),
+      openTransport: harness.openTransport,
+    });
+    soleSession(soleClient(harness.clients)).emitFatal(
+      BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
+    );
+    const secondClient = harness.clients.at(1);
+    if (secondClient === undefined) throw new Error("expected a second client");
+    soleSession(secondClient).emitFatal(BROWSER_SESSIONS_WINDOW_CAP_MESSAGE);
+
+    // Neither refusal opened anything: no third transport was minted.
+    expect(harness.clients).toHaveLength(2);
+    expect(browserSessionsCoordinatorState(first.key)?.lifecycle).toBe(
+      "failed",
+    );
+    expect(browserSessionsCoordinatorState(second.key)?.lifecycle).toBe(
+      "failed",
+    );
+
+    // And a stream that failed for a reason of its own is not re-asked by the
+    // freeing edge either - only the cap-refused are, which is what bounds
+    // the chain: two undialable hosts would each free a place the other's
+    // failure swept on, forever.
+    const undialable = acquire({
+      scope: epicScope("epic-3"),
+      openTransport: harness.openTransport,
+    });
+    const undialableClient = harness.clients.at(2);
+    if (undialableClient === undefined) {
+      throw new Error("expected a third client");
+    }
+    soleSession(undialableClient).emitFatal("This host cannot be dialed.");
+    // Two retries, for the two cap-refused coordinators, and none for the
+    // undialable one that just failed.
+    expect(harness.clients).toHaveLength(5);
+    expect(browserSessionsCoordinatorState(undialable.key)?.lifecycle).toBe(
+      "failed",
+    );
   });
 
   it("keys two scopes on the same host and identity into two coordinators, independent of scope field order", () => {

@@ -354,11 +354,73 @@ export interface LandingPanelPlaceholder {
   readonly index: number;
 }
 
+/**
+ * What a page-raised popup may claim of the strip when it finally lands.
+ *
+ * `selectionRevision` is read when the page RAISES the ask, not when the
+ * device is asked and not when it answers. Those differ, and each difference
+ * was a way to steal the selection: reading at settlement can only ever say
+ * "nobody moved", and reading when the request leaves the queue re-reads a row
+ * the reader chose while an earlier popup was still in flight, which makes the
+ * second popup look like it was raised from there.
+ */
+export interface LandingPageOpenedClaim {
+  /**
+   * Whether this popup was meant to take the selection at all. A background
+   * open (middle / ctrl / cmd click) never is, so it lands without touching
+   * the selection rather than taking it and putting it back - the one
+   * exception being a strip with nothing selected, where there is no reader
+   * position to preserve and an unselected row would be unreachable.
+   */
+  readonly foreground: boolean;
+  /** {@link LandingPanelStoreState.selectionRevision} when the page asked. */
+  readonly selectionRevision: number;
+}
+
 export interface LandingPanelStoreState {
   readonly tabs: ReadonlyArray<LandingPanelTabRef>;
   readonly activeInstanceId: string | null;
   /** The unpicked new-tab row, or `null`. Never persisted. */
   readonly placeholder: LandingPanelPlaceholder | null;
+  /**
+   * How many times the selection has been DECIDED, this session. Never
+   * persisted.
+   *
+   * The distinction `activeInstanceId` cannot draw. A snapshot of which row is
+   * active says where the selection IS, never how it got there, and those are
+   * different facts: closing a tab moves the selection because
+   * {@link nextActiveInstanceId} had to put it somewhere, while clicking a tab
+   * or creating one moves it because something decided to. An answer that
+   * arrives late needs the second question - "has the selection been decided
+   * since I was asked for?" - and inferring it from the first is guesswork
+   * that a closed row makes wrong.
+   *
+   * The rule is INTENT, and naming the actions instead is how this grew a hole
+   * the first time: "bumped by `activateTab` and `openPlaceholder`" described
+   * the two writers that existed rather than the property, and a terminal
+   * created while the strip already had rows reaches the selection through
+   * `fulfillPlaceholder` with no chooser involved - so the revision sat still
+   * while the reader watched a terminal they had just asked for get taken by a
+   * late popup.
+   *
+   * So: every writer of `activeInstanceId` in this store bumps, EXCEPT the two
+   * kinds that decide nothing.
+   *
+   * - it REPAIRS a dangling selection after a removal - `closeTab`,
+   *   `removeExitedTab`, `removeHostTerminal`, `applyReconciliationSlice`,
+   *   `dismissPlaceholder`. Each is `nextActiveInstanceId` putting the
+   *   selection somewhere legal, which says nothing about what anyone wants.
+   * - it IS the late answer asking - {@link addPageOpenedTab}. A claimant
+   *   cannot also be the evidence its claim is tested against.
+   *
+   * Everything else decides: `activateTab`, `openPlaceholder`, `addTab`, and
+   * `fulfillPlaceholder` on the branches where it activates. That includes
+   * arrivals nobody typed for - reconciliation's auto-spawn lands through
+   * `fulfillPlaceholder` too - because the question is whether the selection
+   * moved on purpose, not whether a human moved it. A row the app deliberately
+   * put the reader on is one an older popup must not take.
+   */
+  readonly selectionRevision: number;
   readonly layoutsByLandingPageId: Readonly<
     Partial<Record<string, LandingPanelLayout>>
   >;
@@ -422,6 +484,21 @@ export interface LandingPanelStoreState {
     maximized: boolean,
   ) => void;
   readonly addTab: (tab: LandingPanelTabRef) => void;
+  /**
+   * Lands a tab the PAGE raised, and lets it take the selection only if the
+   * reader has not chosen a different row since it was asked for.
+   *
+   * The same ownership question {@link fulfillPlaceholder} answers, asked by a
+   * caller that has no row to name: a popup is not a chooser the reader
+   * opened, so there is no placeholder instance to match on. What it carries
+   * instead is the selection revision from when the page raised it, and the
+   * rule is the one its sibling uses - the answer may take the selection while
+   * the reader has not moved it, and lands quietly once they have.
+   */
+  readonly addPageOpenedTab: (
+    tab: LandingPanelTabRef,
+    claim: LandingPageOpenedClaim,
+  ) => void;
   readonly activateTab: (instanceId: string) => void;
   readonly renameTab: (instanceId: string, name: string) => void;
   /** Refreshes a derived title without overwriting a user rename. */
@@ -520,8 +597,13 @@ function initialPersistedLandingPanelState(): PersistedLandingPanelState {
 
 function initialLandingPanelState(): PersistedLandingPanelState & {
   readonly placeholder: LandingPanelPlaceholder | null;
+  readonly selectionRevision: number;
 } {
-  return { ...initialPersistedLandingPanelState(), placeholder: null };
+  return {
+    ...initialPersistedLandingPanelState(),
+    placeholder: null,
+    selectionRevision: 0,
+  };
 }
 
 export function landingPanelLayoutFor(
@@ -696,16 +778,42 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
         ),
       addTab: (tab) =>
         set((state) => {
+          // Both arms DECIDE: the sole caller is the provider sign-in's
+          // "Start again", which is a gesture, and the existing-tab arm is
+          // that gesture landing on the session it already made.
+          const selectionRevision = state.selectionRevision + 1;
           const existing = findEquivalentTab(state.tabs, tab);
           if (existing !== undefined) {
             return {
               activeInstanceId: existing.instanceId,
+              selectionRevision,
             };
           }
           return {
             tabs: [...state.tabs, tab],
             activeInstanceId: tab.instanceId,
+            selectionRevision,
           };
+        }),
+      addPageOpenedTab: (tab, claim) =>
+        set((state) => {
+          const existing = findEquivalentTab(state.tabs, tab);
+          const landed = existing?.instanceId ?? tab.instanceId;
+          const tabs = existing === undefined ? [...state.tabs, tab] : null;
+          // A background popup deliberately leaves the reader where they are -
+          // except when there is nowhere to leave them. An empty selection is
+          // what closing the last row leaves behind, and a strip holding rows
+          // with none of them selected is a panel nobody can reach.
+          const wanted = claim.foreground || state.activeInstanceId === null;
+          if (!wanted || !ownsPageOpenedSelection(state, claim)) {
+            // The strip still gains the tab; only the selection is withheld.
+            // A popup with no row would be unreachable, which is the same
+            // reason `fulfillPlaceholder` lands a tab that lost its row.
+            return tabs === null ? state : { tabs };
+          }
+          return tabs === null
+            ? { activeInstanceId: landed }
+            : { tabs, activeInstanceId: landed };
         }),
       // The placeholder is activatable like any other strip row: it is a real
       // tab from the user's side, and `⌘1`-`⌘9` / clicking it must reach it.
@@ -713,7 +821,16 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
         set((state) =>
           state.tabs.some((tab) => tab.instanceId === instanceId) ||
           state.placeholder?.instanceId === instanceId
-            ? { activeInstanceId: instanceId }
+            ? {
+                activeInstanceId: instanceId,
+                // Every caller of this action is someone choosing a row: a
+                // click, a `⌘n`, a command that opens a tab the reader already
+                // has, or a page-opened tab the reconciler adopted for them.
+                // The programmatic landings go through the actions that do NOT
+                // bump, which is what keeps a queued popup's claim alive when
+                // its sibling lands first.
+                selectionRevision: state.selectionRevision + 1,
+              }
             : state,
         ),
       renameTab: (instanceId, name) => {
@@ -753,14 +870,21 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
       openPlaceholder: (instanceId, index) =>
         set((state) => {
           const existing = state.placeholder;
+          // A `+` is a choice whether it opens the chooser or focuses the one
+          // already up, so both arms bump.
+          const selectionRevision = state.selectionRevision + 1;
           if (existing !== null) {
-            return { activeInstanceId: existing.instanceId };
+            return { activeInstanceId: existing.instanceId, selectionRevision };
           }
           const placeholder: LandingPanelPlaceholder = {
             instanceId,
             index: clampPlaceholderIndex(index, state.tabs.length),
           };
-          return { placeholder, activeInstanceId: placeholder.instanceId };
+          return {
+            placeholder,
+            activeInstanceId: placeholder.instanceId,
+            selectionRevision,
+          };
         }),
       fulfillPlaceholder: (tab, forPlaceholderInstanceId) =>
         set((state) => {
@@ -780,6 +904,11 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
               ? state.placeholder === null
               : state.placeholder?.instanceId === forPlaceholderInstanceId;
           const existing = findEquivalentTab(state.tabs, tab);
+          // Only the branches that take the selection bump it. A create that
+          // LOST its row lands quietly and decides nothing, so it must not
+          // invalidate an answer that is still owed one - the same reason the
+          // quiet branch does not touch `placeholder` either.
+          const selectionRevision = state.selectionRevision + 1;
           if (existing !== undefined) {
             // Not ours to clear, and not ours to select: the row this answered
             // is gone, and the placeholder on screen belongs to someone else.
@@ -787,6 +916,7 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
             return {
               placeholder: null,
               activeInstanceId: existing.instanceId,
+              selectionRevision,
             };
           }
           if (!ownsRow) return { tabs: [...state.tabs, tab] };
@@ -794,6 +924,7 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
             tabs: fulfilledTabs(state.tabs, state.placeholder, tab),
             placeholder: null,
             activeInstanceId: tab.instanceId,
+            selectionRevision,
           };
         }),
       dismissPlaceholder: () =>
@@ -1038,6 +1169,36 @@ function findEquivalentTab(
     (entry) =>
       entry.instanceId === tab.instanceId || landingTabRefKey(entry) === key,
   );
+}
+
+/**
+ * May a landing popup take the selection?
+ *
+ * The rowless half of {@link LandingPanelStoreActions.fulfillPlaceholder}'s
+ * rule, for a caller whose ask never had a row to name.
+ *
+ * "The reader has not moved" is read off
+ * {@link LandingPanelStoreState.selectionRevision} rather than compared
+ * against the row that was active when the ask was raised, and that is the
+ * whole of it. A row comparison cannot tell a choice from a fallback: closing
+ * the opener moves the selection without expressing anything about the popup,
+ * so the popup must still front - but the same comparison then also fronts it
+ * over a row the reader picked AFTER that close, because from one snapshot the
+ * two are the same picture. The revision records which of the two happened
+ * instead of inferring it, so both cases come out right and there is no
+ * residual ambiguity to document.
+ */
+function ownsPageOpenedSelection(
+  state: Pick<LandingPanelStoreState, "placeholder" | "selectionRevision">,
+  claim: LandingPageOpenedClaim,
+): boolean {
+  // A chooser is a LATER choice than this popup, whatever it is showing, and
+  // it is a term of its own rather than a consequence of the revision: a
+  // chooser opened BEFORE the page raised this ask is already counted in the
+  // claim, and consuming its row would still move the selection off what the
+  // reader is looking at. Same rule `fulfillPlaceholder` gives a rowless ask.
+  if (state.placeholder !== null) return false;
+  return state.selectionRevision === claim.selectionRevision;
 }
 
 function clampPlaceholderIndex(index: number, length: number): number {

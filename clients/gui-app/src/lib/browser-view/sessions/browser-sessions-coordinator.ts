@@ -10,7 +10,10 @@ import type {
   BrowserViewBridge,
   BrowserViewNativeTabCapability,
 } from "@traycer-clients/shared/platform/browser-view";
-import { browserSessionsStreamKeyId } from "@traycer-clients/shared/platform/browser-view";
+import {
+  browserSessionsStreamKeyId,
+  isBrowserSessionsWindowCapRefusal,
+} from "@traycer-clients/shared/platform/browser-view";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
@@ -398,7 +401,7 @@ export function acquireBrowserSessionsCoordinator(args: {
 
 /**
  * Re-asks every coordinator in this renderer whose stream FAILED, on the edge
- * that can have made room for it: another coordinator's stream just closed.
+ * a consumer release makes room on: this coordinator's stream just closed.
  *
  * The case is the desktop's per-window stream cap. A window already holding
  * its allowance of `browser.sessions` streams is refused a new one with a
@@ -406,10 +409,14 @@ export function acquireBrowserSessionsCoordinator(args: {
  * stays mounted under its key, so a slot freeing later restarts nothing.
  * The Start Page's recovery streams can be what fill the window (one per
  * device a tombstone still names), and the coordinator refused is then a
- * visible one: the panel's, or a canvas tile's. A release is the one edge this
- * renderer sees a slot free on, so it is where the refused are asked again.
- * A stream that failed for another reason is re-asked too; that costs one
- * open per release, and only while it stays failed.
+ * visible one: the panel's, or a canvas tile's.
+ *
+ * Every failed coordinator is re-asked here, not only the cap-refused ones. A
+ * release is a discrete gesture in the UI rather than something a retry can
+ * produce, so the sweep cannot re-trigger itself however the retries land;
+ * that costs one open per release, and only while a stream stays failed.
+ * {@link retryCapRefusedCoordinators} is the same idea on the edge main frees
+ * a slot on by itself, where that guarantee does NOT hold.
  *
  * Ordering: the released coordinator's close went to main before these opens
  * (`stop()` inside `dispose()` sends it), and main handles a renderer's
@@ -418,6 +425,41 @@ export function acquireBrowserSessionsCoordinator(args: {
 function retryFailedCoordinators(): void {
   for (const coordinator of browserSessionsCoordinators.values()) {
     if (coordinator.state.lifecycle === "failed") coordinator.state.retry();
+  }
+}
+
+/**
+ * Re-asks the coordinators the CAP turned away, on the other edge a slot
+ * frees on: a stream main had already admitted has just failed to open.
+ *
+ * Main answers a cap refusal before it creates a stream, so a refusal frees
+ * nothing. Every other `failed` comes from a stream main registered and is
+ * now dropping (`BrowserSessionsStream.failToOpen`), and that stream was
+ * counting against the window from the moment it recorded its identity -
+ * before the directory read whose failure lands here. So its removal hands a
+ * place back with no React consumer having been released, and without this
+ * nothing in the renderer would notice: a visible coordinator refused by the
+ * cap stayed failed until some unrelated provider happened to unmount.
+ *
+ * Only the CAP-REFUSED are re-asked, and that is what keeps this terminating.
+ * A retry that is refused again reports the cap message, which sweeps nothing;
+ * a retry that fails for any other reason has itself freed the place it took,
+ * so sweeping again is answering a second real edge. Either way a coordinator
+ * leaves the cap-refused set the first time it is re-asked and never returns
+ * to it within one chain, so the chain is bounded by the number of refused
+ * coordinators. Re-asking every failed coordinator instead would spin: two
+ * undialable hosts would each free a slot the other's failure swept on,
+ * forever.
+ */
+function retryCapRefusedCoordinators(): void {
+  // Materialized first: `retry()` restarts a stream, and a restart is free to
+  // publish synchronously into whatever this iteration would visit next.
+  for (const coordinator of [...browserSessionsCoordinators.values()]) {
+    if (coordinator.state.lifecycle !== "failed") continue;
+    if (!isBrowserSessionsWindowCapRefusal(coordinator.state.errorMessage)) {
+      continue;
+    }
+    coordinator.state.retry();
   }
 }
 
@@ -723,6 +765,11 @@ function createBrowserSessionsCoordinator(args: {
           ? allocateConnectionGeneration()
           : coordinator.state.connectionGeneration,
     });
+    // AFTER the patch, so this coordinator is already carrying the message the
+    // sweep reads it by and cannot be re-asked as one of its own targets.
+    if (next === "failed" && !isBrowserSessionsWindowCapRefusal(errorMessage)) {
+      retryCapRefusedCoordinators();
+    }
   };
 
   const onFrame = (frame: BrowserSessionsUxServerFrame): void => {

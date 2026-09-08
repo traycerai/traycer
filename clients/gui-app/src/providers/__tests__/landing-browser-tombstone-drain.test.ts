@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
   useLandingPanelStore,
   type LandingBrowserPendingKill,
@@ -57,6 +57,7 @@ describe("landingBrowserTombstoneDecision", () => {
       sessions: null,
       attemptedGeneration: null,
       generation: 1,
+      retryDue: false,
     });
 
     expect(action).toBe("wait");
@@ -73,6 +74,7 @@ describe("landingBrowserTombstoneDecision", () => {
       sessions,
       attemptedGeneration: null,
       generation: 1,
+      retryDue: false,
     });
 
     expect(action).toBe("wait");
@@ -92,6 +94,7 @@ describe("landingBrowserTombstoneDecision", () => {
       sessions,
       attemptedGeneration: null,
       generation: 1,
+      retryDue: false,
     });
 
     expect(action).toBe("close");
@@ -105,6 +108,7 @@ describe("landingBrowserTombstoneDecision", () => {
       sessions,
       attemptedGeneration: null,
       generation: 1,
+      retryDue: false,
     });
 
     expect(action).toBe("clear");
@@ -124,6 +128,7 @@ describe("landingBrowserTombstoneDecision", () => {
       sessions,
       attemptedGeneration: 3,
       generation: 3,
+      retryDue: false,
     });
 
     expect(action).toBe("wait");
@@ -146,6 +151,7 @@ describe("landingBrowserTombstoneDecision", () => {
       sessions,
       attemptedGeneration: 2,
       generation: 3,
+      retryDue: false,
     });
 
     expect(action).toBe("close");
@@ -169,6 +175,7 @@ describe("landingBrowserTombstoneDecision", () => {
       sessions,
       attemptedGeneration: null,
       generation: 1,
+      retryDue: false,
     });
 
     expect(action).toBe("clear");
@@ -188,6 +195,7 @@ describe("landingBrowserTombstoneDecision", () => {
       sessions,
       attemptedGeneration: null,
       generation: 1,
+      retryDue: false,
     });
 
     expect(action).toBe("clear");
@@ -203,6 +211,12 @@ describe("landingBrowserTombstoneDecision", () => {
 describe("useLandingBrowserTombstoneDrain", () => {
   afterEach(() => {
     cleanup();
+    // Restored HERE and not at the end of the test that fakes them: a test
+    // body that fails leaves its `useRealTimers` unreached, and every `waitFor`
+    // after it in this file then hangs against a clock nothing advances - which
+    // reads as an unrelated 20-second timeout rather than as the one real
+    // failure.
+    vi.useRealTimers();
     useLandingPanelStore.getState().resetForTests();
   });
 
@@ -276,6 +290,63 @@ describe("useLandingBrowserTombstoneDrain", () => {
     await waitFor(() => {
       expect(closeTab).toHaveBeenCalledTimes(2);
     });
+  });
+
+  // The ladder is per CONNECTION, and that is a claim about ordering inside
+  // `scheduleBrowserCloseRetry` rather than about the generation field it
+  // stores. With the armed-timer reuse guard ahead of the staleness discard, a
+  // ladder that had climbed on generation 1 kept its long timer across a
+  // reconnect and generation 2's rejection scheduled nothing at all - so the
+  // tab waited out the old interval, holding its capacity, instead of the
+  // fresh 500ms a new connection is owed.
+  //
+  // Driven as the real sequence - climb, reconnect, reject - and read as the
+  // interval that actually follows, because a test that asserted the record's
+  // shape would have passed against the broken order too.
+  it("climbs a fresh ladder after a reconnect, rather than waiting out the old interval", async () => {
+    vi.useFakeTimers();
+    const closeTab = vi.fn(() => Promise.reject(new Error("device refused")));
+    const pending = pendingKill({});
+    const view = renderHook(
+      (sessions: BrowserSessionsState) =>
+        useLandingBrowserTombstoneDrain({
+          pendingKills: [pending],
+          browserSessions: { [HOST_ID]: sessions },
+        }),
+      { initialProps: liveSessionsWithTab(closeTab) },
+    );
+    const advance = async (ms: number): Promise<void> => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
+
+    // Climb: the first close goes out at once, and each rejection arms the
+    // next step at double the last - 500, 1000, 2000.
+    await advance(0);
+    expect(closeTab).toHaveBeenCalledTimes(1);
+    await advance(500);
+    expect(closeTab).toHaveBeenCalledTimes(2);
+    await advance(1000);
+    expect(closeTab).toHaveBeenCalledTimes(3);
+    await advance(2000);
+    expect(closeTab).toHaveBeenCalledTimes(4);
+    // A 4000ms step is now armed and unexpired. That timer is what used to
+    // survive the reconnect below.
+
+    // Reconnect. The generation edge re-arms the send on its own, so this
+    // close is immediate rather than a ladder step.
+    view.rerender(sessionsState({ closeTab, inventoryReady: false }));
+    await advance(0);
+    view.rerender(liveSessionsWithTab(closeTab));
+    await advance(0);
+    expect(closeTab).toHaveBeenCalledTimes(5);
+
+    // And THAT rejection is the one the old order dropped. A fresh ladder puts
+    // the next attempt 500ms out; the stale one would leave the tombstone
+    // waiting on what remained of the 4000ms step.
+    await advance(500);
+    expect(closeTab).toHaveBeenCalledTimes(6);
   });
 
   it("clears the tombstone without a close once a ready inventory no longer lists the tab", async () => {

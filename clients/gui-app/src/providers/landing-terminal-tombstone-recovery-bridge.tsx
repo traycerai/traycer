@@ -223,6 +223,14 @@ function landingTombstoneRouteReady(
  * `connecting` that may never connect, a `failed` refusal, an `unsupported`
  * host that can never answer at all. None of them is worth a slot the queue
  * behind them could use.
+ *
+ * It renews the lease ONCE, and does not end it. A snapshot says the device
+ * can be reached, which is what earns a full budget to drain in; it says
+ * nothing about whether the closes that follow are accepted, so a device that
+ * answers and cannot discharge its tombstones still gives up the slot when
+ * that budget runs out. See the lease effect for the starvation that
+ * distinction fixes - and note that giving up the slot is a fairness outcome,
+ * not the retry: the drain's own ladder owns that.
  */
 function landingBrowserRecoveryAnswering(
   sessions: BrowserSessionsState | null,
@@ -232,11 +240,22 @@ function landingBrowserRecoveryAnswering(
 }
 
 /**
+ * What joins host ids into a recovery key. NUL cannot occur in a host id, so
+ * the key IS the content - the same encoding the authority fleet uses for its
+ * own host key.
+ *
+ * Named rather than written at each join: three keys are built from it and one
+ * split reads them back, and a separator that disagreed between two of them
+ * would compare as a cohort change on every render.
+ */
+const RECOVERY_HOST_KEY_SEPARATOR = "\u0000";
+
+/**
  * The host ids a recovery key names. `[].join()` is `""`, which splits to one
  * empty id rather than to nothing - the case an empty mount list is.
  */
 function splitRecoveryHostKey(key: string): readonly string[] {
-  return key.length === 0 ? [] : key.split("\u0000");
+  return key.length === 0 ? [] : key.split(RECOVERY_HOST_KEY_SEPARATOR);
 }
 
 function landingTerminalTombstoneDrainability(
@@ -795,14 +814,6 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     },
     [],
   );
-  /**
-   * The same entries, read by the rotation timer when it fires. See that
-   * effect for why the timer cannot take them as a dependency.
-   */
-  const browserSessionsRef = useRef(browserSessions);
-  useEffect(() => {
-    browserSessionsRef.current = browserSessions;
-  }, [browserSessions]);
   // Coarse, through the canonical rule. The edge this watches is "a route to
   // that host exists again", because what it does on that edge is send an RPC —
   // there is no copy here and nobody sees this. Asking `dialableHostEndpoint`
@@ -928,11 +939,12 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
    * `indeterminate` entry deliberately - so the two devices at the head of the
    * list can be silent ones, and a fixed oldest-first selection would park
    * every device behind them forever. `landing-browser-recovery-slots` leases
-   * the slots instead: answer and keep yours, stay silent through the attempt
-   * budget and go to the back of the queue with your tombstones intact.
+   * the slots instead: hold one for an attempt budget, which answering buys
+   * once more of, and go to the back of the queue with your tombstones intact
+   * when it runs out with them still outstanding.
    *
-   * Every yield is also a coordinator RELEASE, which is the edge
-   * `retryFailedCoordinators` re-asks a refused visible coordinator on.
+   * Every yield is also a coordinator RELEASE, which is one of the two edges
+   * `browser-sessions-coordinator` re-asks a refused visible coordinator on.
    */
   const browserHostIds = useMemo(
     () =>
@@ -944,18 +956,24 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     [browserCandidateHostIds, recoveryQueue],
   );
   /**
-   * Is every device holding a slot making progress right now?
+   * Which devices holding a slot have answered - published an inventory.
    *
-   * A BOOLEAN and not the entries themselves, because this is a dependency of
-   * the lease timer below: `browserSessions` changes identity on every frame an
+   * A KEY and not the entries themselves, because this is a dependency of the
+   * lease timer below: `browserSessions` changes identity on every frame an
    * answering device publishes, so depending on it would restart that timer
-   * forever and the queue behind a chatty device would never move. This flips
-   * only when the answer does - which is exactly when the lease is worth
+   * forever and the queue behind a chatty device would never move. This moves
+   * only when an answer does - which is exactly when the lease is worth
    * re-deciding.
+   *
+   * Per DEVICE and no longer a single "all of them" boolean, because what the
+   * lease does with the answer changed: an answer buys a device a fresh
+   * budget, so the lease has to know which devices have spent theirs.
    */
-  const browserMountsAllAnswering = browserHostIds.every((hostId) =>
-    landingBrowserRecoveryAnswering(browserSessions[hostId] ?? null),
-  );
+  const browserAnsweringKey = browserHostIds
+    .filter((hostId) =>
+      landingBrowserRecoveryAnswering(browserSessions[hostId] ?? null),
+    )
+    .join(RECOVERY_HOST_KEY_SEPARATOR);
   /**
    * The two lists as SEMANTIC keys, which is what the lease below depends on.
    *
@@ -969,11 +987,12 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
    * once per budget never rotates at all - the starvation the lease exists to
    * prevent, reintroduced by the dependency array.
    *
-   * Joined on NUL, which cannot occur in a host id, so the key IS the
-   * content - the same encoding the authority fleet uses for its own host key.
+   * Joined on {@link RECOVERY_HOST_KEY_SEPARATOR}, so the key IS the content.
    */
-  const browserCandidateKey = browserCandidateHostIds.join("\u0000");
-  const browserMountedKey = browserHostIds.join("\u0000");
+  const browserCandidateKey = browserCandidateHostIds.join(
+    RECOVERY_HOST_KEY_SEPARATOR,
+  );
+  const browserMountedKey = browserHostIds.join(RECOVERY_HOST_KEY_SEPARATOR);
   /**
    * The mounted cohort's deadline, kept across re-renders.
    *
@@ -982,28 +1001,62 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
    * full budget there would let a slow drip of real changes park the queue just
    * as effectively. So the deadline belongs to the COHORT: while the same
    * devices hold the slots, a re-run resumes the remaining time rather than
-   * starting over. Only a different cohort earns a fresh budget, which is
-   * exactly what a new cohort is owed.
+   * starting over. A different cohort earns a fresh budget, which is exactly
+   * what a new cohort is owed - and so does a device in this one ANSWERING for
+   * the first time, which is the one other thing worth spending budget on.
+   *
+   * `answered` is what bounds that second renewal. It is the set of devices in
+   * this cohort that have published an inventory at any point during it, so it
+   * only ever grows and a device that flaps ready renews once rather than on
+   * every reconnect. A cohort therefore holds its slots for at most one budget
+   * per device in it, whatever the fleet does underneath.
    */
   const browserLeaseRef = useRef<{
     readonly cohortKey: string;
+    readonly answered: ReadonlySet<string>;
     readonly dueAtMs: number;
   } | null>(null);
   /**
-   * The cohort's lease: one deadline per mounted set, and whoever is still not
-   * answering when it expires goes to the back of the queue.
+   * The cohort's lease: one deadline per mounted set, and whoever is still
+   * holding a tombstone when it expires goes to the back of the queue.
    *
    * Armed only when there is somewhere for a slot to GO. With no more
    * candidates than slots every device already holds one, so yielding would
    * re-select the same list and buy nothing - the stream's own reconnect is
-   * what keeps trying there. And armed again if a device that WAS answering
-   * goes quiet, which is the same starvation arriving late.
+   * what keeps trying there.
+   *
+   * An inventory EXTENDS the lease and does not cancel it, and that difference
+   * is the whole point of this deadline. Cancelling on "everyone answered" read
+   * a snapshot as the end of the story, but the slot is for DRAINING and a
+   * device can answer and still never discharge its tombstones - a `closeTab`
+   * the host refuses leaves the tombstone standing. Two answering devices in
+   * that state held both slots for the life of the window, and every device
+   * behind them waited on a rotation that was no longer armed.
+   *
+   * What this lease owes them is a TURN, and nothing more than that. It is not
+   * what re-sends a refused close: `landing-browser-tombstone-drain` runs its
+   * own ladder for that, because a refusal has to be retried whether or not
+   * anyone else wants the slot - and when nobody does, this effect correctly
+   * returns above without arming anything at all.
+   *
+   * So the deadline is spent against progress that ARRIVED, not progress that
+   * is possible: answering buys a full budget to drain in, and a device still
+   * holding a tombstone after it has had its turn at a scarce slot.
    *
    * The lists are read back out of the keys rather than closed over, so this
    * effect sees the CURRENT candidates and mounts on every run it makes -
    * including the run a new tombstone triggers - while depending on nothing
-   * that changes without them. Who is silent is re-read from the sessions ref
-   * when the timer fires, because a device has the whole budget to answer.
+   * that changes without them.
+   *
+   * Everything mounted yields, with no second look at who answered: a device
+   * that drained what it was mounted for stops being a candidate, which
+   * changes the cohort and clears this timer before it can fire. So a mounted
+   * device still here at the deadline is by construction one that has not
+   * finished, whether it never spoke, was refused, or is still waiting on a
+   * close the host has not answered. It keeps its tombstones and its ladder
+   * either way - a yield costs it the slot, never an attempt. `yieldLandingBrowserRecoveryHosts` drops
+   * whatever left the candidate list in the meantime, which covers the frame
+   * between a drain landing and this bridge re-rendering.
    */
   useEffect(() => {
     const candidateHostIds = splitRecoveryHostKey(browserCandidateKey);
@@ -1012,34 +1065,31 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       browserLeaseRef.current = null;
       return;
     }
-    if (browserMountsAllAnswering) {
-      browserLeaseRef.current = null;
-      return;
-    }
     const nowMs = Date.now();
     const held = browserLeaseRef.current;
-    const lease =
-      held !== null && held.cohortKey === browserMountedKey
-        ? held
-        : {
-            cohortKey: browserMountedKey,
-            dueAtMs: nowMs + LANDING_BROWSER_RECOVERY_ATTEMPT_MS,
-          };
+    const carried = held?.cohortKey === browserMountedKey ? held : null;
+    const answered = new Set([
+      ...(carried?.answered ?? []),
+      ...splitRecoveryHostKey(browserAnsweringKey),
+    ]);
+    const renewed =
+      carried === null || answered.size > carried.answered.size
+        ? nowMs + LANDING_BROWSER_RECOVERY_ATTEMPT_MS
+        : carried.dueAtMs;
+    const lease = {
+      cohortKey: browserMountedKey,
+      answered,
+      dueAtMs: renewed,
+    };
     browserLeaseRef.current = lease;
     const timer = setTimeout(
       () => {
-        const sessions = browserSessionsRef.current;
-        const silent = mountedHostIds.filter(
-          (hostId) =>
-            !landingBrowserRecoveryAnswering(sessions[hostId] ?? null),
-        );
-        if (silent.length === 0) return;
         browserLeaseRef.current = null;
         setRecoveryQueue((queue) =>
           yieldLandingBrowserRecoveryHosts({
             queue,
             candidateHostIds,
-            yieldingHostIds: silent,
+            yieldingHostIds: mountedHostIds,
           }),
         );
       },
@@ -1048,7 +1098,7 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     return () => {
       clearTimeout(timer);
     };
-  }, [browserCandidateKey, browserMountedKey, browserMountsAllAnswering]);
+  }, [browserCandidateKey, browserMountedKey, browserAnsweringKey]);
   useLandingBrowserTombstoneDrain({
     pendingKills: browserPendingKills,
     browserSessions,

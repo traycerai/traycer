@@ -18,6 +18,7 @@ import type {
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
+  BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
   browserSessionsError,
   browserSessionsLifecycle,
   browserSessionsStreamKeyId,
@@ -277,20 +278,32 @@ export class BrowserSessionsRegistry {
       // Reported as `failed`, exactly like a stream that could not reach a
       // socket: a silent refusal leaves the renderer's session in `connecting`
       // for the life of the window, with nothing to retry and nothing to show.
+      //
+      // The message is shared with the renderer rather than written here,
+      // because this is the one `failed` that hands NO place back: the return
+      // above is taken before a stream exists, so nothing was admitted and
+      // nothing is being dropped. See {@link BROWSER_SESSIONS_WINDOW_CAP_MESSAGE}.
       this.deps.emit(windowId, {
         key,
         event: {
           kind: "status",
           lifecycle: "failed",
-          errorMessage: "This window has too many browser sessions open.",
+          errorMessage: BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
         },
       });
       return;
     }
     const stream = new BrowserSessionsStream(windowId, key, this.deps, () => {
-      // A stream that will never reach a socket is not holding a place under
+      // A stream that will never reach a socket stops holding a place under
       // the cap: it is dropped from the map by the same edge that reported
       // `failed` to the renderer, and re-opening it is one invoke away.
+      //
+      // It WAS holding one - `start()` records the identity before the
+      // directory read that fails here, so `holdsConnection` is true
+      // throughout - which makes this delete a place handed back to the
+      // window without any renderer having released a stream. The renderer
+      // reads that from the failure itself, by the message: this one is not
+      // {@link BROWSER_SESSIONS_WINDOW_CAP_MESSAGE}, so a place freed.
       if (this.streams.get(id) !== stream) return;
       this.streams.delete(id);
       stream.dispose();

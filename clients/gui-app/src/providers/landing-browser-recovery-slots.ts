@@ -11,9 +11,18 @@
  * of the list starve every device behind them, and their tombstones - which are
  * the reason the bridge exists - never drain.
  *
- * So a slot is a LEASE. A device holds it while it is making progress and goes
- * to the back of the queue otherwise, keeping its tombstones. Nothing is ever
- * dropped; only the order and the concurrency are decided here.
+ * So a slot is a LEASE. A device holds it for an attempt budget and goes to
+ * the back of the queue when that runs out with its tombstones still
+ * outstanding, keeping them. Reaching the device buys one more budget rather
+ * than tenure: a slot is for DRAINING, and a device that answers and cannot
+ * discharge its tombstones is holding one the queue behind it could use.
+ * Nothing is ever dropped; only the order and the concurrency are decided
+ * here.
+ *
+ * Concurrency, and only concurrency. Whether a refused close is ever sent
+ * again is not this module's question - `landing-browser-tombstone-drain`
+ * answers it on a timer of its own, precisely because a device with no queue
+ * behind it is never rotated and still has a tombstone to discharge.
  *
  * Pure, and the whole policy: the bridge supplies the evidence and the clock.
  */
@@ -23,9 +32,10 @@
  * a turn.
  *
  * A stream that reaches its device answers with a snapshot as its first frame,
- * so this is not a "how fast is the device" budget - it is how long a silent
- * one may keep a slot another device could use. Long enough for a cold relay
- * dial and a host still starting up, short enough that a queue of unreachable
+ * so this is not a "how fast is the device" budget - it is how long a device
+ * may keep a slot without discharging what it was given one for. Long enough
+ * for a cold relay dial and a host still starting up, and then once more for
+ * the closes that follow the snapshot, short enough that a queue of stuck
  * devices rotates within a minute or so per slot.
  */
 export const LANDING_BROWSER_RECOVERY_ATTEMPT_MS = 30_000;
