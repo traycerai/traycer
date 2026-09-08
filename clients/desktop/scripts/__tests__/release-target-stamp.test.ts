@@ -452,6 +452,47 @@ describe("cliInstallRoot and hostInstallRoot must be home-relative", () => {
     ).toThrow(/must name a directory under the home directory/);
   });
 
+  it('rejects a "." segment that names the home directory itself', () => {
+    // The sibling of the bare `~/` case above. `.` is a legal character in a
+    // plain name (`.traycer`), so the `[A-Za-z0-9._-]` allowlist accepts a
+    // segment that is nothing but a dot, and the `..` check does not fire.
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "~/.";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/names no directory/);
+  });
+
+  it('rejects an interior "." navigation segment', () => {
+    // Not an escape - it resolves to the same directory. It is refused because
+    // these values are joined and compared as STRINGS by consumers that never
+    // normalize, so a second spelling of one directory is a value that
+    // resolves equal and compares unequal.
+    const stamp = cliStamp();
+    stamp.hostInstallRoot = "~/.traycer/./host";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/names no directory/);
+  });
+
+  it('rejects a "..." run that Windows would silently trim', () => {
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "~/.../cli";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/names no directory/);
+  });
+
+  it("still accepts a leading dot in a real directory name", () => {
+    // The negative control for the three above: `.traycer` must survive, or
+    // the rule would have been "no dots" and every shipped root would fail.
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "~/.traycer/cli/staging";
+    expect(
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toMatchObject({ cliInstallRoot: "~/.traycer/cli/staging" });
+  });
+
   it('rejects a backslash escape that survives split("/") as one segment', () => {
     // `windowsLauncherPath` converts "/" to "\\", so a literal backslash in
     // the value is already a separator on the Windows side even though
@@ -486,6 +527,29 @@ function productionDesktopStamp(): Stamp {
   stamp.target = "production";
   stamp.environment = "production";
   stamp.releaseChannel = "stable";
+  return toProductionInstallIdentity(stamp);
+}
+
+/**
+ * Flips the install-identity keys to their production values.
+ *
+ * Shared by the two production fixtures rather than spelled out in each,
+ * because the identity is a SET: `productionDesktopStamp` previously flipped
+ * only `target`/`environment`/`releaseChannel` and kept the staging identity
+ * below - a production stamp naming the staging Scheduled Task, which is
+ * precisely the defect the identity check exists to refuse. Splitting the flip
+ * across call sites is how that happens; one helper is how it stops.
+ *
+ * `desktopStamp()` spreads `cliStamp()`, so a desktop stamp carries
+ * `serviceLabelId` even though `COMPONENT_KEYS.desktop` does not require it -
+ * and the check reads every identity key that is PRESENT, not only the
+ * required ones. Both are set here for that reason.
+ */
+function toProductionInstallIdentity(stamp: Stamp): Stamp {
+  stamp.cliInstallRoot = "~/.traycer/cli";
+  stamp.hostInstallRoot = "~/.traycer/host";
+  stamp.serviceLabelId = "ai.traycer.host";
+  stamp.windowsTaskName = "\\Traycer\\Host";
   return stamp;
 }
 
@@ -544,6 +608,90 @@ describe("desktop releaseChannel enforcement", () => {
         "desktop",
       ),
     ).toThrow(/releaseChannel/);
+  });
+});
+
+// `serviceLabelId` and `windowsTaskName` are the only stamped values a second
+// process DERIVES instead of reading: the CLI computes both from
+// `config.environment` and never consults the stamp. The stamp's copies exist
+// so the NSIS uninstaller can name the CLI's Scheduled Task without importing
+// the CLI - so a value that is merely a non-empty string points the uninstaller
+// at a task that was never registered, and the real host keeps restarting after
+// the app is removed.
+//
+// `clients/traycer-cli/src/service/__tests__/label.test.ts` holds the other
+// half: that the pinned table equals what `serviceLabelFor`/`windowsTaskName`
+// actually produce. These cases only check that the stamp is held to the table.
+describe("install identity must match the target", () => {
+  function productionCliStamp(): Stamp {
+    const stamp = cliStamp();
+    stamp.target = "production";
+    stamp.environment = "production";
+    return toProductionInstallIdentity(stamp);
+  }
+
+  it("rejects a one-character windowsTaskName typo on a desktop stamp", () => {
+    // Syntactically perfect, passes `windowsTaskFolder`'s one-folder shape
+    // check in `release-target-electron-builder.cjs`, and stops nothing.
+    const stamp = desktopStamp();
+    stamp.windowsTaskName = "\\Traycer\\Host-Stagin";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/windowsTaskName/);
+  });
+
+  it("rejects a serviceLabelId typo on a cli stamp", () => {
+    const stamp = cliStamp();
+    stamp.serviceLabelId = "ai.traycer.host.stagin";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/serviceLabelId/);
+  });
+
+  it("rejects the PRODUCTION identity on a staging stamp", () => {
+    // The consequential direction: a staging build whose uninstaller stops
+    // `\Traycer\Host` takes down the developer's production host.
+    const stamp = cliStamp();
+    stamp.serviceLabelId = "ai.traycer.host";
+    stamp.windowsTaskName = "\\Traycer\\Host";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/serviceLabelId/);
+  });
+
+  it("rejects the STAGING identity on a production stamp", () => {
+    const stamp = productionCliStamp();
+    stamp.windowsTaskName = "\\Traycer\\Host-Staging";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "production", "cli"),
+    ).toThrow(/windowsTaskName/);
+  });
+
+  it("accepts each target's own identity", () => {
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(cliStamp()),
+        "staging",
+        "cli",
+      ),
+    ).toMatchObject({
+      serviceLabelId: "ai.traycer.host.staging",
+      windowsTaskName: "\\Traycer\\Host-Staging",
+    });
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(productionCliStamp()),
+        "production",
+        "cli",
+      ),
+    ).toMatchObject({
+      serviceLabelId: "ai.traycer.host",
+      windowsTaskName: "\\Traycer\\Host",
+    });
   });
 });
 

@@ -1,5 +1,7 @@
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { serviceLabelFor, windowsTaskName } from "../label";
+import type { Environment } from "../../runner/environment";
 import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
 describe("serviceLabelFor", () => {
@@ -52,4 +54,52 @@ describe("serviceLabelFor", () => {
     });
     expect(windowsTaskName(label)).toBe("\\Traycer\\Host-Staging");
   });
+});
+
+// The release stamp carries `serviceLabelId` / `windowsTaskName` so the
+// packaging path can name the CLI's OS-service registration without importing
+// this module - the NSIS uninstaller stops and deletes the task by that name.
+// The CLI never reads them back: it derives its own from `config.environment`
+// through the two functions above. So the stamp's copies are a DUPLICATE of
+// this derivation, and a divergence is silent - the uninstaller acts on a task
+// that was never registered while the real one keeps restarting the host.
+//
+// `release-target-stamp.cjs` pins the values rather than computing them,
+// because it is CommonJS build tooling that cannot import this TypeScript.
+// This is the one place both halves are reachable at once, so this is where
+// the duplication is held to account: change either side alone and this
+// reddens. Required by `createRequire` rather than imported, the same way
+// `clients/desktop/scripts/__tests__/release-target-stamp.test.ts` reaches it,
+// so no package dependency is implied by the assertion.
+describe("the release stamp's install identity matches what the CLI registers", () => {
+  const requireCjs = createRequire(import.meta.url);
+  const { REQUIRED_INSTALL_IDENTITY } = requireCjs(
+    "../../../../scripts/release-target-stamp.cjs",
+  ) as {
+    readonly REQUIRED_INSTALL_IDENTITY: Record<
+      string,
+      { readonly serviceLabelId: string; readonly windowsTaskName: string }
+    >;
+  };
+
+  // Driven off the table's own keys so a target added there without a
+  // derivation check here cannot slip through as an untested row.
+  const targets: readonly Environment[] = ["production", "staging"];
+
+  it("covers exactly the shipped release targets", () => {
+    expect(Object.keys(REQUIRED_INSTALL_IDENTITY).sort()).toEqual(
+      [...targets].sort(),
+    );
+  });
+
+  for (const target of targets) {
+    it(`derives the ${target} stamp's serviceLabelId and windowsTaskName`, () => {
+      const label = serviceLabelFor(target);
+
+      expect({
+        serviceLabelId: label.id,
+        windowsTaskName: windowsTaskName(label),
+      }).toEqual(REQUIRED_INSTALL_IDENTITY[target]);
+    });
+  }
 });

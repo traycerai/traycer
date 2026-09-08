@@ -714,7 +714,12 @@ export async function checkForUpdatesNow(
   if (stagingReleaseAuthRequired()) {
     const token = await prepareStagingUpdateToken();
     if (token === null) {
-      emitStagingAuthUnavailable(intent, AUTHENTICATION_REQUIRED_MESSAGE, "");
+      emitStagingAuthUnavailable(
+        intent,
+        AUTHENTICATION_REQUIRED_MESSAGE,
+        "",
+        null,
+      );
       return currentSnapshot;
     }
     stagingUpdateToken = token;
@@ -795,7 +800,12 @@ export async function checkForUpdatesNow(
   } catch (err) {
     if (isStagingAuthFailure(err)) {
       const rejectedToken = discardStagingUpdateTokenForLog();
-      emitStagingAuthUnavailable(checkIntent ?? intent, err, rejectedToken);
+      emitStagingAuthUnavailable(
+        checkIntent ?? intent,
+        err,
+        rejectedToken,
+        null,
+      );
     } else {
       log.warn("[updater] check failed", credentialSafeLogValue(err));
       emitCheckErrorFromCatch(err, checkIntent ?? intent);
@@ -816,8 +826,20 @@ function emitStagingAuthUnavailable(
   intent: DesktopAppUpdateCheckIntent,
   reason: unknown,
   rejectedToken: string,
+  settlement: Masked404Settlement | null,
 ): void {
-  if (checkInFlight && checkErrorEmitted) return;
+  // Two sources for one question - "has the outcome of this check already been
+  // published?" - because the flags that answer it are only valid while the
+  // check is running. A SYNCHRONOUS caller reads them live. A SETTLEMENT reads
+  // the answer it captured when the error was observed, because by the time it
+  // resolves the check's `finally` has set `checkInFlight = false` and
+  // `checkErrorEmitted = false`, and the live flags would say "nothing has been
+  // published" about a check that published moments ago.
+  const alreadyHandled =
+    settlement === null
+      ? checkInFlight && checkErrorEmitted
+      : settlement.duringCheck;
+  if (alreadyHandled) return;
   if (checkInFlight) checkErrorEmitted = true;
   log.warn(
     "[updater] staging update unavailable",
@@ -1973,10 +1995,12 @@ async function assertStagingRepositoryVisible(
 }
 
 // Fetches a candidate's channel manifest bytes for validation. An HTTP error
-// (404/403 - a broken or unpublished manifest) returns null so discovery treats
-// the release as unusable and falls back to the next; a transport-level failure
-// rejects so a genuine connectivity problem surfaces as a discovery error rather
-// than a false "up to date".
+// (403, or a 404 that survives the credential probe below - a broken or
+// unpublished manifest) returns null so discovery treats the release as
+// unusable and falls back to the next; a transport-level failure rejects so a
+// genuine connectivity problem surfaces as a discovery error rather than a
+// false "up to date". A 404 that the probe resolves to a rejected credential
+// rejects too, for the same reason.
 async function fetchDesktopReleaseManifest(
   request: {
     readonly url: string;
@@ -1989,6 +2013,27 @@ async function fetchDesktopReleaseManifest(
     signal,
   });
   if (!response.ok) {
+    // The THIRD masked-404 site, and the last one: `fetchStagingGitHubRelease`
+    // has exactly three call sites in this file - the release listing (guarded
+    // above), the visibility probe itself (which must not recurse), and this.
+    //
+    // It is the only one whose failure mode is silent. The listing throws and
+    // the download emits an error; this returns `null`, which discovery reads
+    // as "unusable release, try the next one". So a credential that lost
+    // access AFTER `/releases` answered - the private asset request is a
+    // separate authorization - masks every candidate as unpublished, and the
+    // check reports the client UP TO DATE while keeping the rejected lease
+    // cached for every later check in the process. A wrong verdict that looks
+    // like a right one.
+    //
+    // Resolved through the same probe, on the 404 path only and only when a
+    // token is actually configured (`stagingCredentialRejected` gates both).
+    // A probe that cannot answer - offline, rate limited - returns false and
+    // leaves this release merely unusable, which is the same fail-safe
+    // direction discovery and `settleMasked404` take.
+    if (response.status === 404 && (await stagingCredentialRejected(signal))) {
+      throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
+    }
     return null;
   }
   return response.text();
@@ -2231,7 +2276,7 @@ function handleUpdaterError(error: unknown): void {
     return;
   }
   if (isStagingAuthFailure(error)) {
-    emitStagingAuthRejection(error);
+    emitStagingAuthRejection(error, null);
     return;
   }
   // The MASKED-404 half of the same question, asked on behalf of the paths
@@ -2258,7 +2303,8 @@ function handleUpdaterError(error: unknown): void {
     // The only asynchronous branch in this handler, so it is also the only one
     // that can turn a throwing listener into an unhandled rejection instead of
     // propagating to the emitter. Terminate the chain here.
-    void settleMasked404(error).catch((settleError: unknown) => {
+    const settlement: Masked404Settlement = { duringCheck: checkInFlight };
+    void settleMasked404(error, settlement).catch((settleError: unknown) => {
       log.warn(
         "[updater] masked-404 settle failed",
         credentialSafeLogValue(settleError),
@@ -2269,9 +2315,48 @@ function handleUpdaterError(error: unknown): void {
   emitOrdinaryUpdaterError(error);
 }
 
+/**
+ * What a fire-and-forget masked-404 settlement carries across its own probe.
+ *
+ * `settleMasked404` is the ONLY path in this module that emits after the check
+ * that produced its error has finished: `handleUpdaterError` is a synchronous
+ * listener, so the probe is started and not awaited, and the check's `finally`
+ * clears `checkInFlight` and `checkErrorEmitted` while the request is still
+ * open. So the dedup guard - `checkInFlight && checkErrorEmitted` - was reading
+ * flags that are false BY CONSTRUCTION by the time it ran: on the one path that
+ * needed it, it could never fire.
+ *
+ * The check then published its outcome twice, its own `catch` first and the
+ * settlement behind it. Worse for an AUTOMATIC check, which publishes nothing
+ * when it fails and therefore leaves `currentSnapshot.lastCheckIntent` holding
+ * whatever the user last did: the settlement resolved its intent from that
+ * field - `checkIntent` being null by then - inherited `"manual"`, and
+ * announced "Updates are not available for this build." to a user who had
+ * asked for nothing.
+ *
+ * One captured boolean, and not a captured intent as well: suppressing the
+ * emission answers both, and the extra field turned out to be mechanism whose
+ * removal reddened no test, which is the honest measure of whether it was
+ * carrying anything.
+ */
+interface Masked404Settlement {
+  /**
+   * Whether a check was in flight when the error was observed. That check's own
+   * `catch` publishes the terminal outcome for it, so a settlement arriving
+   * behind one must not publish a second - it still discards the lease, which
+   * is the half only it can decide.
+   */
+  readonly duringCheck: boolean;
+}
+
 // The rejected-credential outcome, shared by the synchronous 401/403 verdict
 // and the asynchronous masked-404 one so both discard the lease identically.
-function emitStagingAuthRejection(error: unknown): void {
+// `settlement` is null for the synchronous caller, whose coordination state is
+// still live.
+function emitStagingAuthRejection(
+  error: unknown,
+  settlement: Masked404Settlement | null,
+): void {
   const intent =
     downloadIntent ??
     checkIntent ??
@@ -2280,7 +2365,7 @@ function emitStagingAuthRejection(error: unknown): void {
   const rejectedToken = discardStagingUpdateTokenForLog();
   downloadInProgress = false;
   downloadIntent = null;
-  emitStagingAuthUnavailable(intent, error, rejectedToken);
+  emitStagingAuthUnavailable(intent, error, rejectedToken, settlement);
 }
 
 /**
@@ -2303,8 +2388,11 @@ function isStagingMasked404Candidate(error: unknown): boolean {
  * rate limited) leaves the original error standing and the lease untouched,
  * which is the same fail-safe direction discovery takes.
  */
-async function settleMasked404(error: unknown): Promise<void> {
-  const rejected = await stagingCredentialRejected();
+async function settleMasked404(
+  error: unknown,
+  settlement: Masked404Settlement,
+): Promise<void> {
+  const rejected = await stagingCredentialRejected(undefined);
   // Re-checked AFTER the probe, not before. `handleUpdaterError` applies this
   // guard on entry so a late error cannot clobber a finished download; putting
   // a request in front of the decision widens exactly that window, so the
@@ -2314,13 +2402,15 @@ async function settleMasked404(error: unknown): Promise<void> {
     return;
   }
   if (rejected) {
-    emitStagingAuthRejection(error);
+    emitStagingAuthRejection(error, settlement);
     return;
   }
   emitOrdinaryUpdaterError(error);
 }
 
-async function stagingCredentialRejected(): Promise<boolean> {
+async function stagingCredentialRejected(
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
   const coordinate = resolveUpdateRepo();
   if (coordinate === null) return false;
   const token = currentPrivateUpdateToken().trim();
@@ -2332,7 +2422,7 @@ async function stagingCredentialRejected(): Promise<boolean> {
         accept: "application/vnd.github+json",
         authorization: `token ${token}`,
       },
-      undefined,
+      signal,
     );
     return false;
   } catch (probeError) {
@@ -2361,6 +2451,11 @@ function emitOrdinaryUpdaterError(error: unknown): void {
     });
     return;
   }
+  // Always false on a settlement, and deliberately so rather than by accident:
+  // either a check was in flight when the error was observed, and its own catch
+  // has already published that check's outcome, or none was and there is no
+  // check for this error to be the outcome OF. The download arm above is the
+  // only one a settlement can reach.
   if (!checkInFlight) {
     return;
   }

@@ -17,6 +17,46 @@ const REQUIRED_RELEASE_CHANNEL = {
   production: "stable",
   staging: "staging",
 };
+// The install identity each target must stamp, pinned to exact values for the
+// same reason `releaseChannel` is - and for a sharper one.
+//
+// These two keys are the ONLY stamped values a SECOND process derives
+// independently instead of reading: the CLI never consumes them. It computes
+// its own from `config.environment` alone - `serviceLabelFor(env).id` and
+// `windowsTaskName(serviceLabelFor(env))` in
+// `clients/traycer-cli/src/service/label.ts`. The stamp's copies exist so the
+// packaging path can name the CLI's registration without importing the CLI,
+// and a value that merely IS a non-empty string satisfies every other check
+// here while naming a service that does not exist:
+//
+//   - `windowsTaskName` is written into the NSIS uninstaller
+//     (`TRAYCER_WINDOWS_TASK_NAME` / `_FOLDER` in
+//     `release-target-electron-builder.cjs`). A typo such as
+//     `\Traycer\Host-Stagin` passes, and the uninstaller then stops and
+//     deletes a task the CLI never registered - leaving the real staging Host
+//     scheduled to restart after the app is removed.
+//   - `serviceLabelId` is the macOS half of the same bug. The internal repo's
+//     `release-target.cjs` only checks it against `mac.launchAgentLabel`
+//     (`<id>.agent`), so a typo that is spelled consistently in BOTH is
+//     self-consistent there and still mismatches the LaunchAgent the CLI
+//     registers.
+//
+// Pinned rather than cross-checked against the CLI, because these values are
+// read by build tooling that cannot import the CLI's TypeScript. The lockstep
+// is asserted from the CLI side instead, in
+// `clients/traycer-cli/src/service/__tests__/label.test.ts`, so a change to
+// `serviceLabelFor`/`windowsTaskName` reddens there rather than shipping a
+// silent divergence.
+const REQUIRED_INSTALL_IDENTITY = {
+  production: {
+    serviceLabelId: "ai.traycer.host",
+    windowsTaskName: "\\Traycer\\Host",
+  },
+  staging: {
+    serviceLabelId: "ai.traycer.host.staging",
+    windowsTaskName: "\\Traycer\\Host-Staging",
+  },
+};
 // Scalar keys must be non-empty strings; structured keys are checked by shape
 // below. Keeping the two sets apart is what makes a `null` scalar fail here
 // instead of being packaged as `appId: null` or `schemes: [null]`.
@@ -162,6 +202,26 @@ function requireHomeRelativePath(value, where) {
       `${where} must stay inside the home directory, got ${JSON.stringify(value)}`,
     );
   }
+  // The `..` branch above owns its own message; this catches every OTHER
+  // dots-only segment, which the allowlist below cannot: `.` is a legal
+  // character in a plain name (`.traycer`), so `^[A-Za-z0-9._-]+$` accepts a
+  // bare `.` and every longer run of dots.
+  //
+  // `~/.` is the empty-segment defect above wearing a different spelling - it
+  // resolves to the home directory ITSELF rather than a root under it, which
+  // the emptiness check already refuses for `~/`. `~/.traycer/./cli` is worse
+  // than merely redundant: these values are compared and joined as STRINGS by
+  // consumers that never normalize (`windowsLauncherPath` does a literal
+  // `slice(2)` + `replaceAll("/", "\\")`), so a second spelling of the same
+  // directory is a value that resolves equal and compares unequal. `...` and
+  // longer runs go with them because Windows silently trims trailing dots, so
+  // such a segment names a different directory there than on POSIX.
+  const navigationSegment = segments.find((segment) => /^\.+$/u.test(segment));
+  if (navigationSegment !== undefined) {
+    throw new ClientTargetStampError(
+      `${where} path segment ${JSON.stringify(navigationSegment)} names no directory; every segment must be a real directory name under the home directory. Got ${JSON.stringify(value)}`,
+    );
+  }
   const offending = segments.find(
     (segment) => !HOME_RELATIVE_SEGMENT.test(segment),
   );
@@ -228,6 +288,18 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
     throw new ClientTargetStampError(
       "client target stamp environment must equal target",
     );
+  }
+  // Below the target check, because the target is what these are derived from.
+  // Applied per key IF PRESENT, the same way the install roots are: the CLI
+  // stamp carries both, the desktop stamp only `windowsTaskName`.
+  const requiredIdentity = REQUIRED_INSTALL_IDENTITY[stamp.target];
+  for (const key of ["serviceLabelId", "windowsTaskName"]) {
+    if (!(key in stamp)) continue;
+    if (stamp[key] !== requiredIdentity[key]) {
+      throw new ClientTargetStampError(
+        `client target stamp ${key} ${JSON.stringify(stamp[key])} is not the ${JSON.stringify(stamp.target)} ${key} ${JSON.stringify(requiredIdentity[key])}. The CLI derives this value from its environment and never reads the stamp, so a build stamped with anything else names a service that does not exist.`,
+      );
+    }
   }
   requireScalarKeys(
     stamp.cloud,
@@ -370,6 +442,11 @@ function resolveReleaseRepoForTarget(raw, releaseTarget) {
 module.exports = {
   ClientTargetStampError,
   PRODUCTION_RELEASE_REPO,
+  // Exported for the lockstep assertion in the CLI's own
+  // `service/__tests__/label.test.ts`, which is the only place both this table
+  // and `serviceLabelFor`/`windowsTaskName` are reachable at once. Nothing in
+  // the build path reads it from here.
+  REQUIRED_INSTALL_IDENTITY,
   readClientTargetStamp,
   resolveReleaseRepoForTarget,
   targetInputFromArg,

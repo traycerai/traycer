@@ -3118,6 +3118,286 @@ describe("staging updater release authentication and channel", () => {
     // request is worth spending on it.
     expect(calls).toHaveLength(0);
   });
+
+  // The CHANNEL-MANIFEST counterpart of the listing and download pairs above,
+  // and the last of the three. `fetchStagingGitHubRelease` has exactly three
+  // call sites; this was the only one whose masked 404 was not resolved, and
+  // the only one that fails SILENTLY - it returns null, which discovery reads
+  // as "unusable release, try the next". Access to the repository and access
+  // to a private release asset are separate authorizations, so a credential
+  // can pass `/releases` and be refused here.
+  it("treats a masked manifest 404 as an authentication failure when the repository is invisible, instead of reporting up to date", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater, logger } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.1.gabcdef0";
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        calls.push(String(input));
+        const url = new URL(String(input));
+        // The listing SUCCEEDS - this is the case the listing probe cannot
+        // see, because the credential still reads the repository index.
+        if (url.searchParams.has("per_page")) {
+          return new Response(JSON.stringify([macReleaseFixture(tag, true)]), {
+            status: 200,
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "unavailable",
+      errorMessage: "Updates are not available for this build.",
+    });
+    expect(
+      calls.filter((url) => url.endsWith("/repos/traycerai/traycer-internal")),
+    ).toHaveLength(1);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("first-token");
+
+    // The lease was discarded rather than kept behind a false "up to date".
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe("token second-token");
+  });
+
+  it("leaves a masked manifest 404 as an unusable release when the repository is visible", async () => {
+    // The negative control, and the reason the fix is a probe rather than
+    // "treat manifest 404s as auth failures": an unpublished or half-uploaded
+    // manifest 404s with a perfectly good credential, and that release must
+    // stay merely unusable.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.1.gabcdef0";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response(JSON.stringify([macReleaseFixture(tag, true)]), {
+            status: 200,
+          });
+        }
+        if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot().status).toBe("up-to-date");
+
+    // And the lease survives: nothing rejected it.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe("token first-token");
+  });
+
+  // `settleMasked404` is the only path in this module that emits AFTER the
+  // check that produced its error has finished. `handleUpdaterError` is a
+  // synchronous listener, so it starts the visibility probe without awaiting
+  // it, and the check's `finally` clears `checkIntent` / `checkInFlight` /
+  // `checkErrorEmitted` while the request is still open.
+  //
+  // Both tests here hold the probe open until the check has fully resolved,
+  // which is the ordering the defect needs and which no other test in this
+  // file produces: everywhere else the probe answers immediately, so the
+  // settlement lands while the check is still in flight and the live flags
+  // still happen to be right.
+  describe("a masked-404 settlement that outlives its own check", () => {
+    const TAG = "desktop-v2.0.0-staging.1.gabcdef0";
+
+    /**
+     * Discovery succeeds; the repository-visibility probe hangs until released.
+     *
+     * The listing and manifest must BOTH answer 200 - a 404 on either one runs
+     * its own probe, which this gate would block, and the check would never
+     * reach `autoUpdater.checkForUpdates()` at all.
+     */
+    function deferredProbeFetch(): {
+      readonly fetch: Mock;
+      readonly releaseProbe: () => void;
+    } {
+      let release = (): void => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const router = fetchRouter([macReleaseFixture(TAG, true)], {
+        [TAG]: manifestYamlForTag(TAG, macZipAssetName(TAG)),
+      });
+      return {
+        fetch: vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
+            await gate;
+            return new Response("Not Found", { status: 404 });
+          }
+          return router(input, init) as Promise<Response>;
+        }),
+        releaseProbe: () => {
+          release();
+        },
+      };
+    }
+
+    // Fails the check with a bare 404: `isStagingAuthFailure` matches only
+    // 401/403, so the catch takes the ordinary-error arm while the error event
+    // schedules the masked-404 settlement. That split is the whole setup.
+    function failCheckWithMasked404(autoUpdater: {
+      readonly checkForUpdates: Mock;
+      readonly emit: (event: string, payload: unknown) => void;
+    }): void {
+      autoUpdater.checkForUpdates.mockImplementation(() => {
+        autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
+        return Promise.reject(new Error("HttpError: 404 Not Found"));
+      });
+    }
+
+    it("publishes exactly one terminal outcome for a MANUAL check", async () => {
+      // The duplicate: the dedup guard asked `checkInFlight && checkErrorEmitted`,
+      // and `checkInFlight` is false BY CONSTRUCTION by the time a settlement
+      // resolves - so the guard could never fire on the one path that needed it,
+      // and the check published its outcome twice.
+      process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+      const { autoUpdater, updater } = await loadStagingUpdater();
+      const probe = deferredProbeFetch();
+      vi.stubGlobal("fetch", probe.fetch);
+      await updater.installAutoUpdater(true, makeDeps(true));
+      failCheckWithMasked404(autoUpdater);
+
+      const statuses: string[] = [];
+      const unsubscribe = updater.onAppUpdateChange(
+        (snapshot: { readonly status: string }) => {
+          statuses.push(snapshot.status);
+        },
+      );
+      await updater.checkForUpdatesNow(false, "manual");
+      const afterCheck = [...statuses];
+      expect(afterCheck.at(-1)).toBe("error");
+
+      probe.releaseProbe();
+
+      // THE POSITIVE CONTROL, and the reason it is here rather than at the end.
+      // "no second snapshot appeared" is only evidence if the settlement
+      // actually ran, and draining a fixed number of microtasks does not
+      // establish that - an assertion that can pass by arriving early is not an
+      // assertion. The lease discard is the settlement's own footprint:
+      // `emitStagingAuthRejection` discards it and calls the emitter on the
+      // very next line, so a check that re-authenticates with the NEW env token
+      // proves the emitter has already been reached and declined to publish.
+      // Without the settlement this `waitFor` times out on "token first-token".
+      process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+      const authorizations: Array<string | null> = [];
+      await vi.waitFor(async () => {
+        authorizations.length = 0;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+            authorizations.push(
+              new Headers(init?.headers).get("authorization"),
+            );
+            return new Response(JSON.stringify([]), { status: 200 });
+          }),
+        );
+        await updater.checkForUpdatesNow(false, "automatic");
+        expect(authorizations[0]).toBe("token second-token");
+      });
+      unsubscribe();
+
+      // The settlement published nothing: the only statuses after the manual
+      // check are the follow-up checks' own `up-to-date` rows, and
+      // "unavailable" - the terminal outcome the check already published once
+      // as "error" - never appears at all.
+      expect(statuses.slice(0, afterCheck.length)).toEqual(afterCheck);
+      expect(statuses.filter((status) => status === "unavailable")).toEqual([]);
+    });
+
+    it("publishes nothing user-facing for an AUTOMATIC check that follows a manual one", async () => {
+      // A failing automatic check publishes no snapshot, so `lastCheckIntent`
+      // still holds whatever the user last did. The settlement resolved its
+      // intent from that field - `downloadIntent` and `checkIntent` are both
+      // null by then - so a background check inherited "manual" and announced
+      // "Updates are not available for this build." to a user who had asked
+      // for nothing.
+      process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+      const { autoUpdater, updater } = await loadStagingUpdater();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })),
+      );
+      await updater.installAutoUpdater(true, makeDeps(true));
+
+      // The manual check that leaves "manual" behind in the snapshot.
+      await updater.checkForUpdatesNow(false, "manual");
+      expect(updater.getAppUpdateSnapshot()).toMatchObject({
+        status: "up-to-date",
+        lastCheckIntent: "manual",
+      });
+
+      const probe = deferredProbeFetch();
+      vi.stubGlobal("fetch", probe.fetch);
+      failCheckWithMasked404(autoUpdater);
+
+      // Read the snapshot STREAM, not the final snapshot. The recovery check
+      // below republishes `up-to-date`, so an "unavailable" row emitted in
+      // between would be overwritten and a final-state assertion would pass
+      // over the exact defect it is here to catch.
+      const statuses: string[] = [];
+      const unsubscribe = updater.onAppUpdateChange(
+        (snapshot: { readonly status: string }) => {
+          statuses.push(snapshot.status);
+        },
+      );
+      await updater.checkForUpdatesNow(false, "automatic");
+      probe.releaseProbe();
+
+      // Same positive control as the manual case: the lease discard is the
+      // settlement's own footprint, so re-authenticating with the new env token
+      // proves the emitter was reached and declined to publish.
+      process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+      const authorizations: Array<string | null> = [];
+      await vi.waitFor(async () => {
+        authorizations.length = 0;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+            authorizations.push(
+              new Headers(init?.headers).get("authorization"),
+            );
+            return new Response(JSON.stringify([]), { status: 200 });
+          }),
+        );
+        await updater.checkForUpdatesNow(false, "automatic");
+        expect(authorizations[0]).toBe("token second-token");
+      });
+      unsubscribe();
+
+      // A failing automatic check is silent by design; the settlement behind it
+      // must be too.
+      expect(statuses.filter((status) => status === "unavailable")).toEqual([]);
+    });
+  });
 });
 
 describe("masked 404 in release discovery: no probe without a token", () => {
