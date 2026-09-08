@@ -40,6 +40,7 @@ import {
   type RegistryYankLookup,
 } from "../registry/client";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import { holdVersionOnSwapCommitted } from "./held-host-version";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { assertHostNotBusy } from "./busy-check";
 
@@ -56,8 +57,9 @@ import { assertHostNotBusy } from "./busy-check";
 //
 // Source resolution and idempotency policy differ per caller, so both are
 // injected: `resolveInstallSource` is only invoked on the install branch,
-// and `satisfaction` (presence / exact / own-build-minimum /
-// implicit-registry-minimum, finding D + Q7) controls the fast no-op.
+// and `satisfaction` (presence / viability / exact / own-build-minimum /
+// implicit-registry-minimum, finding D + Q7 + the downgrade-revert RCA)
+// controls the fast no-op.
 
 export type HostProvisionAction =
   | "noop"
@@ -117,6 +119,20 @@ export interface HostProvisionResult {
 // same newer direction, for the same reason - see `own-build-minimum`.
 export type HostSatisfactionPolicy =
   | { readonly kind: "presence" }
+  /**
+   * Liveness-only: ANY installed, non-yanked version satisfies - older, newer,
+   * or equal - so a background converge that fires on a "host down" gap keeps
+   * whatever is installed rather than reinstalling the client's preferred pin
+   * over it (the downgrade-revert RCA). It asks NOTHING about which version:
+   * genuine incompatibility is left to where it is actually decided - the
+   * runtime admits-or-rejects at handshake, the selection authority marks an
+   * unusable host dead, and the host's own reconciler plus the server support
+   * floor move a genuinely-too-old host forward. Deliberately NOT a version
+   * floor: host compatibility is a host-admits-client epoch and per-method
+   * protocol negotiation, never a `hostVersion` ordering, so a static semver
+   * floor would proxy the wrong quantity.
+   */
+  | { readonly kind: "viability" }
   | { readonly kind: "exact"; readonly version: string }
   /**
    * This build's own host archive: converge to `version`, but never BACKWARDS
@@ -179,6 +195,15 @@ export interface ProvisionHostOptions {
   // unconditionally (the desktop's "Force restart"). Default callers pass
   // false so in-progress chat/terminal/CLI work is protected.
   readonly force: boolean;
+  // When true, record a version hold if this run's install branch commits a
+  // strict DOWNGRADE (committed version below the previous install). Set by
+  // `host ensure --release <concrete>` - the other explicit-version install
+  // verb - so a deliberate downgrade through ensure is held just like one
+  // through `host install`/`host update`, at the committed-install boundary
+  // UNDER this lock (never a post-return write). Every implicit convergence
+  // (background/viability, first-install, the default pin) leaves it false, so
+  // a liveness converge can never create a hold.
+  readonly holdExplicitDowngrade: boolean;
   // Invoked once this call has committed to MUTATING the host (install,
   // register or start) and never on the no-op fast path - so a caller can
   // run a step that is only warranted when a host will actually be started.
@@ -223,8 +248,9 @@ export async function provisionHost(
     force: opts.force,
     satisfactionKind: opts.satisfaction.kind,
     satisfactionVersion:
-      opts.satisfaction.kind === "presence"
-        ? "presence-only"
+      opts.satisfaction.kind === "presence" ||
+      opts.satisfaction.kind === "viability"
+        ? opts.satisfaction.kind
         : opts.satisfaction.version,
     recordVersionOverride: opts.recordVersionOverride !== null,
     lockReason: opts.lockReason,
@@ -250,6 +276,7 @@ export async function provisionHost(
       opts.satisfaction,
       opts.registerService,
       yankLookup,
+      opts.recordVersionOverride,
     ))
   ) {
     opts.runtime.logger.debug("Host provisioning fast-path satisfied", {
@@ -280,7 +307,12 @@ export async function provisionHost(
     const predictedInstall =
       opts.force ||
       !fast.installed ||
-      !(await versionSatisfied(fast, opts.satisfaction, yankLookup));
+      !(await versionSatisfied(
+        fast,
+        opts.satisfaction,
+        yankLookup,
+        opts.recordVersionOverride,
+      ));
     const preStaged = predictedInstall
       ? await prepareInstallStage(opts, progress, capability, contenderOptions)
       : null;
@@ -359,6 +391,7 @@ async function provisionUnderLock(
             opts.satisfaction,
             opts.registerService,
             yankLookup,
+            opts.recordVersionOverride,
           ))
         ) {
           opts.runtime.logger.debug(
@@ -387,7 +420,12 @@ async function provisionUnderLock(
         if (
           !opts.force &&
           state.installed &&
-          (await versionSatisfied(state, opts.satisfaction, yankLookup)) &&
+          (await versionSatisfied(
+            state,
+            opts.satisfaction,
+            yankLookup,
+            opts.recordVersionOverride,
+          )) &&
           !opts.registerService
         ) {
           opts.runtime.logger.debug(
@@ -434,6 +472,7 @@ async function provisionUnderLock(
           state,
           opts.satisfaction,
           yankLookup,
+          opts.recordVersionOverride,
         );
         if (opts.force || !state.installed || !reinstallVersionSatisfied) {
           if (preStaged === null) {
@@ -662,6 +701,13 @@ async function commitInstall(
   // source directly (it expects the caller to hold the lock). Reconcile
   // wiring (Tech Plan: "Install/ensure re-run reconcile after a successful
   // commit") comes from `commitHostInstallSource` itself.
+  // Version hold recorded via the committer's post-swap observer (at the true
+  // successful-swap boundary under this CLI lock, keyed on the ACTUAL committed
+  // vs previous records): only an explicit `host ensure --release X` below the
+  // prior install (`holdExplicitDowngrade`) holds; every implicit convergence
+  // (background/viability, first-install, the default pin) passes `null` and
+  // never writes a hold. Only the install branch reaches here, so no-op / start
+  // / register never touch it.
   const result = await commitHostInstallSourceWithAttempt(
     capability,
     contenderOptions,
@@ -671,6 +717,9 @@ async function commitInstall(
       onProgress: progress,
       lifecycle,
       onWillSwap: null,
+      onSwapCommitted: opts.holdExplicitDowngrade
+        ? holdVersionOnSwapCommitted(opts.runtime.environment)
+        : null,
     },
   );
   const post = await readProvisionState(controller, label, opts.runtime);
@@ -1010,10 +1059,13 @@ async function readProvisionState(
   };
 }
 
-// The installed-version predicate (RCA finding D, narrowed by Q7). Four
+// The installed-version predicate (RCA finding D, narrowed by Q7). Five
 // policies, one per shape of request:
 //
 //   - `latest` carries no version to compare against, so it is `presence`;
+//   - a background liveness converge (`host ensure --keep-installed`) is
+//     `viability`: installed + not-yanked, whatever the version - it never
+//     moves a viable install's version as a matter of client preference;
 //   - an explicit `--release <semver>` is `exact` - a pin is a pin;
 //   - the build-stamped registry default is `implicit-registry-minimum`,
 //     which accepts an installed version NEWER than the target (an
@@ -1034,13 +1086,38 @@ async function versionSatisfied(
   state: ProvisionState,
   satisfaction: HostSatisfactionPolicy,
   yankLookup: RegistryYankLookup,
+  ownBuildVersion: string | null,
 ): Promise<boolean> {
   if (!state.installed) return false;
+  // THE SOURCE IS THIS SAME BUILD: `ownBuildVersion` is what a local-file
+  // (bundled / `--from`) install would record, so an installed host already
+  // carrying it can only be "unsatisfied" here through a registry yank - and
+  // reinstalling identical withdrawn bytes with a fresh `installId` neither
+  // heals the yank nor changes what runs; it just restarts the host and, on
+  // the next liveness converge, does it again. Keep the install and let the
+  // channel's own replacement (a different, non-yanked version) move it. A
+  // `--force` bypasses satisfaction altogether (every caller ORs it in ahead
+  // of this predicate), so an operator can still redo the bytes on purpose.
+  // Registry sources pass `null`: their target is resolved from the manifest,
+  // which never points at a withdrawn release.
+  if (ownBuildVersion !== null && state.version === ownBuildVersion) {
+    return true;
+  }
   if (satisfaction.kind === "presence") return true;
   if (satisfaction.kind === "exact") {
     return state.version === satisfaction.version;
   }
   if (state.version === null) return false;
+  if (satisfaction.kind === "viability") {
+    // Installed + not-yanked: any readable installed version is viable unless
+    // the registry has explicitly withdrawn it. The yank check fails open (a
+    // registry miss/outage reads as not-yanked), which is the right bias for a
+    // liveness path - keep a working host alive over a network blip rather than
+    // tear it down. (`state.version === null` was excluded by the guard above;
+    // `readProvisionState` only reports `installed` for a record with a real
+    // version, so a null-version-yet-installed state is unreachable here.)
+    return !(await yankLookup.isVersionYanked(state.version));
+  }
   if (satisfaction.kind === "own-build-minimum") {
     // The requested stamp itself, decided BEFORE the comparator so a rebuilt
     // same-release host (another build string the comparator ranks equal) does
@@ -1083,8 +1160,11 @@ async function isSatisfied(
   satisfaction: HostSatisfactionPolicy,
   registerService: boolean,
   yankLookup: RegistryYankLookup,
+  ownBuildVersion: string | null,
 ): Promise<boolean> {
-  if (!(await versionSatisfied(state, satisfaction, yankLookup))) {
+  if (
+    !(await versionSatisfied(state, satisfaction, yankLookup, ownBuildVersion))
+  ) {
     return false;
   }
   // Host-owned registration: only the bytes are the CLI's concern.

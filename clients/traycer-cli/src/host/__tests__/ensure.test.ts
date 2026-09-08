@@ -151,6 +151,7 @@ function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
     allowSelfInvocation: true,
     noServiceRegister: false,
     force: false,
+    keepInstalled: false,
     onProgress: null,
     adoption: undefined,
     beforeMutate: null,
@@ -743,6 +744,23 @@ describe("ensureHost", () => {
         source: { kind: "registry", versionRequest: "1.6.0" },
       }),
     );
+  });
+
+  // Ticket 1/2 regression: the exact downgrade-revert RCA shape - a viable
+  // OLDER install must not be reinstalled to the build's preferred pin just
+  // because `--keep-installed` is threaded all the way through `ensureHost`.
+  it("regression: installed 1.2.0, pin 1.3.0-rc.4, --keep-installed - no-op, no reinstall", async () => {
+    config.supportedHostVersion = "1.3.0-rc.4";
+    readHostInstallRecordMock.mockResolvedValue({ version: "1.2.0" });
+    const controller = makeController("running");
+    createServiceControllerMock.mockReturnValue(controller);
+
+    const result = await ensureHost(makeOpts({ keepInstalled: true }));
+
+    expect(result.action).toBe("noop");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(controller.install).not.toHaveBeenCalled();
   });
 
   it("a lost race (locked recheck finds the host already provisioned by another actor) discards the pre-staged temp and never commits", async () => {
