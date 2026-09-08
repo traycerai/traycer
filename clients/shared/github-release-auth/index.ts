@@ -14,6 +14,7 @@ export { GitHubReleaseCredentialResolver } from "./resolver";
 export {
   cancelResponseBody,
   fetchWithGitHubReleaseAuth,
+  isRateLimited,
 } from "./authenticated-fetch";
 export {
   clearGitHubReleaseListingCache,

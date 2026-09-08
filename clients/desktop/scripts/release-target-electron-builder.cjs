@@ -112,6 +112,15 @@ const config = {
         extraMetadata: {
           ...base.extraMetadata,
           name: target.updaterPackageName,
+          // The .desktop FILENAME, which `linux.executableName` does not
+          // decide. `linux.syncDesktopName` is true, and electron-builder
+          // derives the installed filename from package.json's `desktopName`,
+          // falling back to `executableName` only when that key is ABSENT - and
+          // it is present (`"traycer-desktop.desktop"`). So overriding the
+          // executable alone still shipped production's launcher filename in
+          // the staging package: co-installing the two lets one overwrite the
+          // other's launcher, and removing either takes it away from both.
+          desktopName: target.linux.desktopEntryName,
         },
       }
     : {}),

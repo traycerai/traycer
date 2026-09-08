@@ -3271,6 +3271,56 @@ describe("staging updater release authentication and channel", () => {
     expect(authorizations[0]).toBe(`token ${token}`);
   });
 
+  it.each([
+    ["a rate-limited 403", 403, { "x-ratelimit-remaining": "0" }],
+    ["a 429", 429, {}],
+  ])(
+    "surfaces %s on the manifest fetch as a check failure, not up to date",
+    async (_label, status, headers) => {
+      // The listing SUCCEEDS and the manifest is then rate limited - the exact
+      // window this covers. Every candidate's manifest returns "not ok", and
+      // before the fix each became `null`, which discovery reads as "unusable
+      // release". With one candidate that meant a confident UP TO DATE while
+      // the real answer was "we could not ask".
+      const token = "manifest-ratelimited-token";
+      process.env.TRAYCER_STAGING_RELEASE_TOKEN = token;
+      const { updater } = await loadStagingUpdater();
+      const tag = "desktop-v2.0.0-staging.9.gabcdef9";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: unknown) => {
+          const url = new URL(String(input));
+          if (url.searchParams.has("per_page")) {
+            return new Response(
+              JSON.stringify([macReleaseFixture(tag, true)]),
+              { status: 200 },
+            );
+          }
+          return new Response("rate limited", { status, headers });
+        }),
+      );
+      await updater.installAutoUpdater(true, makeDeps(true));
+      await updater.checkForUpdatesNow(false, "manual");
+
+      // A service failure, not "unavailable" and not "up to date".
+      expect(updater.getAppUpdateSnapshot().status).toBe("error");
+
+      // And the lease survives: a rate limit says nothing about the token, so
+      // changing the env value must have no effect on the next check.
+      process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+      const authorizations: Array<string | null> = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+          authorizations.push(new Headers(init?.headers).get("authorization"));
+          return new Response(JSON.stringify([]), { status: 200 });
+        }),
+      );
+      await updater.checkForUpdatesNow(false, "manual");
+      expect(authorizations[0]).toBe(`token ${token}`);
+    },
+  );
+
   it("still treats a 403 with no rate-limit headers as a credential verdict", async () => {
     // The negative control for the pair above. Without it the fix could have
     // been "never treat 403 as auth" and both rows would still be green.

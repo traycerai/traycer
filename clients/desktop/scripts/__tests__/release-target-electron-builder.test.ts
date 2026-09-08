@@ -43,11 +43,17 @@ function desktopStamp(
     hostDiscoveryTag: staging
       ? "released-host-versions-staging"
       : "released-host-versions",
+    // The third fabrication in this fixture, and the one that mattered most:
+    // `TRAYCER_RELEASE_TOKEN` is a variable that exists nowhere. Production
+    // reaches a PUBLIC repository anonymously, so the generator emits `null`
+    // with two empty arrays - the shape that, until now, no test presented.
     credentialEnvironmentVariable: staging
       ? "TRAYCER_STAGING_RELEASE_TOKEN"
-      : "TRAYCER_RELEASE_TOKEN",
-    credentialSources: ["environment"],
-    authorizedOrigins: ["https://github.com", "https://api.github.com"],
+      : null,
+    credentialSources: staging ? ["environment", "github-cli"] : [],
+    authorizedOrigins: staging
+      ? ["https://github.com", "https://api.github.com"]
+      : [],
     cliInstallRoot: staging ? "~/.traycer/cli/staging" : "~/.traycer/cli",
     windowsTaskName: staging ? "\\Traycer\\Host-Staging" : "\\Traycer\\Host",
     appId: staging ? "ai.traycer.desktop.staging" : "ai.traycer.desktop",
@@ -84,7 +90,13 @@ function desktopStamp(
       deb: { packageName: staging ? "traycer-staging" : "traycer" },
       rpm: { packageName: staging ? "traycer-staging" : "Traycer" },
       executableName: staging ? "traycer-staging" : "traycer",
-      desktopEntryName: staging ? "traycer-staging" : "traycer",
+      // WITH the `.desktop` suffix, as the generator emits and as
+      // package.json's `desktopName` carries - it is the installed filename,
+      // not a stem. The config now stamps it, so a suffix-less fixture would
+      // assert a launcher named `traycer-staging` that nothing installs.
+      desktopEntryName: staging
+        ? "traycer-staging.desktop"
+        : "traycer-desktop.desktop",
     },
     updaterPackageName: staging ? "traycer-staging-desktop" : "traycer",
     updaterCacheDirName: staging
@@ -192,7 +204,16 @@ describe("release-target-electron-builder", () => {
       appId: "ai.traycer.desktop.staging",
       productName: "Traycer Staging",
       protocols: [{ name: "Traycer Staging", schemes: ["traycer-staging"] }],
-      extraMetadata: { name: "traycer-staging-desktop" },
+      // `desktopName` alongside `name`: with `linux.syncDesktopName` true,
+      // electron-builder takes the installed .desktop FILENAME from this key
+      // and only falls back to `executableName` when it is absent - and
+      // package.json sets it. Overriding the executable alone therefore left
+      // the staging package installing production's `traycer-desktop.desktop`,
+      // so co-installing the two had them fight over one launcher file.
+      extraMetadata: {
+        name: "traycer-staging-desktop",
+        desktopName: "traycer-staging.desktop",
+      },
       deb: { packageName: "traycer-staging" },
       rpm: { packageName: "traycer-staging" },
       publish: [

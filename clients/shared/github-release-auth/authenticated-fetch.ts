@@ -91,7 +91,7 @@ export async function fetchWithGitHubReleaseAuth(
  * limit, and `retry-after` for a secondary one. Returning the response leaves
  * classification to the caller, which already retries a non-2xx with backoff.
  */
-function isRateLimited(response: Response): boolean {
+export function isRateLimited(response: Response): boolean {
   if (response.headers.has("retry-after")) return true;
   return response.headers.get("x-ratelimit-remaining") === "0";
 }

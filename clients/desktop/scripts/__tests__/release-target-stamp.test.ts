@@ -81,7 +81,7 @@ function desktopStamp(): Stamp {
       deb: { packageName: "traycer-staging" },
       rpm: { packageName: "traycer-staging" },
       executableName: "traycer-staging",
-      desktopEntryName: "traycer-staging",
+      desktopEntryName: "traycer-staging.desktop",
     },
     updaterPackageName: "traycer-staging-desktop",
     updaterCacheDirName: "traycer-staging-updater",
@@ -527,12 +527,32 @@ describe("cliInstallRoot and hostInstallRoot must be home-relative", () => {
   });
 });
 
+/**
+ * Production's credential policy: it reaches a PUBLIC repository anonymously.
+ *
+ * This is the field group that made the production fixture a fiction. Every
+ * `production*Stamp()` here is built by taking the STAGING fixture and flipping
+ * the handful of fields an assertion happened to read, so the credential block
+ * stayed staging's - a token variable, two sources, two origins. The real
+ * generator emits `null` and two empty arrays for production, which the
+ * validator rejected outright. Every test passed and no production desktop
+ * stamp could be read.
+ *
+ * So: flip it HERE, with the install identity, rather than per-assertion.
+ */
+function toProductionCredentialPolicy(stamp: Stamp): Stamp {
+  stamp.credentialEnvironmentVariable = null;
+  stamp.credentialSources = [];
+  stamp.authorizedOrigins = [];
+  return stamp;
+}
+
 function productionDesktopStamp(): Stamp {
   const stamp = desktopStamp();
   stamp.target = "production";
   stamp.environment = "production";
   stamp.releaseChannel = "stable";
-  return toProductionInstallIdentity(stamp);
+  return toProductionCredentialPolicy(toProductionInstallIdentity(stamp));
 }
 
 /**
@@ -643,7 +663,7 @@ describe("install identity must match the target", () => {
     const stamp = cliStamp();
     stamp.target = "production";
     stamp.environment = "production";
-    return toProductionInstallIdentity(stamp);
+    return toProductionCredentialPolicy(toProductionInstallIdentity(stamp));
   }
 
   it("rejects a one-character windowsTaskName typo on a desktop stamp", () => {
@@ -854,5 +874,144 @@ describe("targetInputFromArg", () => {
         "cli",
       ),
     ).toThrow(/requires a path/);
+  });
+});
+
+describe("the credential policy must match how the target authenticates", () => {
+  // THE REGRESSION THIS GROUP EXISTS FOR. Production reaches a public
+  // repository anonymously, so the generator emits `credentialEnvironmentVariable:
+  // null` with two empty arrays. The validator required a non-empty string and
+  // two non-empty arrays, so it rejected EVERY real production stamp - and
+  // `release-desktop.yml` passes `--target-input` unconditionally, so a
+  // production desktop release would have failed at its stamp step. It went
+  // unseen because these fixtures were staging stamps with a few fields
+  // flipped, so no test ever presented production's actual shape.
+  it("accepts an anonymous production stamp: no variable, no sources, no origins", () => {
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(productionDesktopStamp()),
+        "production",
+        "desktop",
+      ),
+    ).toMatchObject({
+      credentialEnvironmentVariable: null,
+      credentialSources: [],
+      authorizedOrigins: [],
+    });
+  });
+
+  it("rejects a renamed credential variable on a target that authenticates", () => {
+    // No stamper consumes this field - the shared resolver reads the hard-coded
+    // TRAYCER_STAGING_RELEASE_TOKEN - so a rename builds a release that cannot
+    // authenticate while every shape check passes.
+    const stamp = cliStamp();
+    stamp.credentialEnvironmentVariable = "TRAYCER_STAGING_TOKEN";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/credentialEnvironmentVariable/);
+  });
+
+  it("rejects a credential variable on a target that declares no sources", () => {
+    const stamp = productionDesktopStamp();
+    stamp.credentialEnvironmentVariable = "TRAYCER_STAGING_RELEASE_TOKEN";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "production",
+        "desktop",
+      ),
+    ).toThrow(/credentialEnvironmentVariable/);
+  });
+
+  it("rejects origins without sources, and sources without origins", () => {
+    // Both directions, because either alone is a half-stated rule: origins
+    // bound where a credential may be SENT, so they are meaningless without
+    // one and unbounded without them.
+    const originsNoSources = productionDesktopStamp();
+    originsNoSources.authorizedOrigins = ["https://github.com"];
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(originsNoSources),
+        "production",
+        "desktop",
+      ),
+    ).toThrow(/authorizedOrigins/);
+
+    const sourcesNoOrigins = cliStamp();
+    sourcesNoOrigins.authorizedOrigins = [];
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(sourcesNoOrigins),
+        "staging",
+        "cli",
+      ),
+    ).toThrow(/authorizedOrigins/);
+  });
+});
+
+describe("stamped values that duplicate a neighbour are pinned to it", () => {
+  // Each of these is validated but read by NOTHING; the value that actually
+  // reaches the build comes from the field it mirrors. That makes a divergence
+  // worse than a wrong value - the descriptor reads like configuration that
+  // works, and editing it changes nothing.
+  it("rejects a windows.appUserModelId that does not equal appId", () => {
+    // Windows attributes toasts by AUMID and drops what it cannot match, and
+    // the runtime calls setAppUserModelId with config.appId.
+    const stamp = desktopStamp();
+    (stamp.windows as Stamp).appUserModelId = "ai.traycer.desktop.stagin";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/appUserModelId/);
+  });
+
+  it("rejects a windows.installerDisplayName that does not equal productName", () => {
+    const stamp = desktopStamp();
+    (stamp.windows as Stamp).installerDisplayName = "Traycer";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/installerDisplayName/);
+  });
+
+  it("rejects an updaterChannel discovery can never request", () => {
+    // Publishing under `staging` would put manifests where
+    // `platformChannelFile()` never looks; the app then reports itself up to
+    // date forever instead of failing, which is the worst of both.
+    const stamp = desktopStamp();
+    stamp.updaterChannel = "staging";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/updaterChannel/);
+  });
+
+  it("accepts the mirrored values the generator actually emits", () => {
+    // Positive control for all three: a check that refused everything would
+    // satisfy every rejection above.
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(desktopStamp()),
+        "staging",
+        "desktop",
+      ),
+    ).toMatchObject({
+      appId: "ai.traycer.desktop.staging",
+      productName: "Traycer Staging",
+      updaterChannel: "latest",
+      windows: {
+        appUserModelId: "ai.traycer.desktop.staging",
+        installerDisplayName: "Traycer Staging",
+      },
+    });
   });
 });

@@ -51,6 +51,7 @@ import {
   cancelResponseBody,
   fetchStagingGitHubRelease,
   prepareStagingUpdateToken,
+  isRateLimited,
   stagingAuthLogMessage,
   stagingReleaseAuthRequired,
 } from "./staging-release-auth";
@@ -2074,6 +2075,26 @@ async function fetchDesktopReleaseManifest(
     // direction discovery and `settleMasked404` take.
     if (response.status === 404 && (await stagingCredentialRejected(signal))) {
       throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
+    }
+    // A RATE LIMIT IS NOT A MISSING MANIFEST. `fetchWithGitHubReleaseAuth`
+    // deliberately hands a rate-limited 403 back rather than treating it as a
+    // permission failure, and GitHub also answers 429; both arrive here as
+    // "not ok" and would otherwise become `null`. Discovery reads `null` as
+    // "this release is unusable, try the next" - so once the limit is hit
+    // after `/releases` already answered, EVERY candidate is skipped and the
+    // check reports UP TO DATE. That is the same wrong-verdict-that-looks-
+    // right shape as the masked 404 above, from a transient cause.
+    //
+    // Thrown so it lands on the ordinary error path, exactly as the release
+    // listing does for its own non-2xx: the lease is kept and the next check
+    // retries. Uses the shared `isRateLimited` rather than re-reading the
+    // headers here, so the rule has one definition - this call site has a real
+    // `Response`, unlike the downloader path, which can only see a rendered
+    // message.
+    if (response.status === 429 || isRateLimited(response)) {
+      throw new Error(
+        `GitHub release manifest fetch was rate limited with HTTP ${response.status}`,
+      );
     }
     return null;
   }

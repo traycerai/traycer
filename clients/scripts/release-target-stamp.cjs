@@ -89,14 +89,72 @@ function requiredLaunchAgentLabel(target) {
 // Scalar keys must be non-empty strings; structured keys are checked by shape
 // below. Keeping the two sets apart is what makes a `null` scalar fail here
 // instead of being packaged as `appId: null` or `schemes: [null]`.
+//
+// `credentialEnvironmentVariable` is deliberately NOT here. It is the one
+// stamped scalar whose absence is meaningful: a target that reaches its
+// release repository anonymously has no credential variable, and production
+// emits `null` for exactly that reason. Requiring a non-empty string rejected
+// every production desktop stamp - see `requireCredentialEnvironmentVariable`.
 const COMMON_SCALAR_KEYS = [
   "target",
   "environment",
   "sentryEnvironment",
   "cliFeedTag",
   "hostDiscoveryTag",
-  "credentialEnvironmentVariable",
 ];
+
+/**
+ * The credential variable, checked against whether the target authenticates.
+ *
+ * TWO failures, opposite directions, and the shape check caught neither:
+ *
+ *   - ABSENT WHEN NEEDED, or named anything at all. No stamper consumes this
+ *     field; `GitHubReleaseCredentialResolver` reads the hard-coded
+ *     `STAGING_RELEASE_TOKEN_ENV` from `clients/shared/github-release-auth`.
+ *     So a descriptor that renamed it would build a release that cannot
+ *     authenticate, while the stamp looked complete. Pinned to the one name
+ *     the resolver actually reads.
+ *   - PRESENT WHEN NOT NEEDED. Production reaches a public repository
+ *     anonymously (`credentialSources: []`) and correctly emits `null`; a
+ *     non-empty value there would advertise a credential nothing supplies.
+ *
+ * `credentialSources` is the discriminator because it is the same field the
+ * resolver consults to decide whether to look for a credential at all, so the
+ * two cannot disagree about whether this target authenticates.
+ */
+const STAGING_RELEASE_TOKEN_ENV = "TRAYCER_STAGING_RELEASE_TOKEN";
+
+// The only channel `platformChannelFile()` in
+// `src/electron-main/app/desktop-release-feed.ts` ever asks for.
+const DISCOVERABLE_UPDATER_CHANNEL = "latest";
+
+function requireCredentialPolicy(stamp) {
+  const value = stamp.credentialEnvironmentVariable;
+  const authenticates = stamp.credentialSources.length > 0;
+  if (!authenticates) {
+    if (value !== null && value !== undefined) {
+      throw new ClientTargetStampError(
+        `client target stamp credentialEnvironmentVariable ${JSON.stringify(value)} is set, but this target declares no credentialSources and reaches its release repository anonymously. An unused credential variable is a claim nothing honours.`,
+      );
+    }
+    if (stamp.authorizedOrigins.length > 0) {
+      throw new ClientTargetStampError(
+        `client target stamp authorizedOrigins ${JSON.stringify(stamp.authorizedOrigins)} is non-empty, but this target declares no credentialSources. Origins exist to bound where a credential may be SENT, so listing them without one describes a rule with no subject.`,
+      );
+    }
+    return;
+  }
+  if (value !== STAGING_RELEASE_TOKEN_ENV) {
+    throw new ClientTargetStampError(
+      `client target stamp credentialEnvironmentVariable ${JSON.stringify(value)} is not ${JSON.stringify(STAGING_RELEASE_TOKEN_ENV)}. No stamper reads this field: the shared credential resolver reads that exact variable, so any other name builds a release that cannot authenticate.`,
+    );
+  }
+  if (stamp.authorizedOrigins.length === 0) {
+    throw new ClientTargetStampError(
+      "client target stamp authorizedOrigins is empty while credentialSources is not. A target that carries a credential must say where it may be sent; an empty list would leave the send-site unbounded.",
+    );
+  }
+}
 const COMMON_STRUCTURED_KEYS = [
   "cloud",
   "credentialSources",
@@ -269,6 +327,24 @@ function requireStringArray(value, where) {
   value.forEach((entry, index) => requireString(entry, `${where}[${index}]`));
 }
 
+/**
+ * An array of non-empty strings that MAY itself be empty.
+ *
+ * Separate from `requireStringArray` because emptiness means opposite things
+ * for the two callers. `updaterChannelFiles` is a list of files that must
+ * exist, so empty is a mistake. The credential arrays describe how a target
+ * reaches its release repository, and "no credential sources" is the correct,
+ * deliberate description of an anonymous public download - production's.
+ * Whether empty is ALLOWED here is a shape question; whether it is CORRECT for
+ * this target is decided together with the credential variable, below.
+ */
+function requireOptionalStringArray(value, where) {
+  if (!Array.isArray(value)) {
+    throw new ClientTargetStampError(`${where} must be an array`);
+  }
+  value.forEach((entry, index) => requireString(entry, `${where}[${index}]`));
+}
+
 function readClientTargetStamp(inputPath, expectedTarget, component) {
   const componentKeys = COMPONENT_KEYS[component];
   if (componentKeys === undefined) {
@@ -287,6 +363,9 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
     [
       ...COMMON_SCALAR_KEYS,
       ...COMMON_STRUCTURED_KEYS,
+      // Required to be PRESENT even though it may be null: a stamp that omits
+      // it entirely has lost the field rather than declared "no credential".
+      "credentialEnvironmentVariable",
       ...componentKeys.scalar,
       ...componentKeys.structured,
     ],
@@ -296,8 +375,10 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
     requireString(stamp[key], `client target stamp.${key}`);
   }
   for (const key of ["credentialSources", "authorizedOrigins"]) {
-    requireStringArray(stamp[key], `client target stamp.${key}`);
+    requireOptionalStringArray(stamp[key], `client target stamp.${key}`);
   }
+  // After the arrays, since `credentialSources` is the discriminator.
+  requireCredentialPolicy(stamp);
   // Both components carry `cliInstallRoot`; only the CLI stamp carries
   // `hostInstallRoot`. Every consumer of either treats them as home-relative.
   for (const key of ["cliInstallRoot", "hostInstallRoot"]) {
@@ -385,6 +466,43 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
       ["appUserModelId", "executableName", "installerDisplayName"],
       "client target stamp.windows",
     );
+    // TWO STAMPED VALUES THAT DUPLICATE A NEIGHBOUR, pinned to it rather than
+    // to a literal. Neither is read by any stamper, and both have a consumer
+    // that reads the OTHER field - so an edit here changes nothing, which is
+    // worse than being wrong: the descriptor reads like configuration that
+    // works.
+    //
+    //   - `appUserModelId`: the runtime calls `app.setAppUserModelId` with
+    //     `DESKTOP_APP_USER_MODEL_ID`, which is `config.appId`. Windows
+    //     attributes toasts by AUMID and drops those it cannot match, and
+    //     `lifecycle.ts` says the id must equal the one baked into the
+    //     installer - so these two disagreeing is a silent notification loss.
+    //   - `installerDisplayName`: NSIS derives its shortcut and uninstall
+    //     entry names from `productName`, which the generated config already
+    //     stamps.
+    for (const [key, mirrors] of [
+      ["appUserModelId", "appId"],
+      ["installerDisplayName", "productName"],
+    ]) {
+      if (stamp.windows[key] !== stamp[mirrors]) {
+        throw new ClientTargetStampError(
+          `client target stamp.windows.${key} ${JSON.stringify(stamp.windows[key])} does not equal ${mirrors} ${JSON.stringify(stamp[mirrors])}. Nothing reads windows.${key}; the value that reaches the build comes from ${mirrors}, so a difference here is a change that silently does not happen.`,
+        );
+      }
+    }
+    // The updater PUBLISHES under `updaterChannel` but DISCOVERS with
+    // `platformChannelFile()`, which hard-codes `latest.yml` /
+    // `latest-mac.yml` / `latest-linux*.yml`. Any other channel publishes
+    // manifests the installed app never asks for, and it reports itself up to
+    // date forever rather than failing. The descriptor already says both
+    // targets use `latest` on purpose - staging's isolation comes from its own
+    // repository and tag grammar, not from renaming channel files - so this
+    // holds the document to the one value discovery can actually find.
+    if (stamp.updaterChannel !== DISCOVERABLE_UPDATER_CHANNEL) {
+      throw new ClientTargetStampError(
+        `client target stamp updaterChannel ${JSON.stringify(stamp.updaterChannel)} is not ${JSON.stringify(DISCOVERABLE_UPDATER_CHANNEL)}. Update discovery requests \`latest*.yml\` unconditionally, so publishing under any other channel produces a build that can never see its own releases.`,
+      );
+    }
     const linux = requireKeys(
       stamp.linux,
       ["deb", "rpm", "executableName", "desktopEntryName"],
