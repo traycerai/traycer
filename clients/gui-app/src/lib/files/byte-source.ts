@@ -35,16 +35,16 @@ import type {
   ReadEpicFileResponse,
 } from "@traycer/protocol/host/epic/files";
 
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useMaybeTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   useFileAsset,
   type FileAssetRequest,
   type UseFileAssetResult,
 } from "@/hooks/assets/use-file-asset";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useMaybeHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useMaybeHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   imageBlobCache,
   type ScopedImageBytesFetcher,
@@ -336,19 +336,21 @@ export function resetEpicFileHostSupportForTests(): void {
  * because both halves cross the wire as unconstrained strings.
  */
 function epicFileHostBuildKey(
-  hostId: string,
+  hostId: string | null,
   hostVersion: string | null,
 ): string | null {
-  return hostVersion === null ? null : JSON.stringify([hostId, hostVersion]);
+  return hostId === null || hostVersion === null
+    ? null
+    : JSON.stringify([hostId, hostVersion]);
 }
 
 /** The blob cache subject a fetched epic file is keyed under - the epic is the authorization subject (D06), never the sha alone. */
 function epicFileScopeKey(
-  hostId: string,
+  hostId: string | null,
   epicId: string,
   path: string,
 ): string {
-  return JSON.stringify(["epic-file", hostId, epicId, path]);
+  return JSON.stringify(["epic-file", hostId ?? "", epicId, path]);
 }
 
 /** The one PERMANENT `epic.readFile` failure: this host has no file plane. */
@@ -406,9 +408,14 @@ function epicFileFetcher(
  * stable across a source change.
  */
 function useEpicFileBytes(source: EpicFileByteSource | null): FileBytesState {
-  const hostId = useTabHostId();
-  const client = useTabHostClient();
-  const hostVersion = useHostDirectoryEntry(hostId)?.version ?? null;
+  // TOLERANT, and `useMaybeHostClientForHostId` rather than `useTabHostClient`,
+  // for the reason `useFileAsset` states: this leg is mounted on every render
+  // of `useFileBytes` whatever the source kind is, so a provider-free surface
+  // must reach it and settle, never throw. With no tab host the query is
+  // disabled and this stays on `LOADING`, which is what an inert leg means.
+  const hostId = useMaybeTabHostId();
+  const client = useMaybeHostClientForHostId(hostId);
+  const hostVersion = useMaybeHostDirectoryEntry(hostId)?.version ?? null;
   // The client's declared vantage: which host it believes it shares a machine
   // with, `null` for "none I can name". A PLACEMENT FACT, never an
   // authorization - a wrong value costs a signed url instead of a loopback one.
@@ -436,6 +443,8 @@ function useEpicFileBytes(source: EpicFileByteSource | null): FileBytesState {
     method: "epic.readFile",
     params,
     options: {
+      // No `hostId !== null` term: with no tab host `client` is null, and
+      // `useHostQuery` refuses to execute a null client on its own.
       enabled: source !== null && !knownUnsupported,
       // ponytail: zero, so every mount re-reads rather than handing an `<img>`
       // a signed url that expired while the tile was closed. It does NOT cover

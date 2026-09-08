@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
-import { useAuthService } from "@/lib/host";
+import { useAuthService, useHostBinding } from "@/lib/host";
 
 /**
  * Stream-side auth recovery shared by every LONG-LIVED host stream: the
@@ -23,6 +23,20 @@ export function useStreamAuthRevalidator(): StreamAuthRevalidator {
   const authService = useAuthService();
   return useMemo<StreamAuthRevalidator>(
     () => createStreamAuthRevalidator(authService),
+    [authService],
+  );
+}
+
+/**
+ * {@link useStreamAuthRevalidator} for a caller that may be rendered with no
+ * `<HostRuntimeProvider>` above it - `null` there, which every consumer
+ * already accepts (`useHostStreamClientBindingFor` takes `auth` nullable).
+ */
+export function useMaybeStreamAuthRevalidator(): StreamAuthRevalidator | null {
+  const authService = useHostBinding()?.auth ?? null;
+  return useMemo<StreamAuthRevalidator | null>(
+    () =>
+      authService === null ? null : createStreamAuthRevalidator(authService),
     [authService],
   );
 }

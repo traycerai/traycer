@@ -49,16 +49,32 @@ const perHookBindingFactoryRef = vi.hoisted(() => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => tabHostIdRef.value,
+  // `useFileAsset` reads the TOLERANT form (ticket 27 phase A2): the hook is
+  // mounted by `useFileBytes` on every render whatever the source kind is, so
+  // a provider-free surface must reach it and settle rather than throw.
+  useMaybeTabHostId: () => tabHostIdRef.value,
+}));
+
+// One binding object, not a fresh one per call: `useMaybeHostDirectoryEntry`
+// and `useMaybeStreamAuthRevalidator` both memoize on its identity, and a new
+// object every render would churn every consumer downstream of them.
+const hostBindingRef = vi.hoisted(() => ({
+  value: {
+    directory: {
+      onChange: () => ({ dispose() {} }),
+      findById: () => null,
+    },
+    auth: {
+      revalidateCurrentContext: () =>
+        Promise.resolve({ kind: "valid" as const }),
+    },
+  },
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostDirectory: () => ({
-    onChange: () => ({ dispose() {} }),
-    findById: () => null,
-  }),
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
-  }),
+  useHostDirectory: () => hostBindingRef.value.directory,
+  useAuthService: () => hostBindingRef.value.auth,
+  useHostBinding: () => hostBindingRef.value,
 }));
 
 const defaultStreamBindingRef = vi.hoisted(() => ({

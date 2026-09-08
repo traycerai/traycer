@@ -9,11 +9,11 @@ import {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { AssetMediaType } from "@traycer/protocol/host/asset-stream-schemas";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useMaybeTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useMaybeHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
-import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
+import { useMaybeStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   imageBlobCache,
   type ImageBlobRetention,
@@ -550,9 +550,15 @@ function acquireSharedAssetSubscription(
 export function useFileAsset(
   request: FileAssetRequest | null,
 ): UseFileAssetResult {
-  const hostId = useTabHostId();
-  const target = useHostDirectoryEntry(hostId);
-  const auth = useStreamAuthRevalidator();
+  // TOLERANT, not `useTabHostId()`: `useFileBytes` mounts this leg on every
+  // render regardless of the source kind, so a provider-free surface (a chat
+  // transcript rendering an attachment) reaches it with no tab host at all.
+  // With no host there is no transport either, so the fetch effect below goes
+  // inert and this hook stays on `LOADING_STATE` - the same settled value a
+  // `null` request produces.
+  const hostId = useMaybeTabHostId();
+  const target = useMaybeHostDirectoryEntry(hostId);
+  const auth = useMaybeStreamAuthRevalidator();
   // The full binding, not just its `.client` (Codex re-review) - the shared
   // subscription coalescing layer needs `pin`/`unpin` too, see
   // `acquireSharedAssetSubscription`'s call site below.
@@ -671,7 +677,11 @@ export function useFileAsset(
 
   useEffect(() => {
     const normalizedRequest = latestRequestRef.current;
-    if (normalizedRequest === null || streamBinding === null) {
+    if (
+      normalizedRequest === null ||
+      streamBinding === null ||
+      hostId === null
+    ) {
       isMountedRef.current = false;
       cacheKeyRef.current = null;
       requestKeyRef.current = null;

@@ -22,6 +22,9 @@ import type { HostEndpointProvider } from "@traycer-clients/shared/host-transpor
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { RequestContext } from "@traycer/protocol/auth/request-context";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   appHostCredentialMintFlow,
   noteHostCredentialState,
@@ -33,7 +36,7 @@ import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useMaybeRunnerHost } from "@/providers/use-runner-host";
 import {
   hostTransportKey,
   remoteAwareOwnerIdentity,
@@ -381,22 +384,63 @@ export function buildHostStreamClient(params: {
  * identity, so a directory refresh that allocates a fresh but equivalent
  * entry does not tear down an active stream session.
  */
+/**
+ * The loud error stays exactly where it means something: a caller that NAMED
+ * a machine to dial and has no runtime to dial it with. With no target there
+ * is nothing to build, so a hook mounted inert on a provider-free surface
+ * (`useFileBytes` mounts every byte leg on every render, whatever the source
+ * kind is - ticket 27 phase A2) settles at `null` instead of taking the whole
+ * tree down.
+ */
+/**
+ * The four values this hook reads off the runtime, all `null` when there is
+ * no runtime at all. Its own function so the hook body stays a straight line
+ * (and under the repo's `complexity` ceiling): the tolerance is a property of
+ * the READ, not of the transport lifecycle below it.
+ */
+interface StreamRuntimeReads {
+  readonly globalClient: HostClient<HostRpcRegistry> | null;
+  readonly authnBaseUrl: string | null;
+  readonly requestContext: RequestContext | null;
+  readonly userId: string | null;
+}
+
+function streamRuntimeReads(
+  runtimeBinding: HostRuntimeBinding<HostRpcRegistry> | null,
+  runnerHost: IRunnerHost | null,
+): StreamRuntimeReads {
+  const globalClient = runtimeBinding?.hostClient ?? null;
+  return {
+    globalClient,
+    authnBaseUrl: runnerHost?.authnBaseUrl ?? null,
+    // `null` when signed out or the credential lease was released - the
+    // "no bound user" / "no auth" gate.
+    requestContext: globalClient?.getRequestContext() ?? null,
+    userId: globalClient?.getRequestContextUserId() ?? null,
+  };
+}
+
+function assertStreamRuntimePresent(
+  target: HostDirectoryEntry | null,
+  runtimeBinding: HostRuntimeBinding<HostRpcRegistry> | null,
+  runnerHost: IRunnerHost | null,
+): void {
+  if (target === null) return;
+  if (runtimeBinding !== null && runnerHost !== null) return;
+  throw new Error(
+    "useHostStreamClientBindingFor requires a HostRuntimeProvider",
+  );
+}
+
 export function useHostStreamClientBindingFor(
   target: HostDirectoryEntry | null,
   auth: StreamAuthRevalidator | null,
 ): HostStreamClientBinding | null {
   const runtimeBinding = useHostBinding();
-  if (runtimeBinding === null) {
-    throw new Error(
-      "useHostStreamClientBindingFor requires a HostRuntimeProvider",
-    );
-  }
-  const globalClient = runtimeBinding.hostClient;
-  const authnBaseUrl = useRunnerHost().authnBaseUrl;
-  // `null` when signed out or the credential lease was released - the
-  // "no bound user" / "no auth" gate.
-  const requestContext = globalClient.getRequestContext();
-  const userId = globalClient.getRequestContextUserId();
+  const runnerHost = useMaybeRunnerHost();
+  assertStreamRuntimePresent(target, runtimeBinding, runnerHost);
+  const { globalClient, authnBaseUrl, requestContext, userId } =
+    streamRuntimeReads(runtimeBinding, runnerHost);
   const transportKey =
     requestContext === null ? null : hostStreamTransportKeyFor(target, userId);
   const endpointHostId = target?.hostId ?? null;
@@ -445,7 +489,9 @@ export function useHostStreamClientBindingFor(
       endpointHostId === null ||
       endpointWebsocketUrl === null ||
       endpointKind === null ||
-      userId === null
+      userId === null ||
+      globalClient === null ||
+      authnBaseUrl === null
     ) {
       setBinding(null);
       return;
@@ -585,7 +631,7 @@ export function useHostStreamClientBindingFor(
   // `onBearerRotated` signal.
   const client = binding?.client ?? null;
   useEffect(() => {
-    if (client === null) {
+    if (client === null || globalClient === null) {
       return;
     }
     return globalClient.onBearerRotated(() => {

@@ -1,10 +1,11 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 import {
   hostDirectoryEntryEquals,
   subscribeHostRowChanged,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
-import { useHostDirectory } from "@/lib/host";
+import { useHostBinding, useHostDirectory } from "@/lib/host";
 
 /**
  * Re-exported from the connection registry, which OWNS this predicate now
@@ -40,7 +41,29 @@ export { hostDirectoryEntryEquals };
 export function useHostDirectoryEntry(
   hostId: string | null,
 ): HostDirectoryEntry | null {
-  const directory = useHostDirectory();
+  return useHostDirectoryEntryIn(useHostDirectory(), hostId);
+}
+
+/**
+ * {@link useHostDirectoryEntry} for a caller that may be rendered with no
+ * `<HostRuntimeProvider>` above it at all - the same tolerance
+ * `useReactiveLocalHostId` already takes off `useHostBinding()`. `null`
+ * directory means `null` entry, which is what every consumer of this hook
+ * already handles for an unknown host.
+ *
+ * Reach for this only where the absence is a real, handled state: a surface
+ * that genuinely requires the runtime must keep the loud error.
+ */
+export function useMaybeHostDirectoryEntry(
+  hostId: string | null,
+): HostDirectoryEntry | null {
+  return useHostDirectoryEntryIn(useHostBinding()?.directory ?? null, hostId);
+}
+
+function useHostDirectoryEntryIn(
+  directory: HostDirectoryService | null,
+  hostId: string | null,
+): HostDirectoryEntry | null {
   const cacheRef = useRef<HostDirectoryEntry | null>(null);
   const subscribe = useCallback(
     (callback: () => void) => {
@@ -54,9 +77,12 @@ export function useHostDirectoryEntry(
         hostId === null
           ? () => undefined
           : subscribeHostRowChanged(hostId, callback);
-      const subscription = directory.onChange(() => {
-        callback();
-      });
+      const subscription =
+        directory === null
+          ? { dispose: () => undefined }
+          : directory.onChange(() => {
+              callback();
+            });
       return () => {
         subscription.dispose();
         unsubscribeRegistry();
@@ -65,7 +91,10 @@ export function useHostDirectoryEntry(
     [directory, hostId],
   );
   const getSnapshot = useCallback(() => {
-    const next = hostId === null ? null : directory.findById(hostId);
+    const next =
+      hostId === null || directory === null
+        ? null
+        : directory.findById(hostId);
     if (hostDirectoryEntryEquals(cacheRef.current, next)) {
       return cacheRef.current;
     }

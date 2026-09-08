@@ -40,16 +40,23 @@ const mocks = vi.hoisted(() => ({
   coLocatedHostId: "colocated-host",
 }));
 
-vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => ({
-    getActiveHostId: () => mocks.hostId,
-    getRequestContextUserId: () => "user-1",
-    requestWithSignal: mocks.requestWithSignal,
-  }),
+// The epic-file leg resolves its client by NAMED host id rather than through
+// `useTabHostClient` (ticket 27 phase A2): with no tab host the leg has no
+// host to address and must go inert, and `useTabHostClient` throws there.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useMaybeHostClientForHostId: (hostId: string | null) =>
+    hostId === null
+      ? null
+      : {
+          getActiveHostId: () => hostId,
+          getRequestContextUserId: () => "user-1",
+          requestWithSignal: mocks.requestWithSignal,
+        },
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => ({ version: mocks.hostVersion }),
+  useMaybeHostDirectoryEntry: () => ({ version: mocks.hostVersion }),
 }));
 
 vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({

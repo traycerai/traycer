@@ -41,6 +41,27 @@ export function useHostClientForHostId(
 }
 
 /**
+ * {@link useHostClientForHostId} for a NAMED host only, tolerant of a missing
+ * `<HostRuntimeProvider>`.
+ *
+ * There is deliberately no "follow the effective host" branch: `null` here
+ * means "no host named", which is what a byte leg mounted inert on a source
+ * that does not address a host means (`useFileBytes` mounts every leg on
+ * every render). Following the app-wide host from such a leg would be the
+ * wrong answer as well as the throwing one - bytes always ride the host the
+ * source names.
+ */
+export function useMaybeHostClientForHostId(
+  hostId: string | null,
+): HostClient<HostRpcRegistry> | null {
+  const binding = useHostBinding();
+  return useMemo(
+    () => (hostId === null ? null : resolveNamedHostClient(binding, hostId)),
+    [binding, hostId],
+  );
+}
+
+/**
  * The live directory entry for an explicit host id, used by presentation and
  * stream consumers that need row fields in addition to unary identity.
  *
