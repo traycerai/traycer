@@ -981,18 +981,21 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
   });
 
-  it("resolves a stale/delisted remembered slug to the first model and emits the resolved slug", async () => {
+  it("presents a stale/delisted remembered slug as the first model for display and defers the emit", async () => {
     // A remembered slug comes from memory, not a loaded list, so it can be
-    // delisted. Once THIS harness's catalog loads WITHOUT it, the derive falls
-    // back to the first model + its default effort, and the RESOLVED slug - not
-    // the dead one - is what emits (so the memory write self-heals next time).
+    // delisted. Once THIS harness's catalog loads WITHOUT it, the derive
+    // presents the first model + its default effort - for display and launch
+    // only. The dead slug is neither confirmed (memory keeps the user's pick)
+    // nor replaced in the raw sticky value, and a commit that still carries it
+    // is HELD rather than emitted with the substitute: the chat's persisted
+    // model only changes when the user picks one.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
         modelSlug: "delisted-old",
         profileId: null,
       },
-      // No sticky effort, so the resolved first model surfaces its OWN default.
+      // No sticky effort, so the presented first model surfaces its OWN default.
       defaultReasoning: "",
     });
     harnessesData.value = {
@@ -1030,17 +1033,21 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       ),
     );
 
-    // The dead slug resolves to the first live model for display, with that
+    // The dead slug presents as the first live model for display, with that
     // model's own default effort - never the stale slug.
     await waitFor(() =>
       expect(result.current.getState().selection.modelSlug).toBe("survivor"),
     );
     expect(result.current.getState().reasoning).toBe("medium");
-    expect(result.current.getState().selectionCatalogConfirmed).toBe(true);
+    expect(result.current.getState().selectionHealedForDisplay).toBe(true);
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+    expect(result.current.getState().values.selection.modelSlug).toBe(
+      "delisted-old",
+    );
 
     // A commit that still carries the dead remembered slug (as Ticket 4's entry
-    // points will, reading it from memory) emits the RESOLVED slug, not the
-    // dead one.
+    // points will, reading it from memory) is held: the substitute must not
+    // reach the chat as its model.
     act(() => {
       result.current.getState().applyComposerSelection({
         selection: {
@@ -1052,10 +1059,26 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         serviceTier: "",
       });
     });
+    expect(onSettingsChange).not.toHaveBeenCalled();
+    expect(result.current.getState().pendingSettingsEmit).toBe(true);
 
+    // The user's explicit pick flushes the deferred edit with the real choice.
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: {
+          harnessId: "codex",
+          modelSlug: "survivor",
+          profileId: null,
+        },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+    expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ model: "survivor", reasoningEffort: "medium" }),
     );
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(true);
   });
 
   it("emits immediately for a non-empty unvalidated slug but reports it not catalog-confirmed until validated", async () => {
@@ -1135,11 +1158,13 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
   });
 
-  it("emits the resolved first-model slug when a delisted remembered slug self-heals on catalog load", async () => {
-    // INV3: when a remembered slug is absent on load and resolves X -> Y, the
-    // catalog load itself must propagate an emit carrying Y - so live-settings
-    // updates AND Ticket 4 later records Y (not the dead slug). No user action is
-    // required; the catalog resolution alone drives the emit.
+  it("does not emit the first-model substitute when a delisted remembered slug loads absent", async () => {
+    // Regression: a remembered slug absent on load used to "self-heal" X -> Y
+    // and EMIT Y from the catalog load alone - so a single bad catalog (a
+    // harness probe that timed out and answered with a fabricated one-row
+    // list) rewrote the chat's persisted model on every device sharing it.
+    // The load now presents Y for display only: no emit, no raw rewrite, not
+    // confirmed.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
@@ -1170,9 +1195,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
     expect(onSettingsChange).not.toHaveBeenCalled();
 
-    // The catalog loads WITHOUT the remembered slug -> resolves to the first
-    // model AND emits it (the self-heal), carrying that model's own default
-    // effort - never the dead slug.
+    // The catalog loads WITHOUT the remembered slug -> presents the first
+    // model, with that model's own default effort, and stays silent.
     modelsData.value = {
       models: [
         {
@@ -1198,28 +1222,26 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     rerender();
 
     await waitFor(() =>
-      expect(onSettingsChange).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          model: "survivor",
-          reasoningEffort: "medium",
-        }),
-      ),
+      expect(result.current.getState().selection.modelSlug).toBe("survivor"),
     );
-    expect(result.current.getState().selection.modelSlug).toBe("survivor");
-    expect(result.current.getState().selectionCatalogConfirmed).toBe(true);
+    expect(result.current.getState().reasoning).toBe("medium");
+    expect(result.current.getState().selectionHealedForDisplay).toBe(true);
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+    expect(result.current.getState().values.selection.modelSlug).toBe(
+      "delisted-old",
+    );
+    expect(onSettingsChange).not.toHaveBeenCalled();
   });
 
-  it("does not re-emit a stale slug when the catalog unloads after a delisting self-heal", async () => {
-    // Regression (cold-review repro): a delisted slug self-heals X -> Y on load and
-    // emits Y. If the surface later goes inactive / the query detaches
-    // (`modelsLoaded:false`), the derive falls back to holding a raw slug - the
-    // self-heal detector must NOT fire in that UNLOAD direction (it would emit the
-    // dead slug). The catalog-confirmed gate on the detector prevents it; the raw
-    // heal additionally aligns the sticky slug so there is no transition at all.
+  it("restores the remembered slug when the catalog reloads with it after a display-only substitution", async () => {
+    // The point of not rewriting the raw slug: a catalog that merely FAILED to
+    // list the model (a truncated or fabricated probe answer) is followed by
+    // one that lists it again, and the user's selection comes back on its own -
+    // with nothing emitted in either direction.
     useSettingsStore.setState({
       defaultSelection: {
         harnessId: "codex",
-        modelSlug: "delisted-old",
+        modelSlug: "remembered",
         profileId: null,
       },
       defaultReasoning: "",
@@ -1238,44 +1260,34 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       ),
     );
 
-    // Load WITHOUT the remembered slug -> self-heals to the first model, emits it.
-    modelsData.value = {
-      models: [
-        {
-          harnessId: "codex",
-          slug: "survivor",
-          label: "Survivor",
-          description: null,
-          isDefault: true,
-          contextWindow: null,
-          maxOutputTokens: null,
-          defaultReasoningEffort: null,
-          supportedReasoningEfforts: [],
-          defaultServiceTier: null,
-          supportedServiceTiers: [],
-          metadata: {},
-        },
-      ],
-    };
+    const row = (slug: string) => modelOption("codex", slug);
+
+    // Load WITHOUT the remembered slug -> presents the first model, silently.
+    modelsData.value = { models: [row("survivor")] };
     rerender();
     await waitFor(() =>
-      expect(onSettingsChange).toHaveBeenLastCalledWith(
-        expect.objectContaining({ model: "survivor" }),
-      ),
+      expect(result.current.getState().selection.modelSlug).toBe("survivor"),
     );
-    // Raw heal: the sticky slug is now the resolved one, not the dead slug.
     expect(result.current.getState().values.selection.modelSlug).toBe(
-      "survivor",
+      "remembered",
     );
 
-    // The query now detaches / surface unloads: `modelsLoaded` flips false.
-    onSettingsChange.mockClear();
+    // The query detaches / surface unloads: the raw slug is held for display.
     modelsData.value = undefined;
     rerender();
     await waitFor(() =>
-      expect(result.current.getState().selectionCatalogConfirmed).toBe(false),
+      expect(result.current.getState().selection.modelSlug).toBe("remembered"),
     );
-    // The unload must NOT re-emit - neither the healed slug nor the dead one.
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+
+    // A later load that lists it again confirms the user's own slug.
+    modelsData.value = { models: [row("survivor"), row("remembered")] };
+    rerender();
+    await waitFor(() =>
+      expect(result.current.getState().selectionCatalogConfirmed).toBe(true),
+    );
+    expect(result.current.getState().selection.modelSlug).toBe("remembered");
+    expect(result.current.getState().selectionHealedForDisplay).toBe(false);
     expect(onSettingsChange).not.toHaveBeenCalled();
   });
 
