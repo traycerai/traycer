@@ -1465,6 +1465,138 @@ describe("PendingInterviewCard keyboard navigation", () => {
     }
   });
 
+  it("does not answer with a DIFFERENT option when the options are reordered before the timer fires", () => {
+    // The sibling defect of the arm below, and the one that made holding only
+    // `submitDrafts` in a ref insufficient. `readCanonicalState` maps the
+    // stored row onto option INDICES for the questions IT was given, so a
+    // stale reader and a current submitter disagree about what index 0 means:
+    // pick `Alpha` from `[Alpha, Beta]`, receive `[Beta, Alpha]` during the
+    // highlight window, and the answer sent is `Beta` - a choice the user
+    // never made, from a card that showed them making another one.
+    //
+    // With both read from the current render, restoration repairs the index by
+    // LABEL (`draftFromStoredAnswer`), so the canonical answer is Alpha at its
+    // new index - which no longer matches the option this timer was armed on,
+    // and the supersession guard correctly declines to auto-advance. The user
+    // keeps their visible choice and submits it themselves.
+    //
+    // FALSIFICATION: read `readCanonicalState` from the arming closure instead
+    // of the ref and this reddens with `values: ["Beta"]`.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [
+              singleSelect("q1", "Which library?", ["Alpha", "Beta"]),
+            ],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [
+              singleSelect("q1", "Which library?", ["Beta", "Alpha"]),
+            ],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      // Not a dead end: the choice survived the reorder, so Submit is live and
+      // sends what the user actually picked. A green assertion above must not
+      // be the card having silently lost the answer instead.
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Submit" })
+          .disabled,
+      ).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+      expect(onSubmit).toHaveBeenCalledWith(
+        "interview-1",
+        expect.arrayContaining([
+          expect.objectContaining({ values: ["Alpha"] }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("advances instead of submitting when a later question arrives before the timer fires", () => {
+    // `isLast` is a claim about the question COUNT, and a repeated
+    // `interview.requested` can change it. Armed as the last page of a
+    // one-question interview and fired after a second arrived, the captured
+    // `isLast` submits without ever showing the user the new question - and
+    // `answersFromDrafts` maps the CURRENT list, so what it sends is the
+    // second question answered with nothing.
+    //
+    // FALSIFICATION: use the arming render's `isLast` instead of re-deriving
+    // from the ref's `total` and this reddens - `onSubmit` fires and the card
+    // never reaches the second question.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const first = singleSelect("q1", "Which library?", ["Alpha", "Beta"]);
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [first],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [first, singleSelect("q2", "Which runtime?", ["Bun"])],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(screen.getByText("Which runtime?")).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not submit when the free-text channel is withdrawn before the timer fires", () => {
     // The questions-side sibling of the busy-flip arm above, and the reason
     // `latestIsBusyRef` alone was not enough: the timer's `submitDrafts` also

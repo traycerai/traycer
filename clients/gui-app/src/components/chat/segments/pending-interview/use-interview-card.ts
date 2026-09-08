@@ -100,6 +100,23 @@ interface UseInterviewCardArgs {
     | null;
 }
 
+// The single-select advance timer's fire-time inputs: everything it must take
+// from the CURRENT render rather than the one that armed it, because each is
+// derived from `questions` and a repeated `interview.requested` rewrites those
+// in place. Filled every render; see the ref that holds it.
+interface InterviewAdvanceInputs {
+  readonly readCanonicalState: () => {
+    readonly pageIndex: number;
+    readonly drafts: ReadonlyArray<DraftAnswer>;
+  };
+  readonly total: number;
+  readonly submitDrafts: (answerDrafts: ReadonlyArray<DraftAnswer>) => void;
+  readonly navigate: (
+    direction: 1 | -1,
+    answerDrafts: ReadonlyArray<DraftAnswer>,
+  ) => void;
+}
+
 // Owns every behavior of the pending interview card - draft state, paging,
 // the highlight-then-advance timer, dispatch locking, and the keyboard
 // shortcuts - so the components stay purely presentational. Attach
@@ -162,18 +179,32 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     latestIsBusyRef.current = isBusy;
   }, [isBusy]);
   // The same staleness one level up, and why `isBusy` alone is not enough:
-  // that timer's `submitDrafts` also closed over its render's QUESTIONS,
-  // through `hasUnanswerableQuestion` and through `answersFromDrafts`'s
-  // per-question free-text test. A repeated `interview.requested` for this
-  // block updates questions IN PLACE (the card is keyed by chat and block, so
-  // it does not remount), so a free-text channel withdrawn during the
-  // highlight window would still be submitted from - the guard evaluated
-  // against a shape that no longer applies. Every other fire-time input is
-  // already re-derived from the canonical row; this holds the submit itself to
-  // the same rule.
-  const latestSubmitDraftsRef = useRef<
-    ((answerDrafts: ReadonlyArray<DraftAnswer>) => void) | null
-  >(null);
+  // everything else that timer reads is derived from its render's QUESTIONS,
+  // and a repeated `interview.requested` for this block updates questions IN
+  // PLACE (the card is keyed by chat and block, so it does not remount). Each
+  // of these was wrong in its own way against the shape that replaced them:
+  //
+  // - `readCanonicalState` maps the stored row onto option INDICES for the
+  //   questions it was given. Reordered options are repaired by label there
+  //   (`draftFromStoredAnswer`), so reading with the old list and submitting
+  //   with the new one silently answers with a DIFFERENT option - pick
+  //   `Alpha` from `[Alpha, Beta]`, receive `[Beta, Alpha]`, send `Beta`.
+  // - `total`, and so `isLast`, decides submit-versus-advance from a question
+  //   COUNT that a repeated request can change.
+  // - `submitDrafts` guards on questions through `hasUnanswerableQuestion` and
+  //   `answersFromDrafts`'s per-question free-text test, so a channel
+  //   withdrawn during the highlight window would still be submitted from.
+  // - `navigate` looked innocent and is not: it persists through
+  //   `persistDraft`, which pairs each draft with `questions.at(index)` to
+  //   write labels. Fresh drafts against a stale question list mislabels the
+  //   stored row exactly as the submit path would.
+  //
+  // So the ref carries the whole fire-time surface rather than one member of
+  // it - the previous revision held only `submitDrafts` and left the three
+  // beside it stale. What stays captured is deliberate: `safeIndex` and
+  // `optionIndex` are the page and option this timer was ARMED on, and the
+  // guards below exist to compare them against canonical state.
+  const latestFireTimeRef = useRef<InterviewAdvanceInputs | null>(null);
 
   const drafts = useMemo(
     () => draftsFromStoredAnswers(storedDraft?.answers, questions),
@@ -367,10 +398,22 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     onSubmit(blockId, answers);
   };
 
-  // No dependency array on purpose: `submitDrafts` is rebuilt every render, and
-  // the point of the ref is to hold the CURRENT one.
-  useEffect(() => {
-    latestSubmitDraftsRef.current = submitDrafts;
+  // No dependency array on purpose: these are rebuilt every render, and the
+  // point of the ref is to hold the CURRENT ones.
+  //
+  // `useLayoutEffect`, not `useEffect`, and that is the whole guarantee: a
+  // passive effect is scheduled separately from the commit and React may run
+  // it after a timer that a concurrent render's commit has already made stale.
+  // This one runs synchronously at commit, so "the ref holds the render the
+  // user is looking at" is true by construction rather than by the store
+  // updates that happen to flush effects today. Four property writes.
+  useLayoutEffect(() => {
+    latestFireTimeRef.current = {
+      readCanonicalState,
+      total,
+      submitDrafts,
+      navigate,
+    };
   });
 
   const submit = () => {
@@ -438,9 +481,15 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         setPendingOptionIndex(null);
         return;
       }
-      // Re-derive from the LATEST canonical row at fire time. A duplicate view
-      // may have changed this answer or the page during the highlight window.
-      const latest = readCanonicalState();
+      // Everything below reads the CURRENT render's surface, not this timer's.
+      // The `??` is for the type: the effect that fills the ref runs on mount,
+      // long before a click could arm this timer.
+      const fresh = latestFireTimeRef.current;
+      // Re-derive from the LATEST canonical row at fire time, and against the
+      // LATEST questions. A duplicate view may have changed this answer or the
+      // page during the highlight window, and the host may have re-raised the
+      // questions themselves.
+      const latest = (fresh?.readCanonicalState ?? readCanonicalState)();
       // No-op when the canonical page moved off the question this timer was
       // armed on: a duplicate view explicitly navigated (Previous/Next), and
       // submitting or advancing from here would override that navigation -
@@ -463,14 +512,19 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         return;
       }
       // Submit / page-advance against the LATEST canonical answers, never the
-      // captured snapshot - and through the LATEST `submitDrafts`, so its
-      // question-derived guards are the current ones too. The `??` is for the
-      // type: the effect that fills the ref runs on mount, long before a click
-      // could arm this timer. `navigate` needs no such treatment - it moves
-      // pages and reads no question.
-      const submitLatest = latestSubmitDraftsRef.current ?? submitDrafts;
-      if (isLast) submitLatest(latest.drafts);
-      else navigate(1, latest.drafts);
+      // captured snapshot - and through the LATEST submit and navigate, so the
+      // drafts just derived and the questions they are written against are one
+      // shape rather than two.
+      //
+      // `isLast` is re-derived here for the same reason: it is a claim about
+      // the current question COUNT, while `safeIndex` stays the armed page the
+      // guard above just matched against canonical state.
+      const totalNow = fresh?.total ?? total;
+      if (safeIndex >= totalNow - 1) {
+        (fresh?.submitDrafts ?? submitDrafts)(latest.drafts);
+      } else {
+        (fresh?.navigate ?? navigate)(1, latest.drafts);
+      }
     }, ADVANCE_DELAY_MS);
   };
 
