@@ -32,8 +32,7 @@ export function SystemTabModalHost(): ReactNode {
   const modal = useSystemTabModalController();
   useSystemTabModalRefreshGuard();
   const open = modal.active !== null;
-  const themeDraftOpen = useThemeLibraryStore((state) => state.draft !== null);
-  const editingTheme = modal.active?.kind === "settings" && themeDraftOpen;
+  const editingTheme = useThemeLibraryStore((state) => state.draft !== null);
 
   // External-store sync - publish the live modal API for framework-free
   // callers (router adapter, keybinding dispatch, palette sources).

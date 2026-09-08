@@ -1,12 +1,17 @@
 import { zipSync, strToU8 } from "fflate";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeThemeColor,
   themeDefinitionSchema,
   type ThemeDefinition,
 } from "@/lib/themes/theme-definition";
-import { importThemePackage, importThemeText } from "@/lib/themes/theme-import";
+import {
+  importThemeFiles,
+  importThemePackage,
+  importThemeText,
+} from "@/lib/themes/theme-import";
 import { createThemeFromPreset } from "@/lib/themes/theme-library";
+import { searchOpenVsxThemes } from "@/lib/themes/open-vsx";
 
 function nativeTheme(
   overrides: Partial<ThemeDefinition> = {},
@@ -36,6 +41,14 @@ function manifest(path: string): string {
     displayName: "Fixture themes",
     publisher: "fixture",
     name: "theme-pack",
+    contributes: { themes: [{ label: "Fixture", path, uiTheme: "vs-dark" }] },
+  });
+}
+
+function namelessManifest(path: string): string {
+  return JSON.stringify({
+    displayName: "Nameless fixture",
+    publisher: "fixture",
     contributes: { themes: [{ label: "Fixture", path, uiTheme: "vs-dark" }] },
   });
 }
@@ -75,11 +88,37 @@ describe("theme customization contract", () => {
     );
 
     expect(theme.name).toBe("From file");
-    expect(theme.id).not.toBe("from-file");
+    expect(theme.id).toBe("from-file");
     expect(theme.colors.primary).toBe("#123456ff");
     expect(theme.syntax?.colors["editor.background"]).toBe("#101010ff");
     expect(theme.syntax?.tokenColors[0]?.settings.foreground).toBe("#abcdefff");
     expect(theme.syntax?.tokenColors[0]?.settings.fontStyle).toBe("italic");
+  });
+
+  it("honors cancellation before and after reading local theme files", async () => {
+    const before = new AbortController();
+    before.abort();
+    const unread = vi.fn(() => Promise.resolve(JSON.stringify(nativeTheme())));
+    const unreadFile = new File([], "theme.json");
+    Object.defineProperty(unreadFile, "text", { value: unread });
+
+    await expect(
+      importThemeFiles([unreadFile], before.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(unread).not.toHaveBeenCalled();
+
+    const after = new AbortController();
+    const read = vi.fn(() => {
+      after.abort();
+      return Promise.resolve(JSON.stringify(nativeTheme()));
+    });
+    const readFile = new File([], "theme.json");
+    Object.defineProperty(readFile, "text", { value: read });
+
+    await expect(
+      importThemeFiles([readFile], after.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(read).toHaveBeenCalledTimes(1);
   });
 
   it("converts VS Code JSONC, including ANSI and token syntax", () => {
@@ -144,6 +183,68 @@ describe("theme customization contract", () => {
       "comment",
       "keyword",
     ]);
+  });
+
+  it("gives nameless packages stable IDs without collapsing different content", async () => {
+    const files = {
+      "extension/package.json": namelessManifest("themes/base.json"),
+      "extension/themes/base.json": JSON.stringify({
+        name: "Base",
+        colors: { "editor.background": "#101010" },
+      }),
+    };
+    const first = await importThemePackage(pack(files));
+    const second = await importThemePackage(pack(files));
+    expect(second[0]?.id).toBe(first[0]?.id);
+    expect(second[0]?.collection).toEqual(first[0]?.collection);
+
+    const different = await importThemePackage(
+      pack({
+        ...files,
+        "extension/themes/base.json": JSON.stringify({
+          name: "Base",
+          colors: { "editor.background": "#202020" },
+        }),
+      }),
+    );
+    expect(different[0]?.id).not.toBe(first[0]?.id);
+  });
+
+  it("falls back to Open VSX search when an exact identity lookup fails", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            extensions: [
+              {
+                namespace: "fallback",
+                name: "theme",
+                version: "1.0.0",
+                displayName: "Fallback theme",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+
+    try {
+      const results = await searchOpenVsxThemes(
+        "missing.theme",
+        "relevance",
+        new AbortController().signal,
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        id: "fallback.theme",
+        name: "Fallback theme",
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      fetch.mockRestore();
+    }
   });
 
   it("rejects include cycles and paths that escape the extension", async () => {

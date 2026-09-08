@@ -20,7 +20,7 @@ interface PromotableModalFrameProps {
   readonly closeTestId: string;
   readonly onPromote: () => void;
   readonly onClose: () => void;
-  readonly onOpenAutoFocus?: (event: Event) => void;
+  readonly onOpenAutoFocus: ((event: Event) => void) | undefined;
   readonly children: ReactNode;
 }
 

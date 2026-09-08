@@ -19,6 +19,9 @@ export function buildPatchCacheKey(patch: string, scope: string): string {
   return `${scope}:${contentFingerprint(patch.trim())}`;
 }
 
+// ponytail: distinct syntax payloads remain registered for this session. Bound
+// these when Pierre can replace/unload themes across main and worker engines;
+// reusing names today would serve stale tokens from those independent caches.
 const registeredThemes = new Set<string>();
 
 /** Registers imported TextMate rules once before the diff worker resolves them. */

@@ -116,6 +116,32 @@ function parseExtension(value: unknown): OpenVsxExtension | null {
   };
 }
 
+async function lookupOpenVsxIdentity(
+  namespace: string,
+  name: string,
+  signal: AbortSignal,
+): Promise<OpenVsxExtension | null> {
+  try {
+    const detail = await fetch(
+      `${API}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+      {
+        signal,
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      },
+    );
+    if (!detail.ok) {
+      await detail.body?.cancel();
+      return null;
+    }
+    const bytes = await readCappedResponse(detail, 512 * 1024);
+    return parseExtension(JSON.parse(new TextDecoder().decode(bytes)));
+  } catch {
+    signal.throwIfAborted();
+    return null;
+  }
+}
+
 export async function searchOpenVsxThemes(
   query: string,
   sort: "downloadCount" | "rating" | "timestamp" | "relevance",
@@ -124,24 +150,12 @@ export async function searchOpenVsxThemes(
   const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
   const identity = /^([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)$/.exec(query.trim());
   if (identity) {
-    const detail = await fetch(
-      `${API}/${encodeURIComponent(identity[1])}/${encodeURIComponent(identity[2])}`,
-      {
-        signal: requestSignal,
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-      },
+    const extension = await lookupOpenVsxIdentity(
+      identity[1],
+      identity[2],
+      requestSignal,
     );
-    if (detail.status !== 404) {
-      const bytes = await readCappedResponse(detail, 512 * 1024);
-      const extension = parseExtension(
-        JSON.parse(new TextDecoder().decode(bytes)),
-      );
-      if (!extension)
-        throw new Error("Open VSX returned unreadable extension details.");
-      return [extension];
-    }
-    await detail.body?.cancel();
+    if (extension) return [extension];
   }
   const url = new URL(`${API}/-/search`);
   url.search = new URLSearchParams({
@@ -208,11 +222,15 @@ export async function installOpenVsxTheme(
       "The downloaded theme pack failed its checksum check. Try downloading it again.",
     );
   requestSignal.throwIfAborted();
-  const themes = await importVerifiedThemePackage(bytes, {
-    publisher: namespace,
-    name,
-    version: extension.version,
-  });
+  const themes = await importVerifiedThemePackage(
+    bytes,
+    {
+      publisher: namespace,
+      name,
+      version: extension.version,
+    },
+    requestSignal,
+  );
   requestSignal.throwIfAborted();
   return themes.map((theme) => ({
     ...theme,

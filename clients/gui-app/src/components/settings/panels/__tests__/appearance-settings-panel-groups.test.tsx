@@ -177,9 +177,12 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     );
 
     // Each heading's section owns its representative row.
-    expect(colorSchemeHeading.closest("section")).toBe(
-      themesHeading.closest("section"),
-    );
+    const colorSchemeGroup = screen.getByRole("group", {
+      name: "Color scheme",
+    });
+    const themeList = themesHeading.nextElementSibling;
+    expect(colorSchemeGroup.contains(schemeButton)).toBe(true);
+    expect(themeList?.contains(preset)).toBe(true);
     expect(interfaceHeading.closest("section")).toBe(
       pointerCursors.closest("section"),
     );

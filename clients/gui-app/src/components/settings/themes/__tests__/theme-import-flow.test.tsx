@@ -1,3 +1,4 @@
+import { strToU8, zipSync } from "fflate";
 import {
   cleanup,
   fireEvent,
@@ -14,6 +15,29 @@ import { ThemeGallery } from "@/components/settings/themes/theme-gallery";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
+
+function localThemePack(): File {
+  const bytes = zipSync({
+    "extension/package.json": strToU8(
+      JSON.stringify({
+        displayName: "Local fixture",
+        publisher: "fixture",
+        name: "local-pack",
+        contributes: {
+          themes: [{ label: "Local fixture", path: "themes/theme.json" }],
+        },
+      }),
+    ),
+    "extension/themes/theme.json": strToU8(
+      JSON.stringify({
+        name: "Local fixture",
+        type: "dark",
+        colors: { "editor.background": "#101010" },
+      }),
+    ),
+  });
+  return new File([bytes], "local-fixture.vsix", { type: "application/zip" });
+}
 
 function resetThemeStores(): void {
   window.localStorage.clear();
@@ -133,5 +157,61 @@ describe("theme import flow", () => {
     expect(useThemeLibraryStore.getState().themes[0]?.name).toBe(
       "Flow fixture",
     );
+  });
+
+  it("updates a repeated local pack or saves it as a copy", async () => {
+    const user = userEvent.setup();
+    renderThemes();
+    await user.click(screen.getByRole("button", { name: "Import theme" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Find your next palette",
+    });
+    await user.click(within(dialog).getByRole("tab", { name: "Import files" }));
+    const input = within(dialog).getByLabelText("Choose theme files");
+    const file = localThemePack();
+
+    await user.upload(input, file);
+    await within(dialog).findByText("1 theme ready to import");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add to library" }),
+    );
+    await waitFor(() => {
+      expect(useThemeLibraryStore.getState().themes).toHaveLength(1);
+    });
+    const imported = useThemeLibraryStore.getState().themes[0];
+
+    useThemeLibraryStore.setState({
+      themes: [
+        { ...imported, colors: { ...imported.colors, primary: "#123456ff" } },
+      ],
+    });
+    await user.upload(input, localThemePack());
+    await within(dialog).findByText(/Updating replaces 1 installed theme/);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Update themes" }),
+    );
+    await waitFor(() => {
+      expect(useThemeLibraryStore.getState().themes).toHaveLength(1);
+      expect(useThemeLibraryStore.getState().themes[0]?.id).toBe(imported.id);
+    });
+
+    const edited = useThemeLibraryStore.getState().themes[0];
+    useThemeLibraryStore.getState().saveTheme({
+      ...edited,
+      colors: { ...edited.colors, primary: "#123456ff" },
+    });
+    await user.upload(input, localThemePack());
+    await within(dialog).findByText(/Updating replaces 1 installed theme/);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save copies" }),
+    );
+    await waitFor(() => {
+      const themes = useThemeLibraryStore.getState().themes;
+      expect(themes).toHaveLength(2);
+      expect(
+        themes.find((theme) => theme.id === imported.id)?.colors.primary,
+      ).toBe("#123456ff");
+      expect(themes.some((theme) => theme.id !== imported.id)).toBe(true);
+    });
   });
 });

@@ -8,6 +8,7 @@ import {
 import { Unzip, UnzipInflate } from "fflate";
 import { parse, type ParseError } from "jsonc-parser";
 import { z } from "zod";
+import { THEME_PRESETS } from "@/lib/theme-presets";
 import {
   deriveThemeColors,
   isThemeToken,
@@ -335,11 +336,17 @@ export function importThemeText(
   return entries.map((entry: unknown) => {
     const record = z.record(z.string(), z.unknown()).parse(entry);
     if ("version" in record || "base" in record || "appearance" in record) {
-      return themeDefinitionSchema.parse({
+      const theme = themeDefinitionSchema.parse({
         ...record,
-        id: crypto.randomUUID(),
+        id: record.id ?? crypto.randomUUID(),
         syntax: record.syntax ?? null,
       });
+      if (THEME_PRESETS.some((preset) => preset.id === theme.id)) {
+        throw new Error(
+          "This theme identity is reserved for a built-in palette.",
+        );
+      }
+      return theme;
     }
     if (
       !("colors" in record) &&
@@ -381,6 +388,16 @@ function packagePath(path: string, relativeTo: string): string {
   return segments.join("/");
 }
 
+async function hashThemeContent(content: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(content),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 export interface ThemePackageIdentity {
   publisher: string;
   name: string;
@@ -390,20 +407,23 @@ export interface ThemePackageIdentity {
 export function importThemePackage(
   bytes: Uint8Array,
 ): Promise<ThemeDefinition[]> {
-  return readThemePackage(bytes, null);
+  return readThemePackage(bytes, null, null);
 }
 
 export function importVerifiedThemePackage(
   bytes: Uint8Array,
   identity: ThemePackageIdentity,
+  signal: AbortSignal,
 ): Promise<ThemeDefinition[]> {
-  return readThemePackage(bytes, identity);
+  return readThemePackage(bytes, identity, signal);
 }
 
 async function readThemePackage(
   bytes: Uint8Array,
   identity: ThemePackageIdentity | null,
+  signal: AbortSignal | null,
 ): Promise<ThemeDefinition[]> {
+  signal?.throwIfAborted();
   if (bytes.byteLength > MAX_THEME_PACKAGE_BYTES)
     throw new Error("Theme packs must be smaller than 20 MB.");
   const files = new Map<string, string>();
@@ -451,7 +471,13 @@ async function readThemePackage(
   });
   zip.register(UnzipInflate);
   // Feed small chunks so decompression cannot allocate an entire zip bomb before the cap runs.
+  let lastYield = performance.now();
   for (let offset = 0; offset < bytes.byteLength; offset += 1024) {
+    if (performance.now() - lastYield >= 8) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      signal?.throwIfAborted();
+      lastYield = performance.now();
+    }
     zip.push(
       bytes.subarray(offset, offset + 1024),
       offset + 1024 >= bytes.byteLength,
@@ -473,6 +499,7 @@ async function readThemePackage(
   }
   const resolved = new Map<string, VsCodeTheme>();
   function resolve(path: string, ancestors: Set<string>): VsCodeTheme {
+    signal?.throwIfAborted();
     if (ancestors.has(path))
       throw new Error("The theme contains circular includes.");
     if (ancestors.size >= 8)
@@ -502,7 +529,14 @@ async function readThemePackage(
     resolved.set(path, merged);
     return merged;
   }
-  const collectionId = `vsix:${manifest.publisher ?? "local"}.${manifest.name ?? crypto.randomUUID()}`;
+  const packageName =
+    manifest.name ??
+    (await hashThemeContent(
+      JSON.stringify(
+        [...files.keys()].sort().map((path) => [path, files.get(path)]),
+      ),
+    ));
+  const collectionId = `vsix:${manifest.publisher ?? "local"}.${packageName}`;
   const pathOccurrences = new Map<string, number>();
   return Promise.all(
     manifest.contributes.themes.map(async (contribution) => {
@@ -510,15 +544,8 @@ async function readThemePackage(
       const theme = resolve(path, new Set());
       const occurrence = pathOccurrences.get(path) ?? 0;
       pathOccurrences.set(path, occurrence + 1);
-      const digest = await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(`${collectionId}:${path}:${occurrence}`),
-      );
-      const id =
-        "imported:" +
-        Array.from(new Uint8Array(digest), (byte) =>
-          byte.toString(16).padStart(2, "0"),
-        ).join("");
+      const id = `imported:${await hashThemeContent(`${collectionId}:${path}:${occurrence}`)}`;
+      signal?.throwIfAborted();
       return {
         ...convertVsCodeTheme(
           {
@@ -543,13 +570,21 @@ async function readThemePackage(
   );
 }
 
+export interface ThemeImportBatch {
+  themes: ThemeDefinition[];
+  replaceCollectionIds: string[];
+}
+
 export async function importThemeFiles(
   files: File[],
-): Promise<ThemeDefinition[]> {
+  signal: AbortSignal,
+): Promise<ThemeImportBatch> {
   if (files.length === 0 || files.length > MAX_THEMES)
     throw new Error("Choose between 1 and 100 theme files.");
   const themes: ThemeDefinition[] = [];
+  const replaceCollectionIds = new Set<string>();
   for (const file of files) {
+    signal.throwIfAborted();
     if (!/\.(?:json|jsonc|vsix)$/i.test(file.name))
       throw new Error("Choose a .json, .jsonc, or .vsix theme file.");
     const isPackage = /\.vsix$/i.test(file.name);
@@ -557,15 +592,23 @@ export async function importThemeFiles(
       throw new Error(
         "Theme JSON must be smaller than 2 MB; theme packs must be smaller than 20 MB.",
       );
-    const imported = isPackage
-      ? await importThemePackage(new Uint8Array(await file.arrayBuffer()))
-      : importThemeText(
-          await file.text(),
-          file.name.replace(/\.(jsonc?|vsix)$/i, ""),
-        );
+    let imported: ThemeDefinition[];
+    if (isPackage) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      signal.throwIfAborted();
+      imported = await readThemePackage(bytes, null, signal);
+      for (const theme of imported) {
+        if (theme.collection) replaceCollectionIds.add(theme.collection.id);
+      }
+    } else {
+      const text = await file.text();
+      signal.throwIfAborted();
+      imported = importThemeText(text, file.name.replace(/\.jsonc?$/i, ""));
+    }
+    signal.throwIfAborted();
     themes.push(...imported);
     if (themes.length > MAX_THEMES)
       throw new Error("Import up to 100 themes at a time.");
   }
-  return themes;
+  return { themes, replaceCollectionIds: [...replaceCollectionIds] };
 }

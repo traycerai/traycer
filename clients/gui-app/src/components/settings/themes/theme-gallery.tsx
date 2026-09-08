@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   Command,
   CommandEmpty,
@@ -84,10 +85,12 @@ export function ThemeGallery() {
       draft: state.draft,
       setDraft: state.setDraft,
       error: state.error,
+      resetLibrary: state.resetLibrary,
     })),
   );
   const [importOpen, setImportOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
   const manageTrigger = useRef<HTMLButtonElement>(null);
   const beginCreate = () => {
     if (library.draft) return;
@@ -175,9 +178,32 @@ export function ThemeGallery() {
           </Button>
         </div>
         {library.error ? (
-          <p role="alert" className="text-ui-xs text-destructive">
-            {library.error}
-          </p>
+          <div className="space-y-2">
+            <p role="alert" className="text-ui-xs text-destructive">
+              {library.error}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setResetOpen(true)}
+            >
+              Reset theme library…
+            </Button>
+            <ConfirmDestructiveDialog
+              open={resetOpen}
+              onOpenChange={setResetOpen}
+              title="Reset theme library?"
+              description="This deletes your saved themes and resets theme options. Built-in themes remain available. This cannot be undone."
+              cascadeSummary={null}
+              actionLabel="Reset library"
+              isPending={false}
+              blockedReason={null}
+              onConfirm={() => {
+                library.resetLibrary();
+                setResetOpen(false);
+              }}
+            />
+          </div>
         ) : null}
       </div>
       {manageOpen ? (
@@ -430,7 +456,9 @@ function ThemeManager({
   const groups = new Map<string, ThemeDefinition[]>();
   for (const theme of themes) {
     const key = theme.collection?.id ?? "custom";
-    groups.set(key, [...(groups.get(key) ?? []), theme]);
+    const group = groups.get(key);
+    if (group) group.push(theme);
+    else groups.set(key, [theme]);
   }
   const search = query.trim().toLowerCase();
   const matches = (theme: ThemeDefinition) =>

@@ -15,8 +15,8 @@ export const themeTokens = [
   { key: "popover-foreground", label: "Menu text", group: "Surfaces" },
   { key: "sidebar", label: "Sidebar", group: "Surfaces" },
   { key: "sidebar-foreground", label: "Sidebar foreground", group: "Surfaces" },
-  { key: "primary", label: "Accent", group: "Controls" },
-  { key: "primary-foreground", label: "Accent text", group: "Controls" },
+  { key: "primary", label: "Primary", group: "Controls" },
+  { key: "primary-foreground", label: "Primary text", group: "Controls" },
   { key: "secondary", label: "Secondary", group: "Controls" },
   {
     key: "secondary-foreground",
@@ -149,27 +149,14 @@ export const themeDefinitionSchema = z.object({
   base: z.custom<ThemePreset>((value) =>
     THEME_PRESETS.some((preset) => preset.id === value),
   ),
-  colors: z.record(
-    z.string().refine(isThemeToken, "Unknown theme color"),
-    colorSchema,
-  ),
+  colors: z.partialRecord(z.enum(themeTokenNames), colorSchema),
   syntax: themeSyntaxSchema.nullable(),
   sidebarArtwork: z.boolean().optional(),
   collection: z
     .object({ id: z.string().max(256), name: z.string().max(100) })
     .optional(),
 });
-export interface ThemeDefinition {
-  version: 1;
-  id: string;
-  name: string;
-  appearance: "light" | "dark";
-  base: ThemePreset;
-  colors: Partial<Record<ThemeToken, string>>;
-  syntax: ThemeSyntax | null;
-  collection?: { id: string; name: string };
-  sidebarArtwork?: boolean;
-}
+export type ThemeDefinition = z.infer<typeof themeDefinitionSchema>;
 
 /** Guided edits derive surface roles once; advanced edits can override each role. */
 export function deriveThemeColors(

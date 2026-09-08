@@ -46,14 +46,18 @@ same revision. Imported TextMate rules reach Shiki and Pierre. CodeMirror
 continues using its existing Lezer syntax highlighting and semantic surface
 tokens; VS Code semantic-token rules and executable extensions are not run.
 
-Before the module bundle evaluates, `styles/theme-fallback.css` supplies the
-neutral palette using the system color scheme. Runtime inline tokens then
+In production, `styles/theme-fallback.css` supplies a neutral palette before
+the module bundle evaluates. It follows the system color scheme where
+`light-dark()` is supported and otherwise starts with light colors. In
+development, Vite injects the stylesheet during module evaluation. Inline tokens then
 restore the saved theme. Regenerate this fallback after changing base colors
 with `bun scripts/generate-theme-fallback.ts` from `clients/gui-app`.
 
 The library is local to the browser profile. It validates and writes storage
-before changing saved state, refuses to overwrite an unreadable library, and
-refreshes library selections/preferences on cross-window storage events.
+before changing saved state, refuses to overwrite an unreadable library during
+ordinary edits, and refreshes library selections/preferences on cross-window
+storage events. A damaged library exposes an explicit reset with a deletion
+confirmation; failed reset writes preserve the existing data.
 Drafts stay in memory. The original settings store still owns the
 System/Light/Dark preference and existing font settings.
 
@@ -77,8 +81,9 @@ The floating editor uses independent graphite and sage colors so recovery
 controls remain readable during extreme theme edits. Palette / All colors
 controls expose guided derivation and individual tokens in compact horizontal
 color rows; inspection, drag, resize, minimize, paired editing, save, and
-rollback remain available. During editing, modal Settings releases its focus,
-pointer, and scroll locks so the floating editor can interact with the app.
+rollback remain available. During editing, system modals release their focus,
+pointer, and scroll locks so the floating editor can interact with the app,
+including when switching from Settings to History.
 Normal modality returns on save/cancel. Radix remounts the Settings content
 when modality changes, so transient disclosure/scroll state may reset.
 

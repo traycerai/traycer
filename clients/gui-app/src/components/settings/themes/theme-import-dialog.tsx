@@ -34,7 +34,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { themeQueryKeys } from "@/lib/query-keys/theme-query-keys";
-import { importThemeFiles, importThemeText } from "@/lib/themes/theme-import";
+import {
+  importThemeFiles,
+  importThemeText,
+  type ThemeImportBatch,
+} from "@/lib/themes/theme-import";
+import { getThemeImportConflicts } from "@/lib/themes/theme-library";
 import type { ThemeDefinition } from "@/lib/themes/theme-definition";
 import {
   installOpenVsxTheme,
@@ -55,8 +60,7 @@ type ImportSource =
   | { kind: "json"; text: string };
 interface StagedImport {
   themes: ThemeDefinition[];
-  source: ImportSource;
-  collectionId: string | null;
+  replaceCollectionIds: string[];
   baseline: string;
 }
 type Sort = "downloadCount" | "rating" | "timestamp" | "relevance";
@@ -81,14 +85,57 @@ const numberFormat = new Intl.NumberFormat(undefined, {
 async function readImportSource(
   source: ImportSource,
   signal: AbortSignal,
-): Promise<ThemeDefinition[]> {
+): Promise<ThemeImportBatch> {
   switch (source.kind) {
-    case "extension":
-      return installOpenVsxTheme(source.extension, signal);
+    case "extension": {
+      const themes = await installOpenVsxTheme(source.extension, signal);
+      return {
+        themes,
+        replaceCollectionIds: themes.flatMap((theme) =>
+          theme.collection ? [theme.collection.id] : [],
+        ),
+      };
+    }
     case "files":
-      return importThemeFiles(source.files);
+      return importThemeFiles(source.files, signal);
     case "json":
-      return importThemeText(source.text, "Imported theme");
+      return {
+        themes: importThemeText(source.text, "Imported theme"),
+        replaceCollectionIds: [],
+      };
+  }
+}
+
+async function stageThemeImport(
+  source: ImportSource,
+  controllers: Set<AbortController>,
+): Promise<StagedImport> {
+  const beforeRead = structuredClone(useThemeLibraryStore.getState().themes);
+  const controller = new AbortController();
+  controllers.add(controller);
+  try {
+    const imported = await readImportSource(source, controller.signal);
+    controller.signal.throwIfAborted();
+    if (
+      new Set(imported.themes.map((theme) => theme.id)).size !==
+      imported.themes.length
+    ) {
+      throw new Error(
+        "These files contain duplicate theme identities. Import one version of each theme at a time.",
+      );
+    }
+    return {
+      ...imported,
+      baseline: JSON.stringify(
+        getThemeImportConflicts(
+          beforeRead,
+          imported.themes,
+          imported.replaceCollectionIds,
+        ),
+      ),
+    };
+  } finally {
+    controllers.delete(controller);
   }
 }
 
@@ -133,34 +180,20 @@ function ThemeImportDialogBody({
   );
   const loadThemes = useMutation({
     mutationKey: themeQueryKeys.import(),
-    mutationFn: async (source: ImportSource) => {
-      const collectionId =
-        source.kind === "extension" ? `open-vsx:${source.extension.id}` : null;
-      const baseline = JSON.stringify(
-        useThemeLibraryStore
-          .getState()
-          .themes.filter((theme) => theme.collection?.id === collectionId),
-      );
-      const controller = new AbortController();
-      controllers.current.add(controller);
-      try {
-        const imported = await readImportSource(source, controller.signal);
-        controller.signal.throwIfAborted();
-        return { themes: imported, source, collectionId, baseline };
-      } finally {
-        controllers.current.delete(controller);
-      }
-    },
+    mutationFn: (source: ImportSource) =>
+      stageThemeImport(source, controllers.current),
   });
   const staged = loadThemes.data;
   useEffect(() => {
     if (staged) preview.current?.scrollIntoView({ block: "nearest" });
   }, [staged]);
-  const replacing =
-    staged?.source.kind === "extension"
-      ? themes.filter((theme) => theme.collection?.id === staged.collectionId)
-          .length
-      : 0;
+  const replacing = staged
+    ? getThemeImportConflicts(
+        themes,
+        staged.themes,
+        staged.replaceCollectionIds,
+      ).length
+    : 0;
   function load(source: ImportSource) {
     if (loadThemes.isPending) return;
     setSuccess(null);
@@ -171,17 +204,16 @@ function ThemeImportDialogBody({
     if (!staged) return;
     if (
       !copy &&
-      staged.collectionId !== null &&
       JSON.stringify(
-        useThemeLibraryStore
-          .getState()
-          .themes.filter(
-            (theme) => theme.collection?.id === staged.collectionId,
-          ),
+        getThemeImportConflicts(
+          useThemeLibraryStore.getState().themes,
+          staged.themes,
+          staged.replaceCollectionIds,
+        ),
       ) !== staged.baseline
     ) {
       setConflictError(
-        "This theme pack changed while you were reviewing it. Review the update again or save copies to keep those changes.",
+        "These themes changed while you were reviewing them. Review the import again or save copies to keep those changes.",
       );
       return;
     }
@@ -210,7 +242,15 @@ function ThemeImportDialogBody({
           };
         })
       : staged.themes;
-    if (useThemeLibraryStore.getState().installThemes(imported)) {
+    if (
+      useThemeLibraryStore
+        .getState()
+        .installThemes(
+          imported,
+          copy ? [] : staged.replaceCollectionIds,
+          copy ? null : staged.baseline,
+        )
+    ) {
       setSuccess(
         `${imported.length} ${imported.length === 1 ? "theme" : "themes"} added to your library. Choose a light or dark variant in Appearance to use it.`,
       );
@@ -504,6 +544,7 @@ function ThemeImportDialogBody({
             <ThemeImportPreview
               staged={staged}
               replacing={replacing}
+              saveFailed={storageError !== null || conflictError !== null}
               previewRef={preview}
               onCancel={() => loadThemes.reset()}
               onSave={save}
@@ -608,12 +649,14 @@ function CommunityThemeRow({
 function ThemeImportPreview({
   staged,
   replacing,
+  saveFailed,
   previewRef,
   onCancel,
   onSave,
 }: {
   staged: StagedImport | undefined;
   replacing: number;
+  saveFailed: boolean;
   previewRef: RefObject<HTMLDivElement | null>;
   onCancel: () => void;
   onSave: (copy: boolean) => void;
@@ -672,13 +715,13 @@ function ThemeImportPreview({
         <Button variant="ghost" onClick={onCancel}>
           Cancel import
         </Button>
-        {replacing > 0 ? (
+        {replacing > 0 || staged.baseline !== "[]" || saveFailed ? (
           <Button variant="outline" onClick={() => onSave(true)}>
             <Copy aria-hidden className="size-4" />
             Save copies
           </Button>
         ) : null}
-        <Button onClick={() => onSave(staged.source.kind !== "extension")}>
+        <Button onClick={() => onSave(false)}>
           <Download aria-hidden className="size-4" />
           {replacing > 0 ? "Update themes" : "Add to library"}
         </Button>

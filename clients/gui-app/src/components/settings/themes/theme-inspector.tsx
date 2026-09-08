@@ -101,6 +101,7 @@ export function ThemeInspector({
 
   useEffect(() => {
     let frame = 0;
+    let rescan = false;
     // ponytail: usage discovery scans the mounted DOM on selection; index token dependencies if very large documents make this slow.
     let elements: Element[] = [];
     if (inspecting && hover) elements = [hover];
@@ -110,6 +111,12 @@ export function ThemeInspector({
       );
     const refresh = () => {
       frame = 0;
+      if (rescan && token) {
+        rescan = false;
+        elements = findThemeTokenUsage(candidates(), [token]).map(
+          (match) => match.element,
+        );
+      }
       setHighlights(
         elements
           .filter((element) => element.isConnected)
@@ -144,9 +151,7 @@ export function ThemeInspector({
         )
       )
         return;
-      elements = findThemeTokenUsage(candidates(), [token]).map(
-        (match) => match.element,
-      );
+      rescan = true;
       schedule();
     });
     observer.observe(document.body, { childList: true, subtree: true });

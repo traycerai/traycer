@@ -128,6 +128,49 @@ describe("theme editor flow", () => {
     );
   });
 
+  it("requires confirmation before resetting the theme library", async () => {
+    const user = userEvent.setup();
+    const saved = importedTheme("saved-theme", "Saved theme", "light", {
+      id: "custom:saved",
+      name: "Saved",
+    });
+    useThemeLibraryStore.setState({
+      themes: [saved],
+      selected: { light: saved.id, dark: null },
+      error: "Your saved theme library could not be read.",
+    });
+    renderThemes();
+
+    const reset = screen.getByRole("button", {
+      name: "Reset theme library…",
+    });
+    await user.click(reset);
+    const confirmation = await screen.findByRole("dialog", {
+      name: "Reset theme library?",
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Cancel" }),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Reset theme library?" }),
+    ).toBeNull();
+    expect(useThemeLibraryStore.getState().themes).toEqual([saved]);
+
+    await user.click(reset);
+    const secondConfirmation = await screen.findByRole("dialog", {
+      name: "Reset theme library?",
+    });
+    await user.click(
+      within(secondConfirmation).getByRole("button", {
+        name: "Reset library",
+      }),
+    );
+    await waitFor(() => {
+      expect(useThemeLibraryStore.getState().themes).toEqual([]);
+      expect(useThemeLibraryStore.getState().error).toBeNull();
+    });
+  });
+
   it("preserves an imported pack while creating a separate appearance pair", async () => {
     const user = userEvent.setup();
     const collection = { id: "vsix:fixture.pack", name: "Fixture pack" };

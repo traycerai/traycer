@@ -61,6 +61,13 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   }),
 }));
 
+// History content is outside this regression's modal-lock boundary and needs
+// the full host runtime. Keep the actual system modal shell while isolating
+// that unrelated surface.
+vi.mock("@/components/epics/history-modal-content", () => ({
+  HistoryModalContent: () => null,
+}));
+
 const modalProbe: { current: SystemTabModalApi | null } = { current: null };
 
 function ModalProbe() {
@@ -206,7 +213,7 @@ describe("SystemTabModalHost theme editor integration", () => {
     );
 
     await user.click(
-      within(editor).getByRole("button", { name: "Cancel theme editing" }),
+      within(editor).getByRole("button", { name: "Save theme" }),
     );
     await waitFor(() => {
       expect(useThemeLibraryStore.getState().draft).toBeNull();
@@ -214,5 +221,35 @@ describe("SystemTabModalHost theme editor integration", () => {
       expect(document.body.style.pointerEvents).toBe("none");
     });
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Settings" })).getByRole(
+        "button",
+        { name: "Create theme" },
+      ),
+    );
+    const historyDraftEditor = await screen.findByRole("dialog", {
+      name: "Theme editor",
+    });
+    modalProbe.current?.openHistory();
+    await screen.findByRole("dialog", { name: "History" });
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    const historyDraftName =
+      within(historyDraftEditor).getByLabelText("Theme name");
+    await user.clear(historyDraftName);
+    await user.type(historyDraftName, "History draft");
+    expect(historyDraftName.getAttribute("disabled")).toBeNull();
+
+    await user.click(
+      within(historyDraftEditor).getByRole("button", {
+        name: "Cancel theme editing",
+      }),
+    );
+    await waitFor(() => {
+      expect(useThemeLibraryStore.getState().draft).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Theme editor" })).toBeNull();
+      expect(document.body.style.pointerEvents).toBe("none");
+    });
+    expect(screen.getByRole("dialog", { name: "History" })).toBeTruthy();
   });
 });

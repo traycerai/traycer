@@ -1,6 +1,7 @@
 import { getBuiltinThemeColors } from "./builtin-palettes";
 import {
   normalizeThemeColor,
+  isThemeToken,
   themeTokenNames,
   type ThemeDefinition,
   type ThemeToken,
@@ -18,9 +19,7 @@ export function createThemeFromPreset(
     if (!value) continue;
     const reference = /^var\(--([\w-]+)\)$/.exec(value)?.[1];
     const color = normalizeThemeColor(
-      reference && themeTokenNames.some((name) => name === reference)
-        ? (source[reference as ThemeToken] ?? "")
-        : value,
+      reference && isThemeToken(reference) ? (source[reference] ?? "") : value,
     );
     if (color) colors[token] = color;
   }
@@ -43,7 +42,23 @@ export function exportThemes(themes: ThemeDefinition[]): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${(themes[0]?.name ?? "traycer-themes").replace(/[^a-zA-Z0-9_-]/g, "-")}.json`;
+  const name = themes.length === 1 ? themes[0].name : "traycer-themes";
+  anchor.download = `${name.replace(/[^a-zA-Z0-9_-]/g, "-")}.json`;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Include sibling variants only when the source is a complete extension pack. */
+export function getThemeImportConflicts(
+  saved: ThemeDefinition[],
+  imported: ThemeDefinition[],
+  replaceCollectionIds: readonly string[],
+): ThemeDefinition[] {
+  const ids = new Set(imported.map((theme) => theme.id));
+  const collections = new Set(replaceCollectionIds);
+  return saved.filter(
+    (theme) =>
+      ids.has(theme.id) ||
+      (theme.collection !== undefined && collections.has(theme.collection.id)),
+  );
 }

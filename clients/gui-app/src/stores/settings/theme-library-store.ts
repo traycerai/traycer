@@ -6,6 +6,7 @@ import {
   type ThemeDefinition,
 } from "@/lib/themes/theme-definition";
 import { THEME_PRESETS } from "@/lib/theme-presets";
+import { getThemeImportConflicts } from "@/lib/themes/theme-library";
 
 const librarySchema = z.object({
   version: z.literal(1),
@@ -41,11 +42,16 @@ interface ThemeLibraryState extends Library {
   cancelDraft: () => void;
   saveTheme: (theme: ThemeDefinition) => boolean;
   saveThemes: (themes: ThemeDefinition[]) => boolean;
-  installThemes: (themes: ThemeDefinition[]) => boolean;
+  installThemes: (
+    themes: ThemeDefinition[],
+    replaceCollectionIds: string[],
+    expectedBaseline: string | null,
+  ) => boolean;
   deleteTheme: (id: string) => boolean;
   selectTheme: (appearance: "light" | "dark", id: string | null) => boolean;
   setGlassOpacity: (opacity: number) => boolean;
   clearSelection: () => boolean;
+  resetLibrary: () => boolean;
   setAppearancePreference: (
     preference: Partial<
       Pick<
@@ -78,12 +84,13 @@ function readLibrary(): Library {
   if (typeof localStorage === "undefined") return emptyLibrary;
   const raw = localStorage.getItem(key);
   if (raw === null) return emptyLibrary;
-  const result = librarySchema.safeParse(JSON.parse(raw));
-  if (!result.success)
+  try {
+    return librarySchema.parse(JSON.parse(raw));
+  } catch {
     throw new Error(
-      "Your saved theme library could not be read. Export or recover the stored data before replacing it.",
+      "Your saved theme library could not be read. Reset the library to start again, or recover the stored data before resetting.",
     );
-  return result.data;
+  }
 }
 let initial: Library = emptyLibrary;
 let initialError: string | null = null;
@@ -116,6 +123,19 @@ export const useThemeLibraryStore = create<ThemeLibraryState>((set, get) => {
     ...initial,
     draft: null,
     error: initialError,
+    resetLibrary: () => {
+      try {
+        localStorage.setItem(key, JSON.stringify(emptyLibrary));
+        set({ ...emptyLibrary, draft: null, error: null });
+        return true;
+      } catch {
+        set({
+          error:
+            "The theme library could not be reset. Storage is unavailable.",
+        });
+        return false;
+      }
+    },
     setDraft: (draft) => set({ draft }),
     cancelDraft: () => set({ draft: null }),
     saveTheme: (theme) => get().saveThemes([theme]),
@@ -137,14 +157,35 @@ export const useThemeLibraryStore = create<ThemeLibraryState>((set, get) => {
       if (saved) set({ draft: null });
       return saved;
     },
-    installThemes: (themes) =>
+    installThemes: (themes, replaceCollectionIds, expectedBaseline) =>
       update((library) => {
+        if (
+          expectedBaseline !== null &&
+          JSON.stringify(
+            getThemeImportConflicts(
+              library.themes,
+              themes,
+              replaceCollectionIds,
+            ),
+          ) !== expectedBaseline
+        ) {
+          throw new Error(
+            "These themes changed while you were reviewing them. Review the import again or save copies to keep those changes.",
+          );
+        }
         const ids = new Set(themes.map((theme) => theme.id));
-        const collections = new Set(
-          themes.flatMap((theme) =>
-            theme.collection ? [theme.collection.id] : [],
-          ),
-        );
+        if (ids.size !== themes.length)
+          throw new Error("Import one version of each theme at a time.");
+        const collections = new Set(replaceCollectionIds);
+        if (
+          replaceCollectionIds.some(
+            (id) => !themes.some((theme) => theme.collection?.id === id),
+          )
+        ) {
+          throw new Error(
+            "A replacement theme pack is missing from this import.",
+          );
+        }
         const nextThemes = [
           ...library.themes.filter(
             (theme) =>
