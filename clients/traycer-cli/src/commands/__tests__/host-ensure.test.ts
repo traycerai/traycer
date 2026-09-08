@@ -108,6 +108,7 @@ function baseArgs(overrides: Partial<HostEnsureArgs>): HostEnsureArgs {
     allowSelfInvocation: false,
     noServiceRegister: false,
     force: false,
+    keepInstalled: false,
     // Every existing case is a solo invocation - the acquire-or-refuse path
     // these tests already assert.
     attemptAdoption: null,
@@ -384,6 +385,19 @@ describe("buildHostEnsureCommand", () => {
     });
     expect(result.human ?? "").not.toContain("not signed in");
     expect(result.human ?? "").not.toContain("unprovisioned");
+  });
+
+  // Ticket 2: `--keep-installed` plumbs straight through to `ensureHost` -
+  // the actual `viability` selection is `ensure.ts`'s own concern
+  // (`satisfaction-policy-propagation.test.ts`); this only pins that the
+  // command layer threads the flag rather than dropping it.
+  it("threads args.keepInstalled into ensureHost's keepInstalled option", async () => {
+    const command = buildHostEnsureCommand(baseArgs({ keepInstalled: true }));
+    await command(fakeCtx());
+
+    expect(mocks.ensureHostMock).toHaveBeenCalledWith(
+      expect.objectContaining({ keepInstalled: true }),
+    );
   });
 
   it("a mutating run DOES invoke the pre-flight, and a signed-out one truthfully reports the host it just started as unprovisioned", async () => {

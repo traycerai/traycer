@@ -132,7 +132,7 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     // It is not. Edit the row to `12 * 60 * 1000` - a plausible "give it more
     // room" change that forgets the shared constant - and without this line
     // EVERY suite stays green while EVERY real click rejects with "does not
-    // permit response timeout 660000": the mocked-client test still sees the
+    // permit response timeout 700000": the mocked-client test still sees the
     // hook pass the constant, the floor below still passes (720000 > 30000),
     // and the sizing test reads the constant, not the row. Do not remove it
     // again on the grounds that it cannot fail.
@@ -160,12 +160,13 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     //
     // This pins the FLOOR, not the derivation: gui-app is OSS and cannot
     // import the internal `PROVIDERS.json` pack count or the host's registry
-    // timeout constant, so the factors below are forced literals fixed at
-    // today's pack count (15). A 16th pack raises the correct value past this
-    // floor rather than invalidating it, so this stays
-    // `toBeGreaterThanOrEqual` and does not need to move when the pack count
-    // does. The internal repo pins the other half - that `PROVIDERS.json`
-    // still has exactly this many packs - at
+    // timeout constant, so the factors below are forced literals, fixed at the
+    // 15 packs that existed when this pin was written. That is now 16
+    // (antigravity), and the literal deliberately did NOT move with it: a new
+    // pack raises the correct value past this floor rather than invalidating
+    // it, which is exactly why this stays `toBeGreaterThanOrEqual`. The
+    // internal repo pins the other half - that `PROVIDERS.json` still has
+    // exactly the count the budget was derived from - at
     // `traycer-host/src/domain/providers/__tests__/provider-pack-count-fits-gui-discovery-check-budget.test.ts`.
     //
     // FOUR requests per pack, not two: `readLiveHead` calls `getSigned` twice
@@ -175,7 +176,7 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     // call sites - this pin encoded the 2x-undersized figure until the
     // constant was corrected, which is precisely why the factor is spelled out
     // here rather than folded into one number.
-    const MANAGED_PACK_COUNT = 15; // traycer-host/resources/providers/PROVIDERS.json
+    const MANAGED_PACK_COUNT = 15; // floor literal; see the note above
     const SIGNED_READS_PER_PACK = 2; // reader.ts: generation pointer, then head
     const REQUESTS_PER_SIGNED_READ = 2; // registry-transport.ts: object + .minisig
     const REGISTRY_METADATA_TIMEOUT_MS = 10_000; // per-request transport ceiling

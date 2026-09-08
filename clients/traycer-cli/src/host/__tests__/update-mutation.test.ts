@@ -441,6 +441,7 @@ describe("CLI capability-consuming mutation facades", () => {
               "host update",
               false,
             ),
+            onSwapCommitted: null,
           }),
         ).rejects.toMatchObject({ code: "E_CLI_LOCK_BUSY" });
         return "must-not-report-ran";

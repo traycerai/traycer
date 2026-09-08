@@ -2974,6 +2974,11 @@ async function downgradeArm(
         beforeExtract: () => writer.phaseWrite("preparing", null),
         hooks: {
           beforeSwapCommit: () => writer.phaseWrite("applying", null),
+          // The version hold for this downgrade is written inside
+          // `installHostDowngradeInSegment`, at the committed-swap boundary
+          // under the same `withCliAttemptMutation` span and keyed on the
+          // ACTUAL committed/previous records - not here, where a pre-lock
+          // predecessor read would be stale against a cli-lock-only contender.
           afterSwap: async () =>
             writer.phaseWrite(
               "restarting",

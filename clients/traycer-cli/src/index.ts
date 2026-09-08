@@ -1420,6 +1420,10 @@ function registerHostCommands(program: Command): void {
         "Reinstall and restart the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
       .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
+      .option(
+        "--keep-installed",
+        "Liveness only: keep whatever non-yanked host is installed, whatever its version, instead of converging to this build's default. Ignored when --release names a version. The default when nothing is installed still installs the packaged/pinned host.",
+      )
       .addOption(attemptAdoptionOption()),
     (opts) => {
       const explicitVersion =
@@ -1450,6 +1454,7 @@ function registerHostCommands(program: Command): void {
           noServiceRegister: opts.serviceRegister === false,
           force: opts.force === true,
           acceptStoreFormatLoss: opts.acceptStoreFormatLoss === true,
+          keepInstalled: opts.keepInstalled === true,
         })(ctx);
       };
     },
@@ -1479,6 +1484,12 @@ function registerHostCommands(program: Command): void {
         new Option(
           "--no-service",
           "Internal: skip the busy check and service stop/start; rejected on Windows",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--respect-hold",
+          "Internal: for an implicit (launch/reconcile) apply - no-op instead of applying when the installed host is the deliberately-held install instance and is still viable (a held build the registry has yanked is applied over), re-checked under the CLI lock",
         ).hideHelp(),
       )
       .addOption(attemptAdoptionOption())
@@ -1513,6 +1524,7 @@ function registerHostCommands(program: Command): void {
           typeof opts.expectedStageFingerprint === "string"
             ? opts.expectedStageFingerprint
             : null,
+        respectHold: opts.respectHold === true,
         attemptAdoption: attemptAdoptionNonce(opts),
       }),
   );

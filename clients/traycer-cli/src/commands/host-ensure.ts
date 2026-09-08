@@ -35,6 +35,10 @@ export interface HostEnsureArgs {
    * by `--force` - see `host/store-format-floor.ts`.
    */
   readonly acceptStoreFormatLoss: boolean;
+  // Liveness-only convergence: keep any installed, non-yanked host rather than
+  // reinstalling this build's pin over it. The desktop passes it for its
+  // background intent. Surfaced as `--keep-installed`. See `EnsureHostOptions`.
+  readonly keepInstalled: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
 }
@@ -78,11 +82,16 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       noServiceRegister: args.noServiceRegister,
       force: args.force,
       acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+      keepInstalled: args.keepInstalled,
       onProgress: (info) => ctx.progress(info),
       beforeMutate: async () => {
         authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
       },
     });
+    // (A deliberate downgrade through `host ensure --release X` records its
+    // version hold inside `provisionHost`, at the committed-install boundary
+    // under the CLI lock - see `holdExplicitDowngrade` in `host/ensure.ts` and
+    // `host/provision.ts`. Nothing to reconcile here.)
     // After ensureHost returns - and with it the cli-lock it took - exactly
     // like host-install's post-lock probe. `serviceLifecycle` is non-null on
     // every branch that started or cycled the service, so the two `"none"`

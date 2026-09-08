@@ -233,6 +233,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   omp: "Oh My Pi - can1357's coding CLI via your linked provider subscriptions.",
   reasonix:
     "Reasonix - a coding CLI you point at your own model provider; keys live in Reasonix's own store, set up from its terminal wizard.",
+  antigravity:
+    "Antigravity - Google's agent server via your Google account; Traycer can sign the terminal account in, but never signs it out or writes to its home.",
 };
 
 function hasPendingProviderProbe(

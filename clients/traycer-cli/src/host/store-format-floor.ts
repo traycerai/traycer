@@ -605,7 +605,6 @@ export async function assertStoreFormatFloorAtCommit(args: {
 }
 
 /**
-/**
  * Evidence for a caller that could NOT gate early - it had no concrete version
  * before staging (`--from`, an implicit `latest`).
  *

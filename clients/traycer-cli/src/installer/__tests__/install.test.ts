@@ -555,6 +555,7 @@ describe("commitInstallFromSource", () => {
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        onSwapCommitted: null,
         onCommitted: () => {},
         storeFormatFloor: ungatedStoreFormatFloorEvidence(
           "host install",
@@ -608,6 +609,7 @@ describe("commitInstallFromSource", () => {
         },
         onWillSwap: null,
         onCommitted: () => {},
+        onSwapCommitted: null,
         storeFormatFloor: ungatedStoreFormatFloorEvidence(
           "host install",
           false,
@@ -642,6 +644,7 @@ describe("commitInstallFromSource", () => {
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        onSwapCommitted: null,
         onCommitted: () => {
           committed = true;
         },
@@ -688,6 +691,7 @@ describe("commitInstallFromSource", () => {
         },
         swapLockRecovery: null,
       },
+      onSwapCommitted: null,
       onCommitted: () => {},
       storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
@@ -728,6 +732,7 @@ describe("commitInstallFromSource", () => {
           afterSwap: async () => {},
           swapLockRecovery: null,
         },
+        onSwapCommitted: null,
         onCommitted: () => {},
         storeFormatFloor: ungatedStoreFormatFloorEvidence(
           "host install",
@@ -768,6 +773,7 @@ describe("commitInstallFromSource", () => {
       sizeBytes: 0,
       onProgress: () => {},
       lifecycle: null,
+      onSwapCommitted: null,
       onCommitted: () => {},
       storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
@@ -842,6 +848,7 @@ describe("commitInstallFromSource", () => {
           },
           onWillSwap: null,
           onCommitted: () => {},
+          onSwapCommitted: null,
           storeFormatFloor: ungatedStoreFormatFloorEvidence(
             "host install",
             false,
@@ -882,6 +889,7 @@ describe("commitInstallFromSource", () => {
         lifecycle: null,
         onWillSwap: null,
         onCommitted: () => {},
+        onSwapCommitted: null,
         storeFormatFloor: ungatedStoreFormatFloorEvidence(
           "host install",
           false,
@@ -915,6 +923,7 @@ describe("commitInstallFromSource", () => {
         lifecycle: null,
         onWillSwap: null,
         onCommitted: () => {},
+        onSwapCommitted: null,
         storeFormatFloor: ungatedStoreFormatFloorEvidence(
           "host install",
           false,
@@ -926,6 +935,164 @@ describe("commitInstallFromSource", () => {
         readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
       ).toBe("binary-no-version-json");
     });
+  });
+
+  it("fires onSwapCommitted at the swap-in rename even when post-rename work rejects", async () => {
+    // A pre-existing install is required so the post-rename work
+    // (`preserveLegacyProviders` / aside invalidation) actually runs - both
+    // are gated on `targetExists`.
+    const firstSourceDir = join(sandboxRoot, "pre-staged-1");
+    writeLocalHostSource(firstSourceDir, "v1");
+    const { record: firstRecord } = await commitInstallFromSource({
+      environment: ENV,
+      sourceDir: firstSourceDir,
+      executablePath: join(firstSourceDir, "traycer-host"),
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: firstSourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: null,
+      onSwapCommitted: null,
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+      onCommitted: () => {},
+    });
+
+    const secondSourceDir = join(sandboxRoot, "pre-staged-2");
+    writeLocalHostSource(secondSourceDir, "v2");
+    // Succeeds through the swap-in rename, then starts throwing a
+    // lost-mutation-authority error the instant the NEW install.json is on
+    // disk at `install/` - the exact edge `preserveLegacyProviders` and the
+    // aside invalidation revalidate against.
+    const verifyMutationCapability = async (): Promise<void> => {
+      const recordPath = join(installDirFor(ENV), "install.json");
+      if (!existsSync(recordPath)) return;
+      const parsed = JSON.parse(readFileSync(recordPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      if (parsed.version === "2.0.0") {
+        throw new CliError({
+          code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+          message: "lost mutation authority",
+          details: null,
+          exitCode: 1,
+        });
+      }
+    };
+    const observed: Array<{
+      readonly record: { readonly installId: string | null };
+      readonly previous: { readonly installId: string | null } | null;
+    }> = [];
+
+    await expect(
+      commitInstallFromSource({
+        environment: ENV,
+        sourceDir: secondSourceDir,
+        executablePath: join(secondSourceDir, "traycer-host"),
+        version: "2.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: secondSourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: null,
+        verifyMutationCapability,
+        onSwapCommitted: async (info) => {
+          observed.push(info);
+        },
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+        onCommitted: () => {},
+      }),
+    ).rejects.toThrow("lost mutation authority");
+
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+    const onDisk = JSON.parse(
+      readFileSync(join(installDirFor(ENV), "install.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(onDisk.version).toBe("2.0.0");
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.record.installId).toBe(onDisk.installId);
+    expect(observed[0]?.previous?.installId).toBe(firstRecord.installId);
+  });
+
+  it("runs onSwapCommitted before onCommitted and before lifecycle.afterSwap", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    const order: string[] = [];
+
+    await commitInstallFromSource({
+      environment: ENV,
+      sourceDir,
+      executablePath,
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: sourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: {
+        beforeSwap: async () => {},
+        beforeSwapCommit: async () => {},
+        afterSwap: async () => {
+          order.push("afterSwap");
+        },
+        swapLockRecovery: null,
+      },
+      onSwapCommitted: async () => {
+        order.push("onSwapCommitted");
+      },
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+      onCommitted: () => {
+        order.push("onCommitted");
+      },
+    });
+
+    expect(order).toEqual(["onSwapCommitted", "onCommitted", "afterSwap"]);
+  });
+
+  it("swallows an onSwapCommitted rejection without failing the commit", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    let committed = false;
+
+    const { record } = await commitInstallFromSource({
+      environment: ENV,
+      sourceDir,
+      executablePath,
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: sourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: null,
+      onSwapCommitted: async () => {
+        throw new Error("observer boom");
+      },
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+      onCommitted: () => {
+        committed = true;
+      },
+    });
+
+    expect(record.version).toBe("1.0.0");
+    expect(committed).toBe(true);
+    expect(existsSync(installDirFor(ENV))).toBe(true);
   });
 });
 
@@ -1575,6 +1742,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
           "host install",
           false,
         ),
+        onSwapCommitted: null,
       }),
     ).rejects.toThrow();
 
@@ -1599,6 +1767,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
       lifecycle: null,
       onWillSwap: null,
       storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+      onSwapCommitted: null,
     });
 
     expect(result.record.version).toBe("2.0.0");
@@ -1626,6 +1795,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
           "host install",
           false,
         ),
+        onSwapCommitted: null,
       }),
     ).rejects.toMatchObject({ code: "E_HOST_INSTALL_RECORD_INVALID" });
 

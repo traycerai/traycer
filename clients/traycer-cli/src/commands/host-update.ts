@@ -102,6 +102,16 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       releasedReason: outcome.releasedReason,
       hasPostSwapError: outcome.legacy.serviceLifecycle.postSwapError !== null,
     });
+    // Version hold: nothing to do here. A DOWNGRADE's hold is written by the
+    // committer's post-swap observer inside `installHostDowngradeInSegment`
+    // (via `holdVersionOnSwapCommitted`), at the true successful-swap boundary
+    // UNDER the mutation lock and BEFORE the post-swap bookkeeping/health
+    // verification that may reject with the bytes already committed - so it
+    // survives that T6 failure and cannot be stomped by a racing post-return
+    // write. A FORWARD `host update` writes nothing: it installs a new instance
+    // whose `installId` no longer matches any held record, which the consulting
+    // gate treats as inert (the hold is set-only, never cleared - see
+    // `held-host-version`).
     return {
       data: outcome.legacy,
       human: humanSummary(outcome),

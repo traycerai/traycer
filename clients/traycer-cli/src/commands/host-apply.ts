@@ -5,6 +5,9 @@ import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { applyHostWithAttempt } from "../host/update-mutation";
+import { readHostHeldVersion } from "@traycer/protocol/config/installation";
+import { readHostInstallRecord } from "../manifest/host-install";
+import { createRegistryYankLookup } from "../registry/client";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
 // `traycer host apply [--force] [--no-service]` - promotes the single-slot
@@ -58,6 +61,22 @@ export interface HostApplyArgs {
    */
   readonly acceptStoreFormatLoss: boolean;
   /**
+   * IMPLICIT apply: honour the version hold. When true, this command re-reads
+   * the installed and held records UNDER its own CLI mutation lock and no-ops
+   * instead of applying when the installed host IS the deliberately-held
+   * instance (`installId` match) and is still viable - a held host the
+   * registry has yanked voids its hold and is applied over (fail-open: an
+   * unreachable registry keeps the hold). This is the ONLY place the hold is
+   * decided: the desktop's launch-time (implicit) apply always passes it and
+   * never pre-judges the hold from its own snapshot, because a terminal
+   * downgrade can commit between any sample it takes and this lock - a
+   * snapshot that suppressed the call would let that race revert a fresh
+   * downgrade, or park a withdrawn one. An explicit "Update now" apply leaves this false and always
+   * applies; it needs no hold write, since moving forward installs a new
+   * instance whose id no longer matches the held one.
+   */
+  readonly respectHold: boolean;
+  /**
    * Nonce naming a parent executor's live-lock proof, when this invocation was
    * spawned from inside a held segment. `null` for every ordinary invocation,
    * which keeps the acquire-or-refuse path exactly as it was.
@@ -90,8 +109,60 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
     };
     const outcome = await withCliUpdateContender(
       contenderOptions,
-      (capability) =>
-        applyHostWithAttempt(capability, contenderOptions, {
+      async (capability) => {
+        // Finding 3: the authoritative hold check for an IMPLICIT apply, made
+        // HERE under the CLI mutation lock rather than trusting the desktop's
+        // earlier preflight. A terminal downgrade that set the hold while the
+        // launch apply was still staging is serialized behind this same lock,
+        // so by the time we read the install record it reflects that downgrade
+        // - and we no-op instead of reverting it. An explicit apply
+        // (`respectHold: false`) skips this and always applies.
+        if (args.respectHold) {
+          const held = await readHostHeldVersion(ctx.runtime.environment);
+          if (held !== null) {
+            const installed = await readHostInstallRecord(
+              ctx.runtime.environment,
+            );
+            // Match on the install INSTANCE (`installId`), not the version, so
+            // a later reinstall of the same version is never mistaken for the
+            // held one.
+            if (installed !== null && installed.installId === held.installId) {
+              // A hold protects a deliberate choice from client PREFERENCE,
+              // never from curation: a held host the registry has since YANKED
+              // is not viable, so the hold is void and the apply proceeds. The
+              // lookup fails open (offline / malformed / timed out reads as
+              // not yanked), the same bias as `viability`'s yank check - a
+              // network blip keeps the hold rather than reverting it.
+              const yanked = await createRegistryYankLookup(
+                ctx.runtime.environment,
+              ).isVersionYanked(installed.version);
+              if (!yanked) {
+                ctx.runtime.logger.info(
+                  "Host apply skipped: installed host is the held one",
+                  {
+                    environment: ctx.runtime.environment,
+                    version: held.version,
+                  },
+                );
+                return {
+                  outcome: "no-op" as const,
+                  installedVersion: installed.version,
+                };
+              }
+              ctx.runtime.logger.warn(
+                "Host apply overriding the version hold: the held host is yanked",
+                { environment: ctx.runtime.environment, version: held.version },
+              );
+            }
+          }
+        }
+        // No version-hold WRITE follows a committed apply: an apply is always
+        // a FORWARD move (the stage is only ever newer than the install),
+        // which the hold model treats as inert via the consulting gate
+        // (`held !== installed`) rather than by deleting the record - so there
+        // is nothing to clear and no clear/ABA race. The `respectHold` guard
+        // above is this command's only hold interaction.
+        return applyHostWithAttempt(capability, contenderOptions, {
           environment: ctx.runtime.environment,
           force: args.force,
           noService: args.noService,
@@ -104,7 +175,8 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
           // `host apply` advances no attempt record of its own: Desktop
           // drives its own lane around this call and reads the outcome.
           hooks: NO_INSTALL_PHASE_HOOKS,
-        }),
+        });
+      },
     );
     const activation = activationOf(outcome);
     ctx.runtime.logger.info("Host apply command completed", {

@@ -41,6 +41,7 @@ import {
   type StoreFormatFloorEvidence,
 } from "../host/store-format-floor";
 import { readInstalledFloorOperands } from "../host/installed-store-formats";
+import { holdVersionOnSwapCommitted } from "../host/held-host-version";
 
 // `traycer host install [--release <version>]` - registry path (NP-4) /
 // `--from <path>` local-file path (NP-2). There is NO positional argument:
@@ -305,6 +306,13 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
               if (args.ifIdle) {
                 await assertHostNotBusy(ctx.runtime.environment);
               }
+              // Version hold recorded via the committer's post-swap observer,
+              // at the true successful-swap boundary under this mutation lock
+              // and keyed on the ACTUAL committed vs previous records: a `host
+              // install --release X` below the prior install (the desktop's
+              // rollback UI drives exactly this, ordinary AND bytes-only) is
+              // held, bound to the committed `installId`. A forward/equal
+              // install writes nothing.
               return commitHostInstallSourceWithAttempt(
                 capability,
                 contenderOptions,
@@ -315,6 +323,9 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                   lifecycle,
                   onWillSwap: null,
                   storeFormatFloor,
+                  onSwapCommitted: holdVersionOnSwapCommitted(
+                    ctx.runtime.environment,
+                  ),
                 },
               );
             },

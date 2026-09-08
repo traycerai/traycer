@@ -639,4 +639,79 @@ describe("installHostDowngrade", () => {
     // client was constructed, let alone a download or a stage.
     expect(mocks.createDefaultRegistryClientMock).not.toHaveBeenCalled();
   });
+
+  // Final hold model: the downgrade write now happens INSIDE
+  // `installHostDowngradeInSegment` itself, at the committed-swap boundary
+  // under `withCliAttemptMutation` - not in `downgradeArm`'s `afterSwap` hook
+  // (which no longer touches the hold at all). Exercised against the real
+  // `holdVersionIfDowngrade`/`readHostHeldVersion`, not a mock, since the
+  // point is the record on disk.
+  describe("version hold", () => {
+    // `ensureHostHomeDir` is overridden above to this suite's own
+    // `mocks.sandboxHome/host/<env>` tree, but the hold record's actual path
+    // comes from the PROTOCOL package's own (unmocked) `hostInstallHomeDir`,
+    // which resolves through the real (mocked-at-call-time) `os.homedir()`
+    // to `mocks.sandboxHome/.traycer/host/<env>` instead - a different root.
+    // Pre-creating that real parent keeps the write inside the sandbox
+    // rather than relying on the (here, mismatched) override.
+    async function heldVersionPath(): Promise<string> {
+      const { hostHeldVersionRecordPath } =
+        await import("@traycer/protocol/config/installation");
+      return hostHeldVersionRecordPath(ENV);
+    }
+
+    it("holds the committed version+installId on a genuine downgrade", async () => {
+      await writeInstalled("1.3.0", "old");
+      configureRegistry("1.2.0", "new");
+      const heldPath = await heldVersionPath();
+      mkdirSync(join(heldPath, ".."), { recursive: true });
+
+      const outcome = await installHostDowngrade({
+        environment: ENV,
+        version: "1.2.0",
+        force: false,
+        acceptStoreFormatLoss: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      expect(outcome.outcome).toBe("applied");
+      if (outcome.outcome !== "applied") throw new Error("unreachable");
+      const { readHostHeldVersion } =
+        await import("@traycer/protocol/config/installation");
+      await expect(readHostHeldVersion(ENV)).resolves.toEqual({
+        version: "1.2.0",
+        installId: outcome.record.installId,
+      });
+    });
+
+    // Strict compare: an equal-precedence rebuild (build metadata is
+    // ignored per SemVer, so `2.0.0+foo` and `2.0.0+bar` compare `equal`,
+    // not `less`) commits new bytes through this same downgrade-capable
+    // arm but is NOT a downgrade, and so must not be held.
+    it("does not hold an equal-precedence rebuild (2.0.0+foo -> 2.0.0+bar)", async () => {
+      await writeInstalled("2.0.0+foo", "old");
+      configureRegistry("2.0.0+bar", "new");
+      const heldPath = await heldVersionPath();
+      mkdirSync(join(heldPath, ".."), { recursive: true });
+
+      const outcome = await installHostDowngrade({
+        environment: ENV,
+        version: "2.0.0+bar",
+        force: false,
+        acceptStoreFormatLoss: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      expect(outcome.outcome).toBe("applied");
+      expect(existsSync(heldPath)).toBe(false);
+    });
+  });
 });

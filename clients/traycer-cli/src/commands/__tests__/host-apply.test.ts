@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplyHostOutcome } from "../../installer/apply";
 
 // `host apply`'s success contract: exit 0 means the staged bytes COMMITTED,
@@ -8,10 +8,16 @@ import type { ApplyHostOutcome } from "../../installer/apply";
 
 const mocks = vi.hoisted(() => ({
   outcome: null as ApplyHostOutcome | null,
+  applyHostCalls: 0,
+  readHostHeldVersionMock: vi.fn(),
+  readHostInstallRecordMock: vi.fn(),
+  isVersionYankedMock: vi.fn(),
+  createRegistryYankLookupMock: vi.fn(),
 }));
 
 vi.mock("../../installer/apply", () => ({
   applyHost: async () => {
+    mocks.applyHostCalls += 1;
     if (mocks.outcome === null) throw new Error("test outcome not set");
     return mocks.outcome;
   },
@@ -26,13 +32,55 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
   };
 });
 
+// Finding 3 (cold review): the `respectHold` gate reads the held/installed
+// versions itself, under the CLI mutation lock - mocked directly here rather
+// than through a real-fs fixture, since this suite is about the COMMAND's
+// wiring of that check, not the readers' own tolerance (that's
+// `held-host-version.test.ts`).
+vi.mock("@traycer/protocol/config/installation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@traycer/protocol/config/installation")
+    >();
+  return {
+    ...actual,
+    readHostHeldVersion: (
+      ...callArgs: Parameters<typeof mocks.readHostHeldVersionMock>
+    ) => mocks.readHostHeldVersionMock(...callArgs),
+  };
+});
+
+vi.mock("../../manifest/host-install", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../manifest/host-install")>();
+  return {
+    ...actual,
+    readHostInstallRecord: (
+      ...callArgs: Parameters<typeof mocks.readHostInstallRecordMock>
+    ) => mocks.readHostInstallRecordMock(...callArgs),
+  };
+});
+
+// Void-if-yanked check (CodeRabbit follow-up): the `respectHold` gate consults
+// this lookup only once it has already matched the held instance, so the
+// factory must be controllable here rather than reaching the real network -
+// mirrors the pattern in `host/__tests__/provision.test.ts`.
+vi.mock("../../registry/client", () => ({
+  createRegistryYankLookup: (
+    ...callArgs: Parameters<typeof mocks.createRegistryYankLookupMock>
+  ) => {
+    mocks.createRegistryYankLookupMock(...callArgs);
+    return { isVersionYanked: mocks.isVersionYankedMock };
+  },
+}));
+
 import { buildHostApplyCommand } from "../host-apply";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
 
-function record(version: string): HostInstallRecord {
+function record(version: string, installId: string): HostInstallRecord {
   return {
-    installId: "install-test",
+    installId,
     version,
     runtimeVersion: null,
     platform: "darwin",
@@ -75,7 +123,10 @@ function fakeCtx(): CommandContext {
   };
 }
 
-function runApply(outcome: ApplyHostOutcome): Promise<{
+function runApply(
+  outcome: ApplyHostOutcome,
+  overrides: { readonly respectHold?: boolean },
+): Promise<{
   readonly data: unknown;
   readonly human: string | null;
   readonly exitCode: number;
@@ -85,10 +136,22 @@ function runApply(outcome: ApplyHostOutcome): Promise<{
     force: false,
     noService: false,
     expectedStageFingerprint: null,
+    respectHold: overrides.respectHold ?? false,
     attemptAdoption: null,
     acceptStoreFormatLoss: false,
   })(fakeCtx());
 }
+
+beforeEach(() => {
+  mocks.applyHostCalls = 0;
+  mocks.readHostHeldVersionMock.mockReset().mockResolvedValue(null);
+  mocks.readHostInstallRecordMock.mockReset().mockResolvedValue(null);
+  mocks.createRegistryYankLookupMock.mockReset();
+  // Not-yanked by default so every test outside the "respectHold - yank"
+  // describe block below (which overrides this per case) reaches its
+  // outcome without a real network fetch.
+  mocks.isVersionYankedMock.mockReset().mockResolvedValue(false);
+});
 
 describe("host apply - activation", () => {
   // "requested", not "converged": `runningActivated` only means the post-swap
@@ -96,19 +159,22 @@ describe("host apply - activation", () => {
   // ACCEPTS the request - an unspawnable job answers success. Calling this
   // `converged: true` published a health claim nothing here ever checked.
   it("is 'requested' when the post-swap start was accepted - never a health claim", async () => {
-    const result = await runApply({
-      outcome: "applied",
-      record: record("1.3.0"),
-      previous: record("1.2.0"),
-      runningActivated: true,
-      installGeneration: "gen-1",
-      serviceLifecycle: {
-        priorServiceState: "running",
-        stoppedBeforeSwap: true,
-        postSwapAction: "restart",
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: true,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: null,
       },
-      postSwapError: null,
-    });
+      {},
+    );
 
     expect(result.data).toMatchObject({
       outcome: "applied",
@@ -122,19 +188,22 @@ describe("host apply - activation", () => {
   // envelope. The field - and the human line - have to say so unmistakably,
   // because the exit code cannot.
   it("is 'failed', at exit 0, when the swap committed but the service did not come back", async () => {
-    const result = await runApply({
-      outcome: "applied",
-      record: record("1.3.0"),
-      previous: record("1.2.0"),
-      runningActivated: false,
-      installGeneration: "gen-1",
-      serviceLifecycle: {
-        priorServiceState: "running",
-        stoppedBeforeSwap: true,
-        postSwapAction: "restart",
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: false,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: "launchctl kickstart failed",
       },
-      postSwapError: "launchctl kickstart failed",
-    });
+      {},
+    );
 
     expect(result.data).toMatchObject({
       outcome: "applied",
@@ -159,19 +228,22 @@ describe("host apply - activation", () => {
   // else - and an operator who cannot tell them apart will go looking for a
   // fault that does not exist.
   it("is 'not-attempted' when the swap committed but no start was run", async () => {
-    const result = await runApply({
-      outcome: "applied",
-      record: record("1.3.0"),
-      previous: record("1.2.0"),
-      runningActivated: false,
-      installGeneration: "gen-1",
-      serviceLifecycle: {
-        priorServiceState: "externally-managed",
-        stoppedBeforeSwap: false,
-        postSwapAction: "none",
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: false,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "externally-managed",
+          stoppedBeforeSwap: false,
+          postSwapAction: "none",
+        },
+        postSwapError: null,
       },
-      postSwapError: null,
-    });
+      {},
+    );
 
     expect(result.data).toMatchObject({
       outcome: "applied",
@@ -189,26 +261,221 @@ describe("host apply - activation", () => {
   // here would report a healthy, already-running install as broken on
   // evidence the command does not have.
   it("is null for a no-op, which never probes the running host", async () => {
-    const result = await runApply({
-      outcome: "no-op",
-      installedVersion: "1.3.0",
-    });
+    const result = await runApply(
+      {
+        outcome: "no-op",
+        installedVersion: "1.3.0",
+      },
+      {},
+    );
 
     expect(result.data).toMatchObject({ outcome: "no-op", activation: null });
     expect(result.exitCode).toBe(0);
   });
 
   it("is null for a stage-fingerprint mismatch, which commits nothing", async () => {
-    const result = await runApply({
-      outcome: "stage-fingerprint-mismatch",
-      installedVersion: "1.3.0",
-      expectedStageFingerprint: "expected",
-      actualStageFingerprint: "actual",
-    });
+    const result = await runApply(
+      {
+        outcome: "stage-fingerprint-mismatch",
+        installedVersion: "1.3.0",
+        expectedStageFingerprint: "expected",
+        actualStageFingerprint: "actual",
+      },
+      {},
+    );
 
     expect(result.data).toMatchObject({
       outcome: "stage-fingerprint-mismatch",
       activation: null,
     });
   });
+});
+
+// Finding 3 (cold review): the authoritative `respectHold` check made HERE,
+// under the CLI mutation lock, rather than trusting the desktop's earlier
+// preflight - a terminal downgrade that set the hold while a launch apply
+// was staging is serialized behind this same lock, so the read below always
+// reflects the freshest committed state. installId-bound: the gate matches
+// on the install INSTANCE, not the version string, so a reinstall of the
+// same version (a fresh `installId`) is never mistaken for the held one.
+describe("host apply - respectHold", () => {
+  it("respectHold:true + installed.installId===held.installId short-circuits to a no-op without ever calling applyHost", async () => {
+    mocks.readHostHeldVersionMock.mockResolvedValue({
+      version: "1.2.0",
+      installId: "install-held",
+    });
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      record("1.2.0", "install-held"),
+    );
+
+    const result = await runApply(
+      { outcome: "no-op", installedVersion: "1.2.0" },
+      { respectHold: true },
+    );
+
+    expect(result.data).toMatchObject({
+      outcome: "no-op",
+      installedVersion: "1.2.0",
+    });
+    expect(mocks.applyHostCalls).toBe(0);
+    expect(mocks.isVersionYankedMock).toHaveBeenCalledWith("1.2.0");
+  });
+
+  it("respectHold:true + installed.installId===held.installId but the held version has since been yanked applies normally", async () => {
+    mocks.readHostHeldVersionMock.mockResolvedValue({
+      version: "1.2.0",
+      installId: "install-held",
+    });
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      record("1.2.0", "install-held"),
+    );
+    mocks.isVersionYankedMock.mockResolvedValue(true);
+
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: true,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: null,
+      },
+      { respectHold: true },
+    );
+
+    expect(result.data).toMatchObject({ outcome: "applied" });
+    expect(mocks.applyHostCalls).toBe(1);
+    expect(mocks.isVersionYankedMock).toHaveBeenCalledWith("1.2.0");
+  });
+
+  it("respectHold:true + same version but a DIFFERENT installId (a reinstall of the held version) applies normally", async () => {
+    mocks.readHostHeldVersionMock.mockResolvedValue({
+      version: "1.2.0",
+      installId: "install-held",
+    });
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      record("1.2.0", "install-fresh"),
+    );
+
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: true,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: null,
+      },
+      { respectHold: true },
+    );
+
+    expect(result.data).toMatchObject({ outcome: "applied" });
+    expect(mocks.applyHostCalls).toBe(1);
+  });
+
+  it("respectHold:true + installed!==held (different version and installId) applies normally", async () => {
+    mocks.readHostHeldVersionMock.mockResolvedValue({
+      version: "1.0.0",
+      installId: "install-old",
+    });
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      record("1.2.0", "install-current"),
+    );
+
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: true,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: null,
+      },
+      { respectHold: true },
+    );
+
+    expect(result.data).toMatchObject({ outcome: "applied" });
+    expect(mocks.applyHostCalls).toBe(1);
+  });
+
+  it("respectHold:true + nothing held applies normally (never reads the install record)", async () => {
+    mocks.readHostHeldVersionMock.mockResolvedValue(null);
+
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: true,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: null,
+      },
+      { respectHold: true },
+    );
+
+    expect(result.data).toMatchObject({ outcome: "applied" });
+    expect(mocks.applyHostCalls).toBe(1);
+    expect(mocks.readHostInstallRecordMock).not.toHaveBeenCalled();
+  });
+
+  it("respectHold:false applies normally even though the installed version is held (explicit apply always wins)", async () => {
+    mocks.readHostHeldVersionMock.mockResolvedValue({
+      version: "1.2.0",
+      installId: "install-held",
+    });
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      record("1.2.0", "install-held"),
+    );
+
+    const result = await runApply(
+      {
+        outcome: "applied",
+        record: record("1.3.0", "install-test"),
+        previous: record("1.2.0", "install-test"),
+        runningActivated: true,
+        installGeneration: "gen-1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+        },
+        postSwapError: null,
+      },
+      { respectHold: false },
+    );
+
+    expect(result.data).toMatchObject({ outcome: "applied" });
+    expect(mocks.applyHostCalls).toBe(1);
+    // `respectHold: false` never consults the hold at all - not even to read it.
+    expect(mocks.readHostHeldVersionMock).not.toHaveBeenCalled();
+    // Nor the yank lookup, which only matters once a hold is being consulted.
+    expect(mocks.createRegistryYankLookupMock).not.toHaveBeenCalled();
+  });
+
+  // Final hold model: an apply never writes the hold record at all - it is
+  // always a FORWARD move (the stage is only ever newer than the install),
+  // which the write-once/no-delete design treats as inert purely via the
+  // consulting gate (`held !== installed`) once the install moves forward.
+  // There is nothing to clear, so `respectHold` above is this command's
+  // ONLY hold interaction; no test here asserts a write/clear side effect.
 });

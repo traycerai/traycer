@@ -658,6 +658,7 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
       verifyMutationCapability: async () => undefined,
       onWillSwap: null,
       storeFormatFloor: ungatedStoreFormatFloorEvidence("host apply", false),
+      onSwapCommitted: null,
     });
 
     await expectReached(commitHookEntered.promise, "beforeSwapCommit");

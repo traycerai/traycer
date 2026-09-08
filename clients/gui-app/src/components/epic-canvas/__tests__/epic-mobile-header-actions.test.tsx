@@ -1,5 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -147,22 +148,81 @@ function openEdit(testId: string): HTMLElement {
 
 describe("<EpicMobileSwitcherTrigger />", () => {
   beforeEach(() => {
-    useMobileSwitcherStore.setState({ openTabId: null });
+    useMobileSwitcherStore.setState({ openTabId: null, mountCountByTabId: {} });
   });
   afterEach(cleanup);
 
+  /** Stands in for a `MobileTabSwitcherMount` rendered somewhere on the canvas. */
+  function mountSheetFor(tabId: string): void {
+    act(() => useMobileSwitcherStore.getState().registerMount(tabId));
+  }
+
+  /**
+   * Narrowed rather than cast, so `.disabled` below is the NATIVE button
+   * property - the one that actually decides whether a press dispatches a
+   * click. The narrowing is load-bearing on its own: an `aria-disabled` div
+   * would satisfy an attribute check while still answering the tap, which is
+   * the exact failure this control is being fixed for.
+   */
+  function switcherTrigger(): HTMLButtonElement {
+    const element = screen.getByTestId("mobile-epic-switcher-trigger");
+    if (!(element instanceof HTMLButtonElement)) {
+      throw new Error("The switcher trigger is not a native <button>");
+    }
+    return element;
+  }
+
   it("opens the switcher store for its own tabId when tapped", () => {
+    mountSheetFor("tab-1");
     render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
-    const trigger = screen.getByTestId("mobile-epic-switcher-trigger");
+    const trigger = switcherTrigger();
     expect(trigger.getAttribute("aria-label")).toBe("Switch tab");
     fireEvent.click(trigger);
     expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
   });
 
+  /**
+   * The loading epic: the header slot is bound for the whole pane, but the
+   * canvas branch that mounts the sheet has not been reached. A tap here used
+   * to write an open flag nothing rendered - dead on the press, and then a
+   * sheet the user never asked for once the canvas mounted.
+   */
+  it("is disabled while no sheet is mounted for its tab", () => {
+    render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
+    const trigger = switcherTrigger();
+    expect(trigger.disabled).toBe(true);
+    expect(trigger.getAttribute("aria-label")).toBe("Switch tab");
+    fireEvent.click(trigger);
+    expect(useMobileSwitcherStore.getState().openTabId).toBeNull();
+  });
+
+  it("is scoped to its own tab - another tab's mount does not enable it", () => {
+    mountSheetFor("tab-2");
+    render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
+    expect(switcherTrigger().disabled).toBe(true);
+  });
+
+  it("enables when a sheet mounts and disables again when it goes", () => {
+    render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
+    const trigger = switcherTrigger();
+    expect(trigger.disabled).toBe(true);
+    mountSheetFor("tab-1");
+    expect(trigger.disabled).toBe(false);
+    fireEvent.click(trigger);
+    expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
+    act(() => useMobileSwitcherStore.getState().unregisterMount("tab-1"));
+    expect(trigger.disabled).toBe(true);
+    // Losing the mount re-disables the trigger without closing the sheet. The
+    // component-level form of this - a real unmount, not a direct store call -
+    // is pinned in `mobile-tab-switcher-mount.test.tsx`.
+    expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
+  });
+
   it("renders for a viewer role too - switching tabs is not permission-gated", () => {
     holder.role = "viewer";
+    mountSheetFor("tab-1");
     render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
-    expect(screen.getByTestId("mobile-epic-switcher-trigger")).toBeTruthy();
+    expect(switcherTrigger().disabled).toBe(false);
     holder.role = "owner";
   });
 });

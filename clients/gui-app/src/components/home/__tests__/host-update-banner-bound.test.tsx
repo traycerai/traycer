@@ -915,7 +915,11 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "2.1.0", runningActivated: true },
+          value: {
+            appliedVersion: "2.1.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       );
       bindLocalHost({
@@ -1290,7 +1294,11 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "2.1.0", runningActivated: true },
+          value: {
+            appliedVersion: "2.1.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       );
       const activateInstalled = vi.fn(() =>
