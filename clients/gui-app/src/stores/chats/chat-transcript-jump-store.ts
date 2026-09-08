@@ -43,6 +43,16 @@ export type ChatTranscriptJumpTarget =
       readonly timestamp: number;
     }
   /**
+   * The SENDER-side card again, named EXACTLY from the receiver's side. The
+   * receiver knows its own delivered message id, and the sender's send block
+   * carries that id as `agentMessageReceipt.messageId` (stamped by the host
+   * at tool completion), so the "Received message" card can point at the
+   * one card that produced it with no text or clock heuristic. Misses for a
+   * send persisted before receipts existed, and then times out quietly like
+   * any absent target.
+   */
+  | { readonly kind: "receipt"; readonly messageId: string }
+  /**
    * The very start of the transcript - where this agent's life began. Used
    * by the communication graph's Created rows: a creation has no message of
    * its own to anchor on, but "the beginning" is a deterministic landing
