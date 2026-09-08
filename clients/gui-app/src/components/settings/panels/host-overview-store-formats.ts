@@ -18,10 +18,27 @@ export interface HostStoreFormatOffer {
   readonly publishedFormats: HostStoreFormats | null;
   readonly runningVersion: string | null;
   readonly storeFormats: HostStatusStoreFormats | null;
+  /**
+   * Whether the NEGOTIATED `host.update.install` carries the store-format
+   * floor - the `@1.3` contract that added per-dispatch loss consent and the
+   * typed refusal.
+   *
+   * Separate from "can this host downgrade at all", which is `@1.2`. Those two
+   * minors are the whole finding: a host in between advertises downgrades and
+   * has no floor behind them, so it neither surveys before installing nor has
+   * anywhere to put the consent this page collects - the framework projects
+   * `acceptStoreFormatLoss` away on the way down.
+   */
+  readonly installSupportsStoreFloor: boolean;
 }
 
 export interface HostStoreFormatRestriction {
-  readonly kind: "blocked" | "unknown" | "pending" | "failed";
+  readonly kind:
+    | "blocked"
+    | "unknown"
+    | "pending"
+    | "failed"
+    | "floor-unsupported";
   readonly reason: string;
   readonly detail: string | null;
   readonly confirmation: string | null;
@@ -30,14 +47,28 @@ export interface HostStoreFormatRestriction {
 export function hostStoreFormatRestriction(
   input: HostStoreFormatOffer,
 ): HostStoreFormatRestriction | null {
-  if (input.storeFormats === null) return null;
-  const target = resolveHostStoreFormats(input.version, input.publishedFormats);
-  const chatDb = input.storeFormats.chatDb;
+  // Read BEFORE the `storeFormats === null` return below, because whether the
+  // floor APPLIES does not depend on what the host reported about its stores.
   const downgrade = storeFloorApplicability(
     input.version,
     input.runningVersion,
     input.publishedFormats,
   ).applies;
+  // A peer that cannot be told about store-format loss must not be offered a
+  // downgrade at all - not even behind Install anyway, because there is no
+  // way for it to honour the consent that button collects. It predates the
+  // floor: it will not survey, and `acceptStoreFormatLoss` is projected away
+  // before it arrives. Withholding is the only honest answer, and it is
+  // deliberately independent of `storeFormats`: a host that cannot honour
+  // consent stays withheld whether or not it happens to report its formats.
+  if (downgrade && !input.installSupportsStoreFloor) {
+    return unsupportedFloorRestriction(input.version);
+  }
+  // Nothing reported, and the peer CAN honour the floor: leave the row alone
+  // and let the host's own pre-dispatch survey refuse it authoritatively.
+  if (input.storeFormats === null) return null;
+  const target = resolveHostStoreFormats(input.version, input.publishedFormats);
+  const chatDb = input.storeFormats.chatDb;
   // Boot uncertainty is transient. Do not offer loss consent until the
   // first survey has answered, even if this target's metadata is unknown.
   if (downgrade && chatDb.survey === "pending") {
@@ -125,6 +156,32 @@ export function hostStoreFormatRestrictionFromRpc(
   return refusal.reason === "target-format-unknown"
     ? unknownTargetRestriction(refusal.targetVersion)
     : unreadableStoresRestriction(refusal.targetVersion);
+}
+
+/**
+ * The row is WITHHELD: this host is too old to be downgraded safely, and no
+ * consent this page could collect would change that.
+ *
+ * `confirmation: null` is the whole mechanism - `VersionRow` reads a null
+ * confirmation as "no Install anyway", so a non-null `reason` with no
+ * confirmation disables the row and prints why. That is the same shape
+ * `pending` already uses; this one is permanent until the host moves.
+ *
+ * Named `floor-unsupported` rather than `unsupported` because this folder
+ * already has an `unsupported`: `OverviewDegradeReason`'s, which retires the
+ * whole update region when a METHOD is absent. Different union, different
+ * scope, and one word for both would have to be disambiguated by whoever read
+ * it next.
+ */
+function unsupportedFloorRestriction(
+  version: string,
+): HostStoreFormatRestriction {
+  return {
+    kind: "floor-unsupported",
+    reason: "Update this host before installing an older version",
+    detail: `This host is too old to check whether v${version} can open this device's chats, so it can't be downgraded from here. Update the host first; older versions become available once it can check.`,
+    confirmation: null,
+  };
 }
 
 function unknownTargetRestriction(version: string): HostStoreFormatRestriction {

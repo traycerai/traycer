@@ -32,13 +32,15 @@ describe("hostRefusesEpicStore", () => {
     ).toBe(true);
   });
 
-  it("answers false, and evicts, when the current build differs from the recorded one", () => {
+  it("answers false, without writing, when the current build differs from the recorded one", () => {
     recordHostOlderThanDataRefusal({
       hostId: HOST_ID,
       epicId: EPIC_ID,
       hostVersion: "1.2.3",
       now: 1,
     });
+    const listener = vi.fn();
+    subscribeHostOlderThanDataRefusal(HOST_ID, EPIC_ID, listener);
 
     expect(
       hostRefusesEpicStore({
@@ -48,14 +50,18 @@ describe("hostRefusesEpicStore", () => {
       }),
     ).toBe(false);
 
-    // Evicted: a later read with the ORIGINAL version is also false now.
+    // A snapshot read is PURE: it neither evicts nor notifies, because it
+    // runs inside every sidebar row's render and a notify from there wakes
+    // the other rows mid-render. The entry stays until the recorder's effect
+    // replaces or clears it, so the original version still answers true.
+    expect(listener).not.toHaveBeenCalled();
     expect(
       hostRefusesEpicStore({
         hostId: HOST_ID,
         epicId: EPIC_ID,
         hostVersion: "1.2.3",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("treats two unknown versions (null/null) as equal", () => {

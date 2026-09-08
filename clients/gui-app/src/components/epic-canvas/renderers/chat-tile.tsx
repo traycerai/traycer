@@ -335,6 +335,18 @@ interface ChatTileSessionViewProps {
    * permission. `null` on every live tile - the ordinary path is untouched.
    */
   readonly readOnlyNotice: string | null;
+  /**
+   * Whether this view is driven by a live `chat.subscribe` session, as opposed
+   * to a published copy's synthesized state.
+   *
+   * Explicit rather than inferred from `readOnlyNotice === null`, which does
+   * discriminate the two today by coincidence: that field is a composer-lock
+   * REASON, and the day a live tile grows one, refusal recording would go
+   * silently dead. Nothing else on the props or the handle says which kind of
+   * session this is - the synthesized state is deliberately shaped to look
+   * like a loaded one, since for rendering the transcript it is.
+   */
+  readonly isLiveSession: boolean;
 }
 
 function buildModelReasoningLabels(
@@ -576,6 +588,7 @@ export function ChatTile(props: ChatTileProps) {
           isActive={isActive}
           currentEpicId={epicId}
           readOnlyNotice={null}
+          isLiveSession
         />
       </TombstonedProfileProvider>
     </div>
@@ -806,6 +819,8 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     hostVersion: attachmentHostVersion,
     fatalCloseCode: view.fatalClose?.code ?? null,
     snapshotLoaded: view.snapshotLoaded,
+    isLiveSession: props.isLiveSession,
+    retry: view.onChatRetry,
   });
   const attachmentScope = useMemo<ChatAttachmentScopeValue>(
     () => ({

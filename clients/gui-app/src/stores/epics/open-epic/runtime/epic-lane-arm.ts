@@ -547,10 +547,17 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
         if (isMethodIncompatibleClose(status.closeReason)) {
           // Before the probe answers, this IS the answer. After it, the arm is
           // already installed and this is a required lane going away, which
-          // `answerProbe` would swallow (one answer per arm). Both are routed,
-          // and each guards itself.
+          // `answerProbe` would swallow (one answer per arm). Decided BEFORE
+          // `answerProbe` runs, because that call is synchronous all the way
+          // through the legacy install, whose `detach` resets the required-lane
+          // latch - so reporting unconditionally afterwards re-spent the latch
+          // on an arm that was already over. The next lanes arm then inherited
+          // it spent, and a genuine refusal under that arm (the host moved back
+          // to an old build) reached nobody: `answerProbe` a no-op, the report
+          // a no-op, and the `return` below skipping the status consumers.
+          const armWasInstalled = probeAnswered;
           answerProbe("unsupported");
-          reportRequiredLaneUnsupported();
+          if (armWasInstalled) reportRequiredLaneUnsupported();
           // And that is ALL this close is. It is an answer to a capability
           // question, not a transport event about the epic, so it must not
           // reach the consumers below. Forwarded, it read as a fatal close on

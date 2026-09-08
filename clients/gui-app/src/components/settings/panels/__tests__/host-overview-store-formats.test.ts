@@ -14,6 +14,7 @@ function offer(overrides: Partial<HostStoreFormatOffer>): HostStoreFormatOffer {
     version: "1.2.0",
     publishedFormats: { chatDb: 8 },
     runningVersion: RUNNING_VERSION,
+    installSupportsStoreFloor: true,
     storeFormats: {
       chatDb: {
         current: 9,
@@ -279,6 +280,76 @@ describe("hostStoreFormatRestriction", () => {
               survey: "failed",
             },
           },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("withholds a downgrade from an install method that predates the store floor", () => {
+    expect(
+      hostStoreFormatRestriction(offer({ installSupportsStoreFloor: false })),
+    ).toEqual({
+      kind: "floor-unsupported",
+      reason: "Update this host before installing an older version",
+      detail:
+        "This host is too old to check whether v1.2.0 can open this device's chats, so it can't be downgraded from here. Update the host first; older versions become available once it can check.",
+      confirmation: null,
+    });
+  });
+
+  it("withholds a downgrade from a store-floor-incapable install method even when storeFormats is null", () => {
+    // The exact reported case: a status from before @1.4 supplies `null`,
+    // which the old code treated as unrestricted.
+    const restriction = hostStoreFormatRestriction(
+      offer({ installSupportsStoreFloor: false, storeFormats: null }),
+    );
+    expect(restriction).toEqual({
+      kind: "floor-unsupported",
+      reason: "Update this host before installing an older version",
+      detail:
+        "This host is too old to check whether v1.2.0 can open this device's chats, so it can't be downgraded from here. Update the host first; older versions become available once it can check.",
+      confirmation: null,
+    });
+  });
+
+  it("withholds a downgrade from a store-floor-incapable install method even when storeFormats would otherwise clear it", () => {
+    // The gate is the peer's capability, not the evidence: this storeFormats
+    // shape alone would return null (see "allows an unknown target after a
+    // completed empty survey" above).
+    const restriction = hostStoreFormatRestriction(
+      offer({
+        installSupportsStoreFloor: false,
+        version: "1.3.0",
+        runningVersion: "1.3.1",
+        publishedFormats: null,
+        storeFormats: {
+          chatDb: {
+            current: 9,
+            onDiskMax: null,
+            epicCount: 0,
+            survey: "complete",
+          },
+        },
+      }),
+    );
+    expect(restriction).toEqual({
+      kind: "floor-unsupported",
+      reason: "Update this host before installing an older version",
+      detail:
+        "This host is too old to check whether v1.3.0 can open this device's chats, so it can't be downgraded from here. Update the host first; older versions become available once it can check.",
+      confirmation: null,
+    });
+  });
+
+  it("does not withhold an upgrade from a store-floor-incapable install method", () => {
+    // Guard against over-blocking: the gate is downgrade-specific, so a
+    // target NEWER than runningVersion is untouched.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          installSupportsStoreFloor: false,
+          version: "1.4.0",
+          publishedFormats: { chatDb: 9 },
         }),
       ),
     ).toBeNull();

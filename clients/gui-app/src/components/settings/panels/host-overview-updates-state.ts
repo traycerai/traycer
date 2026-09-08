@@ -369,6 +369,7 @@ export function useHostOverviewUpdates(input: {
   });
   const storeFloor = useHostInstallStoreFloor({
     hostId: input.hostId,
+    installSupportsStoreFloor: versionSupportsStoreFloor(installVersion),
     hostName,
     runningVersion: input.runningVersion,
     storeFormats: input.storeFormats,
@@ -657,6 +658,8 @@ function useHostInstallStoreFloor(input: {
   readonly storeFormats: HostStatusStoreFormats | null;
   readonly manifest: HostAvailableManifest | null;
   readonly fallbackFailure: string | null;
+  /** Whether the negotiated install method carries the store-format floor. */
+  readonly installSupportsStoreFloor: boolean;
 }): HostInstallStoreFloor {
   const [retained, setRetained] = useState<RetainedHostInstallRefusal | null>(
     null,
@@ -683,9 +686,17 @@ function useHostInstallStoreFloor(input: {
           ?.storeFormats ?? null,
       runningVersion: input.runningVersion,
       storeFormats: input.storeFormats,
+      installSupportsStoreFloor: input.installSupportsStoreFloor,
     });
-    // Pending is transient and cannot be bypassed even by retained evidence.
-    if (restriction?.kind === "pending") return restriction;
+    // Neither of these may be displaced by retained RPC evidence. `pending` is
+    // transient; `unsupported` says this peer cannot honour consent at all, so
+    // a refusal it once sent cannot turn the row back into an offer.
+    if (
+      restriction?.kind === "pending" ||
+      restriction?.kind === "floor-unsupported"
+    ) {
+      return restriction;
+    }
     const storeFloor = storeFloorForVersion(version);
     if (storeFloor !== null) {
       return hostStoreFormatRestrictionFromRpc(storeFloor);
@@ -720,7 +731,15 @@ function useHostInstallStoreFloor(input: {
       const restriction = restrictionForVersion(version);
       if (
         restriction !== null &&
-        (!acceptStoreFormatLoss || restriction.kind === "pending")
+        // `unsupported` sits beside `pending` for the same reason it does in
+        // `restrictionForVersion`, and it is the more important half: consent
+        // must not unlock a peer that cannot HONOUR consent. A dialog that
+        // outlived a status poll could otherwise arrive here with
+        // `acceptStoreFormatLoss` true and dispatch the very install this
+        // restriction exists to withhold.
+        (!acceptStoreFormatLoss ||
+          restriction.kind === "pending" ||
+          restriction.kind === "floor-unsupported")
       ) {
         setRetained({
           hostId: input.hostId,
@@ -1282,6 +1301,21 @@ function latestIsStrictlyNewer(
 function versionSupportsDowngrade(version: NegotiatedMethodVersion): boolean {
   if (version === null || version === false) return false;
   return version.major > 1 || (version.major === 1 && version.minor >= 2);
+}
+
+/**
+ * Whether the negotiated `host.update.install` carries the store-format floor.
+ *
+ * `@1.3`, where `versionSupportsDowngrade` is `@1.2` - one minor apart, and
+ * the gap is a real fleet state rather than a theoretical one. A host in it
+ * advertises downgrades and has nothing behind them: no pre-dispatch survey,
+ * no typed refusal, and the framework projects `acceptStoreFormatLoss` away
+ * before the request lands. Fails CLOSED on an unnegotiated method for the
+ * same reason its sibling does - an unknown peer is not a floor-capable one.
+ */
+function versionSupportsStoreFloor(version: NegotiatedMethodVersion): boolean {
+  if (version === null || version === false) return false;
+  return version.major > 1 || (version.major === 1 && version.minor >= 3);
 }
 
 /** Only a host advertising downgrade support can honor an older target. */

@@ -1012,6 +1012,57 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     rendered.unmount();
   });
 
+  it("refuses a consented install for a row withheld because the host predates the store floor", async () => {
+    // The hazard: a confirmation dialog can outlive a status poll and arrive
+    // with `acceptStoreFormatLoss: true` for a row that is now withheld -
+    // consent must never unlock a peer that cannot honour consent.
+    const installRequests: string[] = [];
+    const manifest = multiVersionManifest(["1.2.0"]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest,
+          }),
+        "host.update.install": (request) => {
+          installRequests.push(request.version);
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    // Default minors: installMinor 2 is one short of the store floor (@1.3),
+    // so this row is withheld (`floor-unsupported`) from the start.
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.0-rc.1",
+      stagedVersion: null,
+      storeFormats: null,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(
+      rendered.result.current.picker.rows.find((row) => row.version === "1.2.0")
+        ?.storeFormatConfirmation,
+    ).toBeNull();
+
+    act(() => {
+      rendered.result.current.picker.onInstall("1.2.0", true);
+    });
+
+    expect(installRequests).toEqual([]);
+    rendered.unmount();
+  });
+
   it("allows an explicit RC-to-stable downgrade, sends the exact target, and freezes the other rows while it is in flight", async () => {
     let releaseInstall: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
@@ -1037,7 +1088,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         },
       },
     });
-    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    // Explicit minors: installMinor 3 puts this host past the store-floor
+    // gate, so the downgrade is offerable at all - this test is about
+    // downgrade mechanics, not the floor.
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
@@ -1129,7 +1183,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
           }),
       },
     });
-    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    // Explicit minors: installMinor 3 puts this host past the store-floor
+    // gate, so the downgrade is offerable at all - this test is about
+    // downgrade mechanics, not the floor.
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
@@ -1156,6 +1213,50 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         .getByRole("button", { name: "Install 1.1.0" })
         .hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("withholds an older version from a host whose install method predates the store floor", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest: multiVersionManifest(["1.4.0", "1.3.0-rc.1", "1.2.0"]),
+          }),
+      },
+    });
+    // Default minors: installMinor 2 supports downgrade at all (@1.2), but is
+    // one minor short of the store floor (@1.3) - the exact fleet gap.
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await openHostOverviewAdvanced();
+    const rows = within(await screen.findByTestId("host-version-rows"));
+    expect(
+      within(rowFor(rows.getAllByRole("listitem"), "1.4.0"))
+        .getByRole("button", { name: "Install 1.4.0" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    const olderRow = rowFor(rows.getAllByRole("listitem"), "1.2.0");
+    const older = within(olderRow);
+    expect(
+      older
+        .getByRole("button", { name: "Install 1.2.0" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      older.queryByRole("button", { name: "Install 1.2.0 anyway" }),
+    ).toBeNull();
+    expect(olderRow.textContent).toContain(
+      "Update this host before installing an older version",
+    );
   });
 
   it("a YANKED latest is never offered by the summary — the row disables it and the CLI's resolveAsset refuses it, so an offer would dispatch a guaranteed rejection", async () => {

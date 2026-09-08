@@ -41,11 +41,14 @@ import {
   useRecordHostOlderThanDataRefusal,
 } from "@/hooks/chats/use-host-refuses-epic-store";
 
+const retry = vi.fn();
+
 function useCombined(input: {
   readonly hostId: string;
   readonly epicId: string;
   readonly fatalCloseCode: string | null;
   readonly snapshotLoaded: boolean;
+  readonly isLiveSession: boolean;
 }): boolean {
   useRecordHostOlderThanDataRefusal({
     hostId: input.hostId,
@@ -53,6 +56,8 @@ function useCombined(input: {
     hostVersion: directoryState.version,
     fatalCloseCode: input.fatalCloseCode,
     snapshotLoaded: input.snapshotLoaded,
+    isLiveSession: input.isLiveSession,
+    retry,
   });
   return useHostRefusesEpicStore(input.hostId, input.epicId);
 }
@@ -60,6 +65,7 @@ function useCombined(input: {
 beforeEach(() => {
   resetHostOlderThanDataRefusalsForTests();
   directoryState.version = "1.0.0";
+  retry.mockClear();
 });
 
 afterEach(() => {
@@ -116,6 +122,7 @@ describe("useRecordHostOlderThanDataRefusal", () => {
         epicId: EPIC_ID,
         fatalCloseCode: HOST_OLDER_THAN_DATA_FATAL_CODE,
         snapshotLoaded: false,
+        isLiveSession: true,
       }),
     );
 
@@ -131,6 +138,7 @@ describe("useRecordHostOlderThanDataRefusal", () => {
         epicId: EPIC_ID,
         fatalCloseCode: "SOME_OTHER_FATAL_CODE",
         snapshotLoaded: false,
+        isLiveSession: true,
       }),
     );
 
@@ -150,6 +158,7 @@ describe("useRecordHostOlderThanDataRefusal", () => {
         epicId: EPIC_ID,
         fatalCloseCode: HOST_OLDER_THAN_DATA_FATAL_CODE,
         snapshotLoaded: true,
+        isLiveSession: true,
       }),
     );
 
@@ -158,26 +167,101 @@ describe("useRecordHostOlderThanDataRefusal", () => {
     });
   });
 
-  it("does not re-record a close from the old build against the new host version", async () => {
+  it("asks the host again, rather than re-recording, when the version moves under a recorded close", async () => {
     const { result, rerender } = renderHook(() =>
       useCombined({
         hostId: HOST_ID,
         epicId: EPIC_ID,
         fatalCloseCode: HOST_OLDER_THAN_DATA_FATAL_CODE,
         snapshotLoaded: false,
+        isLiveSession: true,
+      }),
+    );
+    await waitFor(() => {
+      expect(result.current).toBe(true);
+    });
+    expect(retry).not.toHaveBeenCalled();
+
+    // The directory's version moved while the tile still shows the close.
+    // Whether the host was upgraded in place (the record must retire) or
+    // merely restarted into the same refusing build with the row transiting
+    // through the move (the record must survive) cannot be told from here.
+    // The effect must not guess either way: no blind re-record against the
+    // new version, and one retry so the host's next answer decides.
+    directoryState.version = "2.0.0";
+    rerender();
+
+    expect(result.current).toBe(false);
+    expect(retry).toHaveBeenCalledTimes(1);
+
+    // Re-rendering on the same version asks nothing more.
+    rerender();
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-records against the current version when the retry draws a fresh close", async () => {
+    let fatalCloseCode: string | null = HOST_OLDER_THAN_DATA_FATAL_CODE;
+    const { result, rerender } = renderHook(() =>
+      useCombined({
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        fatalCloseCode,
+        snapshotLoaded: false,
+        isLiveSession: true,
       }),
     );
     await waitFor(() => {
       expect(result.current).toBe(true);
     });
 
-    // The host upgraded in place while the tile still shows the close the
-    // old build sent. The version change retires the verdict; the effect
-    // re-running on the new version must not write it back.
-    directoryState.version = "2.0.0";
+    // The host restarted into the build that refused: the row dropped and
+    // came back, the retry cleared the close, and the host closed again.
+    directoryState.version = null;
+    rerender();
+    expect(retry).toHaveBeenCalledTimes(1);
+    fatalCloseCode = null;
+    rerender();
+    directoryState.version = "1.0.0";
+    fatalCloseCode = HOST_OLDER_THAN_DATA_FATAL_CODE;
     rerender();
 
+    await waitFor(() => {
+      expect(result.current).toBe(true);
+    });
+  });
+
+  it("does not clear a sibling's refusal on a version move under a snapshot that merely stayed loaded", async () => {
+    // A second tile in the same epic that loaded before the host moved
+    // builds and was never closed: its snapshot is still showing, but that
+    // is not the host proving it reads the file NOW.
+    const { result, rerender } = renderHook(() =>
+      useCombined({
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        fatalCloseCode: null,
+        snapshotLoaded: true,
+        isLiveSession: true,
+      }),
+    );
     expect(result.current).toBe(false);
+
+    // The refused sibling records against the version now current...
+    directoryState.version = "2.0.0";
+    recordHostOlderThanDataRefusal({
+      hostId: HOST_ID,
+      epicId: EPIC_ID,
+      hostVersion: "2.0.0",
+      now: 2,
+    });
+    await waitFor(() => {
+      expect(result.current).toBe(true);
+    });
+
+    // ...and this tile's effect re-running on the version move must not
+    // erase it on the strength of a snapshot that landed before the move.
+    rerender();
+    expect(result.current).toBe(true);
+    expect(retry).not.toHaveBeenCalled();
   });
 
   it("clears an existing refusal once a snapshot lands", async () => {
@@ -194,11 +278,47 @@ describe("useRecordHostOlderThanDataRefusal", () => {
         epicId: EPIC_ID,
         fatalCloseCode: null,
         snapshotLoaded: true,
+        isLiveSession: true,
       }),
     );
 
     await waitFor(() => {
       expect(result.current).toBe(false);
     });
+  });
+
+  it("does not clear a refusal recorded beforehand when the surface is a published copy", () => {
+    recordHostOlderThanDataRefusal({
+      hostId: HOST_ID,
+      epicId: EPIC_ID,
+      hostVersion: "1.0.0",
+      now: 1,
+    });
+
+    const { result } = renderHook(() =>
+      useCombined({
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        fatalCloseCode: null,
+        snapshotLoaded: true,
+        isLiveSession: false,
+      }),
+    );
+
+    expect(result.current).toBe(true);
+  });
+
+  it("does not record a refusal from a fatal close on a published copy", () => {
+    const { result } = renderHook(() =>
+      useCombined({
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        fatalCloseCode: HOST_OLDER_THAN_DATA_FATAL_CODE,
+        snapshotLoaded: false,
+        isLiveSession: false,
+      }),
+    );
+
+    expect(result.current).toBe(false);
   });
 });
