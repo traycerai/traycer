@@ -1,3 +1,4 @@
+import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
  * with expansion, rename, delete, and drag-drop behaviors.
@@ -2108,7 +2109,9 @@ function ChatNodeShellBody(
     writeRoute === "unavailable" && props.decision.showButton
       ? { ...props.decision, showButton: false }
       : props.decision;
+  const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const rowMenuEntries = chatRowMenuEntries({
+    copyIdEntry,
     nodeId,
     canMutate,
     writeRoute,
@@ -2136,7 +2139,7 @@ function ChatNodeShellBody(
         nodeId={nodeId}
         panelId="chats"
         contextMenu={
-          canEdit && !isRenaming && !selectionMode ? (
+          !isRenaming && !selectionMode ? (
             <ContextMenuContent>
               <SidebarContextMenuItems entries={rowMenuEntries} />
             </ContextMenuContent>
@@ -2167,7 +2170,6 @@ function ChatNodeShellBody(
             artifactType={artifactType}
             depth={depth}
             isActive={isActive}
-            canEdit={canEdit}
             updatedAt={updatedAt}
             hasChildren={hasChildren}
             expanded={expanded}
@@ -2193,7 +2195,7 @@ function ChatNodeShellBody(
           />
         ) : null}
 
-        {canEdit && !isRenaming && !selectionMode ? (
+        {!isRenaming && !selectionMode ? (
           <ChatMoreMenu
             nodeId={nodeId}
             nodeName={nodeName}
@@ -2724,7 +2726,6 @@ interface ChatRowButtonProps {
   readonly artifactType: EpicNodeKind;
   readonly depth: number;
   readonly isActive: boolean;
-  readonly canEdit: boolean;
   readonly updatedAt: number;
   readonly hasChildren: boolean;
   readonly expanded: boolean;
@@ -2877,7 +2878,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
     artifactType,
     depth,
     isActive,
-    canEdit,
     updatedAt,
     hasChildren,
     expanded,
@@ -2974,10 +2974,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
-  // Only the "⋯" more menu now reveals on hover (the standalone "+" moved into
-  // that menu as "New child agent"), so the single-control pad-right reserve is
-  // claimed whenever the row is editable and not bulk-selecting.
-  const showRowControls = selectionMode ? false : canEdit;
+  const showRowControls = !selectionMode;
   const revealRowControls = useRevealRowControls();
   const rowClassName = chatRowClassName({
     isDragging,
@@ -3570,6 +3567,7 @@ function chatRowArchiveState(args: {
 }
 
 interface ChatRowMenuEntriesProps {
+  readonly copyIdEntry: SidebarRowMenuEntry;
   readonly nodeId: string;
   readonly canMutate: boolean;
   /**
@@ -3765,6 +3763,7 @@ function chatRowMenuEntries(
     },
     ...archiveMenuEntries(props),
     ...sharingMenuEntries(props),
+    props.copyIdEntry,
     { kind: "separator", id: "before-delete" },
     {
       kind: "item",
@@ -3952,7 +3951,7 @@ function ChatMoreMenu(props: {
           <MoreHorizontal className="size-3" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className="w-max">
         <SidebarDropdownMenuItems entries={entries} />
       </DropdownMenuContent>
     </DropdownMenu>

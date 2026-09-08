@@ -12,8 +12,11 @@ import {
   projectFleetUpdateView,
   warrantsFastPoll,
   preferLiveOverRecord,
+  LOCAL_LIVENESS_PROOF_MS,
+  LOCAL_LIVENESS_CLOCK_SLACK_MS,
   type FleetUpdateRecordObservation,
   type FleetUpdateWireObservation,
+  type LocalUpdateClock,
   type FleetUpdateView,
   UNKNOWN_FLEET_UPDATE_VIEW,
 } from "@/lib/host/fleet-update/fleet-update-view";
@@ -67,8 +70,15 @@ function observation(
     observedAtMs: NOW_MS,
     freshUntilMs: FRESH_UNTIL_MS,
     operation: attemptOperation({}),
+    // Deliberately NOT `attemptOperation`'s "2.1.0" target: the host is still
+    // on the old version for every test that does not say otherwise. A default
+    // that matched the target would silently route every `verifying` +
+    // `interrupted` case to `finalizing-record`, which is the arm those tests
+    // exist to hold at `failed`.
+    runningVersion: "2.0.0",
     transaction: TRANSACTION,
     coarseProgress: null,
+    legacyFacts: null,
     ...overrides,
   };
 }
@@ -531,6 +541,394 @@ describe("projectFleetUpdateView — liveness", () => {
   });
 });
 
+/**
+ * Q11: a refused COMPLETION WRITE must never read as a failed update.
+ *
+ * The situation: the CLI's verify loop breaks only on installed AND running
+ * both verified at the target, host-home-bound. The completion write happens
+ * immediately after that break, so if it is refused the host is provably
+ * serving the new version and only the bookkeeping is outstanding. The CLI
+ * leaves the record untouched on that path (it does NOT stamp `failed`), so
+ * what reaches this projector is a `verifying` record whose executor is gone,
+ * beside a `host.status` reporting the target version.
+ *
+ * The discriminator is the VERSION, not an error code, and that is forced
+ * rather than chosen: the refusal has two causes — a `rejected` intent and a
+ * `durability-unverified` write medium — and the second cannot write anything
+ * at all, so on the path that needs a code most there is none to be had. The
+ * two causes leave the identical shape on disk, which is exactly what lets one
+ * rule cover both.
+ *
+ * Every test here is the difference between "Updated" and "update failed" on a
+ * machine that is running perfectly well, so each one names which direction it
+ * holds.
+ */
+describe("projectFleetUpdateView — a refused completion write is not a failure", () => {
+  /** Interrupted in `verifying`, i.e. the executor died after the loop broke. */
+  function abandonedVerify(
+    overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
+  ): HostStatusUpdateOperation {
+    return attemptOperation({
+      phase: "verifying",
+      liveness: "interrupted",
+      targetVersion: "2.1.0",
+      ...overrides,
+    });
+  }
+
+  it("host RUNNING the target projects finalizing-record, never failed", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("finalizing-record");
+    expect(view.kind).not.toBe("failed");
+    // Nothing failed, so there is no cause to render. A leftover message here
+    // would put a failure's worth of alarm into a success card.
+    expect(view.errorMessage).toBeNull();
+    expect(view.qualified).toBe(false);
+    expect(view.targetVersion).toBe("2.1.0");
+  });
+
+  it("a LIVE executor at the target is still VERIFYING — a dead executor is a precondition, not a detail", () => {
+    // The window this guards is on the HAPPY path, not an edge. Every
+    // successful update passes through a moment where the record says
+    // `verifying`, the host has already restarted into the target, and the
+    // executor is alive still running its evidence loop. `host.status` then
+    // reports the exact two facts `concludesAsFinalizingRecord` tests, and only
+    // the enclosing `liveness === "interrupted"` guard stops the card
+    // announcing "Updated … Finalizing the update record." over an operation
+    // that is still running and can still fail.
+    //
+    // Found by reviewer C hoisting the route above that guard: all 173 stayed
+    // green, because every `finalizing-record` fixture here is interrupted and
+    // every live `verifying` row uses a non-matching version, so "live +
+    // verifying + already at target" existed in neither suite.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({ liveness: "active" }),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("verifying");
+    expect(view.kind).not.toBe("finalizing-record");
+    expect(view.qualified).toBe(false);
+  });
+
+  it("an INDETERMINATE executor at the target stays verifying AND qualified", () => {
+    // The sibling, and it holds something the row above cannot: `indeterminate`
+    // means the host could not establish whether the executor is alive, so the
+    // phase is shown QUALIFIED. Routing it to `finalizing-record` would not
+    // merely mislabel the state — it would drop the qualification an
+    // unconfirmed reading is owed and present a guess as a settled success.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({ liveness: "indeterminate" }),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("verifying");
+    expect(view.qualified).toBe(true);
+  });
+
+  it("host running the OLD version keeps the existing interrupted failure", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.0.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    // The genuine verify failure: the executor died proving the host healthy
+    // and the host is still on the old version. Swallowing this into the
+    // success arm is the regression the version check exists to prevent.
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).not.toBeNull();
+  });
+
+  it("the two refusal causes are indistinguishable here — an error on the record does not change the routing", () => {
+    // `durability-unverified` writes NOTHING (error stays null); a `rejected`
+    // intent may leave a record carrying one. Both mean the same thing and must
+    // render the same thing, so the discriminator must not consult `error` at
+    // all. This reddens the moment someone "improves" the routing by keying off
+    // an error code — which would silently drop the half that has no code.
+    const views = [
+      null,
+      { code: "verify-timeout", message: "x", phase: "verifying" },
+    ].map((error) =>
+      projectFleetUpdateView({
+        observation: observation({
+          operation: abandonedVerify({ error }),
+          runningVersion: "2.1.0",
+        }),
+        nowMs: NOW_MS,
+        connected: true,
+      }),
+    );
+    expect(views[0]).toEqual(views[1]);
+    for (const view of views) expect(view.kind).toBe("finalizing-record");
+  });
+
+  it("the CLI's leftover 'updating' marker does not preempt the route", () => {
+    // The refusal arm writes NOTHING, so it does not clear its own coarse
+    // marker either: production reports `{state:"updating"}` beside the
+    // untouched `verifying` record. The marker is consulted only for
+    // `operation === null` / `{kind:"none"}`, so a live attempt outranks it —
+    // asserted here rather than assumed, because if that precedence ever
+    // inverted this state would render as a generic "Updating host" forever,
+    // on a host that has already finished updating.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        coarseProgress: { state: "updating", error: null },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("finalizing-record");
+    expect(view.kind).not.toBe("updating");
+  });
+
+  it("an EARLIER phase with a matching version is NOT this state", () => {
+    // A host already on the target when a redundant attempt was started. That
+    // is `E_HOST_UPDATE_NOT_NEWER` territory, not a completed update, and
+    // widening the phase set would dress it up as one.
+    for (const phase of [
+      "downloading",
+      "preparing",
+      "applying",
+      "restarting",
+    ] as const) {
+      const view = projectFleetUpdateView({
+        observation: observation({
+          operation: abandonedVerify({ phase }),
+          runningVersion: "2.1.0",
+        }),
+        nowMs: NOW_MS,
+        connected: true,
+      });
+      expect(view.kind).toBe("failed");
+    }
+  });
+
+  it("holds no lifecycle gate and earns no fast poll", () => {
+    // The update is OVER and the host is serving. A gate here would disable
+    // Restart and Diagnostics on a healthy machine until the NEXT update run
+    // reconciles the record — which may never come.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    // FIRST, and load-bearing: every assertion below also holds for `failed`,
+    // so without this line the whole test passes with the routing deleted. It
+    // did, when it was written — the ablation is what caught it.
+    expect(view.kind).toBe("finalizing-record");
+    expect(holdsLifecycleGate(view)).toBe(false);
+    expect(warrantsFastPoll(view)).toBe(false);
+    // Visible, though: this is a card, not a quiet state.
+    expect(isQuietUpdateView(view)).toBe(false);
+  });
+});
+
+/**
+ * Q19/Q23: a host that came up and REFUSED the CLI's authenticated check.
+ *
+ * The verify leg takes two consecutive UNAUTHORIZED/FORBIDDEN frames from the
+ * freshly started target host, stops, and stamps a terminal record with code
+ * `host-refuses-rpc`. What is then known: bytes installed at the target, the
+ * host answered (a refusal is an answer), verification never completed.
+ *
+ * Rendering by CODE is right here and was not available to Q11 above: this is a
+ * terminal record carrying a named code that means one thing, where Q11's path
+ * could not write a code at all.
+ */
+describe("projectFleetUpdateView — a host that refused the authenticated check", () => {
+  /**
+   * The `code` here is a LITERAL on purpose, and must stay one.
+   *
+   * Production compares against `HOST_UPDATE_REFUSES_RPC_CODE`, imported from
+   * protocol. Writing that constant into this fixture would compare it to
+   * itself: the pin would then survive any change to its VALUE, which is the
+   * one change that matters, because it silently stops every already-written
+   * record being recognised as a refusal. Spelling the wire string here is
+   * what makes this an end-to-end assertion rather than an identity check —
+   * so a rename of the constant is free and a change to its value reddens.
+   *
+   * `error.phase` below is the same class of hazard with no instance yet:
+   * `phase` is a free `string` on the record schema exactly as `code` is, so
+   * nothing but a literal comparison would catch a drift in it either. This
+   * module compares no `error.phase` today. The next literal that appears
+   * beside one of these fields is not a style question — it is an untyped wire
+   * value that needs a named constant on the protocol side and a spelled-out
+   * string on this side, the same pairing as `code`.
+   */
+  function refusedAttempt(
+    overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
+  ): HostStatusUpdateOperation {
+    return attemptOperation({
+      phase: "failed",
+      execution: "terminal",
+      liveness: "interrupted",
+      targetVersion: "2.1.0",
+      error: {
+        code: "host-refuses-rpc",
+        message: "the host refused the authenticated check",
+        phase: "verifying",
+      },
+      ...overrides,
+    });
+  }
+
+  it("renders the non-destructive kind, not failed", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({}),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("verification-refused");
+    expect(view.kind).not.toBe("failed");
+    expect(view.qualified).toBe(false);
+    expect(view.targetVersion).toBe("2.1.0");
+  });
+
+  it("a DIFFERENT code on the same terminal record still renders failed", () => {
+    // The discriminator flipped, and nothing else. Without this the route could
+    // be matching on the phase alone and every terminal failure would quietly
+    // lose its failure treatment.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({
+          error: {
+            code: "verify-timeout",
+            message: "did not become healthy",
+            phase: "verifying",
+          },
+        }),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+  });
+
+  it("survives a WIDENED finalizing-record phase set, at either running version", () => {
+    // What this row actually holds, measured rather than assumed — the title
+    // used to claim it pinned the ORDER, and reviewer C showed it does not:
+    //
+    //   - reorder alone (demote this route below Q11's, phase set untouched):
+    //     fully green. Q11's predicate refuses a `failed` phase, so today the
+    //     two cannot collide whichever way round they sit.
+    //   - widen `FINALIZING_RECORD_PHASES` to include `failed`, shipped order
+    //     kept: 1 red, and it is the "DIFFERENT code" row, not this one. The
+    //     shipped order does exactly what the production comment claims — the
+    //     widening cannot reach the refusal case.
+    //   - widen AND demote: this row reddens, on the `2.1.0` iteration.
+    //
+    // So it is CONTINGENT, not vacuous: it fires on the composite of a widened
+    // phase set and a lost ordering, which is precisely the pair the production
+    // comment says the position defends against.
+    //
+    // Both running versions are exercised, and the wider loop is load-bearing:
+    // under widen-and-demote it is the `2.1.0` iteration that fails. The
+    // narrower "target ≠ running" case stays GREEN there, because a mismatched
+    // version cannot reach `finalizing-record` however wide its phase set is.
+    // The non-matching iteration still earns its place — it is the one that
+    // must not fall through to `failed`.
+    for (const runningVersion of ["2.1.0", "2.0.0"]) {
+      const view = projectFleetUpdateView({
+        observation: observation({
+          operation: refusedAttempt({}),
+          runningVersion,
+        }),
+        nowMs: NOW_MS,
+        connected: true,
+      });
+      expect(view.kind).toBe("verification-refused");
+      expect(view.kind).not.toBe("finalizing-record");
+    }
+  });
+
+  it("a NON-terminal record carrying the code is not this state", () => {
+    // A code is only meaningful on a record that concluded. A mid-flight
+    // attempt holding a stale error must keep rendering its live phase rather
+    // than jumping to a terminal rendering.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({
+          phase: "downloading",
+          execution: "active",
+          liveness: "active",
+        }),
+        runningVersion: "2.0.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("downloading");
+  });
+
+  it("a STALE read carrying the code is not this state — freshness is a precondition", () => {
+    // Symmetric with the terminal-phase row above, and the same class of gap
+    // Y1 was: the route sits BELOW the stale arm, and nothing held it there.
+    // Reviewer C hoisted it above and all 140/41/41 stayed green.
+    //
+    // Why the position is load-bearing rather than incidental: the sentence
+    // this kind renders says the host **is running** — present tense — and a
+    // read we can no longer refresh does not establish that. Hoisted, a host
+    // that went unreachable after refusing would keep asserting it is up and
+    // serving, unqualified, with no surface able to add "last seen".
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.kind).not.toBe("verification-refused");
+    expect(view.qualified).toBe(true);
+    // The phase survives as history so a surface can still say "last seen".
+    expect(view.lastKnownKind).toBe("failed");
+  });
+
+  it("holds no lifecycle gate and earns no fast poll, and is not quiet", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({}),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    // The discriminating fact FIRST — every assertion below is also true of
+    // `failed`, so without this the test passes with the route deleted.
+    expect(view.kind).toBe("verification-refused");
+    expect(holdsLifecycleGate(view)).toBe(false);
+    expect(warrantsFastPoll(view)).toBe(false);
+    expect(isQuietUpdateView(view)).toBe(false);
+  });
+});
+
 describe("projectFleetUpdateView — restarting vs reconnecting", () => {
   it("phase: restarting while still connected projects restarting", () => {
     const view = projectFleetUpdateView({
@@ -835,6 +1233,20 @@ describe("holdsLifecycleGate — direct unit coverage", () => {
 
 // ---- Ticket 07 §5.2.7 — the record-derived arm ----------------------------
 
+/**
+ * One instant for both legs, for the cases that are not ABOUT the split.
+ *
+ * `preferLiveOverRecord` takes a wire instant and a record instant because
+ * production has two different clocks to offer it (see `LocalUpdateClock`).
+ * A test whose subject is ordering, not clock choice, has no reason to
+ * separate them, and every case in THIS file is such a test. The pins that do
+ * separate the two instants live with the helper that routes them,
+ * `__tests__/local-update-projection.test.ts`.
+ */
+function sameClock(nowMs: number): LocalUpdateClock {
+  return { wireNowMs: nowMs, recordNowMs: nowMs };
+}
+
 function recordObservation(
   overrides: Partial<FleetUpdateRecordObservation>,
 ): FleetUpdateRecordObservation {
@@ -845,6 +1257,15 @@ function recordObservation(
     attemptId: "attempt-1",
     targetVersion: "2.0.0",
     phase: "preparing",
+    errorMessage: null,
+    // Un-probed by default, which is what a parked or terminal record carries
+    // and what every case here that is not ABOUT liveness should assert
+    // against — `live` is the exceptional verdict, so it has to be asked for.
+    liveness: "unknown",
+    livenessObservedAtMs: null,
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    generation: 1,
+    sequence: 1,
     ...overrides,
   };
 }
@@ -875,6 +1296,17 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
         phase: "failed",
         continuation: null,
         updatedAt: "2026-08-27T00:00:00.000Z",
+        // A post-swap failure leaves the host down; the record is the ONLY
+        // place the cause survives.
+        error: {
+          code: "service-start-failed",
+          message: "the service did not start",
+          phase: "restarting",
+        },
+        // A terminal record is never probed (D13), so Desktop publishes
+        // `unknown` with no observation timestamp.
+        liveness: "unknown",
+        livenessObservedAtMs: null,
       },
       observedAtMs: NOW_MS,
     });
@@ -894,6 +1326,9 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
     // It must not earn the acceleration or hold a lifecycle gate.
     expect(warrantsFastPoll(view)).toBe(false);
     expect(holdsLifecycleGate(view)).toBe(false);
+    // The cause the record carries must reach the view — the only evidence
+    // that exists while the host is down.
+    expect(view.errorMessage).toBe("the service did not start");
   });
 
   it("distinguishes 'attempt exists, host unreachable' from 'attempt progressing'", () => {
@@ -981,14 +1416,14 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
 
   it("a FRESH wire read outranks the record", () => {
     const wire = observation({ freshUntilMs: NOW_MS + 1000 });
-    expect(preferLiveOverRecord(wire, record, NOW_MS)).toBe(wire);
+    expect(preferLiveOverRecord(wire, record, sameClock(NOW_MS))).toBe(wire);
   });
 
   it("a STALE wire read loses to the record", () => {
     // The load-bearing case. A recency comparison would get this backwards in
     // the other direction too - see the next test.
     const wire = observation({ freshUntilMs: NOW_MS - 1 });
-    expect(preferLiveOverRecord(wire, record, NOW_MS)).toBe(record);
+    expect(preferLiveOverRecord(wire, record, sameClock(NOW_MS))).toBe(record);
   });
 
   it("a fresh wire read wins even when the record was observed MORE recently", () => {
@@ -1000,19 +1435,294 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
       observedAtMs: NOW_MS - 5000,
     });
     const newerRecord = recordObservation({ observedAtMs: NOW_MS });
-    expect(preferLiveOverRecord(wire, newerRecord, NOW_MS)).toBe(wire);
+    expect(preferLiveOverRecord(wire, newerRecord, sameClock(NOW_MS))).toBe(
+      wire,
+    );
   });
 
   it("keeps a stale wire read when there is no record, rather than dropping it", () => {
     // Its own stale arm still carries `lastKnownKind`; returning null here
     // would throw away the last thing we knew.
     const wire = observation({ freshUntilMs: NOW_MS - 1 });
-    expect(preferLiveOverRecord(wire, null, NOW_MS)).toBe(wire);
+    expect(preferLiveOverRecord(wire, null, sameClock(NOW_MS))).toBe(wire);
   });
 
   it("returns the record when there is no wire read at all, and null when there is neither", () => {
-    expect(preferLiveOverRecord(null, record, NOW_MS)).toBe(record);
-    expect(preferLiveOverRecord(null, null, NOW_MS)).toBeNull();
+    expect(preferLiveOverRecord(null, record, sameClock(NOW_MS))).toBe(record);
+    expect(preferLiveOverRecord(null, null, sameClock(NOW_MS))).toBeNull();
+  });
+});
+
+describe("projectFleetUpdateView — probed local liveness on a `restarting` record (Ticket 06 D13)", () => {
+  it("live liveness with a fresh stamp projects the live restarting kind, gate held, no retained phase", () => {
+    // Falsifies: `localLivenessProofHolds` returning false for a fresh, valid
+    // stamp, or `recordObservationView` not routing a holding proof to the
+    // live `restarting` arm.
+    const view = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs: NOW_MS - LOCAL_LIVENESS_PROOF_MS / 2,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("restarting");
+    expect(view.qualified).toBe(false);
+    expect(view.progress.kind).toBe("indeterminate");
+    expect(holdsLifecycleGate(view)).toBe(true);
+    expect(view.lastKnownKind).toBeNull();
+    // A live restarting record has nothing to say about failure — the cause
+    // slot is for the retained `failed` arm only.
+    expect(view.errorMessage).toBeNull();
+  });
+
+  it("the SAME observation, once nowMs advances past the 5s proof window, decays to unknown with the gate released", () => {
+    // Falsifies: dropping the upper bound (`ageMs <= LOCAL_LIVENESS_PROOF_MS`)
+    // in `localLivenessProofHolds` — a proof that never expires would hold this
+    // host's lifecycle gate open forever on a payload nothing is refreshing.
+    const livenessObservedAtMs = NOW_MS;
+    // Deliberately DISTINCT from the liveness stamp. The builder defaults
+    // `observedAtMs` to `NOW_MS` too, so leaving it alone would make the
+    // `lastObservedAtMs` assertion below pass whichever of the two fields the
+    // record arm retained — and the two are different facts: when this
+    // renderer READ the record, versus when the holder probe stamped it.
+    const observedAtMs = NOW_MS - 250;
+    const nowAfterDeadline = livenessObservedAtMs + LOCAL_LIVENESS_PROOF_MS + 1;
+    const view = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs,
+        observedAtMs,
+      }),
+      nowMs: nowAfterDeadline,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(holdsLifecycleGate(view)).toBe(false);
+    // The record arm's phase->kind mapping calls `phaseKind(phase, false)` —
+    // never `input.connected` — because reading a record IS the disconnected
+    // vantage, and `restarting` under `connected: false` maps to
+    // `reconnecting`. Asserting what the code actually produces, not what a
+    // naive reading of "restarting expired" might guess ("restarting" or
+    // "unknown").
+    expect(view.lastKnownKind).toBe("reconnecting");
+    expect(view.lastObservedAtMs).toBe(observedAtMs);
+  });
+
+  it("a NEGATIVE age beyond the clock-slack bound projects unknown, gate released", () => {
+    // Falsifies: dropping the lower bound entirely from
+    // `localLivenessProofHolds` (the ticket's own ablation) — a wall-clock
+    // step backward would otherwise read as "even fresher than new" to a
+    // check that only looks at the upper bound. Stepped back well past
+    // `LOCAL_LIVENESS_CLOCK_SLACK_MS` (1s) rather than by ~500ms, because a
+    // step inside the slack is the ordinary quantisation case this bound is
+    // deliberately built to tolerate, not the defect it guards against.
+    const livenessObservedAtMs = NOW_MS;
+    const nowBeforeStamp =
+      livenessObservedAtMs - LOCAL_LIVENESS_CLOCK_SLACK_MS - 9_000;
+    const view = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs,
+      }),
+      nowMs: nowBeforeStamp,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(holdsLifecycleGate(view)).toBe(false);
+  });
+
+  it("an absent or NaN liveness stamp projects unknown even with liveness:'live'", () => {
+    // Falsifies: `localLivenessProofHolds` treating a missing/unparseable
+    // stamp as "nothing to compare, so allow it" instead of refusing.
+    const nullStamp = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs: null,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(nullStamp.kind).toBe("unknown");
+
+    const nanStamp = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs: Number.NaN,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(nanStamp.kind).toBe("unknown");
+  });
+
+  it("'interrupted' and 'unknown' liveness on a restarting record never reach the live arm, regardless of the stamp", () => {
+    // Falsifies: `localLivenessProofHolds` checking only the stamp's age and
+    // forgetting the `liveness !== "live"` guard.
+    for (const liveness of ["interrupted", "unknown"] as const) {
+      const view = projectFleetUpdateView({
+        observation: recordObservation({
+          phase: "restarting",
+          liveness,
+          livenessObservedAtMs: NOW_MS,
+        }),
+        nowMs: NOW_MS,
+        connected: true,
+      });
+      expect(view.kind).toBe("unknown");
+      expect(view.lastKnownKind).toBe("reconnecting");
+      expect(holdsLifecycleGate(view)).toBe(false);
+    }
+  });
+});
+
+describe("preferLiveOverRecord — same-attempt ordering and the different-attempt bound (Ticket 06 D13)", () => {
+  it("a repeated read of ONE unchanged record never outranks a HEALTHY wire frame of the same attempt, across three reads", () => {
+    // Falsifies: comparing on read time / recency instead of freshness — see
+    // the module's own invariant doc at `preferLiveOverRecord`.
+    const wire = observation({
+      freshUntilMs: NOW_MS + 30_000,
+      operation: attemptOperation({
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 1,
+      }),
+    });
+    const unchangedRecord = recordObservation({
+      attemptId: "attempt-1",
+      generation: 1,
+      sequence: 1,
+    });
+    for (let read = 0; read < 3; read += 1) {
+      expect(
+        preferLiveOverRecord(wire, unchangedRecord, sameClock(NOW_MS)),
+      ).toBe(wire);
+    }
+  });
+
+  it("a record with a HIGHER sequence outranks a STALE wire frame of the same attempt", () => {
+    // Falsifies: `recordIsBehind` treating equality or a higher sequence as
+    // "behind", or the caller only consulting `preferLiveOverRecord` while the
+    // wire is fresh.
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 1,
+      operation: attemptOperation({
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 1,
+      }),
+    });
+    const aheadRecord = recordObservation({
+      attemptId: "attempt-1",
+      generation: 1,
+      sequence: 2,
+    });
+    expect(
+      preferLiveOverRecord(staleWire, aheadRecord, sameClock(NOW_MS)),
+    ).toBe(aheadRecord);
+  });
+
+  it("a FUTURE-dated updatedAt on a DIFFERENT attempt loses to a stale wire — the wire must be stale for this to prove anything", () => {
+    // A fresh wire always wins unconditionally (see the healthy-frame pin
+    // above), so this pin deliberately stales the wire first: only then
+    // does `recordTimestampIsSane`'s future-allowance become the deciding
+    // factor. "Future" exceeds LOCAL_LIVENESS_CLOCK_SLACK_MS by a full day, far
+    // past the one-tick slack the bound tolerates.
+    // Falsifies: `recordTimestampIsSane` accepting an unbounded future
+    // timestamp instead of comparing against `LOCAL_LIVENESS_CLOCK_SLACK_MS`.
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 1,
+      operation: attemptOperation({ attemptId: "attempt-1" }),
+    });
+    const futureRecord = recordObservation({
+      attemptId: "attempt-2",
+      updatedAt: new Date(NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    });
+    expect(
+      preferLiveOverRecord(staleWire, futureRecord, sameClock(NOW_MS)),
+    ).toBe(staleWire);
+  });
+
+  it("mirror: a different-attempt record with a SANE updatedAt beats a stale wire", () => {
+    // Falsifies: `recordTimestampIsSane` refusing an ordinary, plausible
+    // timestamp (over-tightening the bound would make this fail alongside the
+    // future-dated pin above).
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 1,
+      operation: attemptOperation({ attemptId: "attempt-1" }),
+    });
+    const saneRecord = recordObservation({
+      attemptId: "attempt-2",
+      updatedAt: new Date(NOW_MS - 60_000).toISOString(),
+    });
+    expect(preferLiveOverRecord(staleWire, saneRecord, sameClock(NOW_MS))).toBe(
+      saneRecord,
+    );
+  });
+
+  it("(C-H2) the different-attempt bound is judged on the RECORD clock, not the wire's", () => {
+    // The three pins around this one all pass `sameClock(NOW_MS)`, which makes
+    // them blind to WHICH slot `recordTimestampIsSane` reads: swapping
+    // `clock.recordNowMs` for `clock.wireNowMs` leaves every one of them
+    // green. This is the case that separates them.
+    //
+    // The split is not contrived, it is the steady state this two-clock design
+    // exists for (round-1 F3): `wireNowMs` is the status query's own
+    // `dataUpdatedAt`, which STOPS ADVANCING exactly when the host goes down,
+    // while `recordNowMs` is a one-second renderer tick that keeps running.
+    // So a current record judged against a frozen wire instant is rejected as
+    // "future-dated" for being what it is — current — which is the failure
+    // `recordTimestampIsSane`'s own doc names.
+    //
+    // Falsifies: `preferLiveOverRecord` passing `clock.wireNowMs` here. Under
+    // that mutation `updatedAt - wireNowMs` is 10 s, far past the 1 s slack,
+    // the record is called insane and the STALE wire keeps the slot.
+    //
+    // `freshUntilMs` sits BEFORE `wireNowMs`, not merely before `NOW_MS`: the
+    // healthy-frame short-circuit at the top of `preferLiveOverRecord` reads
+    // the wire clock too, so a window measured against the tick would let the
+    // frozen instant read as fresh and the pin would never reach the bound it
+    // is about. This is the shape an unhealthy read actually has — the health
+    // is folded into `freshUntilMs`, which is what round-1 F3 established.
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 20_000,
+      operation: attemptOperation({ attemptId: "attempt-1" }),
+    });
+    const currentRecord = recordObservation({
+      attemptId: "attempt-2",
+      updatedAt: new Date(NOW_MS).toISOString(),
+    });
+    expect(
+      preferLiveOverRecord(staleWire, currentRecord, {
+        // Frozen ten seconds ago: the host stopped answering, so the query's
+        // `dataUpdatedAt` stopped moving with it.
+        wireNowMs: NOW_MS - 10_000,
+        // Still ticking, which is the whole point of the second slot.
+        recordNowMs: NOW_MS,
+      }),
+    ).toBe(currentRecord);
+  });
+
+  it("an unparseable updatedAt on a different attempt loses to a stale wire", () => {
+    // Falsifies: `recordTimestampIsSane` treating `Date.parse`'s `NaN` as
+    // "unknown, so allow it" instead of refusing — the doc's explicit
+    // "invalid loses" vs. "invalid silently wins" distinction.
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 1,
+      operation: attemptOperation({ attemptId: "attempt-1" }),
+    });
+    const unparseableRecord = recordObservation({
+      attemptId: "attempt-2",
+      updatedAt: "not-a-date",
+    });
+    expect(
+      preferLiveOverRecord(staleWire, unparseableRecord, sameClock(NOW_MS)),
+    ).toBe(staleWire);
   });
 });
 
@@ -1167,5 +1877,509 @@ describe("isQuietUpdateView", () => {
 
   it("is false for a live 'failed' view", () => {
     expect(isQuietUpdateView(viewOf({ kind: "failed" }))).toBe(false);
+  });
+});
+
+// ---- record-derived parks (legacyFacts) — Ticket beside 07 §5.2.7 ----------
+//
+// `legacyFactsView` is consulted in BOTH the `operation === null` arm and the
+// `operation.kind === "none"` arm, AFTER the coarse `updateProgress` marker
+// and BEFORE `unknown`/`idle`. See the module's own doc on `legacyFactsView`
+// for the full precedence story; these tests pin it end to end through
+// `projectFleetUpdateView` rather than calling the (unexported) helper
+// directly, so a precedence regression shows up exactly where a surface would
+// see it.
+
+describe("projectFleetUpdateView — record-derived parks (legacyFacts)", () => {
+  it("activation debt under operation:{kind:'none'} projects waiting-to-activate, targetVersion = installed, unqualified, no blocking count", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("1.3.0-rc.3");
+    expect(view.qualified).toBe(false);
+    expect(view.blockingSessionCount).toBeNull();
+  });
+
+  it("SAME activation debt under operation: null (a pre-1.3 peer) - the legacy updater parks the same way on either cohort", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("1.3.0-rc.3");
+    expect(view.qualified).toBe(false);
+    expect(view.blockingSessionCount).toBeNull();
+  });
+
+  it("staged wait projects waiting-for-work, targetVersion = staged, and carries the blocking count - offersForceRestart follows it", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: null,
+          stagedWait: { stagedVersion: "1.3.0-rc.4", blockingSessionCount: 2 },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-for-work");
+    expect(view.targetVersion).toBe("1.3.0-rc.4");
+    expect(view.blockingSessionCount).toBe(2);
+    expect(offersForceRestart(view)).toBe(true);
+  });
+
+  it("staged wait with a null blocking count offers no force - a null count is a claim, not countable work", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: null,
+          stagedWait: {
+            stagedVersion: "1.3.0-rc.4",
+            blockingSessionCount: null,
+          },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-for-work");
+    expect(view.blockingSessionCount).toBeNull();
+    expect(offersForceRestart(view)).toBe(false);
+  });
+
+  it("debt AND staged wait both present - debt wins (the restart is the smaller, always-available step)", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: { stagedVersion: "1.3.0-rc.4", blockingSessionCount: 2 },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("1.3.0-rc.3");
+  });
+
+  it("a coarse 'updating' marker outranks the facts - a live updater is working right now, ahead of its own park", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: { state: "updating", error: null },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("updating");
+  });
+
+  it("a coarse 'failed' marker outranks the facts and keeps its failure text - real evidence, not papered over", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: { state: "failed", error: "health probe failed" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe("health probe failed");
+  });
+
+  it("a genuine attempt record outranks the facts - the kind comes from the attempt's own phase", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({ phase: "applying" }),
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("applying");
+  });
+
+  it("'unavailable' outranks the facts - fail-closed record evidence stays fail-closed", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "unavailable", reason: "corrupt", cause: null },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unavailable");
+  });
+
+  it("a STALE park decays to unknown, retaining lastKnownKind, the observed time, and the target version", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        freshUntilMs: NOW_MS - 1,
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("waiting-to-activate");
+    expect(view.lastObservedAtMs).toBe(NOW_MS);
+    expect(view.targetVersion).toBe("1.3.0-rc.3");
+  });
+
+  it("neither park kind holds the lifecycle gate or earns the fast poll, and neither reads as quiet", () => {
+    const debtView = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: { installedVersion: "1.3.0-rc.3" },
+          stagedWait: null,
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    const stagedView = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: {
+          activationDebt: null,
+          stagedWait: { stagedVersion: "1.3.0-rc.4", blockingSessionCount: 2 },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(holdsLifecycleGate(debtView)).toBe(false);
+    expect(holdsLifecycleGate(stagedView)).toBe(false);
+    expect(warrantsFastPoll(debtView)).toBe(false);
+    expect(warrantsFastPoll(stagedView)).toBe(false);
+    expect(isQuietUpdateView(debtView)).toBe(false);
+    expect(isQuietUpdateView(stagedView)).toBe(false);
+  });
+
+  // Regression pin: with `legacyFacts: null` (the fixture default) and no
+  // coarse marker, `{kind:"none"}` must still fall through to plain `idle` -
+  // exactly the pre-legacyFacts behaviour. Falsification: a bug that made
+  // `legacyFactsView` return a non-null park for `legacyFacts: null` would
+  // turn this into `waiting-to-activate` or `waiting-for-work`.
+  it("legacyFacts: null with kind:'none' and no coarse marker still projects idle - unchanged from before this feature", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        legacyFacts: null,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("idle");
+  });
+});
+
+/**
+ * D-49: a TERMINAL, non-`failed` attempt yields the operation slot to the
+ * record-derived parks — and yields it for the CHOICE only, falling back to
+ * its own arm when the records say nothing.
+ *
+ * The rule exists for D-47's settlement: another actor delivered the version,
+ * the host is not running it, the executor writes `superseded` with no error.
+ * The attempt has nothing to say; `install.json` and the runtime do.
+ */
+describe("projectFleetUpdateView — terminal attempts yield to the record parks (D-49)", () => {
+  const DEBT_FACTS = {
+    activationDebt: { installedVersion: "2.1.0" },
+    stagedWait: null,
+  };
+
+  it("(1) superseded + installed != running projects the DEBT park, not idle", () => {
+    // The pin the rule exists for. Falsification: drop the terminal
+    // fall-through in `fleet-update-view.ts` and `superseded` reaches
+    // `phaseKind`, projects `idle`, and `isQuietUpdateView` hides the card —
+    // which is the "nothing on screen after an Updating… toast" outcome.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "superseded",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: DEBT_FACTS,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("2.1.0");
+    expect(view.qualified).toBe(false);
+    // And it is NOT quiet, which is what puts the card on screen at all.
+    expect(isQuietUpdateView(view)).toBe(false);
+  });
+
+  it("(2) failed keeps its OWN arm even with the same debt facts - a failure's cause must render", () => {
+    // `failed` is excluded from the fall-through on purpose: it is the one
+    // terminal state carrying something the records cannot say for it.
+    // Falsification: widen the guard to every terminal phase and this becomes
+    // `waiting-to-activate`, silently swallowing the error message.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "failed",
+          execution: "terminal",
+          liveness: "terminal",
+          error: {
+            code: "E_TEST",
+            message: "the updater fell over",
+            phase: "applying",
+          },
+        }),
+        legacyFacts: DEBT_FACTS,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe("the updater fell over");
+  });
+
+  it("(3) complete with installed == running keeps its COMPLETE kind - the acknowledgement is not spent to reach the rule", () => {
+    // The FALL-BACK half, and the reason the rule is not a replacement. With
+    // no park the attempt arm still answers, so the landing banner's
+    // completion acknowledgement (`useLandingCompletionCollapse`, keyed on
+    // `kind === "complete"` and the attempt id) survives. Its own leg passes
+    // `legacyFacts: null` — the fixture default here — so a substitution that
+    // returned `{kind:"none"}`'s answer outright would project `idle` and
+    // delete that surface. Falsification: make the fall-through return the
+    // `none` arm's result instead of falling back, and this reddens along
+    // with `host-update-banner-bound.test.tsx:437` and `:1001`.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "complete",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: null,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("complete");
+    expect(view.attemptId).toBe("attempt-1");
+  });
+
+  it("a complete attempt whose records DISAGREE with the running version is debt, not a completion", () => {
+    // Deliberate, not incidental: "delivered, but not running it" is the
+    // debt whatever the attempt calls itself, and this is the ordering that
+    // makes (3) a statement about the absence of a park rather than about
+    // `complete` being exempt.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "complete",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: DEBT_FACTS,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+  });
+
+  it("(H2) the STAGED WAIT park reaches the fall-back too - it is the record parks, plural", () => {
+    // `legacyPark` answers for both parks, and D-49's decision is about the
+    // record parks rather than about the debt one: a terminal attempt does
+    // not make a stage stop waiting any more than it makes an install stop
+    // needing a restart. Falsification: narrow the fall-back to
+    // `facts.activationDebt !== null` and this reddens while pin (1) stays
+    // green — which is exactly the asymmetry cold review C flagged as
+    // unpinned.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "superseded",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: {
+          activationDebt: null,
+          stagedWait: { stagedVersion: "2.2.0", blockingSessionCount: 2 },
+        },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-for-work");
+    expect(view.targetVersion).toBe("2.2.0");
+    expect(view.blockingSessionCount).toBe(2);
+    expect(view.qualified).toBe(false);
+  });
+
+  it("(H3) a STALE terminal attempt with debt retains the PARK's phase, qualified - never a live park", () => {
+    // The fall-back sits above the attempt arm's `stale` decay, which is not
+    // a bypass: `legacyFactsView` decays on its own `stale` argument, so what
+    // comes back is the qualified `unknown` + `lastKnownKind` shape. The
+    // reachable shape is a status read that aged while the installation read
+    // stayed healthy — two independent legs — and there the retained phase
+    // becomes the park's rather than the attempt's `idle`, which is the same
+    // answer these records give under `{kind:"none"}`.
+    //
+    // Falsification: move the fall-back below the `stale` branch and the
+    // retained kind reverts to `idle` (`phaseKind("superseded")`), taking the
+    // park's target version with it.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "superseded",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: {
+          activationDebt: { installedVersion: "2.1.0" },
+          stagedWait: null,
+        },
+      }),
+      // One millisecond past the fresh window: stale by the observation's own
+      // rule, with the facts still carried.
+      nowMs: FRESH_UNTIL_MS + 1,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("2.1.0");
+    // Retained, not live — and THIS is where the "never a live park" half of
+    // the claim actually lives. `kind: "unknown"` says we do not know;
+    // `qualified` is what every surface reads to decide whether to say so
+    // out loud ("last seen …"), so a decay that dropped it would render the
+    // park as though it were current while still passing the two assertions
+    // above.
+    expect(view.qualified).toBe(true);
+    expect(isQuietUpdateView(view)).toBe(false);
+  });
+});
+
+/**
+ * P1 window A: the view carries WHICH POSITION of the attempt it describes.
+ *
+ * The bound dispatch sends this as `expected` so the host can refuse a Force
+ * that names a park the user was never shown. The renderer had been truncating
+ * the ordering key exactly as the wire request did — `attemptId` and neither of
+ * `generation`/`sequence` — so the request could not have carried it even once
+ * the protocol gained the field.
+ *
+ * ## Why the pairing is pinned rather than the null arm
+ *
+ * The brief asked for a row where an observation with NO identity sends no
+ * `expected`. Through the panel that state does not exist: `deriveAttemptControl`
+ * returns no offer unless `view.attemptId !== null`, and every site that builds
+ * a view sets the two together — so a null position never reaches a dispatch.
+ * Pinning "no identity → no key" through the UI would therefore be a row whose
+ * premise cannot occur, which is the mistitled-unreachable-state trap this file
+ * has already been corrected for once.
+ *
+ * What IS falsifiable is the invariant the unreachability rests on. Pinned at
+ * all three sites that build a view, because "they are set together" is only
+ * true if it is true at each of them.
+ */
+describe("projectFleetUpdateView — the attempt position travels with the attempt id", () => {
+  it("carries the wire leg's own position, not a default", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({ generation: 3, sequence: 9 }),
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+
+    expect(view.attemptId).toBe("attempt-1");
+    expect(view.attemptPosition).toEqual({ generation: 3, sequence: 9 });
+  });
+
+  it("carries the record leg's own position, not a default", () => {
+    const view = projectFleetUpdateView({
+      observation: recordObservation({ generation: 5, sequence: 2 }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+
+    expect(view.attemptId).toBe("attempt-1");
+    expect(view.attemptPosition).toEqual({ generation: 5, sequence: 2 });
+  });
+
+  it("names a position exactly when it names an attempt, on every leg", () => {
+    const views: ReadonlyArray<{
+      readonly label: string;
+      readonly view: FleetUpdateView;
+    }> = [
+      { label: "the unknown constant", view: UNKNOWN_FLEET_UPDATE_VIEW },
+      {
+        label: "the wire leg",
+        view: projectFleetUpdateView({
+          observation: observation({}),
+          nowMs: NOW_MS,
+          connected: true,
+        }),
+      },
+      {
+        label: "the record leg",
+        view: projectFleetUpdateView({
+          observation: recordObservation({}),
+          nowMs: NOW_MS,
+          connected: true,
+        }),
+      },
+      {
+        label: "an operation naming no attempt",
+        view: projectFleetUpdateView({
+          observation: observation({ operation: { kind: "none" } }),
+          nowMs: NOW_MS,
+          connected: true,
+        }),
+      },
+    ];
+
+    for (const row of views) {
+      expect(
+        { [row.label]: row.view.attemptPosition === null },
+        `${row.label}: position and id must agree`,
+      ).toEqual({ [row.label]: row.view.attemptId === null });
+    }
   });
 });

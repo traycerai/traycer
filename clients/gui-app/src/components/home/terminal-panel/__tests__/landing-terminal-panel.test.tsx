@@ -3828,6 +3828,7 @@ describe("<LandingTerminalPanel />", () => {
           isEligible: () => true,
         },
         true,
+        () => true,
       ),
     );
 
@@ -4309,6 +4310,7 @@ describe("<LandingTerminalPanel />", () => {
           isEligible: () => true,
         },
         true,
+        () => true,
       ),
     );
     render(panelUi());
@@ -5197,6 +5199,7 @@ describe("<LandingTerminalPanel />", () => {
           isEligible: () => true,
         },
         true,
+        () => true,
       ),
     );
 
@@ -5741,6 +5744,7 @@ describe("<LandingTerminalPanel />", () => {
           isEligible: () => true,
         },
         true,
+        () => true,
       ),
     );
 

@@ -96,6 +96,10 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
         allowDowngrade: false,
         versionRequest: null,
         ackNonce: "nonce-abcdefgh",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -111,6 +115,10 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
         allowDowngrade: false,
         versionRequest: null,
         ackNonce: null,
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -129,6 +137,10 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
         allowDowngrade: false,
         versionRequest: null,
         ackNonce: "nonce-abcdefgh",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -152,6 +164,10 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
         allowDowngrade: true,
         versionRequest: "1.2.0",
         ackNonce: "nonce-downgrade",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });

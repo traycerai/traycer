@@ -15,15 +15,16 @@ import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat
  * `chatTranscriptEventRowId` - and then reads the ordinal straight off the
  * skeleton it already holds.
  *
- * Three kinds cannot be derived that way, and they are the reason this module
+ * Four kinds cannot be derived that way, and they are the reason this module
  * exists. A `block` target is identified by walking the RENDERED segment tree,
- * and a `sent-message` target by matching an `agentMessageSend` enrichment
- * inside one - and a cold row has no rendered models at all. So the client can
+ * a `sent-message` target by matching an `agentMessageSend` enrichment inside
+ * one, and a `receipt` target by matching an `agentMessageReceipt` - and a
+ * cold row has no rendered models at all. So the client can
  * neither find the row nor learn that it exists, and waiting for it to appear
  * deadlocks: the scroll is what drives hydration and the scroll is what is
  * being held back.
  *
- * A `message` target is the third, and it fails for a different reason worth
+ * A `message` target is the fourth, and it fails for a different reason worth
  * stating separately, because "a message id is a row id" holds often enough to
  * look like a rule. It is one only for USER records. An assistant record is
  * projected into TURN-KEYED rows (`assistant:<turnKey>`, and one per slice when
@@ -76,7 +77,7 @@ import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat
 export const LOCATOR_MESSAGE_TEXT_MAX_CHARS = 64_000;
 
 /**
- * The three jump targets whose row a client cannot identify on its own.
+ * The four jump targets whose row a client cannot identify on its own.
  *
  * A zod schema rather than a bare type because it is also the wire shape - it
  * is re-exported by `host/agent/gui/subscribe-windowed.ts`, which is where a
@@ -101,6 +102,18 @@ export const transcriptRowLocatorSchema = z.discriminatedUnion("kind", [
     messageText: z.string().max(LOCATOR_MESSAGE_TEXT_MAX_CHARS),
     timestamp: z.number(),
   }),
+  /**
+   * The SENDER-side card of an A2A exchange, named from the RECEIVER's side.
+   * `messageId` is the received row's own id: the host mints it before
+   * delivery, the receiver's append uses it verbatim, and the sender's
+   * harness stamps it on the send's tool block as `agentMessageReceipt` at
+   * completion. So a received card can name its sender's card exactly, with
+   * no text or clock heuristic - the id is unique across the epic.
+   *
+   * Misses (`null`) for a block persisted before receipts existed; the caller
+   * degrades to the tile it already opened.
+   */
+  z.object({ kind: z.literal("receipt"), messageId: z.string() }),
   /**
    * A durable record id, for the case the client's own id-as-row-id read
    * cannot cover: an ASSISTANT record, whose rows are turn-keyed.
@@ -191,6 +204,32 @@ function sentMessageBlockId(
 }
 
 /**
+ * The `tool_call` block whose `agentMessageReceipt` names this delivered
+ * message, or `null`.
+ *
+ * Exact, not nearest: the receipt's `messageId` is a host-minted id that one
+ * delivery owns, so at most one block can legitimately carry it. First writer
+ * wins if a duplicate ever appears, matching `rowOrdinalByBlockId`. Blocks are
+ * flat on the assistant record, so a subagent-routed send (nested only when
+ * drawn) is found without walking parents.
+ */
+function receiptBlockId(
+  messages: readonly Message[],
+  messageId: string,
+): string | null {
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const block of message.blocks) {
+      if (block.type !== "tool_call") continue;
+      if (block.agentMessageReceipt?.messageId === messageId) {
+        return block.blockId;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * The row that RENDERS this record, or `null`.
  *
  * "Renders" is the discriminating word, and it is what keeps this from being a
@@ -238,6 +277,20 @@ function rowOrdinalByMessageId(
   return found;
 }
 
+function blockIdForLocator(
+  messages: readonly Message[],
+  locator: Exclude<TranscriptRowLocator, { kind: "message" }>,
+): string | null {
+  switch (locator.kind) {
+    case "block":
+      return locator.blockId;
+    case "sent-message":
+      return sentMessageBlockId(messages, locator);
+    case "receipt":
+      return receiptBlockId(messages, locator.messageId);
+  }
+}
+
 /**
  * Where this target sits in the transcript, or `null` if nothing matches it.
  *
@@ -258,10 +311,7 @@ export function locateTranscriptRowOrdinal(
   if (locator.kind === "message") {
     return rowOrdinalByMessageId(transcript.rows, locator.messageId);
   }
-  const blockId =
-    locator.kind === "block"
-      ? locator.blockId
-      : sentMessageBlockId(transcript.messages, locator);
+  const blockId = blockIdForLocator(transcript.messages, locator);
   if (blockId === null) return null;
   return rowOrdinalByBlockId(transcript.rows).get(blockId) ?? null;
 }

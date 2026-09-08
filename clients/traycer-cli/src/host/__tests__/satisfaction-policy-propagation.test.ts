@@ -105,26 +105,36 @@ describe("ensureHost satisfaction policy propagation", () => {
     );
   });
 
-  it("passes exact against the CLI build for local-file sources", async () => {
+  // Q7: `exact` for an own build is what silently reverted a host the user had
+  // updated out of band - the desktop asks for a convergence whenever the local
+  // host is down or has not been dialed, and equality could not say "newer is
+  // fine". `own-build-minimum` keeps a comparably newer install and converges
+  // everything else, `recordVersionOverride` is unchanged, and `--release` (the
+  // row above) keeps `exact` because a pin is a pin.
+  it("passes own-build-minimum against the CLI build for local-file sources", async () => {
     resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
 
     await ensureHost(makeEnsureOptions({}));
 
     expect(provisionHostMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        satisfaction: { kind: "exact", version: config.version },
+        satisfaction: { kind: "own-build-minimum", version: config.version },
         recordVersionOverride: config.version,
       }),
     );
   });
 
-  it("passes exact against the CLI build for explicit --from sources", async () => {
+  // The Windows desktop reaches the SAME bundled archive through `--from`
+  // (`resolveWindowsBundledHostArchive`), so this row is not a courtesy: on the
+  // old mapping the two desktop platforms would disagree about whether a user's
+  // newer host survives a convergence.
+  it("passes own-build-minimum against the CLI build for explicit --from sources", async () => {
     await ensureHost(makeEnsureOptions({ fromPath: "/tmp/host.tar.gz" }));
 
     expect(provisionHostMock).toHaveBeenCalledWith(
       expect.objectContaining({
         resolveInstallSource: expect.any(Function),
-        satisfaction: { kind: "exact", version: config.version },
+        satisfaction: { kind: "own-build-minimum", version: config.version },
         recordVersionOverride: config.version,
       }),
     );

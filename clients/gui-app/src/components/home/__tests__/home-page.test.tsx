@@ -224,6 +224,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           isEligible: () => composer.isConnected,
         },
         activityEnabled,
+        () => true,
       );
     }, [activityEnabled, delayComposerRegistration, instanceId]);
     useEffect(() => {
@@ -912,6 +913,7 @@ describe("<HomePage />", () => {
           isEligible: () => inactiveComposer.isConnected,
         },
         false,
+        () => true,
       );
 
       const { queryClient, tree, view } =

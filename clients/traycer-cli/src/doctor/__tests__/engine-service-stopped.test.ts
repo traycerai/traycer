@@ -97,9 +97,17 @@ function stageServiceMocks(input: StageServiceMocksInput): void {
   // issue as the only issue in the result other than the unverified-binary
   // info (skipped because the install record's signatureKeyId is a registry
   // key).
-  vi.doMock("../../host/pid-metadata", () => ({
-    readHostPidMetadata: async () => input.pidMetadata,
-  }));
+  vi.doMock("../../host/pid-metadata", async () => {
+    // Only the read is stubbed; `publishedHostProcessGone` stays real so the
+    // engine's liveness verdict follows the (mocked) `isProcessAlive`.
+    const actual = await vi.importActual<
+      typeof import("../../host/pid-metadata")
+    >("../../host/pid-metadata");
+    return {
+      ...actual,
+      readHostPidMetadata: async () => input.pidMetadata,
+    };
+  });
   vi.doMock("../../service", () => ({
     createServiceController: () => ({
       status: async () => ({
@@ -310,6 +318,11 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
     });
     vi.doMock("../../store/cli-lock", () => ({
       isProcessAlive: () => false,
+      // The doctor's marker-lock probe reads through this facade too.
+      probeCliScopedFileLock: async () => ({ kind: "absent" }),
+      probeCliScopedFileLockArbitration: async () => ({ kind: "free" }),
+      cliScopedFileLockAgeMs: async () => null,
+      CLI_SCOPED_FILE_LOCK_EMPTY_GRACE_MS: 5000,
     }));
 
     const { runDoctor } = await import("../engine");

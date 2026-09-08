@@ -84,11 +84,10 @@ export type SessionImportUnreadableReason = z.infer<
 /**
  * Why a discovered session cannot be offered as-is.
  *
- * `already_in_traycer` is legacy: current hosts hide an already-imported
- * session from the scan entirely (the native-session index is what enforces
- * import-once, so the wizard's second visit shows only what is new). The
- * variant stays in the schema because an older host still emits it, and a
- * client must be able to parse - and then discard - those rows.
+ * `already_in_traycer` names an imported chat that still exists. Scan @1.1
+ * includes these rows for browsing; @1.0 retains its filtering behavior.
+ * The native-session index continues to enforce import-once independently
+ * of whether a client displays the row.
  *
  * `unreadable` carries the same closed reason + free-text `detail` pair the
  * run reports, so a session that fails at discovery and one that fails at

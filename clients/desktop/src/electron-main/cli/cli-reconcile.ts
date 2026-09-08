@@ -1,5 +1,11 @@
 import { access } from "node:fs/promises";
 import {
+  CLI_NPM_PACKAGE_NAME,
+  isPackageManagerCliSource,
+  type PackageManagerCliSource,
+  PACKAGE_MANAGER_UPGRADE_COMMAND,
+} from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
+import {
   CLI_RECONCILE_PROBE_TIMEOUT_MS,
   cliBinariesDiffer,
   compareSemver,
@@ -19,14 +25,6 @@ import {
   type CliInstallManifest,
 } from "./cli-discovery";
 import { log } from "../app/logger";
-
-type PackageManagerSource =
-  | "homebrew"
-  | "npm"
-  | "winget"
-  | "scoop"
-  | "apt"
-  | "rpm";
 
 /**
  * Launch-time CLI reconciliation (Core Flow 2, "newest-wins"):
@@ -98,7 +96,7 @@ export type CliReconcileOutcome =
     }
   | {
       readonly kind: "package-manager-older";
-      readonly source: PackageManagerSource;
+      readonly source: PackageManagerCliSource;
       readonly installedVersion: string;
       readonly bundledVersion: string;
       readonly upgradeHint: string;
@@ -115,9 +113,6 @@ export type CliReconcileOutcome =
       readonly kind: "no-cli-anywhere";
     };
 
-const PACKAGE_MANAGER_SOURCES: ReadonlySet<CliInstallManifest["source"]> =
-  new Set(["homebrew", "npm", "winget", "scoop", "apt", "rpm"]);
-
 // Windows: EBUSY, EACCES, EPERM are all common when a process holds the
 // live binary open. POSIX: only EBUSY (and a textual "locked" tag) are
 // real transient locks; EACCES/EPERM mean a permission problem the
@@ -125,36 +120,17 @@ const PACKAGE_MANAGER_SOURCES: ReadonlySet<CliInstallManifest["source"]> =
 const WINDOWS_LOCK_RE = /EBUSY|EACCES|EPERM|locked/i;
 const POSIX_LOCK_RE = /EBUSY|locked/i;
 
-function isPackageManagerSource(
-  source: CliInstallManifest["source"],
-): source is PackageManagerSource {
-  return PACKAGE_MANAGER_SOURCES.has(source);
-}
-
 function packageManagerUpgradeHint(
-  source: PackageManagerSource,
+  source: PackageManagerCliSource,
   bundledVersion: string,
 ): string {
-  switch (source) {
-    case "homebrew":
-      // Must match the Homebrew formula name shipped via
-      // scripts/native-packaging/publish-cli-package-managers.cjs
-      // (`Formula/traycer.rb`) and the CLI self-upgrade guidance in
-      // traycer-cli/src/commands/cli-upgrade.ts.
-      return "brew upgrade traycer";
-    case "npm":
-      // `latest` names stable builds, so it can be older than an installed RC.
-      // Name the version this reconciliation actually offered to upgrade to.
-      return `npm install -g @traycerai/cli@${bundledVersion}`;
-    case "winget":
-      return "winget upgrade Traycer.CLI";
-    case "scoop":
-      return "scoop update traycer-cli";
-    case "apt":
-      return "sudo apt update && sudo apt install --only-upgrade traycer-cli";
-    case "rpm":
-      return "sudo dnf upgrade traycer-cli";
-  }
+  // `latest` can be older than an installed RC, so npm pins Desktop's exact
+  // bundled version - built from the shared package name rather than by
+  // editing the shared command, which would silently fall back to `latest`
+  // the day that command stopped ending in `@latest`.
+  return source === "npm"
+    ? `npm install -g ${CLI_NPM_PACKAGE_NAME}@${bundledVersion}`
+    : PACKAGE_MANAGER_UPGRADE_COMMAND[source];
 }
 
 export interface ReconcileCliDeps {
@@ -184,7 +160,7 @@ export interface ReconcileCliDeps {
   ) => Promise<CliInstallManifest | null>;
   readonly writeDesktopReconcileState: (state: {
     readonly packageManagerUpgrade: {
-      readonly source: PackageManagerSource;
+      readonly source: PackageManagerCliSource;
       readonly installedVersion: string;
       readonly bundledVersion: string;
       readonly upgradeCommand: string;
@@ -496,7 +472,7 @@ export async function reconcileCli(
   }
 
   // Case 3: installed is older than bundled. Branch on source.
-  if (isPackageManagerSource(manifest.source)) {
+  if (isPackageManagerCliSource(manifest.source)) {
     const upgradeHint = await persistPackageManagerUpgradeHint(deps, {
       source: manifest.source,
       installedVersion,
@@ -652,7 +628,7 @@ export async function reconcileCli(
 async function persistPackageManagerUpgradeHint(
   deps: ReconcileCliDeps,
   args: {
-    readonly source: PackageManagerSource;
+    readonly source: PackageManagerCliSource;
     readonly installedVersion: string;
     readonly bundledVersion: string;
   },

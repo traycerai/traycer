@@ -9,9 +9,12 @@ import {
 
 /**
  * Fixup A8: every lock-taking CLI command this wrapper still carries
- * (`host service uninstall`, `host stamp-runtime`, `host free-port`,
- * `host purge-stage`, `host uninstall [--all]`; the long-running mutations -
- * install / apply / ensure / restart / service install - stream instead)
+ * (`host stamp-runtime`, `host free-port`, `host purge-stage`; the
+ * long-running mutations - install / apply / ensure / restart / service
+ * install / service uninstall / uninstall [--all] - stream instead. Service
+ * install can wait for post-registration credential provisioning; restart
+ * and the two uninstall commands can stop the host through Windows'
+ * scan-then-kill loop, whose worst case is several 30 s scans)
  * waits up to
  * `waitMs: 30_000` internally on the shared `cli-lock` before terminally
  * throwing `E_CLI_LOCK_BUSY` (every `withCliLock` call site under
