@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
 import {
   readHostDirectoryEntry,
@@ -81,7 +81,11 @@ export function useHostRefusesEpicStore(
  * the store and therefore the only one that can learn the answer. A fatal
  * close carrying `HOST_OLDER_THAN_DATA` records the refusal against the build
  * the directory reports for the host; a landed snapshot clears it, because a
- * snapshot is the host proving it reads the file now.
+ * snapshot is the host proving it reads the file now. When both are showing
+ * at once - the chat had loaded, then the host was moved to an older build
+ * and closed it - the close wins, because it is the later fact. Each close is
+ * recorded once: a directory version change re-runs the effect, and a close
+ * the old build sent is not evidence about the new one.
  *
  * `hostVersion` is passed in rather than read here because the tile already
  * subscribes to its host's directory entry for the attachment scope, and a
@@ -96,18 +100,33 @@ export function useRecordHostOlderThanDataRefusal(input: {
   readonly snapshotLoaded: boolean;
 }): void {
   const { hostId, epicId, hostVersion, fatalCloseCode, snapshotLoaded } = input;
+  // The (host, epic) pair whose CURRENT fatal refusal this hook has already
+  // recorded, or `null` while no such close is showing. Recording is
+  // edge-triggered on the close, not level-triggered on the inputs: the
+  // effect also re-runs when `hostVersion` moves, and a close that arrived
+  // from the OLD build must not be written against the new one.
+  const recordedCloseRef = useRef<string | null>(null);
   useEffect(() => {
-    if (snapshotLoaded) {
-      clearHostOlderThanDataRefusal({ hostId, epicId });
-      return;
-    }
+    // The host's latest word outranks the snapshot that loaded before it. The
+    // session store keeps `snapshotLoaded` through a close so the transcript
+    // stays readable, so a host that served this chat and was then moved to
+    // an older build arrives here with BOTH set - and the close is the newer
+    // fact. `retry()` clears both, and the next snapshot clears the record.
     if (fatalCloseCode === HOST_OLDER_THAN_DATA_FATAL_CODE) {
+      const closeKey = `${hostId} ${epicId}`;
+      if (recordedCloseRef.current === closeKey) return;
+      recordedCloseRef.current = closeKey;
       recordHostOlderThanDataRefusal({
         hostId,
         epicId,
         hostVersion,
         now: Date.now(),
       });
+      return;
+    }
+    recordedCloseRef.current = null;
+    if (snapshotLoaded) {
+      clearHostOlderThanDataRefusal({ hostId, epicId });
     }
   }, [hostId, epicId, hostVersion, fatalCloseCode, snapshotLoaded]);
 }

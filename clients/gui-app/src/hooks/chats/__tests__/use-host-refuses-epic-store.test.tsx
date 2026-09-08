@@ -140,6 +140,46 @@ describe("useRecordHostOlderThanDataRefusal", () => {
     expect(result.current).toBe(false);
   });
 
+  it("records the refusal even though a snapshot had loaded before the host closed", async () => {
+    // The session store keeps `snapshotLoaded` through a close, so a chat
+    // that was served and then refused by a host moved to an older build
+    // shows both at once. The close is the later fact and must win.
+    const { result } = renderHook(() =>
+      useCombined({
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        fatalCloseCode: HOST_OLDER_THAN_DATA_FATAL_CODE,
+        snapshotLoaded: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current).toBe(true);
+    });
+  });
+
+  it("does not re-record a close from the old build against the new host version", async () => {
+    const { result, rerender } = renderHook(() =>
+      useCombined({
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        fatalCloseCode: HOST_OLDER_THAN_DATA_FATAL_CODE,
+        snapshotLoaded: false,
+      }),
+    );
+    await waitFor(() => {
+      expect(result.current).toBe(true);
+    });
+
+    // The host upgraded in place while the tile still shows the close the
+    // old build sent. The version change retires the verdict; the effect
+    // re-running on the new version must not write it back.
+    directoryState.version = "2.0.0";
+    rerender();
+
+    expect(result.current).toBe(false);
+  });
+
   it("clears an existing refusal once a snapshot lands", async () => {
     recordHostOlderThanDataRefusal({
       hostId: HOST_ID,
