@@ -27,7 +27,7 @@
  * two places a non-image/video cloud origin becomes attacker-authored content
  * on a shared storage host, which is exactly what the blob leg exists to stop.
  */
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -45,12 +45,19 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+import {
+  imageBlobCache,
+  type ScopedImageBytesFetcher,
+} from "@/lib/attachments/image-blob-cache";
 import {
   useImageBlobUrlState,
   type ImageBlobUrlState,
 } from "@/lib/attachments/use-image-blob-url";
-import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
+import {
+  useChatAttachmentBlobSrc,
+  type AttachmentBlobSrcState,
+} from "@/lib/attachments/use-attachment-blob-src";
+import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   familyAcceptsDirectUrl,
@@ -128,6 +135,29 @@ export type FileBytesUnavailableReason =
   | EpicFileUnavailableReason
   | "fetch-failed";
 
+/**
+ * What the producing side already knows about the bytes before (or without)
+ * decoding them: the asset stream's header carries all three, the epic-file
+ * plane carries none (`epic.readFile` answers with an ADDRESS, so dimensions
+ * are simply not on the wire), and a chat attachment carries none either.
+ *
+ * Every field is independently nullable because the legs disagree about which
+ * they know: a dimension-less SVG has a size and no dimensions, and a settled
+ * failure that arrived after the header has a size and nothing else.
+ */
+export interface FileBytesHeader {
+  readonly width: number | null;
+  readonly height: number | null;
+  readonly sizeBytes: number | null;
+}
+
+/**
+ * `reason` stays MACHINE-readable (the protocol enum) on every arm; the
+ * human one-liner a placeholder renders lives in `message`, because the two
+ * are different vocabularies and collapsing them into one field would widen
+ * `reason` to `string` and cost `epic-file-tile.tsx` its exhaustive switch
+ * over the four protocol reasons.
+ */
 export type FileBytesState =
   | {
       readonly status: "loading";
@@ -135,6 +165,15 @@ export type FileBytesState =
       readonly mediaType: null;
       readonly delivery: null;
       readonly reason: null;
+      /**
+       * Non-null while the bytes are still arriving but their header already
+       * landed - the asset stream's own `header` phase, which is what lets a
+       * viewer hold an aspect-ratio skeleton instead of a spinner. The other
+       * legs never reach it, so they stay `null` here.
+       */
+      readonly header: FileBytesHeader | null;
+      readonly servedFromCache: false;
+      readonly message: null;
     }
   | {
       readonly status: "ready";
@@ -142,6 +181,16 @@ export type FileBytesState =
       readonly mediaType: string;
       readonly delivery: FileBytesDelivery;
       readonly reason: null;
+      readonly header: FileBytesHeader | null;
+      /**
+       * Whether `src` resolved from the shared blob cache rather than a fresh
+       * transfer. A brand-new `<img>` mounted over already-resident bytes
+       * still reports `complete === false` at layout time, so this is the only
+       * signal a viewer has for "skip the entrance fade". `false` on any leg
+       * whose transport cannot tell (epic-file, chat attachment).
+       */
+      readonly servedFromCache: boolean;
+      readonly message: null;
     }
   | {
       readonly status: "unavailable";
@@ -150,6 +199,11 @@ export type FileBytesState =
       readonly delivery: null;
       /** `null` when the source's own transport gave no machine-readable one. */
       readonly reason: FileBytesUnavailableReason | null;
+      /** Whatever the header had said before the failure - a size for a placeholder. */
+      readonly header: FileBytesHeader | null;
+      readonly servedFromCache: false;
+      /** Human copy where the leg has one (the asset stream's per-render-kind message). */
+      readonly message: string | null;
     }
   | {
       /** The tab's host predates this byte plane entirely - hide the surface, do not degrade it. */
@@ -158,7 +212,25 @@ export type FileBytesState =
       readonly mediaType: null;
       readonly delivery: null;
       readonly reason: null;
+      readonly header: null;
+      readonly servedFromCache: false;
+      readonly message: null;
     };
+
+/**
+ * What {@link useFileBytes} returns: the settled state plus the one callback a
+ * viewer needs that no state field can carry.
+ */
+export type UseFileBytesResult = FileBytesState & {
+  /**
+   * Call from an `<img onError>` (or a viewer's equivalent) once
+   * `status === "ready"`: bytes that were valid enough to reach a blob URL can
+   * still fail to DECODE in the browser, and the cache entry behind them must
+   * be discarded or every later mount is handed the same undecodable URL.
+   * A no-op on a leg with no cache entry of its own to invalidate.
+   */
+  readonly reportDecodeFailure: () => void;
+};
 
 const LOADING: FileBytesState = {
   status: "loading",
@@ -166,6 +238,9 @@ const LOADING: FileBytesState = {
   mediaType: null,
   delivery: null,
   reason: null,
+  header: null,
+  servedFromCache: false,
+  message: null,
 };
 
 const UNSUPPORTED: FileBytesState = {
@@ -174,10 +249,30 @@ const UNSUPPORTED: FileBytesState = {
   mediaType: null,
   delivery: null,
   reason: null,
+  header: null,
+  servedFromCache: false,
+  message: null,
 };
+
+function loadingWithHeader(header: FileBytesHeader | null): FileBytesState {
+  return header === null
+    ? LOADING
+    : {
+        status: "loading",
+        src: null,
+        mediaType: null,
+        delivery: null,
+        reason: null,
+        header,
+        servedFromCache: false,
+        message: null,
+      };
+}
 
 function unavailable(
   reason: FileBytesUnavailableReason | null,
+  message: string | null,
+  header: FileBytesHeader | null,
 ): FileBytesState {
   return {
     status: "unavailable",
@@ -185,16 +280,33 @@ function unavailable(
     mediaType: null,
     delivery: null,
     reason,
+    header,
+    servedFromCache: false,
+    message,
   };
 }
 
-function ready(
-  src: string,
-  mediaType: string,
-  delivery: FileBytesDelivery,
-): FileBytesState {
-  return { status: "ready", src, mediaType, delivery, reason: null };
+interface ReadyBytes {
+  readonly src: string;
+  readonly mediaType: string;
+  readonly delivery: FileBytesDelivery;
+  readonly header: FileBytesHeader | null;
+  readonly servedFromCache: boolean;
 }
+
+function ready(args: ReadyBytes): FileBytesState {
+  return {
+    status: "ready",
+    src: args.src,
+    mediaType: args.mediaType,
+    delivery: args.delivery,
+    reason: null,
+    header: args.header,
+    servedFromCache: args.servedFromCache,
+    message: null,
+  };
+}
+
 
 /**
  * Host BUILDS that answered `E_HOST_UNSUPPORTED` for `epic.readFile`, keyed on
@@ -393,7 +505,9 @@ function epicFileStateFor(args: {
   if (args.unsupported) return UNSUPPORTED;
   if (!args.hasSource || args.response === null) return LOADING;
   if (args.response.kind === "unavailable") {
-    return unavailable(args.response.reason);
+    // No header and no human copy: `epic.readFile` answers with an address
+    // and a machine reason, and dimensions are not on the wire (D27/D10).
+    return unavailable(args.response.reason, null, null);
   }
   // Re-derived here rather than handed in: the hook's own `address` feeds the
   // blob leg's `useMemo`, and passing that same object on to a call AFTER the
@@ -403,13 +517,25 @@ function epicFileStateFor(args: {
   const address = addressFor(args.response, args.declaredMediaType);
   if (address === null) return LOADING;
   if (familyAcceptsDirectUrl(address.family)) {
-    return ready(address.url, address.mediaType, "url");
+    return ready({
+      src: address.url,
+      mediaType: address.mediaType,
+      delivery: "url",
+      header: null,
+      servedFromCache: false,
+    });
   }
   if (args.blob.status === "ready") {
-    return ready(args.blob.url, args.blob.mediaType, "blob");
+    return ready({
+      src: args.blob.url,
+      mediaType: args.blob.mediaType,
+      delivery: "blob",
+      header: null,
+      servedFromCache: false,
+    });
   }
   return args.blob.status === "unavailable"
-    ? unavailable("fetch-failed")
+    ? unavailable("fetch-failed", null, null)
     : LOADING;
 }
 
@@ -485,38 +611,116 @@ function assetRequestFor(source: FileByteSource): FileAssetRequest | null {
  * already means here; such a caller decides on the entry it looked up, never
  * on this state, so nothing renders a spinner that can never end.
  *
- * Must be called inside `<TabHostProvider>`: bytes are always fetched through
- * the TAB host, never the app-active one.
+ * Bytes for the workspace/git and epic-file legs are fetched through the TAB
+ * host, never the app-active one; those legs go inert when there is no
+ * `<TabHostProvider>` above the caller, so a provider-less surface (a chat
+ * transcript rendering an attachment) degrades rather than throwing.
  */
-export function useFileBytes(source: FileByteSource | null): FileBytesState {
+export function useFileBytes(source: FileByteSource | null): UseFileBytesResult {
   const asset = useFileAsset(source === null ? null : assetRequestFor(source));
+  const attachmentHash =
+    source?.kind === "chat-attachment" ? source.hash : null;
   const attachment = useChatAttachmentBlobSrc(
-    source?.kind === "chat-attachment" ? source.hash : null,
+    attachmentHash,
     source?.kind === "chat-attachment" ? source.mediaType : "",
     null,
   );
+  // The chat leg's own cache subject, so a decode failure can discard the
+  // exact entry the blob resolved from. Read here rather than through
+  // `useChatAttachmentBlobSrc` (which does not surface it) - the hook is
+  // referentially stable per (handle, scope), so the second call is free.
+  const attachmentFetcher = useChatImageFetcher();
+  const attachmentScopeKey = attachmentFetcher.scopeKey;
+  const discardAttachmentBlob = useCallback((): void => {
+    if (attachmentHash === null) return;
+    imageBlobCache.discard(attachmentScopeKey, attachmentHash);
+  }, [attachmentScopeKey, attachmentHash]);
   const epicFile = useEpicFileBytes(
     source?.kind === "epic-file" ? source : null,
   );
 
+  const state = fileBytesStateFor(source, asset, attachment, epicFile);
+  if (source === null) return { ...state, reportDecodeFailure: NOOP };
+  if (source.kind === "chat-attachment") {
+    return { ...state, reportDecodeFailure: discardAttachmentBlob };
+  }
+  if (source.kind === "epic-file") {
+    // Nothing to invalidate: an image/video epic file is delivered as a
+    // direct url (D10) and never reaches the blob cache at all, and the
+    // blob-delivered families have no decode step a viewer can report on.
+    return { ...state, reportDecodeFailure: NOOP };
+  }
+  return { ...state, reportDecodeFailure: asset.reportDecodeFailure };
+}
+
+const NOOP = (): void => {};
+
+/** Which leg answers, split out so `useFileBytes` is hooks plus one call. */
+function fileBytesStateFor(
+  source: FileByteSource | null,
+  asset: UseFileAssetResult,
+  attachment: AttachmentBlobSrcState,
+  epicFile: FileBytesState,
+): FileBytesState {
   if (source === null) return LOADING;
   if (source.kind === "epic-file") return epicFile;
   if (source.kind === "chat-attachment") {
+    // No header, no cache signal and no human copy: the chat plane delivers
+    // bytes with a sniffed type and nothing else.
     if (attachment.status === "ready") {
-      return ready(attachment.src, attachment.mediaType, "blob");
+      return ready({
+        src: attachment.src,
+        mediaType: attachment.mediaType,
+        delivery: "blob",
+        header: null,
+        servedFromCache: false,
+      });
     }
-    return attachment.status === "unavailable" ? unavailable(null) : LOADING;
+    return attachment.status === "unavailable"
+      ? unavailable(null, null, null)
+      : LOADING;
   }
   return assetStateFor(asset);
 }
 
+/**
+ * Whatever the asset stream has already declared about the bytes, at any of
+ * its phases: `meta` once the header lands (and it carries the dimensions),
+ * `totalBytes` alone on a failure that arrived after the header.
+ */
+function assetHeader(asset: UseFileAssetResult): FileBytesHeader | null {
+  if (asset.meta !== null) {
+    return {
+      width: asset.meta.width,
+      height: asset.meta.height,
+      sizeBytes: asset.meta.sizeBytes,
+    };
+  }
+  if (asset.totalBytes !== null) {
+    return { width: null, height: null, sizeBytes: asset.totalBytes };
+  }
+  return null;
+}
+
 /** The asset stream's own settle, split out to keep `useFileBytes` readable. */
 function assetStateFor(asset: UseFileAssetResult): FileBytesState {
+  const header = assetHeader(asset);
   if (asset.status === "ready" && asset.url !== null && asset.meta !== null) {
-    return ready(asset.url, asset.meta.mediaType, "blob");
+    return ready({
+      src: asset.url,
+      mediaType: asset.meta.mediaType,
+      delivery: "blob",
+      header,
+      servedFromCache: asset.servedFromCache,
+    });
   }
-  // `fallback` is the asset stream's settled failure; its `reason` is already
-  // human copy (per-render-kind), which is why it is not mapped onto the
-  // machine-readable enum above.
-  return asset.status === "fallback" ? unavailable(null) : LOADING;
+  // `fallback` is the asset stream's settled failure. Its `reason` is human
+  // copy (per render kind), which is why it lands on `message` rather than on
+  // the machine-readable `reason` enum - the stream has no such enum to give.
+  if (asset.status === "fallback") {
+    return unavailable(null, asset.reason, header);
+  }
+  // The stream's `header` phase is a LOADING arm that already knows the
+  // bytes' shape, which is exactly what an aspect-ratio skeleton needs.
+  return loadingWithHeader(header);
 }

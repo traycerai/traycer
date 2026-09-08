@@ -52,6 +52,9 @@ const LOADING_BYTES: FileBytesState = {
   mediaType: null,
   delivery: null,
   reason: null,
+  header: null,
+  servedFromCache: false,
+  message: null,
 };
 
 const state = vi.hoisted((): RendererTestState => ({
@@ -61,6 +64,9 @@ const state = vi.hoisted((): RendererTestState => ({
     mediaType: null,
     delivery: null,
     reason: null,
+    header: null,
+    servedFromCache: false,
+    message: null,
   },
   entry: null,
   role: "editor",
@@ -168,7 +174,16 @@ function makeEntry(overrides: {
 }
 
 function ready(mediaType: string, src = "blob:epic-file"): FileBytesState {
-  return { status: "ready", src, mediaType, delivery: "blob", reason: null };
+  return {
+    status: "ready",
+    src,
+    mediaType,
+    delivery: "blob",
+    reason: null,
+    header: null,
+    servedFromCache: false,
+    message: null,
+  };
 }
 
 function unavailable(
@@ -180,6 +195,9 @@ function unavailable(
     mediaType: null,
     delivery: null,
     reason,
+    header: null,
+    servedFromCache: false,
+    message: null,
   };
 }
 
@@ -301,6 +319,9 @@ describe("<EpicFileTile /> byte states", () => {
       mediaType: null,
       delivery: null,
       reason: null,
+      header: null,
+      servedFromCache: false,
+      message: null,
     };
     renderTile();
 

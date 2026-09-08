@@ -33,6 +33,9 @@ const fileBytesState = vi.hoisted(() => {
     mediaType: null,
     delivery: null,
     reason: null,
+    header: null,
+    servedFromCache: false,
+    message: null,
   };
   return {
     loading,
@@ -119,7 +122,16 @@ function readyBytes(
   mediaType: string,
   delivery: "url" | "blob",
 ): FileBytesState {
-  return { status: "ready", src, mediaType, delivery, reason: null };
+  return {
+    status: "ready",
+    src,
+    mediaType,
+    delivery,
+    reason: null,
+    header: null,
+    servedFromCache: false,
+    message: null,
+  };
 }
 
 function fakeEpicFileObject(

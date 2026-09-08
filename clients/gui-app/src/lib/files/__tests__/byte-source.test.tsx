@@ -67,6 +67,7 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
     reason: null,
     totalBytes: null,
     servedFromCache: false,
+    reportDecodeFailure: () => {},
   }),
 }));
 vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
@@ -175,12 +176,17 @@ describe("useFileBytes - epic-file source, delivery decision (D10)", () => {
 
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
-    expect(result.current).toEqual({
+    const { reportDecodeFailure, ...state } = result.current;
+    expect(typeof reportDecodeFailure).toBe("function");
+    expect(state).toEqual({
       status: "ready",
       src: SIGNED_URL,
       mediaType: "image/png",
       delivery: "url",
       reason: null,
+      header: null,
+      servedFromCache: false,
+      message: null,
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -237,12 +243,17 @@ describe("useFileBytes - epic-file source, delivery decision (D10)", () => {
 
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
-    expect(result.current).toEqual({
+    const { reportDecodeFailure, ...state } = result.current;
+    expect(typeof reportDecodeFailure).toBe("function");
+    expect(state).toEqual({
       status: "ready",
       src: LOOPBACK_URL,
       mediaType: "image/png",
       delivery: "url",
       reason: null,
+      header: null,
+      servedFromCache: false,
+      message: null,
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -272,13 +283,18 @@ describe("useFileBytes - epic-file source, settled unavailable states", () => {
 
       await waitFor(() => expect(result.current.status).toBe("unavailable"));
 
-      expect(result.current).toEqual({
+      const { reportDecodeFailure, ...state } = result.current;
+      expect(typeof reportDecodeFailure).toBe("function");
+      expect(state).toEqual({
         status: "unavailable",
         src: null,
         mediaType: null,
         delivery: null,
         reason,
-      });
+        header: null,
+        servedFromCache: false,
+        message: null,
+        });
     },
   );
 });
