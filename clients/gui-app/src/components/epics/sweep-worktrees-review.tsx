@@ -3,7 +3,6 @@ import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
-  formatStopHeading,
   formatTeardownActors,
   formatUnknownHolderConsequence,
 } from "@/lib/worktree/teardown-holder-copy";
@@ -39,13 +38,6 @@ export function SweepWorktreesReview(props: {
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
-  const stopActors = formatTeardownActors(
-    props.snapshot.disclosedHolders,
-    props.agentNames,
-  );
-  const unknownRows = props.snapshot.inUse.filter(
-    (row) => row.holders.length === 0,
-  ).length;
   const externalEpicIds = distinctExternalEpicIds(
     props.snapshot.shared,
     props.selectedEpicIds,
@@ -127,10 +119,7 @@ export function SweepWorktreesReview(props: {
         ) : null}
         {props.snapshot.inUse.length > 0 ? (
           <ReviewSection
-            title={formatStopHeading({
-              knownActors: stopActors.length,
-              unknownRows,
-            })}
+            title="Anything working in this worktree when the delete runs will be stopped."
             danger={false}
             testId="sweep-review-stops"
           >

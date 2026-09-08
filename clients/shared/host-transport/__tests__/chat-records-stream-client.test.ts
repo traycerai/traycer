@@ -72,6 +72,7 @@ function makeWsStreamClient(
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => null,
+    hostId: null,
     bearer: () => null,
     auth: null,
     clock: null,

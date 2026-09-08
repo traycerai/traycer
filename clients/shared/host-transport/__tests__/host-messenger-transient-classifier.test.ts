@@ -19,9 +19,11 @@ describe("isTransientHostRpcFailure", () => {
     expect(isTransientHostRpcFailure(new HostTransportFailureError(base))).toBe(
       true,
     );
-    expect(isTransientHostRpcFailure(new RetryableTransportError(base))).toBe(
-      true,
-    );
+    expect(
+      isTransientHostRpcFailure(
+        new RetryableTransportError({ ...base, replaySafetyFromKey: false }),
+      ),
+    ).toBe(true);
   });
 
   it("classifies a retryable fatal frame as transient", () => {

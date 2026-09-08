@@ -52,7 +52,7 @@ const mcpMocks = vi.hoisted(() => ({
   mutateIsPending: false,
   discoverMutate: vi.fn(),
   authMutate: vi.fn(),
-  openExternalLink: vi.fn(),
+  openLink: vi.fn(),
   listCalls: [] as Array<{
     providerId: string;
     scope: string;
@@ -176,10 +176,8 @@ vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({
-    mutate: mcpMocks.openExternalLink,
-  }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mcpMocks.openLink,
 }));
 
 vi.mock("@/hooks/providers/use-providers-mcp-list-query", () => ({
@@ -415,7 +413,7 @@ describe("<ProviderMcpTab />", () => {
     mcpMocks.mutateAsync.mockReset();
     mcpMocks.discoverMutate.mockReset();
     mcpMocks.authMutate.mockReset();
-    mcpMocks.openExternalLink.mockReset();
+    mcpMocks.openLink.mockReset();
     mcpMocks.mutateIsPending = false;
     mcpMocks.listCalls = [];
     worktreeMocks.workspaces = [];
@@ -1252,7 +1250,7 @@ describe("<ProviderMcpTab />", () => {
     expect(mcpMocks.mutate).not.toHaveBeenCalled();
   });
 
-  it("starts auth login and opens authorizationUrl via runner mutation", () => {
+  it("starts auth login and opens authorizationUrl via openLink", () => {
     mcpMocks.listResult.data = {
       servers: [
         connectedServer({
@@ -1289,8 +1287,10 @@ describe("<ProviderMcpTab />", () => {
       }),
       expect.anything(),
     );
-    expect(mcpMocks.openExternalLink).toHaveBeenCalledWith(
+    expect(mcpMocks.openLink).toHaveBeenCalledWith(
       "https://auth.example.com/oauth",
+      "auth",
+      null,
     );
     const entry = useMcpPendingAuthStore.getState().get({
       providerId: "codex",

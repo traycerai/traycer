@@ -29,18 +29,18 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import { QueryClient } from "@tanstack/react-query";
 import { commitSidebarReparentDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import { canReparentProjected } from "@/lib/reparent-projection-rules";
 import { appLogger } from "@/lib/logger";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
@@ -92,7 +92,7 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function newSession(): OpenEpicStoreHandle {
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -105,11 +105,21 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-1",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   const seed = Y.encodeStateAsUpdate(new Y.Doc());
@@ -143,7 +153,13 @@ function makeTerminalAgentEntry(id: string, title: string): Y.Map<unknown> {
   return agent;
 }
 
-function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
+/**
+ * An `epic.listChatRecords@1.1` row - what `applyChatRecords` takes. Registry
+ * shaped, so `docResident: false`; a doc-homed case would override it.
+ */
+function chatRecord(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
   return {
     chatId: "chat-1",
     ownerUserId: "user-a",
@@ -159,6 +175,7 @@ function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     revision: 1,
     visibility: "private",
     origin: "own",
+    docResident: false,
     ...overrides,
   };
 }
@@ -176,7 +193,7 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
     seam.hasClient = true;
   });
 
-  it("commits a doc-only terminal agent dropped onto a record-backed chat, and the projected tree agrees with the outcome", () => {
+  it("commits a doc-only terminal agent dropped onto a record-backed chat, and the projected tree agrees with the outcome", async () => {
     const handle = newSession();
 
     // The source: a doc-only terminal agent. No `epic.listTuiAgents` row for
@@ -212,7 +229,15 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
     const expand = vi.spyOn(useEpicSidebarExpansionStore.getState(), "expand");
     const errorSpy = vi.spyOn(appLogger, "error");
 
-    expect(() =>
+    // AWAITED. `commitSidebarReparentDrop` returns `Promise<void>`, and the
+    // reveal this test asserts on (`expand`) runs past an await inside it. The
+    // old `expect(() => …).not.toThrow()` only ever checked the SYNCHRONOUS
+    // prefix - which is why every assertion below it passed while the `expand`
+    // one saw zero calls: the doc write is synchronous, the reveal is not.
+    // `.not.toThrow()` on a promise-returning call is also the wrong
+    // instrument, since a rejection would surface as an unhandled rejection
+    // rather than a failure; `resolves` is the form that actually catches one.
+    await expect(
       commitSidebarReparentDrop({
         epicId: "epic-1",
         sourceNodeId: "agent-1",
@@ -221,7 +246,7 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
         viewTabId: "tab-1",
         queryClient,
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
 
     // Neither of the two RPCs this branch could reach fires: this node's
     // pointer lives in the doc (`epic.reparentChat` is the registry-backed

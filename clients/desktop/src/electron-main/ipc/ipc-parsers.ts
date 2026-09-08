@@ -451,8 +451,17 @@ export function parseDesktopAuthSession(
 }
 
 export function parseSupportLogTarget(value: unknown): SupportLogTarget {
-  if (value === "host" || value === "desktop") return value;
-  throw new Error('supportLogTarget must be "desktop" or "host"');
+  if (
+    value === "host" ||
+    value === "desktop" ||
+    value === "browserTelemetry" ||
+    value === "browserTrace"
+  ) {
+    return value;
+  }
+  throw new Error(
+    'supportLogTarget must be "desktop", "host", "browserTelemetry", or "browserTrace"',
+  );
 }
 
 /**

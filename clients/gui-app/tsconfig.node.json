@@ -24,6 +24,7 @@
     "vitest.config.ts",
     "vitest.react-compiler.config.ts",
     "scripts",
-    "types"
+    "types",
+    "vite"
   ]
 }

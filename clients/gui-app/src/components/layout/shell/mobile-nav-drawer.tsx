@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { LogOut, Pin, Settings, SquareArrowOutUpRight } from "lucide-react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
@@ -7,12 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { HistoryRowStatusIcon } from "@/components/epics/epics-list-shared";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-drawer-surface";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isMobileApp } from "@/lib/mobile-app";
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
@@ -56,6 +60,7 @@ export function MobileNavDrawer(): ReactNode {
   const profile = useAuthStore((state) => state.profile);
   const { openSettings } = useSystemTabModalActions();
   const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
@@ -81,14 +86,14 @@ export function MobileNavDrawer(): ReactNode {
   };
   const handleManageSubscription = () => {
     close();
-    void runnerHost
-      .openExternalLink(resolvePlatformBaseUrl(runnerHost.signInUrl))
-      .then(() => {
-        Analytics.getInstance().track(
-          AnalyticsEvent.SubscriptionManagementOpened,
-          { source: "direct_ui" },
-        );
-      });
+    void openLink(
+      resolvePlatformBaseUrl(runnerHost.signInUrl),
+      "account",
+      null,
+    );
+    Analytics.getInstance().track(AnalyticsEvent.SubscriptionManagementOpened, {
+      source: "direct_ui",
+    });
   };
 
   // The panel is identical on both primitives; only the frame around it
@@ -273,7 +278,28 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     hasNextPage,
     isFetchingNextPage,
   } = useHistoryQuery({ search, nowMs: null });
-  const items = data?.items ?? [];
+  // Memoized so the id list below only changes when the page does, not on
+  // every render's fresh empty array.
+  const items = useMemo(() => data?.items ?? [], [data]);
+
+  // The rows' status indicator reads notification state from context, and the
+  // drawer is mounted by the shell outside the providers the tab strip and the
+  // list panel each put around their own rows - so it provides its own, for
+  // exactly the ids on screen. Same call as the list panel's: epic ids only,
+  // so the app-wide active host is the right one to ask (an Epic is a shared
+  // cloud entity, not a host-owned record). A phase row's `epicId` is a phase
+  // id and names no epic, so it is left out of the question.
+  const indicatorEpicIds = useMemo(
+    () =>
+      items.flatMap((item) => (item.taskType === "epic" ? [item.epicId] : [])),
+    [items],
+  );
+  const notificationIndicators = useNotificationIndicators({
+    hostId: null,
+    epicIds: indicatorEpicIds,
+    chatIds: [],
+    enabled: indicatorEpicIds.length > 0,
+  });
 
   const openItem = (item: HistoryItem) => {
     props.onNavigate();
@@ -351,11 +377,15 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
               openItem(item);
             }}
           >
-            {/* No leading icon on ordinary rows: every row in this list is a
+            {/* No default glyph on ordinary rows: every row in this list is a
                 task, so a repeated glyph carried no information and cost the
-                title ~28px. The pin glyph appears only on pinned rows, where
-                it IS the information - mirrors the list panel's pinned style
-                (primary + filled). */}
+                title ~28px. What does take the leading slot is information:
+                the pin on pinned rows (mirrors the list panel's pinned style,
+                primary + filled), and the task's STATUS - an agent working, or
+                a result waiting to be read - through the same indicator the
+                desktop list and the history page render. A row with neither
+                gives its title the full width. Pinned and running shows both,
+                pin first. */}
             {item.isPinned ? (
               <Pin
                 aria-label="Pinned"
@@ -363,6 +393,12 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
                 className="size-3.5 shrink-0 fill-current text-primary"
               />
             ) : null}
+            <HistoryRowStatusIcon
+              item={item}
+              testIdPrefix="mobile-nav-task"
+              className="text-muted-foreground"
+              defaultIcon={null}
+            />
             <span className="min-w-0 flex-1 truncate text-left font-normal">
               {drawerItemDisplayTitle(item)}
             </span>
@@ -433,7 +469,9 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
           View all
         </button>
       </div>
-      {body}
+      <NotificationIndicatorsProvider indicators={notificationIndicators}>
+        {body}
+      </NotificationIndicatorsProvider>
     </div>
   );
 }

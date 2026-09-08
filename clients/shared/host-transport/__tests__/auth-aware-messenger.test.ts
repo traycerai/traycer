@@ -103,7 +103,11 @@ describe("createAuthAwareMessenger", () => {
 
     const lease = defaultLease();
     const wrapped = createAuthAwareMessenger(inner, auth);
-    await wrapped.request(METHOD, PARAMS, authorityFor(lease));
+    await wrapped.request(METHOD, PARAMS, {
+      replayMustBeKeyed: false,
+      idempotencyKey: null,
+      authority: authorityFor(lease),
+    });
     expect(revalidate).not.toHaveBeenCalled();
     expect(inner.request).toHaveBeenCalledTimes(1);
   });
@@ -119,7 +123,11 @@ describe("createAuthAwareMessenger", () => {
     const lease = defaultLease();
     const wrapped = createAuthAwareMessenger(inner, auth);
     await expect(
-      wrapped.request(METHOD, PARAMS, authorityFor(lease)),
+      wrapped.request(METHOD, PARAMS, {
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: authorityFor(lease),
+      }),
     ).rejects.toBeInstanceOf(HostRpcError);
     expect(revalidate).toHaveBeenCalledTimes(1);
     expect(inner.request).toHaveBeenCalledTimes(1);
@@ -137,7 +145,11 @@ describe("createAuthAwareMessenger", () => {
     const lease = defaultLease();
     const wrapped = createAuthAwareMessenger(inner, auth);
     const thrown = await wrapped
-      .request(METHOD, PARAMS, authorityFor(lease))
+      .request(METHOD, PARAMS, {
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: authorityFor(lease),
+      })
       .catch((e: unknown) => e);
     // Transient host-side failure - the bearer is fine, so no authn churn.
     expect(thrown).toBe(original);
@@ -162,7 +174,11 @@ describe("createAuthAwareMessenger", () => {
     const lease = defaultLease();
     const wrapped = createAuthAwareMessenger(inner, auth);
     const thrown = await wrapped
-      .request(METHOD, PARAMS, authorityFor(lease))
+      .request(METHOD, PARAMS, {
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: authorityFor(lease),
+      })
       .catch((e: unknown) => e);
     // The typed UNAUTHORIZED must survive so recovery keyed on `code` still works.
     expect(thrown).toBe(original);
@@ -180,7 +196,11 @@ describe("createAuthAwareMessenger", () => {
     const lease = defaultLease();
     const wrapped = createAuthAwareMessenger(inner, auth);
     await expect(
-      wrapped.request(METHOD, PARAMS, authorityFor(lease)),
+      wrapped.request(METHOD, PARAMS, {
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: authorityFor(lease),
+      }),
     ).rejects.toBeInstanceOf(HostRpcError);
     expect(revalidate).not.toHaveBeenCalled();
   });
@@ -204,7 +224,11 @@ describe("createAuthAwareMessenger", () => {
     const auth = authRevalidator(revalidate);
 
     const wrapped = createAuthAwareMessenger(inner, auth);
-    await wrapped.request(METHOD, PARAMS, authorityFor(lease));
+    await wrapped.request(METHOD, PARAMS, {
+      replayMustBeKeyed: false,
+      idempotencyKey: null,
+      authority: authorityFor(lease),
+    });
     expect(revalidate).toHaveBeenCalledTimes(1);
     expect(inner.request).toHaveBeenCalledTimes(2);
   });
@@ -221,7 +245,11 @@ describe("createAuthAwareMessenger", () => {
 
     const wrapped = createAuthAwareMessenger(inner, auth);
     await expect(
-      wrapped.request(METHOD, PARAMS, authorityFor(lease)),
+      wrapped.request(METHOD, PARAMS, {
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: authorityFor(lease),
+      }),
     ).rejects.toBeInstanceOf(HostRpcError);
     expect(revalidate).toHaveBeenCalledTimes(1);
     expect(inner.request).toHaveBeenCalledTimes(1);
@@ -246,7 +274,11 @@ describe("createAuthAwareMessenger", () => {
       authRevalidator(revalidateExpectedBearer),
     );
     await expect(
-      wrapped.request(METHOD, PARAMS, authorityFor(staleLease)),
+      wrapped.request(METHOD, PARAMS, {
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: authorityFor(staleLease),
+      }),
     ).rejects.toBeInstanceOf(HostAuthoritySupersededError);
     expect(replacementLease.getBearerToken()).toBe("replacement");
     expect(inner.request).toHaveBeenCalledTimes(1);

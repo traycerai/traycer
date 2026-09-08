@@ -4,9 +4,11 @@ import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migratio
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
 
+const HOST = "host-a";
+
 describe("<MigrationBlockingModalHost />", () => {
   beforeEach(() => {
-    useMigrationRunStore.getState().reset();
+    useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
     useDesktopDialogStore.setState({
       activeDialog: null,
       reportIssueAvailable: false,
@@ -16,7 +18,7 @@ describe("<MigrationBlockingModalHost />", () => {
 
   afterEach(() => {
     cleanup();
-    useMigrationRunStore.getState().reset();
+    useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
     useDesktopDialogStore.setState({
       activeDialog: null,
       reportIssueAvailable: false,
@@ -25,7 +27,7 @@ describe("<MigrationBlockingModalHost />", () => {
   });
 
   it("renders the settings retry migration layer as a portaled full-screen blocker", () => {
-    useMigrationRunStore.getState().markRunning();
+    useMigrationRunStore.getState().markRunning(HOST);
 
     const { container } = render(
       <main className="relative">
@@ -45,7 +47,10 @@ describe("<MigrationBlockingModalHost />", () => {
 
   it("offers a capability-gated report action with fixed migration context", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
-    useMigrationRunStore.getState().applyError();
+    // An error is only ever a RUN's error: a frame for a host with no run is
+    // dropped rather than materialising a slice, so start one first.
+    useMigrationRunStore.getState().markRunning(HOST);
+    useMigrationRunStore.getState().applyError(HOST);
 
     render(<MigrationBlockingModalHost />);
     fireEvent.click(screen.getByRole("button", { name: "Report issue" }));

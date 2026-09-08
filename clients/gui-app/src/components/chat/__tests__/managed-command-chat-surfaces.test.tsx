@@ -82,6 +82,12 @@ vi.mock(
     }),
     useManagedCommandStopAllIsPending: () => stopAllSharedFlight.isPending,
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandConfigureIsPending: () => false,
+    useManagedCommandRelaunchOnHostRestart: (
+      _target: unknown,
+      streamed: { relaunchOnHostRestart: boolean },
+    ) => streamed.relaunchOnHostRestart,
+    useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDeliverHeld: () => ({
       mutate: deliverHeldMutate,
       isPending: deliverHeldOwnFlight.isPending,
@@ -93,11 +99,11 @@ vi.mock(
 
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   disposeManagedCommandChatSessions,
   installManagedCommandChatSession,
@@ -134,6 +140,7 @@ function command(over: Partial<ManagedCommand>): ManagedCommand {
     cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4410, startedAtMs: 10 },
     chatId: CHAT_ID,
+    relaunchOnHostRestart: false,
     createdAtMs: 10,
     updatedAtMs: 10,
     ...over,
@@ -229,7 +236,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-let epicHandle: OpenEpicStoreHandle;
+let epicHandle: OpenedStoreForTest;
 
 beforeEach(() => {
   stopMutate.mockClear();
@@ -240,11 +247,21 @@ beforeEach(() => {
   deliverHeldOwnFlight.isPending = false;
   deliverHeldSharedFlight.isPending = false;
   streamSupport.value = "supported";
-  epicHandle = createOpenEpicStore({
+  epicHandle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.setState({
@@ -902,12 +919,17 @@ describe("held shells in the Background panel", () => {
     });
     expandPanel();
 
-    expect(
-      screen.getByTestId("held-managed-command-row-quiet-watcher"),
-    ).not.toBeNull();
+    const heldRow = screen.getByTestId(
+      "held-managed-command-row-quiet-watcher",
+    );
+    expect(heldRow).not.toBeNull();
     expect(
       screen.queryByTestId("managed-command-background-row-quiet-watcher"),
     ).toBeNull();
+    // Held does not imply stopped: the glyph follows the LIVE state, so a
+    // held shell that is still running wears the running row's monitor glyph,
+    // not the pause glyph a finished one gets.
+    expect(heldRow.querySelector("[data-monitor-icon]")).not.toBeNull();
     // The shell that is only running keeps its ordinary row.
     expect(
       screen.getByTestId("managed-command-background-row-busy-shell"),
@@ -960,12 +982,15 @@ describe("held shells in the Background panel", () => {
     });
     expandPanel();
 
-    expect(
-      screen.getByTestId("held-managed-command-row-finished-shell"),
-    ).not.toBeNull();
+    const heldRow = screen.getByTestId(
+      "held-managed-command-row-finished-shell",
+    );
+    expect(heldRow).not.toBeNull();
     expect(
       screen.queryByTestId("managed-command-stop-finished-shell"),
     ).toBeNull();
+    // Not running, so no running glyph: this is the pause-glyph case.
+    expect(heldRow.querySelector("[data-monitor-icon]")).toBeNull();
     expect(screen.getByTestId("background-header-summary").textContent).toBe(
       "1 held",
     );

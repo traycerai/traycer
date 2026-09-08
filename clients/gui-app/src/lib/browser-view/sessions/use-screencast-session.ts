@@ -12,6 +12,7 @@ import type {
   BrowserScreencastCaptureMode,
   BrowserScreencastClientFrame,
   BrowserScreencastServerFrame,
+  BrowserScreencastViewerRole,
 } from "@traycer/protocol/host/browser/contracts";
 import { BrowserScreencastStreamClient } from "@traycer-clients/shared/host-transport/browser-screencast-stream-client";
 import type {
@@ -20,11 +21,13 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   EMPTY_SCREENCAST_NAV_STATE,
   toastScreencastUnsupportedInteraction,
 } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   createScreencastController,
   type ScreencastController,
@@ -117,6 +120,14 @@ export interface ScreencastSession {
   readonly details: string | null;
   readonly frameSize: ScreencastFrameSize | null;
   readonly navState: BrowserNavState;
+  /**
+   * This subscription is a `"viewer"`, the tier the host refuses every claim
+   * and every input frame from (`viewer-passive`, H07). A tile reading `true`
+   * must render no arm and no input affordance at all: the alternative is a
+   * control that starts a gesture the host will not finish, which reads as a
+   * broken tab (H12).
+   */
+  readonly readOnly: boolean;
   /** Non-null only while this tile is visible AND the host has armed input. */
   readonly armedEpoch: number | null;
   readonly dialog: ScreencastDialog | null;
@@ -200,6 +211,25 @@ export interface ScreencastSessionOptions {
 }
 
 /**
+ * The control tier a shell may subscribe at. `"tile"` only where the shell
+ * owns a native browser of its own - which is exactly the desktop, since
+ * `browserView` is the shell's own "I have a real BrowserView" capability and
+ * both the web bundle (no runner host at all) and the mobile shell
+ * (`MobileRunnerHost.browserView = null`) answer `null`.
+ *
+ * Everything else is a `"viewer"`: it watches the tab, and the host refuses
+ * its `arm` and its input frames outright (security review root cause G). The
+ * declaration is what the host acts on, so a modified client can still claim
+ * `"tile"` - the tier bounds a cooperating viewer, it does not authorize one.
+ */
+export function screencastRoleForShell(
+  runnerHost: Pick<IRunnerHost, "browserView"> | null,
+): BrowserScreencastViewerRole {
+  if (runnerHost === null || runnerHost.browserView === null) return "viewer";
+  return "tile";
+}
+
+/**
  * Headless `browser.screencast` viewer. This hook owns only what a render
  * reads - the frame image, the lifecycle, the armed epoch and the composing
  * flag - plus the transport that feeds them. Everything with its own state
@@ -214,6 +244,7 @@ export function useScreencastSession(
   // A module constant chosen by the shell this bundle booted into, so the
   // reference is stable across renders and safe to depend on below.
   const profile = screencastProfile();
+  const role = screencastRoleForShell(useRunnerHostOrNull());
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
   const videoPlaneRef = useRef<VideoPlaneSession | null>(null);
   /**
@@ -625,7 +656,7 @@ export function useScreencastSession(
       maxHeight: profile.maxHeight,
       quality: profile.quality,
       format: "jpeg",
-      role: "tile",
+      role,
       callbacks: { onServerFrame, onConnectionStatus },
     });
     streamRef.current = stream;
@@ -656,6 +687,7 @@ export function useScreencastSession(
     patchStreamState,
     profile,
     readControlPlaneRttMs,
+    role,
     sessionId,
     tabId,
     visible,
@@ -837,7 +869,7 @@ export function useScreencastSession(
 
   useEffect(() => {
     const tile = tileRef.current;
-    if (tile === null || armedEpoch === null) return;
+    if (tile === null || armedEpoch === null || role === "viewer") return;
     const onKeyDown = (event: KeyboardEvent): void => {
       controller.handleTileKeyDown(event);
     };
@@ -855,7 +887,7 @@ export function useScreencastSession(
       tile.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", onWindowBlur);
     };
-  }, [armedEpoch, controller]);
+  }, [armedEpoch, controller, role]);
 
   useEffect(() => {
     const button = overlayButtonRef.current;
@@ -923,6 +955,7 @@ export function useScreencastSession(
   return {
     refs,
     ...planeView,
+    readOnly: role === "viewer",
     armedEpoch,
     dialog,
     composing,

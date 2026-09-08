@@ -367,6 +367,7 @@ describe("ephemeral-fetch-queue", () => {
         // no in-flight probe whose result we could collect.
         return Promise.reject(
           new RetryableTransportError({
+            replaySafetyFromKey: false,
             code: "RPC_ERROR",
             message: "WebSocket dial timed out after 10000ms",
             requestId: "req-2",

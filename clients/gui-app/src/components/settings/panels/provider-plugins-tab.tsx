@@ -371,6 +371,7 @@ function ProviderPluginsTabBody({
       />
 
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={removeTarget !== null}
         onOpenChange={(open) => {
           if (!open) setRemoveTarget(null);

@@ -3,12 +3,11 @@ import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { useEpicCreateArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
-import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export interface SwitcherCreateArtifact {
   readonly create: (type: EpicArtifactKind) => void;
@@ -31,10 +30,7 @@ export function useSwitcherCreateArtifact(
 ): SwitcherCreateArtifact {
   const createArtifact = useEpicCreateArtifact();
   const epicHandle = useOpenEpicHandle();
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
 
   const create = useCallback(
@@ -50,12 +46,11 @@ export function useSwitcherCreateArtifact(
           onSuccess: (result) => {
             openProjectedSidebarNodeInTabWhenAvailable({
               epicHandle,
-              tabId,
               nodeId: result.artifactId,
               fallbackHostId: activeHostId,
-              openTileInTab: (targetTabId, nodeRef: EpicNodeRef) => {
-                navigateNested(epicId, targetTabId, () =>
-                  prepareOpenTileInTabFocusTarget(targetTabId, nodeRef),
+              openNode: (nodeRef) => {
+                openTile(
+                  tileIntent(nodeRef, { tabId }, "explicit", "direct_ui"),
                 );
               },
               onBeforeOpen: null,
@@ -75,9 +70,8 @@ export function useSwitcherCreateArtifact(
       createArtifact,
       epicHandle,
       epicId,
-      navigateNested,
       onOpened,
-      prepareOpenTileInTabFocusTarget,
+      openTile,
       tabId,
     ],
   );

@@ -8,7 +8,10 @@ import type {
 } from "@traycer/protocol/host/session-import/candidate";
 import type { SessionImportScanTotals } from "@traycer/protocol/host/session-import/scan";
 import type { SessionImportOutcome } from "@traycer/protocol/host/session-import/run";
-import type { SessionImportProviderFailure } from "@traycer-clients/shared/host-transport/session-import-scan-client";
+import type {
+  SessionImportImportedSupport,
+  SessionImportProviderFailure,
+} from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import {
   guiHarnessIdToProviderId,
   providerDisplayName,
@@ -37,10 +40,49 @@ export function sessionImportSelectionKey(
   return `${harness}:${nativeSessionId}`;
 }
 
+/**
+ * A scan group's identity: one per location, which is how the scan streams
+ * them and how arrival dedupes a re-delivered group.
+ */
 export function sessionImportGroupKey(
   location: SessionImportGroupLocation,
 ): string {
   return `${location.kind}:${location.path}`;
+}
+
+/**
+ * Every folder that no longer exists on disk renders as ONE group, under this
+ * key. The scan still reports them one location per folder - the wire shape
+ * is per folder, and so is an older host - so the merge is the projection's:
+ * a person deciding about "work whose folder is gone" decides once, not once
+ * per deleted checkout, and the folder each row ran in stays on the row.
+ */
+export const SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY = "deleted-folders";
+export const SESSION_IMPORT_DELETED_FOLDERS_NAME = "Deleted Folders";
+
+/**
+ * The key a RENDERED group answers to - what the header's checkbox and expand
+ * toggle dispatch, and what {@link groupsForViewKey} resolves back to scan
+ * groups. Distinct from {@link sessionImportGroupKey}: a missing folder keeps
+ * its own scan identity (so two of them are not deduped into one on arrival)
+ * while sharing one rendered group.
+ */
+export function sessionImportGroupViewKey(
+  location: SessionImportGroupLocation,
+): string {
+  if (location.kind === "missing_folder") {
+    return SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY;
+  }
+  return sessionImportGroupKey(location);
+}
+
+function groupsForViewKey(
+  state: SessionImportWizardState,
+  groupKey: string,
+): ReadonlyArray<SessionImportGroup> {
+  return state.groups.filter(
+    (candidate) => sessionImportGroupViewKey(candidate.location) === groupKey,
+  );
 }
 
 export type SessionImportScanPhase = "scanning" | "complete" | "failed";
@@ -51,7 +93,7 @@ export type SessionImportScanPhase = "scanning" | "complete" | "failed";
  * before reading anything - so it is part of the scan request, never a
  * client-side filter over a full scan.
  */
-export type SessionImportScanWindow = 7 | 14 | 30 | null;
+export type SessionImportScanWindow = 1 | 7 | 14 | 30 | null;
 
 /** A week: recent enough to be "what I'm working on", the act's premise. */
 export const SESSION_IMPORT_DEFAULT_SCAN_WINDOW: SessionImportScanWindow = 7;
@@ -60,6 +102,7 @@ export const SESSION_IMPORT_SCAN_WINDOW_OPTIONS: ReadonlyArray<{
   readonly window: SessionImportScanWindow;
   readonly label: string;
 }> = [
+  { window: 1, label: "Last 24 hours" },
   { window: 7, label: "Last 7 days" },
   { window: 14, label: "Last 2 weeks" },
   { window: 30, label: "Last 30 days" },
@@ -85,7 +128,17 @@ export interface SessionImportWizardState {
   readonly scanErrorDetail: string | null;
   readonly selected: ReadonlySet<string>;
   readonly expandedGroups: ReadonlySet<string>;
+  /**
+   * Whether the user cleared the Deleted Folders header. Every missing folder
+   * renders under that one header, so a missing folder that arrives AFTER the
+   * clear (a reconnected scan delivering one the first pass never reached)
+   * must not arrive ticked: it would re-tick a header the user just cleared.
+   * Re-ticking the header, or a fresh scan, lifts it.
+   */
+  readonly deletedFoldersCleared: boolean;
   readonly query: string;
+  readonly showImported: boolean;
+  readonly importedSupport: SessionImportImportedSupport;
   /**
    * Providers the user has switched OUT of the import. This is scope, not a
    * view filter: a harness in here is hidden from the list AND unticked, so
@@ -111,7 +164,10 @@ export const SESSION_IMPORT_INITIAL_STATE: SessionImportWizardState = {
   scanErrorDetail: null,
   selected: new Set(),
   expandedGroups: new Set(),
+  deletedFoldersCleared: false,
   query: "",
+  showImported: false,
+  importedSupport: "unknown",
   disabledHarnesses: new Set(),
   scanWindow: SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
   scannedProviders: [],
@@ -133,6 +189,11 @@ export type SessionImportWizardAction =
       readonly kind: "scanStarted";
       readonly providers: ReadonlyArray<GuiHarnessId>;
     }
+  | {
+      readonly kind: "scanImportedSupportChanged";
+      readonly support: SessionImportImportedSupport;
+    }
+  | { readonly kind: "showImportedChanged"; readonly showImported: boolean }
   | { readonly kind: "scanGroupArrived"; readonly group: SessionImportGroup }
   | {
       readonly kind: "scanProviderFailed";
@@ -182,6 +243,7 @@ export function sessionImportWizardReducer(
   switch (action.kind) {
     case "scanRestarted":
     case "scanStarted":
+    case "scanImportedSupportChanged":
     case "scanGroupArrived":
     case "scanProviderFailed":
     case "scanCompleted":
@@ -210,10 +272,8 @@ function applyScanFrame(
       if (action.reason === "reconnect") {
         // The stream dropped and came back over the SAME folders, so the rows
         // the user has been ticking are the rows the host is about to re-send.
-        // Nothing below the filters is thrown away - not even the groups:
-        // re-delivered ones are ignored by the dedupe in `scanGroupArrived`,
-        // which is also what keeps a deliberate UNTICK from being undone by
-        // that case's pre-select-on-arrival rule.
+        // Keep the rows while reconnecting. Re-delivered groups refresh their
+        // states without reselecting existing rows.
         return {
           ...state,
           phase: "scanning",
@@ -231,6 +291,7 @@ function applyScanFrame(
       return {
         ...SESSION_IMPORT_INITIAL_STATE,
         query: state.query,
+        showImported: state.showImported,
         disabledHarnesses: state.disabledHarnesses,
         scanWindow: state.scanWindow,
         scannedProviders: state.scannedProviders,
@@ -239,43 +300,11 @@ function applyScanFrame(
     case "scanStarted": {
       return { ...state, scannedProviders: action.providers };
     }
+    case "scanImportedSupportChanged": {
+      return { ...state, importedSupport: action.support };
+    }
     case "scanGroupArrived": {
-      const key = sessionImportGroupKey(action.group.location);
-      if (
-        state.groups.some(
-          (group) => sessionImportGroupKey(group.location) === key,
-        )
-      ) {
-        return state;
-      }
-      // A current host hides already-imported sessions from the scan; an older
-      // one still sends them as `already_in_traycer` rows. Discard those here
-      // so both hosts produce the same wizard: only what is new to bring over.
-      const sessions = action.group.sessions.filter(
-        (candidate) => candidate.state.kind !== "already_in_traycer",
-      );
-      if (sessions.length === 0) return state;
-      const group = { ...action.group, sessions };
-      // Everything importable arrives pre-selected, missing folders included
-      // (spec §5): those still import, just without a workspace. A provider the
-      // user has switched out of the import is the one exception - its rows are
-      // not on screen, so ticking them would import work the user cannot see.
-      const selected = new Set(state.selected);
-      for (const candidate of group.sessions) {
-        if (!isImportable(candidate)) continue;
-        if (state.disabledHarnesses.has(candidate.harness)) continue;
-        selected.add(
-          sessionImportSelectionKey(
-            candidate.harness,
-            candidate.nativeSessionId,
-          ),
-        );
-      }
-      return {
-        ...state,
-        groups: [...state.groups, group],
-        selected,
-      };
+      return applyScanGroup(state, action.group);
     }
     case "scanProviderFailed": {
       // A harness is in exactly one state per scan, so a second failure for it
@@ -302,19 +331,83 @@ function applyScanFrame(
   }
 }
 
+function applyScanGroup(
+  state: SessionImportWizardState,
+  group: SessionImportGroup,
+): SessionImportWizardState {
+  const key = sessionImportGroupKey(group.location);
+  const previous = state.groups.find(
+    (group) => sessionImportGroupKey(group.location) === key,
+  );
+  // Refresh states after reconnect without undoing a deliberate untick.
+  // A newly imported row must never retain its old selected key.
+  // An unavailable row could not have been unticked by the user. If it
+  // becomes importable, give it the same initial selection as a new row.
+  const previousImportableKeys = new Set(
+    previous?.sessions
+      .filter(isImportable)
+      .map((candidate) =>
+        sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
+      ),
+  );
+  // Everything importable arrives pre-selected, missing folders included
+  // (spec §5): those still import, just without a workspace. Two
+  // exceptions: a provider the user has switched out of the import - its
+  // rows are not on screen, so ticking them would import work the user
+  // cannot see - and a missing folder landing under a Deleted Folders
+  // header the user has already cleared, which shares that header's
+  // decision rather than reopening it.
+  const preselect =
+    group.location.kind !== "missing_folder" || !state.deletedFoldersCleared;
+  const selected = new Set(state.selected);
+  const nextImportableKeys = new Set(
+    group.sessions
+      .filter(isImportable)
+      .map((candidate) =>
+        sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
+      ),
+  );
+  for (const previousKey of previousImportableKeys) {
+    if (!nextImportableKeys.has(previousKey)) selected.delete(previousKey);
+  }
+  for (const candidate of group.sessions) {
+    if (!preselect) break;
+    if (!isImportable(candidate)) continue;
+    if (state.disabledHarnesses.has(candidate.harness)) continue;
+    if (
+      previousImportableKeys.has(
+        sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
+      )
+    )
+      continue;
+    selected.add(
+      sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
+    );
+  }
+  return {
+    ...state,
+    groups:
+      previous === undefined
+        ? [...state.groups, group]
+        : state.groups.map((entry) =>
+            sessionImportGroupKey(entry.location) === key ? group : entry,
+          ),
+    selected,
+  };
+}
+
 function applyUserAction(
   state: SessionImportWizardState,
   action: SessionImportUserAction,
 ): SessionImportWizardState {
   switch (action.kind) {
+    case "showImportedChanged": {
+      if (action.showImported && state.importedSupport !== "supported")
+        return state;
+      return { ...state, showImported: action.showImported };
+    }
     case "sessionToggled": {
-      const selected = new Set(state.selected);
-      if (selected.has(action.selectionKey)) {
-        selected.delete(action.selectionKey);
-      } else {
-        selected.add(action.selectionKey);
-      }
-      return { ...state, selected };
+      return toggleSessionSelection(state, action.selectionKey);
     }
     case "groupSelectionSet": {
       return applyGroupSelectionSet(state, action.groupKey, action.selected);
@@ -330,7 +423,9 @@ function applyUserAction(
     }
     case "visibleSelectionSet": {
       const selected = new Set(state.selected);
+      const eligible = eligibleSelectionKeys(state);
       for (const key of action.selectionKeys) {
+        if (!eligible.has(key)) continue;
         if (action.selected) selected.add(key);
         else selected.delete(key);
       }
@@ -350,27 +445,75 @@ function applyUserAction(
   }
 }
 
+function toggleSessionSelection(
+  state: SessionImportWizardState,
+  selectionKey: string,
+): SessionImportWizardState {
+  if (!eligibleSelectionKeys(state).has(selectionKey)) return state;
+  const selected = new Set(state.selected);
+  if (selected.has(selectionKey)) selected.delete(selectionKey);
+  else selected.add(selectionKey);
+  return { ...state, selected };
+}
+
+function eligibleSelectionKeys(
+  state: SessionImportWizardState,
+): ReadonlySet<string> {
+  return new Set(
+    state.groups.flatMap((group) =>
+      group.sessions
+        .filter(
+          (candidate) =>
+            isImportable(candidate) &&
+            !state.disabledHarnesses.has(candidate.harness),
+        )
+        .map((candidate) =>
+          sessionImportSelectionKey(
+            candidate.harness,
+            candidate.nativeSessionId,
+          ),
+        ),
+    ),
+  );
+}
+
+function isVisibleCandidate(
+  state: SessionImportWizardState,
+  candidate: SessionImportCandidate,
+): boolean {
+  return (
+    candidate.state.kind !== "already_in_traycer" ||
+    (state.showImported && state.importedSupport === "supported")
+  );
+}
+
 function applyGroupSelectionSet(
   state: SessionImportWizardState,
   groupKey: string,
   select: boolean,
 ): SessionImportWizardState {
-  const group = state.groups.find(
-    (candidate) => sessionImportGroupKey(candidate.location) === groupKey,
-  );
-  if (group === undefined) return state;
+  // A rendered group may stand for several scan groups (every missing folder
+  // shares one), and its checkbox governs all of them.
+  const groups = groupsForViewKey(state, groupKey);
+  if (groups.length === 0) return state;
   const selected = new Set(state.selected);
-  for (const candidate of group.sessions) {
-    if (!isImportable(candidate)) continue;
-    if (state.disabledHarnesses.has(candidate.harness)) continue;
-    const key = sessionImportSelectionKey(
-      candidate.harness,
-      candidate.nativeSessionId,
-    );
-    if (select) selected.add(key);
-    else selected.delete(key);
+  for (const group of groups) {
+    for (const candidate of group.sessions) {
+      if (!isImportable(candidate)) continue;
+      if (state.disabledHarnesses.has(candidate.harness)) continue;
+      const key = sessionImportSelectionKey(
+        candidate.harness,
+        candidate.nativeSessionId,
+      );
+      if (select) selected.add(key);
+      else selected.delete(key);
+    }
   }
-  return { ...state, selected };
+  const deletedFoldersCleared =
+    groupKey === SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY
+      ? !select
+      : state.deletedFoldersCleared;
+  return { ...state, selected, deletedFoldersCleared };
 }
 
 /**
@@ -411,6 +554,12 @@ export interface SessionImportRowView {
   readonly selectionKey: string;
   readonly candidate: SessionImportCandidate;
   readonly title: string;
+  /**
+   * The folder this session ran in, as the scan spelled it. Every row carries
+   * it; the list shows it only inside the Deleted Folders group, where the
+   * header no longer names one folder.
+   */
+  readonly folderPath: string;
   readonly selected: boolean;
   readonly selectable: boolean;
   /** Short reason a row is not selectable, e.g. "Unreadable". */
@@ -436,7 +585,7 @@ export interface SessionImportGroupView {
   readonly missingFolder: boolean;
   readonly expanded: boolean;
   readonly rows: ReadonlyArray<SessionImportRowView>;
-  /** Everything in scope this folder holds, pickable or not. */
+  /** Rows displayed in this folder, selectable or not. */
   readonly totalCount: number;
   readonly selectableCount: number;
   readonly selectedCount: number;
@@ -457,6 +606,7 @@ export interface SessionImportWizardView {
   readonly selectableSessions: number;
   /** How many survive scope and search. */
   readonly matchedSessions: number;
+  readonly hiddenImportedCount: number;
   /** Everything ticked - search-hidden rows included - is what submits. */
   readonly selectedCount: number;
   /** Selectable rows currently on screen, for the Select all / Clear action. */
@@ -495,31 +645,93 @@ export function folderDisplayName(path: string): string {
   return last.length > 0 ? last : path;
 }
 
-const FAILURE_REASON_LABELS: Record<SessionImportFailureReason, string> = {
-  source_unreadable: "Could not be read",
-  source_empty: "Nothing to import",
-  workspace_bind_failed: "No workspace could be resolved",
-  creation_failed: "Task could not be created",
-  internal_error: "Unexpected error",
-};
+/** The order failure groups render in: what the user can act on first. */
+const FAILURE_REASON_ORDER: ReadonlyArray<SessionImportFailureReason> = [
+  "source_unreadable",
+  "workspace_bind_failed",
+  "creation_failed",
+  "internal_error",
+  "source_empty",
+];
 
 /**
- * Failure groups render in the order the labels above are declared, read off
- * that record rather than restated so a new reason cannot be given a label in
- * one place and left out of the order in another.
+ * The cause as a short heading: what the summary's sections are titled, and
+ * what a greyed row's tooltip leads with.
  */
-const FAILURE_REASON_ORDER: ReadonlyArray<string> = Object.keys(
-  FAILURE_REASON_LABELS,
-);
-
 export function sessionImportFailureLabel(
   reason: SessionImportFailureReason,
 ): string {
-  return FAILURE_REASON_LABELS[reason];
+  switch (reason) {
+    case "source_unreadable":
+      return "Could not be read";
+    case "source_empty":
+      return "No messages";
+    case "workspace_bind_failed":
+      return "No matching folder on this machine";
+    case "creation_failed":
+      return "Task could not be created";
+    case "internal_error":
+      return "Unexpected error";
+  }
+}
+
+/**
+ * Whether the host's per-session detail says more than the reason does. For
+ * an unreadable file it is the actual error, worth a glance; for an empty
+ * session it restates the heading, and a list that repeats one sentence per
+ * row is what buried the summary under a wall of text.
+ */
+export function sessionImportFailureDetailVaries(
+  reason: SessionImportFailureReason,
+): boolean {
+  switch (reason) {
+    case "source_unreadable":
+    case "creation_failed":
+    case "internal_error":
+      return true;
+    case "source_empty":
+    case "workspace_bind_failed":
+      return false;
+  }
+}
+
+/**
+ * The one line the summary shows above the details: an outcome first, then
+ * the cause when there is exactly one - "Not imported: 6 sessions with no
+ * messages". Mixed causes keep the line plain and leave the reasons to the
+ * sections underneath.
+ */
+export function sessionImportNotImportedLine(
+  groups: ReadonlyArray<SessionImportFailureGroupView>,
+): string {
+  const count = groups.reduce(
+    (total, group) => total + group.entries.length,
+    0,
+  );
+  const noun = count === 1 ? "session" : "sessions";
+  const only = groups.length === 1 ? groups[0] : undefined;
+  if (only === undefined) return `Not imported: ${count} ${noun}`;
+  return `Not imported: ${count} ${noun} ${failureCause(only.reason)}`;
+}
+
+function failureCause(reason: SessionImportFailureReason): string {
+  switch (reason) {
+    case "source_unreadable":
+      return "that could not be read";
+    case "source_empty":
+      return "with no messages";
+    case "workspace_bind_failed":
+      return "with no matching folder on this machine";
+    case "creation_failed":
+      return "whose task could not be created";
+    case "internal_error":
+      return "that hit an unexpected error";
+  }
 }
 
 function rowView(
   candidate: SessionImportCandidate,
+  folderPath: string,
   selected: ReadonlySet<string>,
 ): SessionImportRowView {
   const selectionKey = sessionImportSelectionKey(
@@ -528,14 +740,24 @@ function rowView(
   );
   const title = candidateDisplayTitle(candidate);
   const state = candidate.state;
-  // `already_in_traycer` never reaches here: those rows are dropped at
-  // arrival (see `scanGroupArrived`), so the only unavailable rows are
-  // unreadable ones.
+  if (state.kind === "already_in_traycer") {
+    return {
+      selectionKey,
+      candidate,
+      title,
+      folderPath,
+      selected: false,
+      selectable: false,
+      unavailableLabel: "Imported",
+      unavailableDetail: null,
+    };
+  }
   if (state.kind === "unreadable") {
     return {
       selectionKey,
       candidate,
       title,
+      folderPath,
       selected: false,
       selectable: false,
       unavailableLabel: "Unreadable",
@@ -546,6 +768,7 @@ function rowView(
     selectionKey,
     candidate,
     title,
+    folderPath,
     selected: selected.has(selectionKey),
     selectable: true,
     unavailableLabel: null,
@@ -582,6 +805,7 @@ function providerViewsFor(
   for (const harness of state.disabledHarnesses) counts.set(harness, 0);
   for (const group of state.groups) {
     for (const candidate of group.sessions) {
+      if (!isVisibleCandidate(state, candidate)) continue;
       counts.set(candidate.harness, (counts.get(candidate.harness) ?? 0) + 1);
     }
   }
@@ -632,13 +856,36 @@ export function buildSessionImportView(
   let selectableSessions = 0;
   let matchedSessions = 0;
   let visibleSelectedCount = 0;
+  let hiddenImportedCount = 0;
+  // Missing folders share a rendered group. Selection covers their full
+  // provider scope; the displayed count covers only the matching rows.
+  const deletedRows: SessionImportRowView[] = [];
+  const deleted = {
+    folders: 0,
+    inScope: 0,
+    selectable: 0,
+    selected: 0,
+    latest: 0,
+  };
 
   for (const group of state.groups) {
     const path = group.location.path;
-    totalSessions += group.sessions.length;
+    const visible = group.sessions.filter((candidate) =>
+      isVisibleCandidate(state, candidate),
+    );
+    totalSessions += visible.length;
+    hiddenImportedCount += group.sessions.filter(
+      (candidate) =>
+        !isVisibleCandidate(state, candidate) &&
+        !state.disabledHarnesses.has(candidate.harness) &&
+        matchesQuery(candidate, path, needle),
+    ).length;
 
-    const inScope = group.sessions.filter(
+    const providerScope = group.sessions.filter(
       (candidate) => !state.disabledHarnesses.has(candidate.harness),
+    );
+    const inScope = providerScope.filter((candidate) =>
+      isVisibleCandidate(state, candidate),
     );
     const selectable = inScope.filter(isImportable);
     selectableSessions += selectable.length;
@@ -647,10 +894,9 @@ export function buildSessionImportView(
       matchesQuery(candidate, path, needle),
     );
     matchedSessions += matching.length;
-    if (matching.length === 0) continue;
 
     const rows = matching.map((candidate) =>
-      rowView(candidate, state.selected),
+      rowView(candidate, path, state.selected),
     );
     for (const row of rows) {
       if (!row.selectable) continue;
@@ -663,26 +909,66 @@ export function buildSessionImportView(
         sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
       ),
     ).length;
+    const latest = Math.max(
+      0,
+      ...providerScope.map((candidate) => candidate.updatedAt),
+    );
 
-    const missingFolder = group.location.kind === "missing_folder";
+    if (group.location.kind === "missing_folder") {
+      if (inScope.length > 0) deleted.folders += 1;
+      deletedRows.push(...rows);
+      deleted.inScope += inScope.length;
+      deleted.selectable += selectable.length;
+      deleted.selected += selectedCount;
+      deleted.latest = Math.max(deleted.latest, latest);
+      continue;
+    }
+    if (matching.length === 0) continue;
+
+    const groupKey = sessionImportGroupViewKey(group.location);
     sortable.push({
       view: {
-        groupKey: sessionImportGroupKey(group.location),
+        groupKey,
         name: folderDisplayName(path),
         path,
-        missingFolder,
-        expanded: state.expandedGroups.has(
-          sessionImportGroupKey(group.location),
-        ),
+        missingFolder: false,
+        expanded: state.expandedGroups.has(groupKey),
         rows,
-        totalCount: inScope.length,
+        totalCount: rows.length,
         selectableCount: selectable.length,
         selectedCount,
         selectionState: selectionStateFor(selectable.length, selectedCount),
       },
-      tier: groupSortTier(missingFolder, group.gitBacked),
-      count: inScope.length,
-      latest: Math.max(0, ...inScope.map((candidate) => candidate.updatedAt)),
+      tier: groupSortTier(false, group.gitBacked),
+      count: providerScope.length,
+      latest,
+    });
+  }
+
+  if (deletedRows.length > 0) {
+    // Rows from several folders interleave, so the group keeps the list's
+    // own order - newest first - rather than the arrival order of folders.
+    const rows = [...deletedRows].sort(
+      (left, right) => right.candidate.updatedAt - left.candidate.updatedAt,
+    );
+    sortable.push({
+      view: {
+        groupKey: SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY,
+        name: SESSION_IMPORT_DELETED_FOLDERS_NAME,
+        path: deletedFoldersSubtitle(deleted.folders),
+        missingFolder: true,
+        expanded: state.expandedGroups.has(
+          SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY,
+        ),
+        rows,
+        totalCount: rows.length,
+        selectableCount: deleted.selectable,
+        selectedCount: deleted.selected,
+        selectionState: selectionStateFor(deleted.selectable, deleted.selected),
+      },
+      tier: groupSortTier(true, false),
+      count: deleted.inScope,
+      latest: deleted.latest,
     });
   }
 
@@ -703,16 +989,28 @@ export function buildSessionImportView(
     totalSessions,
     selectableSessions,
     matchedSessions,
-    selectedCount: state.selected.size,
+    hiddenImportedCount,
+    selectedCount: [...eligibleSelectionKeys(state)].filter((key) =>
+      state.selected.has(key),
+    ).length,
     visibleSelectionKeys,
     visibleSelectedCount,
   };
 }
 
-/** Repos sort above loose folders, which sort above missing ones. */
+/** Repos sort above loose folders, which sort above the deleted ones. */
 function groupSortTier(missingFolder: boolean, gitBacked: boolean): number {
   if (missingFolder) return 2;
   return gitBacked ? 0 : 1;
+}
+
+/**
+ * The Deleted Folders header's second line, where a folder group shows its
+ * path: how many folders the rows below came from.
+ */
+function deletedFoldersSubtitle(folders: number): string {
+  const noun = folders === 1 ? "folder" : "folders";
+  return `${folders.toLocaleString()} ${noun} no longer on this machine`;
 }
 
 export interface SessionImportFailureEntryView {
@@ -723,6 +1021,7 @@ export interface SessionImportFailureEntryView {
 
 export interface SessionImportFailureGroupView {
   readonly reason: SessionImportFailureReason;
+  /** The cause as the section's heading. */
   readonly label: string;
   readonly entries: ReadonlyArray<SessionImportFailureEntryView>;
 }
@@ -731,7 +1030,8 @@ export interface SessionImportFailureGroupView {
  * Groups a finished run's failures by cause, because that is how a person acts
  * on them: "four sessions could not be read" is one problem with four
  * instances, not four problems. The closed reason enum is what makes the
- * grouping meaningful; `detail` is the per-session half and stays on the row.
+ * grouping meaningful; `detail` is the per-session half and stays on the row,
+ * behind the group's expand toggle.
  */
 export interface SessionImportOutcomeEntry {
   readonly selectionKey: string;
@@ -795,6 +1095,11 @@ export function buildSessionImportSubmission(
         candidate.harness,
         candidate.nativeSessionId,
       );
+      if (
+        !isImportable(candidate) ||
+        state.disabledHarnesses.has(candidate.harness)
+      )
+        continue;
       if (!state.selected.has(key)) continue;
       selections.push({
         harness: candidate.harness,

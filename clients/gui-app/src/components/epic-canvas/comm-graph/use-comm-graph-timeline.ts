@@ -62,6 +62,17 @@ export interface CommGraphTimelineProjection {
   /** Drives playback-only canvas behavior; live and paused are both false. */
   readonly playing: boolean;
   readonly pulse: CommGraphPulse | null;
+  /**
+   * Stable identity of the row `pulse` was derived from, or null.
+   *
+   * A pulse is a derived value with no identity of its own: two consecutive
+   * rows between the same pair produce equal pulses, and one row re-supplied
+   * across renders produces the same pulse too. A renderer that spawns
+   * something per event - the office floor's envelopes - cannot tell those
+   * apart without the row's own key, so it is carried alongside rather than
+   * recovered by comparing pulses.
+   */
+  readonly pulseEventKey: string | null;
 }
 
 /** Tile-side derivations: the graph as of the panel's cursor, plus its pulse. */
@@ -130,5 +141,13 @@ export function useCommGraphTimelineProjection(
     [pulseEvent, visibleAgentIds],
   );
 
-  return { asOfEvents, visibleAgentIds, playing, pulse };
+  // Keyed off the row the pulse was resolved FROM, not off the pulse: a row
+  // that resolves to no pulse (both endpoints still invisible) must not leave a
+  // key pointing at something the canvas is not showing.
+  const pulseEventKey =
+    pulse === null || pulseEvent === null
+      ? null
+      : commGraphEventKey(pulseEvent);
+
+  return { asOfEvents, visibleAgentIds, playing, pulse, pulseEventKey };
 }

@@ -43,7 +43,7 @@ function StatusPill(props: {
   const canEdit = isEditableRole(role);
   const connectionStatus = useEpicConnectionStatus();
   const isDisconnected = connectionStatus === "closed";
-  const updateStatus = useEpicUpdateArtifactStatus();
+  const updateStatus = useEpicUpdateArtifactStatus(artifactId);
 
   const currentStatus =
     (liveArtifact !== null && "kind" in liveArtifact

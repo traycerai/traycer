@@ -66,7 +66,11 @@ import {
   SPEC_B,
   SPEC_C,
   TEST_HOST_ID,
+  expectCanvasInvariants,
 } from "./canvas-test-fixtures";
+
+/** The analytics source the `*FromSource` openers carry; irrelevant here. */
+const SOURCE = "direct_ui" as const;
 
 // Resolve a pane's tab payloads in strip order via tilesByInstanceId.
 function tabRefsOfPane(
@@ -782,10 +786,11 @@ describe("epic canvas store header tabs", () => {
       firstBlankTarget,
     );
 
-    const fillTarget = store.prepareOpenTileInPaneFocusTarget(
+    const fillTarget = store.prepareOpenTileInPaneFocusTargetFromSource(
       tabId,
       paneId,
       SPEC_C,
+      { mode: "permanent", index: null, source: SOURCE },
     );
     if (fillTarget === null || fillTarget.tileInstanceId === undefined) {
       throw new Error("expected fill-in-place target");
@@ -795,8 +800,72 @@ describe("epic canvas store header tabs", () => {
       requireCanvas(tabId).tilesByInstanceId[fillTarget.tileInstanceId]?.id,
     ).toBe(SPEC_C.id);
     expect(
-      store.prepareOpenTileInPaneFocusTarget(tabId, "missing-pane", SPEC_A),
+      store.prepareOpenTileInPaneFocusTargetFromSource(
+        tabId,
+        "missing-pane",
+        SPEC_A,
+        { mode: "permanent", index: null, source: SOURCE },
+      ),
     ).toBeNull();
+  });
+
+  it("opens into an explicit pane in preview, background and positioned modes", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pane-modes", "Pane Modes");
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    // Preview claims the pane's preview slot...
+    const first = store.prepareOpenTileInPaneFocusTargetFromSource(
+      tabId,
+      paneId,
+      SPEC_B,
+      { mode: "preview", index: null, source: SOURCE },
+    );
+    const firstInstanceId = first?.tileInstanceId;
+    if (firstInstanceId === undefined) throw new Error("expected preview tab");
+    expect(requirePane(requireCanvas(tabId), paneId).previewTabId).toBe(
+      firstInstanceId,
+    );
+
+    // ...and the next preview evicts it, payload and all (one per pane).
+    const second = store.prepareOpenTileInPaneFocusTargetFromSource(
+      tabId,
+      paneId,
+      SPEC_C,
+      { mode: "preview", index: null, source: SOURCE },
+    );
+    const secondInstanceId = second?.tileInstanceId;
+    if (secondInstanceId === undefined) {
+      throw new Error("expected second preview tab");
+    }
+    const afterEvict = requireCanvas(tabId);
+    expect(requirePane(afterEvict, paneId).previewTabId).toBe(secondInstanceId);
+    expect(requirePane(afterEvict, paneId).tabInstanceIds).not.toContain(
+      firstInstanceId,
+    );
+    expect(afterEvict.tilesByInstanceId[firstInstanceId]).toBeUndefined();
+
+    // Background is membership only: no focus target, active tab untouched.
+    const activeBefore = requirePane(afterEvict, paneId).activeTabId;
+    expect(
+      store.prepareOpenTileInPaneFocusTargetFromSource(tabId, paneId, CHAT_A, {
+        mode: "background",
+        index: 0,
+        source: SOURCE,
+      }),
+    ).toBeNull();
+    const afterBackground = requireCanvas(tabId);
+    const pane = requirePane(afterBackground, paneId);
+    expect(pane.activeTabId).toBe(activeBefore);
+    expect(pane.previewTabId).toBe(secondInstanceId);
+    // `index: 0` inserts at the head of the strip rather than appending.
+    expect(pane.tabInstanceIds).toHaveLength(3);
+    expect(afterBackground.tilesByInstanceId[pane.tabInstanceIds[0]]?.id).toBe(
+      CHAT_A.id,
+    );
+    expectCanvasInvariants(afterBackground);
   });
 
   it("prepares split and active-move targets", () => {
@@ -1277,7 +1346,10 @@ describe("makeSelectIsActiveTile", () => {
       .getState()
       .splitPaneEmptyRightInTab(tabId, sourcePaneId);
     if (otherPaneId === null) throw new Error("expected a second pane");
-    useEpicCanvasStore.getState().openTileInPane(tabId, otherPaneId, right);
+    useEpicCanvasStore.getState().openTileInPane(tabId, otherPaneId, right, {
+      mode: "permanent",
+      index: null,
+    });
 
     // `splitPaneEmpty` makes the NEW pane active, so `right` is the tile the
     // user is looking at and `left` is parked beside it.
@@ -1324,7 +1396,10 @@ describe("makeSelectIsActiveTile", () => {
       .getState()
       .splitPaneEmptyRightInTab(tabId, sourcePaneId);
     if (otherPaneId === null) throw new Error("expected a second pane");
-    useEpicCanvasStore.getState().openTileInPane(tabId, otherPaneId, hostB);
+    useEpicCanvasStore.getState().openTileInPane(tabId, otherPaneId, hostB, {
+      mode: "permanent",
+      index: null,
+    });
 
     const state = useEpicCanvasStore.getState();
     expect(makeSelectIsActiveTile(tabId, sharedId, "host-b")(state)).toBe(true);
@@ -2213,7 +2288,10 @@ describe("restoreClosedTilePreview", () => {
 
     // Explicit-pane opens intentionally bypass content dedup and mint another
     // instance for the same content id.
-    store.openTileInPane(tabId, paneId, SPEC_A);
+    store.openTileInPane(tabId, paneId, SPEC_A, {
+      mode: "permanent",
+      index: null,
+    });
     const withDuplicate = requirePane(requireCanvas(tabId), paneId);
     const duplicateInstanceId = withDuplicate.tabInstanceIds.find(
       (instanceId) => instanceId !== SPEC_A.instanceId,

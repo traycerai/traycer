@@ -483,17 +483,29 @@ export interface ManagedCommandOutputTileRef {
 }
 
 /**
- * Persisted view state of a comm-graph tile: the canvas viewport ONLY.
+ * Persisted view state of a comm-graph tile: the canvas viewport and which
+ * renderer draws it.
  *
  * Node positions are deliberately NOT persisted - the graph is auto-laid-out
  * from the epic's live agent set on every data change, so a stored position
  * would go stale the moment an agent is created, archived, or reparented.
  * Zoom/pan is the user's own framing of that layout and is worth keeping.
+ *
+ * `mode` picks between the two renderings of the SAME projection: the React
+ * Flow node graph and the pixel-art office floor. Both read one cursor, one
+ * event array and one agent set, so switching cannot show two different
+ * stories. There is ONE viewport for both, not one per mode - and because the
+ * fields mean flow units in `graph` and sprite pixels in `office`, a framing
+ * chosen in one mode says nothing about the other. So switching mode RESETS
+ * the viewport to the neutral one, which is what each renderer reads as "fit
+ * yourself"; carrying the numbers over would open the incoming mode
+ * off-screen while still counting as user-framed.
  */
 export interface CommGraphTileViewState {
   readonly x: number;
   readonly y: number;
   readonly zoom: number;
+  readonly mode: "graph" | "office";
 }
 
 /**

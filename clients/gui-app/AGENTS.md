@@ -116,6 +116,12 @@ inset-0` and marked `data-full-bleed-surface`, so it takes the viewport
 - No `key={x ?? fallback}` when `undefined` already remounts correctly.
 - Zustand = client UI state; TanStack Query = server/host data.
 - Keep browser-safe unless the task adds a native host.
+- **Local browser tiles are CSS-anchored `<webview>` guests.** Overlay
+  primitives paint in ordinary DOM stacking above the guest. Importing a
+  Radix portal primitive directly outside `src/components/ui/` is still
+  banned by the `overlayPortal` ESLint block so portal behavior stays in the
+  shadcn wrappers. Toast placement may consult live tile rects; there is no
+  native-view occlusion coordinator, snapshot stand-in, or motion freeze.
 
 ## Backend calls → TanStack Query
 
@@ -272,6 +278,22 @@ model download there. The cost is real and accepted — a composer pinned to
 host B gates its mic on the app-wide host's model, not B's. Scope a NEW
 composer RPC to the target host unless it is about the human's input devices.
 
+## Opening seams (links + tiles)
+
+Two boundaries, both enforced by `eslint/traycer-tile-open-boundary-rules.mjs`
+(a `no-restricted-syntax` dimension in `eslint.config.mjs`, so oxlint gets it
+through `oxlint-config-adapter.mjs` too):
+
+- **URL egress** — `useOpenLink()(url, kind, event)` (`lib/links/open-link.ts`),
+  never a raw `openExternalLink`, `window.open`, or `target="_blank"`. Pick the
+  `LinkKind`; it decides in-app vs external.
+- **Tile open** — `useEpicTileNavigation().openTile(intent)` (or
+  `openTileWithNavigation` outside a component), never a
+  `prepare*FocusTarget` action. The intent carries placement, dedupe and source.
+
+Exemptions are per file with a stated reason in `eslint.config.mjs`; the
+nested-focus dimension still bans the raw store actions underneath.
+
 ## Routing
 
 - Auth/redirects → route `beforeLoad`; search → `validateSearch`; critical
@@ -301,10 +323,10 @@ Materialized from `skills-lock.json` under `.agents/` / `.claude/`.
 ## Terminal theming (xterm)
 
 Invariants only — read `src/lib/theme-applier.ts`, `terminal-theme.ts`,
-`styles/terminal-themes.css` before changing:
+`lib/themes/builtin-palettes.ts` before changing:
 
 - `theme-applier.ts` owns `<html>` class / `data-theme` (module-load, outside
   React). Don't write those attributes elsewhere.
-- ANSI tokens in CSS (`--term-ansi-*`); new full-palette preset = one CSS block.
+- Palette data (including `--term-ansi-*`) lives in `lib/themes/builtin-palettes.ts`; the applier writes the registered CSS tokens. Add presets to that registry, never theme-name CSS selectors.
 - `buildTerminalTheme` is sync (no flash); unset bright slots L-shift at runtime.
 - Lazy-load `TerminalXtermHost`; clear atlas via `scheduleAtlasClear`.

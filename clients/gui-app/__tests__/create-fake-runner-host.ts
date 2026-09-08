@@ -97,6 +97,7 @@ export function createFakeRunnerHost(
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
     openMicrophoneSettings: () => Promise.resolve(),
+    openFullDiskAccessSettings: () => Promise.resolve(),
     beginAuthAttempt: () => undefined,
     onAuthCallback: () => ({ dispose: () => undefined }),
     deviceFlow: { start: () => Promise.resolve(null) },
@@ -159,6 +160,9 @@ export function createFakeRunnerHost(
     // Desktop-shaped by default; a phone-shaped test passes its own
     // `pushPermission` double through `overrides`.
     pushPermission: null,
+    // Likewise: a shell that raises an OS back request passes its own
+    // `systemBack` double through `overrides`.
+    systemBack: null,
   };
   return { ...base, ...overrides };
 }

@@ -1539,31 +1539,6 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "string"
                                                 }
                                               },
-                                              "attributes": {
-                                                "type": "array",
-                                                "items": {
-                                                  "type": "object",
-                                                  "properties": {
-                                                    "name": {
-                                                      "type": "string"
-                                                    },
-                                                    "value": {
-                                                      "type": "string"
-                                                    }
-                                                  },
-                                                  "required": [
-                                                    "name",
-                                                    "value"
-                                                  ],
-                                                  "additionalProperties": false
-                                                }
-                                              },
-                                              "outerHtml": {
-                                                "type": "string"
-                                              },
-                                              "outerHtmlTruncated": {
-                                                "type": "boolean"
-                                              },
                                               "textPreview": {
                                                 "anyOf": [
                                                   {
@@ -1659,9 +1634,6 @@ export const chatSyncSchemaSurfaceBaseline = {
                                               "tagName",
                                               "elementId",
                                               "classNames",
-                                              "attributes",
-                                              "outerHtml",
-                                              "outerHtmlTruncated",
                                               "textPreview",
                                               "ariaRole",
                                               "accessibleName",
@@ -2447,6 +2419,30 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 }
                                               ]
                                             },
+                                            "agentMessageReceipt": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "receiverAgentId": {
+                                                      "type": "string"
+                                                    },
+                                                    "messageId": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "receiverAgentId",
+                                                    "messageId"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "managedCommand": {
                                               "default": null,
                                               "anyOf": [
@@ -2827,6 +2823,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "taskTodoItems",
                                             "error",
                                             "agentMessageSend",
+                                            "agentMessageReceipt",
                                             "managedCommand",
                                             "progress",
                                             "backgroundOutput",

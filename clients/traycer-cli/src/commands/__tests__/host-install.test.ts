@@ -31,6 +31,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../installer", () => ({
+  // The two swap barriers this command observes: none. Inlined rather than
+  // re-exported from the real module so this bare factory keeps the installer
+  // out of the module graph entirely, which is what it exists for - and so
+  // that the next export production reaches for fails loudly here rather
+  // than arriving as `undefined`.
+  NO_INSTALL_PHASE_HOOKS: {
+    beforeSwapCommit: async () => {},
+    afterSwap: async () => {},
+  },
   stageHostInstallSource: async (
     ...callArgs: Parameters<typeof mocks.stageHostInstallSourceMock>
   ) => {
@@ -159,7 +168,10 @@ import { buildHostInstallCommand, type HostInstallArgs } from "../host-install";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
-import type { StagedHostInstallSource } from "../../installer";
+import {
+  NO_INSTALL_PHASE_HOOKS,
+  type StagedHostInstallSource,
+} from "../../installer";
 import type { ServiceInstallLifecycleHandle } from "../../service/install-lifecycle";
 
 function sampleRecord(version: string): HostInstallRecord {
@@ -219,6 +231,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
     },
     lifecycle: {
       beforeSwap: async () => {},
+      beforeSwapCommit: async () => {},
       afterSwap: async () => {},
       swapLockRecovery: null,
     },
@@ -491,6 +504,11 @@ describe("buildHostInstallCommand", () => {
       environment: "production",
       bootstrap: { enableLinger: false, allowSelfInvocation: true },
       force: false,
+      // A first install has no disruption boundary to report: there is no
+      // running host of this environment to stop, and no marker to stamp.
+      onWillStopHost: null,
+      // `host install` is not an update: it observes neither swap barrier.
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
   });
 

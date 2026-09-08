@@ -4,6 +4,7 @@ import type {
   PrCheckContext,
   PrChecksSection,
 } from "@traycer/protocol/host/pr-schemas";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { PrDetailChecks } from "@/components/epic-canvas/pr/pr-detail-sections";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
@@ -34,7 +35,7 @@ function section(contexts: readonly PrCheckContext[]): PrChecksSection {
 
 function renderChecks(args: {
   readonly contexts: readonly PrCheckContext[];
-  readonly onOpenDetails: (url: string) => void;
+  readonly onOpenDetails: (url: string, event: LinkClickEvent) => void;
 }): void {
   render(
     <PrDetailChecks
@@ -107,8 +108,8 @@ describe("PrDetailChecks", () => {
     ).toBeTruthy();
   });
 
-  it("makes the name itself the link, with no separate trailing button", () => {
-    const opened: string[] = [];
+  it("makes the name itself the link, with no separate trailing button, passing the click event through", () => {
+    const opened: [string, LinkClickEvent][] = [];
     renderChecks({
       contexts: [
         check({
@@ -117,11 +118,13 @@ describe("PrDetailChecks", () => {
           detailsUrl: "https://ci/run/1",
         }),
       ],
-      onOpenDetails: (url) => opened.push(url),
+      onOpenDetails: (url, event) => opened.push([url, event]),
     });
 
     fireEvent.click(screen.getByTestId("pr-detail-check-name"));
-    expect(opened).toEqual(["https://ci/run/1"]);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.[0]).toBe("https://ci/run/1");
+    expect(opened[0]?.[1]).toBeTruthy();
     expect(screen.queryByTestId("pr-detail-check-details")).toBeNull();
   });
 

@@ -16,11 +16,11 @@ import {
   type TileFindStateSnapshot,
 } from "@/stores/tile-find";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { GitDiffTile } from "../git-diff-tile";
 
 interface VirtuosoMockProps {
@@ -75,6 +75,14 @@ const state = vi.hoisted(() => ({
 // `use-surface-host-stream-binding.test.tsx`.
 // The hook returns the value to PROVIDE: the ambient binding while following
 // (this suite's), the pin's own once built, null while pending. Following here.
+// These tiles resolve the user's default open target, which asks whether the
+// tile's host is the LOCAL one before it may offer Finder. That read wants the
+// host runtime, which this suite does not mount; `null` is the honest answer
+// here and simply leaves Finder unoffered.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
+
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
   const { use } = await import("react");
   const { StreamRuntimeContext } =
@@ -118,6 +126,7 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => false,
 }));
 
@@ -191,7 +200,7 @@ const NODE = makeGitBundleDiffTile({
 
 const EPIC_ID = "epic-1";
 
-let epicSessionHandle: OpenEpicStoreHandle;
+let epicSessionHandle: OpenedStoreForTest;
 
 const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -209,11 +218,21 @@ describe("<GitDiffTile /> bundle find", () => {
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     });
-    epicSessionHandle = createOpenEpicStore({
+    epicSessionHandle = openStoreForTest({
       epicId: EPIC_ID,
       userId: null,
-      streamClientFactory: fakeStreamClientFactory,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: fakeStreamClientFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
   });
 

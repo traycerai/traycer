@@ -6,10 +6,7 @@ import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import {
-  ACTIVE_TILE_PLACEMENT,
-  type ConversationTilePlacement,
-} from "@/lib/canvas/conversation-tile-placement";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import {
   classifyRecoverableForkFailure,
   type RecoverableForkFailure,
@@ -80,7 +77,7 @@ export interface StartSideChatArgs {
   readonly accountContext: CreateChatInitialMessage["accountContext"];
   /** The source chat's visible workspace, so the fork works in the same place. */
   readonly worktreeIntent: WorktreeIntent | null;
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   readonly createChat: CreateChatCommand;
   /** Fired right before the settings-only retry - the side chat still opens. */
   readonly onHistoryUnavailable: (reason: RecoverableForkFailure) => void;
@@ -233,48 +230,37 @@ function openIntentForPlacement(
   args: StartSideChatArgs,
   chatId: string,
 ): CreatedChatOpenIntent {
-  const base = {
+  return {
     epicId: args.epicId,
     tabId: args.tabId,
     chatId,
     hostId: args.hostId,
-    source: "direct_ui" as const,
+    placement: args.placement,
+    source: "direct_ui",
   };
-  const placement = args.placement;
-  if (placement.kind === "split") {
-    return {
-      ...base,
-      kind: "split",
-      targetGroupId: placement.groupId,
-      position: placement.position,
-    };
-  }
-  if (placement.kind === "target-group") {
-    return { ...base, kind: "target-group", groupId: placement.groupId };
-  }
-  return { ...base, kind: "active-tile" };
 }
 
 /**
  * Where a side chat asked from `sourceChatId`'s tile lands: split to the RIGHT
  * of the pane showing that tile, so the source keeps streaming in view - a
- * side chat is read beside its conversation, not instead of it. Falls back to
- * the active group when the source is not on this tab's canvas (or on a phone,
- * which shows one tile at a time), and the handoff falls back the same way on
- * its own if the pane closes before the fork projects.
+ * side chat is read beside its conversation, not instead of it. Returns `null`
+ * - "use the configured conversation placement" - when the source is not on
+ * this tab's canvas (or on a phone, which shows one tile at a time), and the
+ * handoff degrades the same way on its own if the pane closes before the fork
+ * projects.
  */
 export function sideChatPlacementForTile(
   tabId: string,
   sourceChatId: string,
-): ConversationTilePlacement {
-  if (isMobileApp()) return ACTIVE_TILE_PLACEMENT;
+): ExplicitTilePlacement | null {
+  if (isMobileApp()) return null;
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
-  if (canvas === undefined) return ACTIVE_TILE_PLACEMENT;
+  if (canvas === undefined) return null;
   const pane = collectPanes(canvas.root).find((candidate) =>
     paneTabRefs(canvas, candidate).some(
       (ref) => ref.type === "chat" && ref.id === sourceChatId,
     ),
   );
-  if (pane === undefined) return ACTIVE_TILE_PLACEMENT;
-  return { kind: "split", groupId: pane.id, position: "right" };
+  if (pane === undefined) return null;
+  return { kind: "split", paneId: pane.id, edge: "right" };
 }

@@ -7,15 +7,15 @@ import {
   within,
 } from "@testing-library/react";
 import type { PrOwnerRef } from "@traycer/protocol/host/pr-schemas";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type { EpicTreeIndex, EpicTreeNode } from "@/lib/epic-selectors";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 // Typed to the real signature so `mock.calls` destructures as a tuple. An
 // untyped `vi.fn()` hands back `any[]`, which reads fine and asserts nothing.
-const openTileInEpic =
-  vi.fn<(epicId: string, node: EpicCanvasTileRef) => null>();
+const openTile = vi.fn<(intent: TileOpenIntent) => null>();
 
 /**
  * Parent links the epic tree reports, rewritten per test. Empty means every
@@ -98,7 +98,7 @@ function seedPresentNodeIds(owners: readonly PrOwnerRef[]): void {
 }
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({ openTileInEpic }),
+  useEpicTileNavigation: () => ({ openTile }),
 }));
 
 // A session HANDLE has to exist for `EpicSessionGate` to render the owner row
@@ -139,7 +139,7 @@ function renderBadges(owners: readonly PrOwnerRef[]) {
 
 afterEach(() => {
   cleanup();
-  openTileInEpic.mockReset();
+  openTile.mockReset();
   parentByNodeId = {};
   deletedNodeIds = new Set<string>();
   presentNodeIds = [];
@@ -202,11 +202,20 @@ describe("PrOwnerBadges overflow", () => {
     fireEvent.click(screen.getByTestId("pr-owner-overflow"));
     fireEvent.click(screen.getByLabelText("Open Chat chat-12"));
 
-    expect(openTileInEpic).toHaveBeenCalledTimes(1);
-    const [epicId, ref] = openTileInEpic.mock.calls[0];
-    expect(epicId).toBe("epic-1");
-    expect(ref.id).toBe("chat-12");
-    expect(ref.type).toBe("chat");
+    expect(openTile).toHaveBeenCalledTimes(1);
+    expect(openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: "epic-1" },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: "chat-12",
+          type: "chat",
+        }) as EpicCanvasTileRef,
+      }),
+    );
   });
 
   it("names the overflow chip by the full owner count for assistive tech", () => {

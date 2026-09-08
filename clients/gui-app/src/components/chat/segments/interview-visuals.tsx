@@ -58,35 +58,6 @@ function optionDetails(
   ];
 }
 
-export function InterviewFraming(props: {
-  readonly title: string | null;
-  readonly description: string | null;
-  readonly titleFindUnitId: string | null;
-  readonly descriptionFindUnitId: string | null;
-}) {
-  if (props.title === null && props.description === null) return null;
-  return (
-    <div className="flex min-w-0 flex-col gap-0.5">
-      {props.title === null ? null : (
-        <div
-          data-chat-find-unit={props.titleFindUnitId ?? undefined}
-          className="min-w-0 text-ui font-medium text-foreground"
-        >
-          {props.title}
-        </div>
-      )}
-      {props.description === null ? null : (
-        <p
-          data-chat-find-unit={props.descriptionFindUnitId ?? undefined}
-          className="m-0 min-w-0 text-ui-sm text-muted-foreground"
-        >
-          {props.description}
-        </p>
-      )}
-    </div>
-  );
-}
-
 export function InterviewQuestionHeader(props: {
   readonly header: string | null;
   readonly questionText: string;

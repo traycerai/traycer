@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useShallow } from "zustand/react/shallow";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -23,21 +22,6 @@ import type {
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
-import {
-  epicsSeen,
-  taskChainsSeen,
-  useMigrationRunStore,
-  type MigrationRunState,
-} from "@/stores/migration/migration-run-store";
-import { startMigrationRun } from "@/components/migration/migration-run-handle";
-import { SessionImportDialog } from "@/components/session-import/session-import-dialog";
-import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
-import { useSessionImportStatus } from "@/hooks/session-import/use-session-import-status-query";
-import {
-  sessionImportDoneCount,
-  sessionImportIsRunning,
-  useSessionImportRunStore,
-} from "@/stores/session-import/session-import-run-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
@@ -46,17 +30,7 @@ import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
 
-const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
-
-function formatMigrationProgress(state: MigrationRunState): string | null {
-  if (state.status !== "running") return null;
-  if (state.totals === null) return MIGRATION_PROGRESS_LABEL;
-  const { totalTaskChains, totalLocalEpics } = state.totals;
-  const tasks = `${taskChainsSeen(state.counts)}/${totalTaskChains}`;
-  const epics = `${epicsSeen(state.counts)}/${totalLocalEpics}`;
-  return `${MIGRATION_PROGRESS_LABEL} - tasks ${tasks}, epics ${epics}`;
-}
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("general", setting);
@@ -65,18 +39,6 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 export function GeneralSettingsPanel() {
   const navigate = useNavigate();
   const restartOnboarding = useOnboardingStore((s) => s.restart);
-  const migrationState = useMigrationRunStore(
-    useShallow((s) => ({
-      status: s.status,
-      totals: s.totals,
-      counts: s.counts,
-      finalSuccess: s.finalSuccess,
-      remoteRunning: s.remoteRunning,
-    })),
-  );
-  const migrationProgressLabel = formatMigrationProgress(migrationState);
-  const migrationIsRunning =
-    migrationState.status === "running" || migrationState.remoteRunning;
   const showGlobalResourceMonitor = useSettingsStore(
     (s) => s.showGlobalResourceMonitor,
   );
@@ -245,13 +207,18 @@ export function GeneralSettingsPanel() {
           </SettingsGroup>
         ) : null}
 
+        {/* One row, and named for the SUBJECT rather than for itself: the
+            tour is a window-level replay of onboarding, so it belongs on the
+            app-wide page. Import and Data migration used to sit beside it and
+            do not - each moves one machine's local data, and neither could
+            name the machine from here. Both are now on that host's own
+            Overview, under the sidebar's host picker. */}
         <SettingsGroup
-          title="Setup & migration"
+          title="Onboarding"
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
-          <SessionImportSettingsRow />
           <SettingsRow
             label="Product tour"
             description="Replay the first-launch onboarding tour."
@@ -273,113 +240,11 @@ export function GeneralSettingsPanel() {
               </Button>
             }
           />
-          <SettingsRow
-            label="Data migration"
-            description={
-              migrationProgressLabel ??
-              "Retry moving local SQLite tasks and epics to cloud."
-            }
-            control={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={migrationIsRunning}
-                data-testid="settings-reattempt-migration"
-                onClick={() => {
-                  startMigrationRun();
-                }}
-              >
-                {migrationIsRunning ? (
-                  <AgentSpinningDots
-                    className="text-muted-foreground"
-                    testId="settings-reattempt-migration-spinner"
-                    variant={undefined}
-                  />
-                ) : null}
-                Re-attempt migration
-              </Button>
-            }
-          />
         </SettingsGroup>
 
         <DangerZoneSection />
       </div>
     </SettingsPanelShell>
-  );
-}
-
-/**
- * The single "Import your work" entry (spec §5): one row for every provider,
- * not one per provider and not in the Providers panel. Hidden entirely on a host
- * that predates the feature - it is deliberately de-emphasised, so there is
- * nothing worth explaining in its absence.
- *
- * Live progress comes from the run store, which is only populated for a run
- * this window started or is attached to; `sessionImport.status` covers the
- * colder questions - a run left going by a quit, and the last run's summary -
- * and is asked on mount rather than polled (see the host method policy).
- */
-function SessionImportSettingsRow() {
-  const [importOpen, setImportOpen] = useState(false);
-  const available = useSessionImportAvailable();
-  const statusQuery = useSessionImportStatus(available);
-  const run = useSessionImportRunStore(
-    useShallow((s) => ({
-      running: sessionImportIsRunning(s),
-      done: sessionImportDoneCount(s),
-      total: s.total,
-    })),
-  );
-  if (!available) return null;
-
-  const status = statusQuery.data ?? null;
-  const active = run.running
-    ? { done: run.done, total: run.total }
-    : (status?.active ?? null);
-
-  let description =
-    "Bring work you already started in Claude Code, Codex, or OpenCode into Traycer as tasks.";
-  if (active !== null) {
-    // A run is active from the moment it is submitted, but its size is the
-    // host's answer to that submission - so between the two there is a real
-    // run with nothing yet to count, and "Importing 0 of 0…" would be the row
-    // reporting a number it does not have. The spinner keeps turning either
-    // way: `active` is what drives it, and this only changes what is said.
-    description =
-      active.total === 0
-        ? "Starting import…"
-        : `Importing ${active.done} of ${active.total}…`;
-  }
-
-  return (
-    <>
-      <SettingsRow
-        label="Import your work"
-        description={description}
-        control={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-testid="settings-import-sessions"
-            onClick={() => setImportOpen(true)}
-          >
-            {active !== null ? (
-              <AgentSpinningDots
-                className="text-muted-foreground"
-                testId="settings-import-sessions-spinner"
-                variant={undefined}
-              />
-            ) : null}
-            Import
-          </Button>
-        }
-      />
-      {importOpen ? (
-        <SessionImportDialog onClose={() => setImportOpen(false)} />
-      ) : null}
-    </>
   );
 }
 
@@ -489,6 +354,7 @@ function SettingsLocalAppStateSection() {
         }
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Clear local app state?"

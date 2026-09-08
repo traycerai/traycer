@@ -12,6 +12,7 @@
  * - only the I/O channels differ.
  */
 
+import type { DialPriority } from "./dial-priority";
 import type {
   WebSocketCloseEvent,
   WebSocketErrorEvent,
@@ -51,7 +52,11 @@ export interface StreamWebSocketLike {
  * Produces a fresh `StreamWebSocketLike` for a given URL. `WsStreamClient`
  * requests exactly one socket per connect attempt through this factory and
  * discards it on disconnect - no long-lived socket state crosses reconnects.
+ *
+ * `priority` carries the same meaning as on the unary `IWebSocketFactory`
+ * (`ws-factory.ts`): a session is bound to one subscription method for its
+ * lifetime, so it can classify every dial and redial it makes.
  */
 export interface IStreamWebSocketFactory {
-  create(url: string): StreamWebSocketLike;
+  create(url: string, priority: DialPriority): StreamWebSocketLike;
 }

@@ -25,6 +25,11 @@ import {
   type TabNavigationIntent,
 } from "@/lib/tab-navigation/intents";
 import { parseNestedFocusTargetFromSearch } from "@/lib/epic-nested-focus-route";
+import {
+  commitWithoutNavigation,
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
@@ -53,6 +58,7 @@ import {
 import type { TabRef } from "@/stores/tabs/types";
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export {
   completeEpicMigrationIntent,
@@ -102,7 +108,13 @@ export interface TabNavigationLocation {
   readonly search: Readonly<Record<string, unknown>> | undefined;
 }
 
-export type TabNavigationOptions = Pick<NavigateOptions, "replace" | "search">;
+export type TabNavigationOptions = Pick<
+  NavigateOptions,
+  "replace" | "search"
+> & {
+  /** Rejected before navigate runs, including a superseded hydration queue entry. */
+  readonly onRejected?: (error: Error) => void;
+};
 
 export interface TabNavigationDiagnostics {
   readonly pendingTokenCount: number;
@@ -572,10 +584,20 @@ export class TabNavigationController {
   ): boolean {
     this.navigator = navigate;
     if (!this.hydrationReady) {
+      const superseded = this.queuedActivation;
       this.queuedActivation = { navigate, intent, options };
+      superseded?.options?.onRejected?.(
+        new Error("Another task was opened before this task could open."),
+      );
       return true;
     }
-    return this.executeActivation(navigate, intent, options);
+    const accepted = this.executeActivation(navigate, intent, options);
+    if (!accepted) {
+      options?.onRejected?.(
+        new Error("The task could not be opened. Try again."),
+      );
+    }
+    return accepted;
   }
 
   /**
@@ -591,13 +613,26 @@ export class TabNavigationController {
     options: TabNavigationOptions | undefined,
   ): boolean {
     this.navigator = navigate;
-    if (!this.hydrationReady) return false;
+    if (!this.hydrationReady) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
+      return false;
+    }
     const layoutBefore = currentLayout();
     const focusedRef = command.focusedRef;
     const canonical = this.canonicalIntent(intent, focusedRef);
-    if (canonical === null) return false;
+    if (canonical === null) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
+      return false;
+    }
     const priorRef = backingRefOfLayout(layoutBefore);
     if (priorRef === null || !tabCommandCoordinator.pairTabs(command)) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
       return false;
     }
     const replace =
@@ -778,11 +813,16 @@ export class TabNavigationController {
     const queuedActivation = this.queuedActivation;
     this.queuedActivation = null;
     if (queuedActivation !== null) {
-      this.executeActivation(
+      const accepted = this.executeActivation(
         queuedActivation.navigate,
         queuedActivation.intent,
         queuedActivation.options,
       );
+      if (!accepted) {
+        queuedActivation.options?.onRejected?.(
+          new Error("The task could not be opened. Try again."),
+        );
+      }
     }
   }
 
@@ -1023,9 +1063,19 @@ export class TabNavigationController {
     if (preparation === null) return null;
     const canvas = useEpicCanvasStore.getState();
     if (preparation.kind === "open-tile") {
-      return preparation.preview
-        ? canvas.prepareOpenTilePreviewInTabFocusTarget(tabId, preparation.node)
-        : canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+      // `commitWithoutNavigation`: this target is folded into the tab
+      // navigation envelope being built here, so the open must not issue a
+      // route write of its own.
+      return openTileWithNavigation(
+        tileIntent(
+          preparation.node,
+          { tabId },
+          preparation.gesture,
+          "direct_ui",
+        ),
+        commitWithoutNavigation,
+        MANUAL_TILE_OPEN,
+      );
     }
     return canvas.prepareSetActiveTileTabFocusTarget(
       tabId,

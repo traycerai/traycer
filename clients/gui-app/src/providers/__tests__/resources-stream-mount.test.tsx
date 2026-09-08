@@ -8,6 +8,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 function installStubFactory(): void {
   __setResourcesStreamClientFactoryForTests(() => ({
     close: () => undefined,
+    setDemand: () => undefined,
   }));
 }
 

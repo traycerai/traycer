@@ -7,6 +7,7 @@ import {
 import {
   HostRpcError,
   type HostRequestAuthority,
+  type HostRequestOptions,
   RetryableTransportError,
   type IHostMessenger,
 } from "../host-messenger";
@@ -36,8 +37,26 @@ const testRegistry = defineVersionedRpcRegistry({
 
 function retryableError(): RetryableTransportError {
   return new RetryableTransportError({
+    replaySafetyFromKey: false,
     code: "RPC_ERROR",
     message: "WebSocket dial timed out after 10000ms",
+    requestId: "req",
+    method: "host.echo",
+    fatalDetails: null,
+  });
+}
+
+/**
+ * The other ground for the same class: a POST-SEND failure that is retryable
+ * only because the connection negotiated the idempotency key. Distinct from
+ * `retryableError`'s pre-dispatch ground in exactly the field the wrapper
+ * latches on.
+ */
+function keyEarnedRetryableError(): RetryableTransportError {
+  return new RetryableTransportError({
+    replaySafetyFromKey: true,
+    code: "RPC_ERROR",
+    message: "connection dropped after dispatch",
     requestId: "req",
     method: "host.echo",
     fatalDetails: null,
@@ -61,8 +80,11 @@ function fatalError(): HostRpcError {
 function fakeInner(outcomes: ReadonlyArray<HostRpcError>): {
   readonly messenger: IHostMessenger<typeof testRegistry>;
   calls: () => number;
+  /** `options.replayMustBeKeyed` as each attempt actually received it. */
+  replayRequirements: () => ReadonlyArray<boolean>;
 } {
   let call = 0;
+  const replayRequirements: boolean[] = [];
   // Written as a `vi.fn()` rather than a hand-rolled `request<Method>(…)`
   // method: the interface promises `ResponseOfMethod<Registry, Method>` for an
   // unresolved `Method`, which a concrete `{ echoed }` literal cannot satisfy
@@ -70,23 +92,34 @@ function fakeInner(outcomes: ReadonlyArray<HostRpcError>): {
   // type parameter). The mock stays loosely typed and assignable.
   const request = vi
     .fn()
-    .mockImplementation((method: string, params: { message: string }) => {
-      const index = call;
-      call += 1;
-      const outcome = outcomes[index];
-      if (outcome !== undefined) {
-        return Promise.reject(outcome);
-      }
-      void method;
-      return Promise.resolve({ echoed: params.message.toUpperCase() });
-    });
+    .mockImplementation(
+      (
+        method: string,
+        params: { message: string },
+        options: HostRequestOptions,
+      ) => {
+        const index = call;
+        call += 1;
+        replayRequirements.push(options.replayMustBeKeyed);
+        const outcome = outcomes[index];
+        if (outcome !== undefined) {
+          return Promise.reject(outcome);
+        }
+        void method;
+        return Promise.resolve({ echoed: params.message.toUpperCase() });
+      },
+    );
   const messenger: IHostMessenger<typeof testRegistry> = {
     request,
     // The retry wrapper drives both paths through the same `runWithRetries`,
     // so the long-poll variant shares this mock (and its call counter).
     requestWithResponseTimeout: request,
   };
-  return { messenger, calls: () => call };
+  return {
+    messenger,
+    calls: () => call,
+    replayRequirements: () => replayRequirements,
+  };
 }
 
 function makeRecordingPolicy(
@@ -131,7 +164,11 @@ describe("createRetryingMessenger", () => {
     const result = await createRetryingMessenger(messenger, policy).request(
       "host.echo",
       { message: "hi" },
-      authority(),
+      {
+        idempotencyKey: null,
+        authority: authority(),
+        replayMustBeKeyed: false,
+      },
     );
 
     expect(result).toEqual({ echoed: "HI" });
@@ -146,7 +183,11 @@ describe("createRetryingMessenger", () => {
     const result = await createRetryingMessenger(messenger, policy).request(
       "host.echo",
       { message: "hi" },
-      authority(),
+      {
+        idempotencyKey: null,
+        authority: authority(),
+        replayMustBeKeyed: false,
+      },
     );
 
     expect(result).toEqual({ echoed: "HI" });
@@ -169,7 +210,11 @@ describe("createRetryingMessenger", () => {
         {
           message: "hi",
         },
-        authority(),
+        {
+          idempotencyKey: null,
+          authority: authority(),
+          replayMustBeKeyed: false,
+        },
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
     expect(calls()).toBe(3);
@@ -186,7 +231,11 @@ describe("createRetryingMessenger", () => {
         {
           message: "hi",
         },
-        authority(),
+        {
+          idempotencyKey: null,
+          authority: authority(),
+          replayMustBeKeyed: false,
+        },
       ),
     ).rejects.toSatisfy(
       (error: unknown) =>
@@ -204,10 +253,66 @@ describe("createRetryingMessenger", () => {
       createRetryingMessenger(messenger, NO_RETRY_TRANSPORT_POLICY).request(
         "host.echo",
         { message: "hi" },
-        authority(),
+        {
+          idempotencyKey: null,
+          authority: authority(),
+          replayMustBeKeyed: false,
+        },
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
     expect(calls()).toBe(1);
+  });
+
+  it("latches the replay-must-be-keyed requirement once a key earns a retry, and a later pre-dispatch failure does not clear it", async () => {
+    // Three attempts, and the MIDDLE one is the discriminator. Attempt 2's
+    // failure is pre-dispatch (`replaySafetyFromKey: false`), so a wrapper that
+    // recomputed the requirement per attempt - rather than latching it - would
+    // hand attempt 3 a `false` and license exactly the unkeyed replay of a call
+    // that attempt 1 may already have committed. Two attempts could not tell
+    // the two implementations apart: both would report `[false, true]`.
+    const { messenger, calls, replayRequirements } = fakeInner([
+      keyEarnedRetryableError(),
+      retryableError(),
+    ]);
+    const { policy } = makeRecordingPolicy(2, 100, 1_000, () => 0.5);
+
+    const result = await createRetryingMessenger(messenger, policy).request(
+      "host.echo",
+      { message: "hi" },
+      {
+        idempotencyKey: "k-1",
+        authority: authority(),
+        replayMustBeKeyed: false,
+      },
+    );
+
+    expect(result).toEqual({ echoed: "HI" });
+    expect(calls()).toBe(3);
+    expect(replayRequirements()).toEqual([false, true, true]);
+  });
+
+  it("leaves the requirement off when every failure is pre-dispatch", async () => {
+    // The negative half of the pin above: `true` must be EARNED. Without this,
+    // an implementation that latched on any `RetryableTransportError` at all
+    // would pass the test above and quietly refuse legitimate first-send
+    // downgrades against hosts that predate the capability.
+    const { messenger, replayRequirements } = fakeInner([
+      retryableError(),
+      retryableError(),
+    ]);
+    const { policy } = makeRecordingPolicy(2, 100, 1_000, () => 0.5);
+
+    await createRetryingMessenger(messenger, policy).request(
+      "host.echo",
+      { message: "hi" },
+      {
+        idempotencyKey: "k-1",
+        authority: authority(),
+        replayMustBeKeyed: false,
+      },
+    );
+
+    expect(replayRequirements()).toEqual([false, false, false]);
   });
 
   it("backs off on the shared jittered schedule", async () => {
@@ -220,7 +325,11 @@ describe("createRetryingMessenger", () => {
       {
         message: "hi",
       },
-      authority(),
+      {
+        idempotencyKey: null,
+        authority: authority(),
+        replayMustBeKeyed: false,
+      },
     );
 
     expect(delays).toEqual([

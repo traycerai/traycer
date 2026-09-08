@@ -80,19 +80,6 @@ export interface AppLifecycleBridge {
     reply: FreshUnsyncedSnapshotResponse,
   ): Promise<void>;
   /**
-   * Main asks one renderer for a final browser capture before its desktop
-   * route goes away (quit, window close). The renderer's job is to refresh the
-   * durable primary-profile store, never to ship per-tab state: the host
-   * suspends the session to dormant on route loss and re-materializes it later
-   * from the durable tab URLs plus that store.
-   */
-  onCaptureFinalBrowserState(
-    handler: (request: { readonly requestId: string }) => void,
-  ): Disposable;
-  respondFinalBrowserStateCaptured(reply: {
-    readonly requestId: string;
-  }): Promise<void>;
-  /**
    * Every Epic holding work that can never sync, across ALL windows.
    *
    * On `appLifecycle` rather than on the app-update bridge because the fact is

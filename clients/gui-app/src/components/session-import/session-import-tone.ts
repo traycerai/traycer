@@ -5,7 +5,7 @@
  * Both grounds are the user's own theme - the tour's window renders the real
  * app the same way the diorama beside it does - so there is one colour bundle
  * rather than one per surface. The surface is still carried, because COPY
- * differs by it: "your tasks are in the list on the left" is a lie during the
+ * differs by it: "they're in your task list" is a lie during the
  * tour, where the task list is several acts away.
  *
  * The colours deliberately avoid `bg-muted` fills: on a raised surface

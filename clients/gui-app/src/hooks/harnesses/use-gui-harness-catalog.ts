@@ -3,6 +3,8 @@ import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import { useRefreshProvidersForClient } from "@/hooks/providers/use-refresh-providers";
 import { useHostBinding, useHostClient } from "@/lib/host";
 import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
@@ -522,10 +524,11 @@ const REFRESHABLE_CATALOG_METHODS = [
 
 /**
  * Returns a function that force-refreshes the harness catalog (availability +
- * model lists + commands) for the active host, bypassing the long catalog
- * cache. Wired to the picker's refresh button so users can re-fetch on demand
- * without waiting out the 15-min stale window - e.g. to pick up provider
- * enable/disable changes or an updated models.dev catalog. (It re-queries the
+ * model lists + commands) and the provider list for the active host, bypassing
+ * the long caches. Wired to the picker's refresh button so users can re-fetch
+ * on demand without waiting out the 15-min stale window - e.g. to pick up
+ * provider enable/disable changes, an updated models.dev catalog, or a
+ * credential they just configured in the provider's own store. (It re-queries the
  * existing provider servers; a brand-new shell API key exported after the
  * host started still needs a host restart, since the server's env is fixed
  * at spawn.)
@@ -555,6 +558,7 @@ export function useRefreshHarnessCatalogForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): () => Promise<HarnessCatalogRefreshOutcome> {
   const queryClient = useQueryClient();
+  const refreshProviders = useRefreshProvidersForClient(client);
   return useCallback(async () => {
     const hostId = client?.getActiveHostId() ?? null;
     if (hostId === null) {
@@ -570,18 +574,47 @@ export function useRefreshHarnessCatalogForClient(
         {},
       ),
     );
+    // The picker's auth line and its degraded-tab set read `providers.list`,
+    // which is otherwise held for fifteen minutes, and the catalog row's own
+    // `authStatus` cannot stand in for it: the host fills that field from a
+    // thirty-second cache and OMITS it once that expires. Nor is invalidating
+    // the list enough - a plain refetch serves the last-known verdict while
+    // the host re-probes in the background - so this is the FORCED refresh
+    // the Settings and banner refresh buttons use, committed under this
+    // host's classic key. Its failure is already toasted by the mutation and
+    // must not withhold the catalog refetch below.
+    const providersRefreshed = await refreshProviders().then(
+      () => true,
+      () => false,
+    );
     // `invalidateQueries` resolves once the refetches it triggers on active
     // queries settle, so awaiting all of them lets the caller drive a spinner
     // that reflects real refetch progress (not just fire-and-forget).
+    //
+    // The dedupe below is owed entirely to the commit ABOVE HAVING RUN: a
+    // successful `commitAuthoritativeProvidersList` invalidates every
+    // `PROVIDER_INVALIDATIONS` scope (`agent.gui.listHarnesses` among them),
+    // so invalidating those again here would restart refetches already in
+    // flight. A REJECTED forced request never reaches that commit and so
+    // invalidates nothing - and the harness row is where `enabled`,
+    // `available` and `authStatus` come from, the very fields the rail dims
+    // on. Deducting it unconditionally would return `refreshed` from a click
+    // that refetched neither the provider list nor the rail it feeds, over a
+    // provider-probe timeout that left the catalog endpoints perfectly
+    // usable. So the filter applies only on the success path; on failure this
+    // pass covers every refreshable method itself.
     await Promise.all(
-      REFRESHABLE_CATALOG_METHODS.map((method) =>
+      REFRESHABLE_CATALOG_METHODS.filter(
+        (method) =>
+          !providersRefreshed || !PROVIDER_INVALIDATIONS.includes(method),
+      ).map((method) =>
         queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(hostId, method),
         }),
       ),
     );
     return { kind: "refreshed" };
-  }, [client, queryClient]);
+  }, [client, queryClient, refreshProviders]);
 }
 
 function guiHarnessCommandsQueryParams(

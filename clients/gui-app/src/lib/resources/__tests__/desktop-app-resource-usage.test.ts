@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   desktopAppResourceUsageFromMetrics,
+  describeDesktopJsHeapIsolate,
   getDesktopDiagnosticsBridge,
+  getDesktopJsHeapBridge,
+  type DesktopJsHeapIsolate,
   type DesktopProcessMetricsSnapshot,
 } from "@/lib/resources/desktop-app-resource-usage";
 
@@ -132,5 +135,90 @@ describe("desktopAppResourceUsageFromMetrics", () => {
     expect(usage.cpuPercent).toBe(0);
     expect(usage.rssBytes).toBe(0);
     expect(usage.processCount).toBe(1);
+  });
+});
+
+describe("getDesktopJsHeapBridge", () => {
+  it("returns null when runnerHost is missing", () => {
+    expect(getDesktopJsHeapBridge()).toBeNull();
+  });
+
+  it("returns null when measureJsHeaps is absent", () => {
+    setRunnerHost({ platform: { diagnostics: {} } });
+
+    expect(getDesktopJsHeapBridge()).toBeNull();
+  });
+
+  it("returns the bridge when measureJsHeaps is present", () => {
+    const measureJsHeaps = vi.fn(() => Promise.resolve(null));
+    setRunnerHost({
+      platform: {
+        diagnostics: {
+          measureJsHeaps,
+        },
+      },
+    });
+
+    expect(getDesktopJsHeapBridge()).toEqual({ measureJsHeaps });
+  });
+});
+
+describe("describeDesktopJsHeapIsolate", () => {
+  function isolate(kind: "page" | "worker", url: string): DesktopJsHeapIsolate {
+    return {
+      kind,
+      url,
+      usedBytes: 0,
+      totalBytes: 0,
+      embedderBytes: null,
+      backingStorageBytes: null,
+    };
+  }
+
+  it("labels the page isolate as This window regardless of its URL", () => {
+    expect(
+      describeDesktopJsHeapIsolate(
+        isolate("page", "app://renderer/index.html"),
+      ),
+    ).toBe("This window");
+  });
+
+  it("labels an epic-runtime-worker chunk as Epic runtime worker", () => {
+    expect(
+      describeDesktopJsHeapIsolate(
+        isolate(
+          "worker",
+          "app://renderer/assets/epic-runtime-worker-entry-BKyjY2bC.js",
+        ),
+      ),
+    ).toBe("Epic runtime worker");
+  });
+
+  it("labels a pdf.worker chunk as PDF worker", () => {
+    expect(
+      describeDesktopJsHeapIsolate(
+        isolate("worker", "app://renderer/assets/pdf.worker.min-abc123.mjs"),
+      ),
+    ).toBe("PDF worker");
+  });
+
+  it("labels a bare worker- chunk as Diff highlighter worker", () => {
+    expect(
+      describeDesktopJsHeapIsolate(
+        isolate("worker", "app://renderer/assets/worker-DMI2JaPh.js"),
+      ),
+    ).toBe("Diff highlighter worker");
+  });
+
+  it("falls back to a generic Worker (<file>) label for an unrecognized chunk", () => {
+    expect(
+      describeDesktopJsHeapIsolate(
+        isolate("worker", "app://renderer/assets/mystery-chunk-xyz.js"),
+      ),
+    ).toBe("Worker (mystery-chunk-xyz.js)");
+  });
+
+  it("falls back to bare Worker when the URL has no file part", () => {
+    expect(describeDesktopJsHeapIsolate(isolate("worker", ""))).toBe("Worker");
   });
 });

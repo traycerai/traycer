@@ -1,13 +1,27 @@
 import type { MouseEvent, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { GitChangedFileV11 } from "@traycer/protocol/host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
+import {
+  requestSidebarNodeReveal,
+  useSidebarNodeRevealStore,
+} from "@/stores/epics/sidebar-node-reveal-store";
 import { FileTree as GitDiffFileTree } from "../file-tree";
 
 const testState = vi.hoisted(() => ({
   treePath: "src/app.ts",
+  activeFilePath: null as string | null,
+  scrollToPath: vi.fn(),
   navigateNested: vi.fn(
     (
       _epicId: string,
@@ -45,8 +59,8 @@ vi.mock("../git-diff-section", () => ({
 }));
 
 vi.mock("../use-git-panel-active-file", () => ({
-  gitPanelActiveFilePathForGroup: () => null,
-  useGitPanelActiveFile: () => null,
+  gitPanelActiveFilePathForGroup: () => testState.activeFilePath,
+  useGitPanelActiveFile: () => testState.activeFilePath,
   useGitPanelRevealSection: () => undefined,
 }));
 
@@ -57,7 +71,8 @@ vi.mock("../use-git-pierre-file-tree-model", () => ({
       getSelectedPaths: () => [],
       getItem: () => null,
       getItemHeight: () => 24,
-      scrollToPath: () => undefined,
+      scrollToPath: testState.scrollToPath,
+      getFileTreeContainer: () => document.createElement("div"),
     },
     paths: files.map((file) => file.path),
     rowDirectoryPaths: ["src"],
@@ -121,6 +136,12 @@ describe("<FileTree /> nested focus navigation", () => {
     cleanup();
     resetCanvas();
     testState.navigateNested.mockClear();
+    testState.activeFilePath = null;
+    testState.scrollToPath.mockClear();
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
   });
 
   it("routes tree-row preview through nested focus navigation", () => {
@@ -147,6 +168,32 @@ describe("<FileTree /> nested focus navigation", () => {
       tabId,
       expect.any(Function),
     );
+  });
+
+  it("scrolls again when revealing the already-active diff row", async () => {
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    const file = changedFile();
+    testState.activeFilePath = file.path;
+    renderTree(tabId);
+    testState.scrollToPath.mockClear();
+
+    act(() => {
+      requestSidebarNodeReveal(
+        tabId,
+        makeGitFileDiffTileForFile({
+          hostId: "host-1",
+          runningDir: "/repo",
+          file,
+          repositoryContext: null,
+        }).id,
+      );
+    });
+
+    await waitFor(() => {
+      expect(testState.scrollToPath).toHaveBeenCalledWith(file.path, {
+        offset: "nearest",
+      });
+    });
   });
 
   /**

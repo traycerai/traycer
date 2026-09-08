@@ -21,6 +21,7 @@ import {
   runWithFleetReadSlot,
 } from "@/lib/host/fleet-update/fleet-read-gate";
 import { FLEET_MAX_CONCURRENT_READS } from "@/lib/host/fleet-update/fleet-poll-policy";
+import { isRecordObservation } from "@/lib/host/fleet-update/fleet-update-view";
 
 // G10(a): `observationFromStatus` builds a PROVISIONAL observation with a
 // synthetic `freshUntilMs: Number.POSITIVE_INFINITY` so the projection it
@@ -113,6 +114,7 @@ describe("observationFromStatus — the synthetic placeholder never escapes", ()
       hostId: "host-a",
       status: status(operation),
       nowMs: NOW_MS,
+      legacyFacts: null,
     });
     expect(Number.isFinite(observation.freshUntilMs)).toBe(true);
     expect(observation.freshUntilMs).not.toBe(Number.POSITIVE_INFINITY);
@@ -124,8 +126,41 @@ describe("observationFromStatus — the synthetic placeholder never escapes", ()
       hostId: "host-a",
       status: status(attemptOperation({})),
       nowMs: NOW_MS,
+      legacyFacts: null,
     });
     expect(observation.source).toBe("borrowed");
+  });
+});
+
+// The two-state `updateProgress` marker is the only signal the shipped legacy
+// `traycer host update` path emits, and it must ride along beside the
+// (possibly absent) schema-v2 attempt record rather than being dropped at this
+// stamping boundary — see `FleetUpdateWireObservation.coarseProgress`'s doc.
+describe("observationFromStatus — carries the coarse updateProgress marker through", () => {
+  it("carries `updateProgress: null` through as `coarseProgress: null`", () => {
+    const observation = observationFromStatus({
+      hostId: "host-a",
+      status: { ...status({ kind: "none" }), updateProgress: null },
+      nowMs: NOW_MS,
+      legacyFacts: null,
+    });
+    expect(observation.coarseProgress).toBeNull();
+  });
+
+  it("carries a non-null `updateProgress` through untouched, equal to what the wire reported", () => {
+    const observation = observationFromStatus({
+      hostId: "host-a",
+      status: {
+        ...status({ kind: "none" }),
+        updateProgress: { state: "updating", error: null },
+      },
+      nowMs: NOW_MS,
+      legacyFacts: null,
+    });
+    expect(observation.coarseProgress).toEqual({
+      state: "updating",
+      error: null,
+    });
   });
 });
 
@@ -159,6 +194,9 @@ function readySession(): FakeSession {
     }) as FakeSession["sendUnary"],
     forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    subscribeAtVersion: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),
     subscribeWithParamsProvider: vi.fn(() => {
@@ -315,5 +353,55 @@ describe("readUpdateStatusOverBorrowedSession — actually enters the fleet read
     });
     await Promise.all(holderRuns);
     owner.close();
+  });
+});
+
+// `readUpdateStatusOverBorrowedSession` never has an installation read beside
+// its `host.status` round trip - it is one RPC and nothing more (module doc).
+// `legacyFacts: null` there means "not observed", never "no park", and it is
+// what keeps a borrowed row from claiming a park it never checked for.
+describe("readUpdateStatusOverBorrowedSession — never derives legacyFacts", () => {
+  it("the returned observation carries legacyFacts: null", async () => {
+    const hostId = "host-no-legacy-facts";
+    const session = readySession();
+    const owner = acquireRemoteSession(
+      remoteIdentity(hostId),
+      BORROW_READ_POLICY,
+      () => session,
+    );
+
+    const observation = await readUpdateStatusOverBorrowedSession({
+      hostId,
+      now: () => Date.now(),
+      abortSignal: null,
+    });
+
+    expect(observation).not.toBeNull();
+    if (observation === null || isRecordObservation(observation)) {
+      throw new Error("expected a wire observation");
+    }
+    expect(observation.legacyFacts).toBeNull();
+
+    owner.close();
+  });
+});
+
+// `observationFromStatus` copies whatever `legacyFacts` its caller hands it
+// onto the returned observation verbatim - it never derives or mutates the
+// value itself, so the LOCAL/SELECTED legs (which DO have an installation
+// read) get exactly what they computed.
+describe("observationFromStatus — copies the caller's legacyFacts through verbatim", () => {
+  it("carries a non-null legacyFacts value through unchanged", () => {
+    const facts = {
+      activationDebt: { installedVersion: "1.3.0-rc.3" },
+      stagedWait: null,
+    };
+    const observation = observationFromStatus({
+      hostId: "host-a",
+      status: status({ kind: "none" }),
+      nowMs: NOW_MS,
+      legacyFacts: facts,
+    });
+    expect(observation.legacyFacts).toEqual(facts);
   });
 });

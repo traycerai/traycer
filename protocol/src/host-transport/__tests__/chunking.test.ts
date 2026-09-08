@@ -644,3 +644,44 @@ describe("body compression round-trip (T5)", () => {
     });
   });
 });
+
+/**
+ * H11: `maxMessageBytes` bounds one message on one stream, so the aggregate a
+ * peer can hold is that bound times the number of streams it opens. The
+ * receiver charges the peer for the sum; this is the number it reads.
+ */
+describe("ChunkReassembler.retainedBytes", () => {
+  function startChunk(streamId: number, length: number): MuxFrame {
+    return decodeMuxFrame(
+      encodeMuxFrame({
+        type: MuxFrameType.STREAM_FRAME,
+        streamId,
+        seq: 0,
+        qos: QosClass.BULK,
+        chunked: true,
+        chunkFirst: true,
+        chunkLast: false,
+        compressed: false,
+        json: null,
+        binary: new Uint8Array(length),
+      }),
+    );
+  }
+
+  it("sums every in-flight accumulator and drops what a stream releases", () => {
+    const reassembler = new ChunkReassembler(undefined);
+    expect(reassembler.retainedBytes).toBe(0);
+
+    expect(reassembler.accept(startChunk(1, 100))).toBeNull();
+    expect(reassembler.accept(startChunk(2, 250))).toBeNull();
+    expect(reassembler.retainedBytes).toBe(350);
+    expect(reassembler.pendingStreamCount).toBe(2);
+
+    reassembler.forget(1);
+    expect(reassembler.retainedBytes).toBe(250);
+
+    reassembler.reset();
+    expect(reassembler.retainedBytes).toBe(0);
+    expect(reassembler.pendingStreamCount).toBe(0);
+  });
+});

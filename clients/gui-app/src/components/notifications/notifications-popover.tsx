@@ -530,6 +530,7 @@ export function NotificationsPopover(
         ) : null}
       </div>
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={clearAllConfirmOpen}
         onOpenChange={setClearAllConfirmOpen}
         title="Clear all notifications?"
@@ -665,7 +666,7 @@ function NotificationsPopoverHeader({
   subtitle,
 }: NotificationsPopoverHeaderProps): ReactNode {
   return (
-    <header className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-popover px-4 pt-3 pb-2.5">
+    <header className="flex shrink-0 flex-col gap-2 border-b border-border/60 px-4 pt-3 pb-2.5">
       <div className="flex min-w-0 items-center justify-between gap-2">
         <h2
           ref={headingRef}

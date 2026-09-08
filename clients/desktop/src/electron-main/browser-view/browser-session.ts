@@ -7,13 +7,18 @@ import {
 } from "electron";
 import { randomUUID } from "node:crypto";
 import type { BrowserViewDownloadState } from "@traycer-clients/shared/platform/browser-view";
-import type { BrowserPrimaryProfileDelta } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserCookieKey,
+  BrowserPrimaryProfileDelta,
+} from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../app/logger";
+import { confirmDestructiveInMainSync } from "../app/confirm-destructive";
 import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
 } from "../app/cert-trust";
 import { isBrowserSavedLoginsEnabled } from "./storage/browser-saved-logins";
+import { releaseHeadlessOriginCookieKeys } from "./storage/browser-forget-ledger";
 import {
   BrowserCookieChangeObserver,
   BROWSER_COOKIE_DELTA_WINDOW_MS,
@@ -60,6 +65,16 @@ type BrowserDisplayMediaRequestHandler = (
   callback: (streams: object) => void,
 ) => void;
 
+interface BrowserViewBeforeRequestDetails {
+  readonly url: string;
+  readonly webContentsId?: number;
+}
+
+type BrowserViewBeforeRequestListener = (
+  details: BrowserViewBeforeRequestDetails,
+  callback: (response: { readonly cancel?: boolean }) => void,
+) => void;
+
 interface BrowserViewPolicySession {
   setPermissionRequestHandler(
     handler: BrowserPermissionRequestHandler | null,
@@ -85,6 +100,9 @@ interface BrowserViewPolicySession {
     handler: BrowserDisplayMediaRequestHandler | null,
   ): void;
   on(event: "will-download", listener: BrowserDownloadListener): void;
+  readonly webRequest: {
+    onBeforeRequest(listener: BrowserViewBeforeRequestListener): void;
+  };
 }
 
 interface BrowserViewTrackedWebContents {
@@ -156,6 +174,13 @@ const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
 
 const installedPolicySessions = new WeakSet<BrowserViewPolicySession>();
 const browserWebContentsIds = new Set<number>();
+/**
+ * Exact webview guests whose non-`about:blank` requests stay cancelled until
+ * main finishes policy/seed/CDP. One process set; each session policy installs
+ * the same `onBeforeRequest` listener once.
+ */
+const gatedGuestWebContentsIds = new Set<number>();
+const BLANK_GUEST_REQUEST_URL = "about:blank";
 const browserDownloadListeners = new Set<
   (change: BrowserSessionDownloadChange) => void
 >();
@@ -189,6 +214,35 @@ export function ensureBrowserViewSession(
   );
 }
 
+/**
+ * A plain desktop Chrome User-Agent for guest partitions, carrying NO
+ * `Electron/<ver>` token and NO Traycer product token - exactly the shape a
+ * real Chrome sends. Guests are browser tabs, and providers (Google's
+ * `disallowed_useragent`, others) refuse sign-in for any UA containing
+ * "Electron", which broke OAuth completing inside a guest/popup. The Chrome
+ * version tracks the runtime; the platform token is the standard per-OS string
+ * a real Chrome reports (macOS reports Intel even on Apple Silicon, matching
+ * Chrome). Traycer's own host/renderer comms keep their branded UA via
+ * `configureUserAgent()` on the default session.
+ *
+ * Guests get this clean UA too, but not via a session-level `setUserAgent`
+ * call here: guest partition sessions are never the default session, so with
+ * no explicit session UA they fall through to `app.userAgentFallback`, which
+ * `configureUserAgent()` sets to this same value. That one lever covers both
+ * guests and their popups (popups share the opener's partition session) -
+ * exported for `configureUserAgent()` to consume.
+ */
+export function guestBrowserUserAgent(): string {
+  const platformToken = guestBrowserPlatformToken();
+  return `Mozilla/5.0 (${platformToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
+}
+
+function guestBrowserPlatformToken(): string {
+  if (process.platform === "darwin") return "Macintosh; Intel Mac OS X 10_15_7";
+  if (process.platform === "win32") return "Windows NT 10.0; Win64; x64";
+  return "X11; Linux x86_64";
+}
+
 /** The named jar, bypassing the saved-logins pref. */
 export function ensureBrowserViewSessionForPartition(
   partition: string,
@@ -206,6 +260,10 @@ export function ensureBrowserViewSessionForPartition(
  * Cookie deltas come from the durable `primary` jar and nowhere else: the
  * ephemeral jar's logins are gone at quit, and an isolated partition shares
  * nothing by construction (spec §6.1).
+ *
+ * This runs on the FIRST materialization of that partition, not at app start:
+ * the observer's startup grace window is therefore anchored to the user's
+ * first browser tile of the run. See `attach()` for what that costs.
  */
 function observePrimaryProfileCookieChanges(
   partition: string,
@@ -220,7 +278,14 @@ function observePrimaryProfileCookieChanges(
       browserCookieDeltaListeners.forEach((listener) => listener(delta));
     },
     now: () => Date.now(),
+    monotonicNow: () => performance.now(),
     coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+    // The handler is synchronous, so the promise cannot be awaited here. It
+    // is not dropped work: the transfer is in memory the moment the call
+    // returns, the file write behind it is queued on the ledger's own write
+    // chain, and a failure to reach disk is warned about there rather than
+    // rejecting into nothing.
+    onLocalCookieWrite: (key) => void releaseHeadlessOriginCookieKeys([key]),
   });
   observer.attach();
   primaryCookieObserver = observer;
@@ -241,28 +306,48 @@ export function onBrowserPrimaryProfileDelta(
 }
 
 /**
- * Runs a deliberate local change to one site's cookies without it echoing back
- * to the host as a delta (ticket 07's "clear cookies for this site").
- */
-export async function suppressBrowserPrimaryProfileDelta<T>(
-  domain: string,
-  action: () => Promise<T>,
-): Promise<T> {
-  if (primaryCookieObserver === null) return await action();
-  return await primaryCookieObserver.suppress(domain, action);
-}
-
-/**
- * The same, for a change that spans the whole jar: ticket 08's "forget all
- * browser logins". A `clearStorageData()` fires a removal for every cookie
- * there is, and those deltas would reach the host after it had already shredded
- * the slice - re-creating an entry for the identity just forgotten.
+ * Runs a deliberate whole-jar change without it echoing back to the host as a
+ * delta: ticket 08's "forget all browser logins". A `clearStorageData()` fires
+ * a removal for every cookie there is, and those deltas would reach the host
+ * after it had already shredded the slice - re-creating an entry for the
+ * identity just forgotten.
+ *
+ * The whole jar is the only granularity this comes in. A per-domain form
+ * existed for the host-driven evict, which universal-sign-in ticket 08 retired
+ * along with the frame that drove it; the local "clear cookies for this site"
+ * deliberately does NOT suppress, because its removals are exactly the delta
+ * that tells the host the slice is empty.
  */
 export async function suppressAllBrowserPrimaryProfileDeltas<T>(
   action: () => Promise<T>,
 ): Promise<T> {
   if (primaryCookieObserver === null) return await action();
   return await primaryCookieObserver.suppressAll(action);
+}
+
+/**
+ * The observed-sign-in applier is about to write these keys into the DURABLE
+ * jar (universal-sign-in ticket 08). Their insert events belong to the
+ * applier, not to this machine's browsing, so the observer must not read them
+ * as the desktop taking the key back.
+ *
+ * A no-op when that jar has never been materialised this run - there is no
+ * observer, and therefore no insert to attribute either way. The applier never
+ * calls this for a write bound for the ephemeral jar: that jar is watched by
+ * nobody, and marking keys on the durable observer would make it miss a local
+ * write there.
+ */
+export function noteBrowserPrimaryProfileAppliedKeys(
+  keys: readonly BrowserCookieKey[],
+): void {
+  primaryCookieObserver?.noteAppliedKeys(keys);
+}
+
+/** The jar refused those writes, so the marks will never be answered. */
+export function forgetBrowserPrimaryProfileAppliedKeys(
+  keys: readonly BrowserCookieKey[],
+): void {
+  primaryCookieObserver?.forgetAppliedKeys(keys);
 }
 
 export function createBrowserViewWebPreferences(
@@ -350,9 +435,34 @@ function installBrowserViewSessionPolicy(
   target.setDisplayMediaRequestHandler((_request, callback) => {
     callback({});
   });
+  target.webRequest.onBeforeRequest((details, callback) => {
+    const webContentsId = details.webContentsId;
+    if (
+      webContentsId !== undefined &&
+      gatedGuestWebContentsIds.has(webContentsId) &&
+      details.url !== BLANK_GUEST_REQUEST_URL
+    ) {
+      callback({ cancel: true });
+      return;
+    }
+    callback({});
+  });
   target.on("will-download", (_event, item, webContents) => {
     handleBrowserViewDownload(item, webContents);
   });
+}
+
+/**
+ * Cancel this guest's non-`about:blank` requests until the disposer runs.
+ * Called once for each guest birth; the returned disposer is idempotent.
+ */
+export function gateBrowserViewGuestRequests(
+  webContentsId: number,
+): () => void {
+  gatedGuestWebContentsIds.add(webContentsId);
+  return () => {
+    gatedGuestWebContentsIds.delete(webContentsId);
+  };
 }
 
 function isBrowserPermissionAllowed(permission: string): boolean {
@@ -476,7 +586,12 @@ function handleBrowserViewDownload(
 
   if (
     dangerType !== null &&
-    !confirmDangerousDownload(filename, dangerType, item.getURL())
+    !confirmDestructiveInMainSync({
+      title: "Confirm download",
+      message: `Save ${filename}?`,
+      detail: `${dangerType} files can run code on your machine.\n\nSource: ${item.getURL()}`,
+      confirmLabel: "Save anyway",
+    })
   ) {
     item.cancel();
     emitBrowserDownloadChange(item, webContents, {
@@ -598,24 +713,6 @@ function terminalDownloadState(state: string): BrowserViewDownloadState {
   if (state === "completed") return "completed";
   if (state === "cancelled") return "cancelled";
   return "interrupted";
-}
-
-function confirmDangerousDownload(
-  filename: string,
-  dangerType: string,
-  url: string,
-): boolean {
-  const response = dialog.showMessageBoxSync({
-    type: "warning",
-    buttons: ["Cancel", "Save anyway"],
-    defaultId: 0,
-    cancelId: 0,
-    title: "Confirm download",
-    message: `Save ${filename}?`,
-    detail: `${dangerType} files can run code on your machine.\n\nSource: ${url}`,
-    noLink: true,
-  });
-  return response === 1;
 }
 
 function dangerousDownloadType(filename: string): string | null {

@@ -3,20 +3,33 @@ import {
   parseChordString,
   type ChordParts,
 } from "@traycer-clients/shared/keybindings/chord-core";
+import type { BrowserViewReservedChord } from "@traycer-clients/shared/platform/browser-view";
+import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { log } from "../../app/logger";
-import type { BrowserViewEntry } from "./browser-view-entry";
+import {
+  toTileKey,
+  type BrowserViewEntry,
+  type BrowserViewSend,
+} from "./browser-view-entry";
 import type {
   BrowserViewInputModifier,
   BrowserViewWindow,
 } from "../browser-view-port";
 
 /**
- * Reserved-chord handling (BT-301/302). The renderer registers canonical
- * `ChordString` tokens through the preload bridge; the chord vocabulary and
- * its parser are owned by `@traycer-clients/shared/keybindings/chord-core` -
- * this module only adds the two things Electron main needs on top: turning a
- * guest `before-input-event` into chord parts, and turning a matched chord's
- * key back into a `sendInputEvent` keyCode.
+ * Reserved-chord handling (BT-301/302). The renderer registers the whole
+ * guest-focused input policy through the preload bridge - which chords outrank
+ * the page, and what each one means. The chord vocabulary and its parser are
+ * owned by `@traycer-clients/shared/keybindings/chord-core`; this module adds
+ * what Electron main needs on top: turning a guest `before-input-event` into
+ * chord parts, and acting on a match.
+ *
+ * A matched chord goes one of two ways, and the renderer's table decides
+ * which. `command: null` is APP-FORWARDED: the key is replayed into the host
+ * renderer so the app's own keybinding runs as if the guest never had focus.
+ * A named command is BROWSER-SCOPED: the renderer is told to run it against
+ * the focused tile's session tab. Either way the guest never sees the key and
+ * the menu accelerator never fires, because the caller preventDefaults.
  *
  * Modifier semantics: on macOS `mod` is Command (Meta) and Control is a
  * DISTINCT modifier carried in `ctrl`; everywhere else `mod` IS Control, so a
@@ -36,6 +49,8 @@ export interface BrowserViewKeyInput {
   readonly meta: boolean;
   readonly shift: boolean;
   readonly alt: boolean;
+  /** Held-key repeat. A reserved chord is a COMMAND, so it fires once. */
+  readonly isAutoRepeat: boolean;
 }
 
 export function hostPlatformFromProcessPlatform(
@@ -135,48 +150,72 @@ function chordsEqual(a: ChordParts, b: ChordParts): boolean {
   );
 }
 
+/** A registered policy row, resolved for this platform. */
+export interface MatchedReservedChord extends ChordParts {
+  readonly command: BrowserViewReservedChord["command"];
+}
+
 interface BrowserViewChordsOptions {
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   /** Platform used to resolve reserved chords (BT-301). */
   readonly hostPlatform: HostPlatform;
+  readonly send: BrowserViewSend;
 }
 
 /**
- * BT-302: reserved app chords win before the guest sees them. The chord set
- * is registered by the renderer; only interceptable+forwardable chords are
- * claimed, so pages keep everything the app cannot replay.
+ * BT-302: reserved chords win before the guest sees them. The policy table is
+ * registered by the renderer; only interceptable chords are claimed, so pages
+ * keep everything the app cannot act on.
  */
 export class BrowserViewChords {
   private readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   private readonly hostPlatform: HostPlatform;
-  private chords: readonly ChordParts[] = [];
+  private readonly send: BrowserViewSend;
+  private chords: readonly MatchedReservedChord[] = [];
 
   constructor(options: BrowserViewChordsOptions) {
     this.getWindow = options.getWindow;
     this.hostPlatform = options.hostPlatform;
+    this.send = options.send;
   }
 
-  /** BT-303 wire-in: replace the registered chord set at runtime. */
-  setTokens(tokens: readonly string[]): void {
-    const parsed: ChordParts[] = [];
-    for (const token of tokens) {
+  /** BT-303 wire-in: replace the registered policy table at runtime. */
+  setReservedChords(reserved: readonly BrowserViewReservedChord[]): void {
+    const parsed: MatchedReservedChord[] = [];
+    for (const { token, command } of reserved) {
       if (!isValidChordString(token)) continue;
       const base = parseChordString(token);
       if (base === null) continue;
       // Unmodified chords would swallow ordinary typing inside the page.
       if (!base.mod && !base.ctrl && !base.shift && !base.alt) continue;
-      // Only claim chords we can actually replay to the host window.
-      if (hostSendKeyCodeForToken(base.key) === null) continue;
-      parsed.push(resolveChordForPlatform(base, this.hostPlatform));
+      // App-forwarded chords are claimed only if they can be replayed; a
+      // browser-scoped one never travels as a keystroke, so it has no such
+      // requirement.
+      if (command === null && hostSendKeyCodeForToken(base.key) === null) {
+        continue;
+      }
+      parsed.push({
+        ...resolveChordForPlatform(base, this.hostPlatform),
+        command,
+      });
     }
     this.chords = parsed;
     log.info("[browser-view] reserved chords updated", {
       count: parsed.length,
-      tokens,
+      tokens: reserved.map((entry) => entry.token),
     });
   }
 
-  match(input: BrowserViewKeyInput): ChordParts | null {
+  /**
+   * Matching deliberately ignores `isAutoRepeat`: a repeat of a reserved chord
+   * still has to be CLAIMED, or it reaches the focus-blind menu accelerator
+   * this policy exists to displace (holding Cmd+W would close the app tab
+   * while the browser tab's asynchronous close is still pending). Whether a
+   * repeat also DISPATCHES is the seam's call - see
+   * `handleBeforeInputEvent`, which suppresses it because every reserved
+   * chord is one-shot.
+   */
+  match(input: BrowserViewKeyInput): MatchedReservedChord | null {
     if (this.chords.length === 0) return null;
     const event = chordFromKeyEvent(input, this.hostPlatform);
     if (event === null) return null;
@@ -184,18 +223,31 @@ export class BrowserViewChords {
   }
 
   /**
-   * Replay a matched chord into the owning window's host renderer so its own
-   * keybindings fire as if the guest never had focus. Unforwardable chords
-   * are never matched in the first place (see `setTokens`'s keyCode gate).
+   * Act on a matched chord: replay an app-forwarded one into the host renderer
+   * so its own keybindings fire, or name a browser-scoped command to the
+   * renderer so it runs against this tile's session tab.
    */
-  forwardToHostWindow(entry: BrowserViewEntry, chord: ChordParts): void {
-    const keyCode = hostSendKeyCodeForToken(chord.key);
-    if (keyCode === null) return;
-    const surface = entry.surface;
+  dispatch(
+    surface: BrowserViewEntry["surface"],
+    chord: MatchedReservedChord,
+  ): void {
     if (surface === null) return;
     const window = this.getWindow(surface.windowId);
     const hostWebContents =
       window === null || window.isDestroyed() ? null : window.webContents;
+    if (chord.command !== null) {
+      // The guest owns OS keyboard focus. Anything that hands the user a
+      // caret in the host chrome has to take that focus first, or they type
+      // into the page while the field looks focused.
+      if (chord.command === "focusAddressBar") hostWebContents?.focus();
+      this.send(surface.windowId, RunnerHostEvent.browserViewTileCommand, {
+        ...toTileKey(surface),
+        command: chord.command,
+      });
+      return;
+    }
+    const keyCode = hostSendKeyCodeForToken(chord.key);
+    if (keyCode === null) return;
     if (hostWebContents === null) return;
     const modifiers: BrowserViewInputModifier[] = [];
     if (chord.mod)

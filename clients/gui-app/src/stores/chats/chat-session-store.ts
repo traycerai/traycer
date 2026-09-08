@@ -27,6 +27,13 @@ import {
   removeOptimisticQueuedItemByClientActionId,
   removeOptimisticQueuedItemByMessageId,
 } from "@/stores/chats/optimistic-queue";
+import {
+  BUDGET_PLANE_IDS,
+  createGenerationGuard,
+  guardHandler,
+  type GenerationGuard,
+  type RuntimeEnvironment,
+} from "@traycer-clients/shared/replica-runtime";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TRANSCRIPT_RANGE_MAX_BYTES } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
@@ -58,14 +65,28 @@ import {
   isTailHydrated,
   mapWindowMessages,
   planTranscriptHydration,
+  activeTurnOrdinalsOf,
+  rangeRecordsInstalled,
+  rangeSeatsActiveTurn,
   recordSharingOrdinals,
+  refreshSeatedRows,
   streamWindowMessage,
   touchTranscriptRange,
+  transcriptWindowChargedBytes,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
+import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import {
+  chatHolderId,
+  chatSessionChargeBytes,
+  chatWholeSetSliceBytes,
+  evictChatWindowForAccountant,
+  legacyTranscriptResidencyBytes,
+  type ChatWholeSetSlices,
+} from "@/stores/replica-memory/chat-window-budget";
 import type {
   StreamFlushCoordinator,
   StreamFlushLease,
@@ -95,10 +116,15 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import { appLogger } from "@/lib/logger";
 import type {
   ChatStreamCallbacks,
   ChatStreamClient,
 } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import {
+  createLegacyChatTranscriptAdapter,
+  type LegacyChatTranscriptSnapshotEvent,
+} from "@/stores/chats/legacy-chat-transcript-adapter";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
@@ -350,6 +376,17 @@ export interface PendingChatAction {
    */
   readonly restoreWorktreeIntent: WorktreeIntent | null;
   /**
+   * Render-only copy of the consumed worktree choice. Unlike the restore copy,
+   * this is retired once the host records the message, so retained action
+   * bookkeeping cannot mask a newer binding after transcript-window eviction.
+   */
+  readonly displayWorktreeIntent: WorktreeIntent | null;
+  /**
+   * A live `messageAccepted` sighting retained across transcript-window
+   * eviction until the action ack copies it to `AcceptedChatAction`.
+   */
+  readonly messageConfirmedByHost: boolean;
+  /**
    * Staging revision immediately after the send consumes its selection. A
    * rejection restores only when the user has made no newer picker choice.
    */
@@ -495,6 +532,8 @@ export interface AcceptedChatAction {
   readonly accountContext: AccountContext | null;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
   readonly restoreWorktreeIntent: WorktreeIntent | null;
+  /** See {@link PendingChatAction.displayWorktreeIntent}. */
+  readonly displayWorktreeIntent: WorktreeIntent | null;
   /**
    * The connection this send was DISPATCHED on, carried across the accepted
    * ack. Absence from a snapshot is only evidence against an earlier
@@ -1138,6 +1177,11 @@ export interface ChatSessionStoreOptions {
   readonly epicId: string;
   readonly chatId: string;
   readonly userId: string | null;
+  /**
+   * Injected so this factory never touches `window`. Production passes
+   * `createRendererRuntimeEnvironment()`; tests pass a fake.
+   */
+  readonly environment: RuntimeEnvironment;
   readonly streamClientFactory: ChatStreamClientFactory;
   /**
    * Decides when buffered `blockDelta` batches are folded into the store. A
@@ -1273,6 +1317,38 @@ export const STREAM_COMPLETION_TIMEOUT_MS = 45_000;
  * degrades to the status quo instead of to something worse.
  */
 export const MAX_WATCHDOG_RESTREAMS_PER_EPOCH = 3;
+
+/**
+ * How many catch-ups one provisionally seated body may ask for.
+ *
+ * A catch-up is answered with a slice, and a slice taken while the turn is still
+ * writing can be overtaken before it lands: the client then holds a body with
+ * the later writes and the answer carries the earlier one, and no merge of the
+ * two is sound. Asking again is the repair - the next slice is taken later - but
+ * a stream that keeps overtaking would make that a request per round trip for
+ * the length of the turn. Past the cap the client keeps what it has and stops
+ * asking; the turn's completion rebase re-seats the row from the host, so the
+ * cap costs a delayed repair rather than a permanent one.
+ */
+export const MAX_PROVISIONAL_CATCH_UP_ROUNDS = 3;
+
+/**
+ * Is this stream event evidence that the host wrote to the STREAMING turn?
+ *
+ * Read by the write mark, so it errs towards yes: over-counting costs a request,
+ * under-counting can certify an answer that is short of the host. The one thing
+ * it rules out is an event the reducer itself will reject as another turn's - a
+ * late `usage.updated` from the previous turn, say (see `applyBlockDelta`) -
+ * which changes nothing about the active body and so is no evidence at all.
+ */
+function countsAsActiveTurnWrite(
+  event: RuntimeEvent,
+  activeTurnId: string | null,
+): boolean {
+  if (activeTurnId === null) return false;
+  if (!("turnId" in event) || typeof event.turnId !== "string") return true;
+  return event.turnId === activeTurnId;
+}
 
 const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
 
@@ -1818,17 +1894,70 @@ export interface ChatSessionNotificationDependencies {
   >;
 }
 
+/**
+ * The six slices charged to the chat-windows plane alongside the transcript.
+ *
+ * THE OBLIGATION: every write to one of these must be followed by a budget
+ * re-settle. The transcript paths get theirs from `commitChatWindowBudget` /
+ * `commitLegacyTranscriptBudget`; everything else calls
+ * `commitWholeSetSliceBudget`. A write with no re-settle behind it leaves the
+ * accountant holding a stale figure for as long as this chat stays quiet on
+ * the transcript, which is the whole of the growth it is supposed to bound.
+ * Adding a slice here adds that obligation to its writers too.
+ */
+function chatSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
+  return {
+    queue: state.queue,
+    pendingApprovals: state.pendingApprovals,
+    pendingFileEditApprovals: state.pendingFileEditApprovals,
+    pendingInterviews: state.pendingInterviews,
+    backgroundItems: state.backgroundItems,
+    managedCommands: state.managedCommands,
+  };
+}
+
 export function createChatSessionStoreWithNotificationDependencies(
   options: ChatSessionStoreOptions,
   notificationDependencies: ChatSessionNotificationDependencies,
 ): ChatSessionStoreHandle {
   const notificationUserId = options.userId;
+  const memory = ensureProcessMemoryRuntime(options.environment);
+  const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
+  let recencyStamp = 0;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
   // Assigned synchronously inside the `create()` initializer below, where the
   // delta buffer lives; read by the handle's surface-visibility rollup.
   let flushLease: StreamFlushLease | null = null;
-  let activeStreamGeneration = 0;
+  /**
+   * The counter half of this store's stream guard - shared, so the check that
+   * keeps a superseded socket's frames out of the live store exists once rather
+   * than once per plane.
+   *
+   * The DISPOSAL half is this store's own and is composed over it in
+   * {@link streamGuard}, not folded into the shared counter: a retired
+   * generation and a dead store are different facts, and only one of them is
+   * about which socket a frame came from.
+   */
+  const streamGenerations = createGenerationGuard();
+  /**
+   * What every stream handler is actually guarded on: a live store AND a
+   * current generation.
+   *
+   * `disposed` is deliberately kept as its own conjunct rather than argued
+   * redundant. It IS redundant on the path anyone would check - `dispose()`
+   * calls `closeStreamClient()`, which retires the generation - but only while
+   * `streamClient !== null`, since that method early-returns otherwise, and
+   * only for as long as nothing builds a stream after disposal. Both of those
+   * are properties of code elsewhere in this file, not of the guard, so the
+   * conjunct stays where it cannot be invalidated from a distance.
+   */
+  const streamGuard: GenerationGuard = {
+    current: () => streamGenerations.current(),
+    next: () => streamGenerations.next(),
+    isCurrent: (candidate) =>
+      !disposed && streamGenerations.isCurrent(candidate),
+  };
   let fatalCloseNotificationGeneration: number | null = null;
   // `activeTurn` is cleared as soon as a stream fatally closes. Retain the
   // turn that produced that close so another renderer's later live completion
@@ -2038,7 +2167,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     if (streamClient === null) return;
     const client = streamClient;
     streamClient = null;
-    activeStreamGeneration += 1;
+    streamGuard.next();
     // A replaced client is a new connection - the old one's `closed` status
     // event is suppressed by the generation guard, so bump here too.
     connectionEpoch += 1;
@@ -2110,7 +2239,11 @@ export function createChatSessionStoreWithNotificationDependencies(
       //
       // Nothing here bounds the buffer, and that is the existing contract: it
       // is drained by the flush coordinator's tick on every non-deferred beat,
-      // and a deferral resolves on the very next range response.
+      // and a deferral resolves on the next range response that hydrates the
+      // tail. On a live chat the streaming row IS the tail, so a catch-up
+      // demotion of that row can re-open the deferral for one more answer;
+      // that is bounded by `MAX_PROVISIONAL_CATCH_UP_ROUNDS`, and the repair
+      // seat drains this buffer itself before it looks at the served body.
       if (deferredWindowedSnapshot !== null) return;
       const batch = bufferedDeltas;
       bufferedDeltas = [];
@@ -2147,6 +2280,19 @@ export function createChatSessionStoreWithNotificationDependencies(
           : { ...merged, pendingActions, acceptedActions };
       });
       evictWindowAfterInPlaceGrowth();
+      // A streaming turn is under-read for its duration: block deltas defer
+      // measurement, and `evictChatWindowForAccountant` settles before
+      // deciding. The eviction above does not change that - it is gated on
+      // `hydratedBytes`, which a `deferred` charge leaves unmoved, so it fires
+      // only where a settled write already grew the tier and never serializes
+      // the growing row. Recency stays the only budget fact this path can
+      // honestly stamp without paying for that.
+      //
+      // Order carries no meaning: the eviction reads `hydratedBytes`, the
+      // viewport range and the required ordinals, and publishes; the stamp
+      // writes recency. Neither reads what the other writes. The eviction runs
+      // first only so the stamp describes a settled window.
+      recencyStamp = memory.stampChatRecency();
     };
 
     /**
@@ -2206,9 +2352,6 @@ export function createChatSessionStoreWithNotificationDependencies(
     const flushBlockDeltas = (): void => {
       applyBufferedDeltas();
     };
-
-    const isCurrentStream = (streamGeneration: number): boolean =>
-      !disposed && streamGeneration === activeStreamGeneration;
 
     /**
      * The authoritative-snapshot fold, shared by BOTH lines.
@@ -2756,6 +2899,126 @@ export function createChatSessionStoreWithNotificationDependencies(
       readonly range: OrdinalRange;
     } | null = null;
 
+    /**
+     * How many writes to the streaming turn this client has seen, from any
+     * source: block deltas it applied, block deltas it had nowhere to put, and
+     * accepted index echoes reporting a write the host made.
+     *
+     * Monotonic, never decremented, and deliberately NOT a count of outstanding
+     * work. Its whole purpose is to date a `range` answer against the writes it
+     * MAY be missing. A request records the value it was sent under
+     * ({@link hydrationRequestMarks}); the host slices its answer at some point
+     * after that, which may be before or after any given write. So the mark
+     * answers one question, in one direction only, and that is the whole of what
+     * is needed here:
+     *
+     *   sentUnderMark === activeTurnWriteMark  =>  no write was observed
+     *   between this request going out and its answer arriving, so what it
+     *   carries plus what the client has applied since is the whole of the turn.
+     *
+     * The converse does NOT hold: a write observed in that interval may still be
+     * in the answer, because the host may have sliced after it. Nothing here
+     * claims otherwise - an observed write means coverage is not ESTABLISHED,
+     * which is why the response is to ask again rather than to discard anything.
+     * The clock also sees only what reaches this client's callbacks, never every
+     * write the host made.
+     *
+     * Counting EVERY write, rather than only the ones the client dropped, is
+     * what makes that implication hold - and it is the correction a cold review
+     * forced twice. An earlier version compared the held copy's
+     * `blocksVersion` before and after the fold to spot a write that overtook a
+     * catch-up. That reading is a per-SEAT baseline, so one answer installing a
+     * body reset it and the next answer read "unchanged" and discharged the
+     * obligation while the write was still missing; and `blocksVersion` is
+     * optional on the wire, so where the host omits it every reading
+     * normalised to the same number and no overtaking write was ever visible.
+     * A mark carried by each REQUEST has neither problem: it is per-answer
+     * provenance rather than shared state, and it does not depend on a field
+     * the schema lets the host leave out.
+     */
+    let activeTurnWriteMark = 0;
+
+    /**
+     * The mark each outstanding range request was sent under.
+     *
+     * Retired when its answer arrives, whatever became of it, so this tracks
+     * the ledger's open ranges rather than accumulating. The bulk clears sit
+     * beside the ledger's own (`authorityBoundary`, `dropAll`), because a
+     * request those abandon is one no answer will ever retire.
+     */
+    const hydrationRequestMarks = new Map<string, number>();
+
+    /** The mark a request was sent under, retired from the map. */
+    const takeHydrationRequestMark = (
+      requestId: string,
+    ): number | undefined => {
+      const mark = hydrationRequestMarks.get(requestId);
+      hydrationRequestMarks.delete(requestId);
+      return mark;
+    };
+
+    /**
+     * The streaming turn whose held body is UNSOUND, with the repair budget
+     * spent on it so far.
+     *
+     * Unsound means the client's copy is not what the host would serve: either
+     * nothing is held, or a write arrived with no body to apply it to and the
+     * body seated afterwards is torn around the gap. It is set when such a write
+     * is dropped and cleared only by an answer that provably closes the gap -
+     * one whose request saw no write between going out and coming back.
+     *
+     * `rounds` counts catch-up requests actually SENT for this turn, charged at
+     * the mint in {@link requestPlannedHydration} rather than at the demotion
+     * that asks for one. The two differ: a demotion whose re-plan is suppressed
+     * by an outstanding request for the same rows sends nothing, and charging it
+     * let a queue of old answers spend the whole budget without a single
+     * corrective request reaching the host.
+     *
+     * Kept for the turn once exhausted, which is why `rounds` lives here rather
+     * than beside the obligation it bounds: forgetting the record at the cap let
+     * a late answer that predated the write start the budget over, and the cap
+     * has to be a per-turn total. Keyed by `turnId` for the opposite reason - a
+     * NEXT turn must not inherit an exhausted budget and give up before asking
+     * once.
+     */
+    let catchUpBudget: {
+      readonly turnId: string;
+      /** The held body is known to be short of the host. */
+      readonly unsound: boolean;
+      /** Catch-up requests sent for this turn. */
+      readonly rounds: number;
+    } | null = null;
+
+    /**
+     * The ordinals a demotion retired, waiting for the re-plan to turn them
+     * back into a request.
+     *
+     * The ORDINALS and not a bare flag, because the next request the planner
+     * mints need not be the repair: the reader can scroll away between the
+     * demotion and the re-plan, and the requests that follow are then for
+     * scrollback that owes nothing. Charging the budget for those spent it on
+     * history and left the streaming row with no rounds when the reader came
+     * back to it. A round is charged only by a request that covers the rows the
+     * demotion opened.
+     */
+    let pendingCatchUp: {
+      readonly turnId: string;
+      readonly ordinals: readonly number[];
+    } | null = null;
+
+    const forgetCatchUpBudget = (): void => {
+      catchUpBudget = null;
+      pendingCatchUp = null;
+    };
+
+    /** The budget for `turnId`, fresh when the turn is new. */
+    const budgetForTurn = (
+      turnId: string,
+    ): { readonly unsound: boolean; readonly rounds: number } =>
+      catchUpBudget?.turnId === turnId
+        ? catchUpBudget
+        : { unsound: false, rounds: 0 };
+
     let resnapshotRequestTimer: number | null = null;
 
     const clearResnapshotRequestTimer = (): void => {
@@ -3154,6 +3417,36 @@ export function createChatSessionStoreWithNotificationDependencies(
         epoch: transcriptWindow.epoch,
         range: next,
       });
+      // The repair budget is charged HERE, at the mint, and not at the demotion
+      // that asks for one. A demotion is a request to re-plan, not a request on
+      // the wire: when an outstanding request already covers the same rows the
+      // re-plan is deduplicated and nothing is sent. Charging the demotion let a
+      // queue of answers older than the write spend the whole budget while the
+      // dedup slot suppressed every send - the client then warned that it was
+      // giving up after three rounds having asked the host exactly nothing.
+      // Owned by the turn that asked for it, as well as by the rows: a demotion
+      // whose re-plan never went out can outlive its turn, and without the turn
+      // check the NEXT turn's first request over those same rows was charged as
+      // that turn's first repair before it had asked for anything.
+      const repairs =
+        pendingCatchUp !== null &&
+        pendingCatchUp.turnId === catchUpBudget?.turnId &&
+        pendingCatchUp.ordinals.some(
+          (ordinal) => ordinal >= next.fromOrdinal && ordinal < next.toOrdinal,
+        );
+      // Dated on the way out: what this answer can be missing is decided by the
+      // writes already made when it was asked for, never by what the window
+      // happens to hold when it lands.
+      hydrationRequestMarks.set(requestId, activeTurnWriteMark);
+      if (repairs) {
+        pendingCatchUp = null;
+        if (catchUpBudget !== null) {
+          catchUpBudget = {
+            ...catchUpBudget,
+            rounds: catchUpBudget.rounds + 1,
+          };
+        }
+      }
       hydrationRequestTimer = window.setTimeout(() => {
         hydrationRequestTimer = null;
         // Only the request this timeout was armed for. Anything else already
@@ -3195,6 +3488,17 @@ export function createChatSessionStoreWithNotificationDependencies(
       // no path lets one member's response discharge another's obligation.
       // The ledger evicted enough to fit this one back under the cap.
       if (capEvicted.length > 0) {
+        // The marks go with the entries, always. `takeHydrationRequestMark`
+        // retires a mark when its answer ARRIVES, and for these ids no answer
+        // ever will be accepted - the ledger dropped them, so the response path
+        // refuses them exactly as it refuses an unrecorded id. Leaving the marks
+        // behind grew the map without bound on any stream that keeps losing
+        // requests or answers: the 30-second timeout re-asks, each re-ask can
+        // evict at the cap, and none of it is visible to the ledger's own byte
+        // accounting because these entries sit outside it.
+        for (const entry of capEvicted) {
+          hydrationRequestMarks.delete(entry.requestId);
+        }
         const evictedFrom = Math.min(
           ...capEvicted.map((entry) => entry.range.fromOrdinal),
         );
@@ -3207,6 +3511,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           epoch: transcriptWindow.epoch,
           range: { fromOrdinal: evictedFrom, toOrdinal: evictedTo },
         });
+        // Dated like any other request. It replaces the evicted entries'
+        // obligations, and it inherits nothing from them: it is sent NOW, so
+        // what it can contain is what the current mark says.
+        hydrationRequestMarks.set(widerRequestId, activeTurnWriteMark);
         client.requestTranscriptRange({
           requestId: widerRequestId,
           epoch: transcriptWindow.epoch,
@@ -3293,6 +3601,301 @@ export function createChatSessionStoreWithNotificationDependencies(
         servedCount: response.rowIds.length,
       });
 
+    /**
+     * What every log line about a range answer names.
+     *
+     * Every discarded answer is logged, at the one level the desktop log keeps
+     * for the renderer. A range that never seats has no other trace: the
+     * placeholder it would have filled looks exactly like one nothing has asked
+     * for yet, and the loop this store shipped twice - every answer thrown
+     * away, every discard minting one more request - was invisible from
+     * outside until a screenshot arrived.
+     */
+    const rangeAnswerLogFields = (
+      response: ChatRangeResponse,
+    ): {
+      readonly epicId: string;
+      readonly chatId: string;
+      readonly requestId: string;
+      readonly epoch: number;
+      readonly fromOrdinal: number;
+      readonly rows: number;
+      readonly activeTurnId: string | null;
+    } => ({
+      epicId: options.epicId,
+      chatId: options.chatId,
+      requestId: response.requestId,
+      epoch: response.epoch,
+      fromOrdinal: response.fromOrdinal,
+      rows: response.rowIds.length,
+      activeTurnId: get().activeTurn?.turnId ?? null,
+    });
+
+    /**
+     * May this answer install over a body the client knows is unsound?
+     *
+     * Every condition here is about there being a REPAIR behind the forfeit.
+     * Handing the served body the seat is only acceptable because something
+     * comes after it to correct what it in turn is missing; where nothing can,
+     * the ordinary held-copy preference is what protects the drawn body, and
+     * that is also exactly what base does.
+     */
+    const mayRepairUnsoundBody = (input: {
+      readonly budget: {
+        readonly unsound: boolean;
+        readonly rounds: number;
+      } | null;
+      readonly turnOrdinals: readonly number[];
+      readonly markIsCurrent: boolean;
+      readonly deferred: boolean;
+    }): boolean => {
+      const { budget } = input;
+      if (budget === null || !budget.unsound) return false;
+      // Nothing of the turn's OWN rows to retire means no repair can follow, so
+      // a forfeit here is just a worse body installed with no gap left to
+      // re-request it. A STEER row is the case that matters: it carries the
+      // whole turn's records, so the answer passes the records test, but it is
+      // not one of the turn's assistant rows - it yields no ordinal,
+      // `refreshSeatedRows` moves nothing, and the demotion never happens.
+      if (input.turnOrdinals.length === 0) return false;
+      // While a windowed snapshot waits for its tail the coalescing buffer
+      // cannot be drained, so seating a served body over the held one would
+      // install it against a window that has not absorbed the writes the client
+      // already holds - the double-apply, by another route.
+      if (input.deferred) return false;
+      // Either this answer is itself the whole truth, or another repair can
+      // still follow it.
+      return (
+        input.markIsCurrent || budget.rounds < MAX_PROVISIONAL_CATCH_UP_ROUNDS
+      );
+    };
+
+    /**
+     * Seat one non-stale `range` answer, logging the two ways the fold can
+     * still refuse it, and re-ask for a body that predates a dropped write.
+     */
+    const seatRangeAnswer = (
+      response: ChatRangeResponse,
+      /**
+       * The write mark this answer's request was sent under, or `undefined` for
+       * a request nothing recorded - a cap-evicted or boundary-abandoned id,
+       * whose answer the ledger has already refused.
+       */
+      sentUnderMark: number | undefined,
+    ): TranscriptWindow => {
+      const activeTurnIdBeforeFlush = get().activeTurn?.turnId ?? null;
+      // Forfeiting the held copy's authority is only ever worth it because a
+      // repair is in play: the served body may be older than what is on screen,
+      // and what makes that acceptable is either that THIS answer is the repair,
+      // or that one can still follow it. An old answer arriving once neither
+      // holds would replace the best body the client has with a worse one and
+      // nothing would put it back, so past that point the ordinary held-copy
+      // preference protects what is drawn - while the exhausted budget is still
+      // retained, so nothing restarts the rounds.
+      //
+      // The first disjunct is not redundant, and leaving it out broke the LAST
+      // repair of every episode. Rounds are charged when a request is SENT, so
+      // by the time the third one's own answer arrives the budget already reads
+      // as spent; asking "may I authorise another" there rejected the very body
+      // that repair had been authorised to fetch and certified the torn copy in
+      // its place. Asking instead whether THIS answer saw no write in flight
+      // gets that case right, and is strictly better than a "was this the
+      // repair" stamp would be: an authorised repair that a write DID overtake
+      // is not preferred either, so the newer text on screen survives it.
+      const markIsCurrent =
+        sentUnderMark !== undefined && sentUnderMark === activeTurnWriteMark;
+      // The rows this answer could retire, decided before the seat because the
+      // forfeit below depends on it.
+      const turnOrdinals = activeTurnOrdinalsOf(
+        response,
+        activeTurnIdBeforeFlush,
+      );
+      const repairsUnsoundBody = mayRepairUnsoundBody({
+        budget:
+          activeTurnIdBeforeFlush === null
+            ? null
+            : budgetForTurn(activeTurnIdBeforeFlush),
+        turnOrdinals,
+        markIsCurrent,
+        deferred: deferredWindowedSnapshot !== null,
+      });
+      if (repairsUnsoundBody) {
+        // Drain the coalescing buffer BEFORE seating, so the window this answer
+        // folds into is what the client has actually received rather than what
+        // the flush coordinator has got round to applying.
+        //
+        // Everywhere else the two can differ harmlessly, because the active
+        // arm keeps the held copy and the buffered delta lands on it a tick
+        // later. This path is the exception: it hands the served body the seat,
+        // and a delta still sitting in the buffer is then applied on top of a
+        // body the host had ALREADY applied it to - the same text twice. The
+        // mark cannot see that either, since it counts a write when the frame
+        // arrives and the buffer is exactly the gap between arriving and being
+        // applied.
+        //
+        // The deferred-snapshot state is excluded by the gate above rather than
+        // here: that is the one state `applyBufferedDeltas` refuses to drain in
+        // (there is no seated row for a delta to attach to yet, and forcing it
+        // would discard the batch), so taking the repair arm there would seat a
+        // served body with the buffer still full - the same double-apply by
+        // another route.
+        applyBufferedDeltas();
+      }
+      const before = get().transcriptWindow;
+      const activeTurnId = get().activeTurn?.turnId ?? null;
+      const seated = applyRangeResponse(
+        before,
+        response,
+        // An UNSOUND body forfeits the active turn's held-copy authority: it is
+        // one this client knows is not what the host would serve, so the premise
+        // that the held copy has every write - the whole basis of the active arm
+        // - is false for it, and letting it stand would have that body
+        // substitute away the catch-up sent to repair it. `activeTurnId` is the
+        // only thing that selects that arm, so passing `null` is how the fold is
+        // told. Under the settled arm the served copy seats unless the held one
+        // is demonstrably ahead, which is the right default for a record the
+        // client has already established is incomplete.
+        repairsUnsoundBody ? null : activeTurnId,
+        imageWitnesses,
+      );
+      if (seated === before) {
+        // The fold returns its input by identity on an epoch mismatch or an
+        // empty answer - neither seats a row.
+        appLogger.warn("[transcript] discarded a range answer unseated", {
+          ...rangeAnswerLogFields(response),
+          windowEpoch: before.epoch,
+        });
+        return seated;
+      }
+      if (!before.invalidated && seated.invalidated) {
+        appLogger.warn(
+          "[transcript] discarded a range answer that contradicted the skeleton; index voided",
+          rangeAnswerLogFields(response),
+        );
+        return seated;
+      }
+      return settleActiveTurnCatchUp({
+        response,
+        seated,
+        activeTurnId,
+        markIsCurrent,
+        turnOrdinals,
+      });
+    };
+
+    /**
+     * Decide what the answer just seated leaves owed for the streaming turn:
+     * nothing, or another catch-up.
+     *
+     * Split out of {@link seatRangeAnswer} for the complexity budget, and the
+     * split falls where the two halves genuinely differ - above is "did this
+     * answer seat at all", here is "is what it seated the whole of the turn".
+     */
+    const settleActiveTurnCatchUp = (input: {
+      readonly response: ChatRangeResponse;
+      readonly seated: TranscriptWindow;
+      readonly activeTurnId: string | null;
+      /** No write was observed between this answer's request and its arrival. */
+      readonly markIsCurrent: boolean;
+      /** The active turn's own rows among the ones this answer served. */
+      readonly turnOrdinals: readonly number[];
+    }): TranscriptWindow => {
+      const { response, seated, activeTurnId, markIsCurrent, turnOrdinals } =
+        input;
+      // The turn's RECORDS are what a write staled, so records are what this
+      // asks about. Scrollback from the same era is current and must not be
+      // re-fetched; a sibling row of the turn is stale even though the echo
+      // named a different ordinal. And "seats" rather than "carries": a row the
+      // host declared incomplete takes its whole turn out of the fold, so an
+      // answer that carries the turn and withholds it has installed nothing -
+      // reading the raw records there retired a COMPLETE historical row served
+      // in the same answer and asked for it again, discarding valid hydration
+      // to chase a body that never seated.
+      if (activeTurnId === null) return seated;
+      if (!rangeSeatsActiveTurn(response, activeTurnId)) return seated;
+      const budget = budgetForTurn(activeTurnId);
+      // Nothing is owed for a turn whose held copy is sound: the deltas have
+      // been landing on it, so it is already what the host would serve, and the
+      // active arm of the fold kept it over this answer for exactly that reason.
+      if (!budget.unsound) return seated;
+      // Closing the gap takes BOTH halves, and each rules out a different way
+      // of being wrong.
+      //
+      // The mark answers "did any write happen between this request going out
+      // and its answer coming back". If none did, the answer carries every
+      // write up to its slice and the client has applied every write since, so
+      // together they are the turn. It is per-ANSWER provenance, which is what
+      // makes it hold when several answers are outstanding at once: a shared
+      // "has the body changed since the last seat" baseline cannot, because the
+      // first answer to install resets it and the next then reads "unchanged"
+      // and discharges the obligation with the write still missing.
+      //
+      // But a mark describes the ANSWER, and the answer is not necessarily what
+      // the window ended up holding - the fold can substitute a held copy for
+      // the served one. Certifying on the mark alone then declared the row
+      // current while the body on screen was the torn one this answer had been
+      // sent to replace. So the records have to have actually landed.
+      const closesTheGap =
+        markIsCurrent &&
+        rangeRecordsInstalled(seated, response.messages, activeTurnId);
+      if (closesTheGap) {
+        catchUpBudget = { ...budget, turnId: activeTurnId, unsound: false };
+        // And the demotion that never became a request is cancelled with it.
+        // Left standing, the next request to cover these rows - a plain
+        // re-visit, once the turn is sound again - would be charged as a repair
+        // for a turn that no longer owes one.
+        pendingCatchUp = null;
+        return seated;
+      }
+      if (budget.rounds >= MAX_PROVISIONAL_CATCH_UP_ROUNDS) {
+        // Writes have overtaken every catch-up actually sent. Keep what is on
+        // screen and stop: the completion rebase re-seats the turn from the
+        // host, and a request per round trip for the rest of a long turn is a
+        // worse failure than a body that repairs late.
+        //
+        // The exhausted budget is KEPT, not forgotten. Dropping it let a late
+        // answer - one that predated the write and had been in flight through
+        // the whole episode - find a fresh budget and start the rounds over,
+        // which is the cap failing to be a cap.
+        appLogger.warn(
+          "[transcript] giving up on catching a streaming row up; leaving it to the completion rebase",
+          { ...rangeAnswerLogFields(response), rounds: budget.rounds },
+        );
+        pendingCatchUp = null;
+        return seated;
+      }
+      // The ACTIVE TURN's rows only, widened to the turn inside
+      // `refreshSeatedRows`: a slice and its steer siblings share the records
+      // that went stale, so retiring one without the others would leave the
+      // same trailing body drawn under a neighbouring ordinal. A settled row
+      // served in the same answer is not retired and is not repair work -
+      // taking every ordinal the answer happened to carry threw away a complete
+      // historical row's hydration, and then let a later visit to that row be
+      // charged against the streaming row's repair budget. The seat stays
+      // rendered - the stale tier still draws - and the gap it opens is what
+      // the planner turns back into a request.
+      const refreshed = refreshSeatedRows(seated, turnOrdinals);
+      if (refreshed === seated) return seated;
+      // Asking for the re-plan, not charging for it. The budget moves only if
+      // this turns into a request on the wire - see the mint in
+      // `requestPlannedHydration`.
+      catchUpBudget = { ...budget, turnId: activeTurnId };
+      pendingCatchUp = { turnId: activeTurnId, ordinals: turnOrdinals };
+      appLogger.info(
+        "[transcript] re-asking for a range answer that predates a write",
+        {
+          ...rangeAnswerLogFields(response),
+          // Which half of the gap test refused it: `false` means a write was
+          // observed while it was in flight, `true` means the fold kept a held
+          // copy over the one it served.
+          markIsCurrent,
+          activeTurnWriteMark,
+          rounds: budget.rounds,
+        },
+      );
+      return refreshed;
+    };
+
     /** {@link ChatSessionState.reportVisibleTranscriptRange}'s implementation;
      *  hoisted beside the planner it drives rather than defined inline in the
      *  state object two thousand lines below. */
@@ -3332,6 +3935,62 @@ export function createChatSessionStoreWithNotificationDependencies(
      * The steady-state path for every windowed frame that changes hydration
      * without being authoritative about anything else.
      */
+    const commitChatWindowBudget = (window: TranscriptWindow): void => {
+      recencyStamp = memory.stampChatRecency();
+      memory.chatWindows.settle(
+        memory.accountant,
+        holderId,
+        chatSessionChargeBytes(window, chatSlicesOf(get())),
+      );
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+    };
+
+    const legacyTranscriptChargeBytes = (state: ChatSessionState): number =>
+      legacyTranscriptResidencyBytes(state.messages, state.events) +
+      chatWholeSetSliceBytes(chatSlicesOf(state));
+
+    const commitLegacyTranscriptBudget = (): void => {
+      recencyStamp = memory.stampChatRecency();
+      memory.chatWindows.settle(
+        memory.accountant,
+        holderId,
+        legacyTranscriptChargeBytes(get()),
+      );
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+    };
+
+    /**
+     * Re-settle after a WHOLE-SET slice moved while the transcript did not.
+     *
+     * Both charge formulas fold {@link chatSlicesOf}'s six slices in, but only
+     * the transcript paths used to re-settle. An auxiliary frame - managed
+     * commands, the queue, an approval, an interview, background items - wrote
+     * its slice into the store and left the accountant holding the previous
+     * figure, so that growth sat outside the process-wide chat budget until
+     * some unrelated transcript frame happened to arrive and recompute it.
+     *
+     * Picks the arm the same way the accountant's own `evict` does, off
+     * `windowedLine`, so the two can never disagree about what this holder is
+     * charged for.
+     *
+     * Deliberately does NOT stamp recency, unlike the two commits above.
+     * Recency orders LRU eviction, and a frame arriving is not evidence anyone
+     * is READING this chat; stamping here would quietly reorder eviction as a
+     * side effect of an accounting fix.
+     */
+    const commitWholeSetSliceBudget = (): void => {
+      if (disposed) return;
+      const state = get();
+      memory.chatWindows.settle(
+        memory.accountant,
+        holderId,
+        windowedLine
+          ? chatSessionChargeBytes(state.transcriptWindow, chatSlicesOf(state))
+          : legacyTranscriptChargeBytes(state),
+      );
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+    };
+
     const publishWindowedTranscript = (
       window: TranscriptWindow,
       // How the rows got here, when that is something a consumer has to know.
@@ -3348,7 +4007,52 @@ export function createChatSessionStoreWithNotificationDependencies(
         transcriptRowContext: records.rowContext,
         ...(provenance ?? {}),
       });
+      commitChatWindowBudget(window);
     };
+
+    memory.chatWindows.attach({
+      holderId,
+      touchedAt: () => recencyStamp,
+      evict: (overBytes) => {
+        const state = get();
+        if (!windowedLine) {
+          const transcriptBytes = legacyTranscriptResidencyBytes(
+            state.messages,
+            state.events,
+          );
+          // No ordinal/range exists on the legacy line, so this transcript is
+          // the sole recoverable copy rather than an evictable window.
+          memory.chatWindows.settle(
+            memory.accountant,
+            holderId,
+            transcriptBytes + chatWholeSetSliceBytes(chatSlicesOf(state)),
+          );
+          return {
+            reclaimedBytes: 0,
+            protectedBytesByKind:
+              transcriptBytes === 0
+                ? []
+                : [{ kind: "sole-copy", bytes: transcriptBytes }],
+          };
+        }
+        const current = transcriptWindowChargedBytes(state.transcriptWindow);
+        const { window, outcome } = evictChatWindowForAccountant(
+          state.transcriptWindow,
+          Math.max(0, current - overBytes),
+          visibleTranscriptRange,
+          requiredHydrationOrdinalsOf(state),
+        );
+        if (window !== state.transcriptWindow) {
+          publishWindowedTranscript(window, null);
+        }
+        memory.chatWindows.settle(
+          memory.accountant,
+          holderId,
+          chatSessionChargeBytes(window, chatSlicesOf(get())),
+        );
+        return outcome;
+      },
+    });
 
     /**
      * Route a record that arrived with no ordinal into the window.
@@ -3563,69 +4267,106 @@ export function createChatSessionStoreWithNotificationDependencies(
       );
     };
 
-    const callbacks: ChatStreamCallbacks = {
-      onSnapshot: (frame) => {
-        if (!windowedLine) {
-          // The legacy line's `messages` IS the transcript, so the scan is the
-          // whole-transcript answer here and needs no host help.
-          applyAuthoritativeSnapshot(
-            frame,
-            null,
-            latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
-          );
-          return;
-        }
-        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
-          return;
-        }
-        // A LEGACY snapshot on a session that had negotiated `1.8`: the
-        // reconnect renegotiated onto an older line (a host rolled back below
-        // `1.8`, or a fallback route to an older peer). The windowed state is
-        // not stale-but-usable, it is unaddressable - no current peer serves
-        // the epoch its ordinals live in, so stale placeholders could never
-        // hydrate - and left in place it would make the appliers treat this
-        // WHOLE transcript as a hydrated subset and merge it against a dead
-        // skeleton. Drop all of it, atomically with the snapshot's own
-        // publish (`extra` below), and fall back to the legacy shape the
-        // discriminator now reports.
-        windowedLine = false;
-        clearInFlightHydration();
-        clearStreamCompletionWatchdog();
-        // Not merely unawaited: this line no longer HAS ordinals, so an answer
-        // still in the air describes a coordinate space nothing here can read.
-        // The whole ledger drops with the window - ranges, recovery entries
-        // and summary trust alike.
-        recovery.dropAll();
-        clearResnapshotRequestTimer();
-        forgetDeferredWindowedSnapshot();
-        // The buffer belongs to the windowed line too. Left behind, the flag
-        // below and it disagree at the one site whose own comment demands a
-        // blank slate for a later re-upgrade.
-        assemblingSummaries = null;
-        // The witness store's evidence orders copies within the windowed
-        // coordinate space this line is abandoning; a later re-upgrade starts
-        // a new lineage and must not inherit stamps from the old one.
-        imageWitnesses = createImageWitnessStore();
+    const applyLegacyTranscriptEvent = (
+      event: LegacyChatTranscriptSnapshotEvent,
+    ): void => {
+      const { frame } = event;
+      if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+        return;
+      }
+      if (!windowedLine) {
+        // The legacy line's `messages` IS the transcript, so the scan is the
+        // whole-transcript answer here and needs no host help.
+        //
+        // This event is also a whole-transcript RESIDENCY claim, not merely a
+        // decode buffer: `applyAuthoritativeSnapshot` retains both arrays in the
+        // replica. T5's process-wide accountant must charge that complete cost;
+        // this line has no ordinal/range mechanism with which to evict part of
+        // it and later recover it.
         applyAuthoritativeSnapshot(
           frame,
-          {
-            transcriptWindow: emptyTranscriptWindow(),
-            transcriptDerived: null,
-            // The rest of the windowed line's aux state, back to its initial
-            // values: nothing reads either once `transcriptDerived` is null,
-            // but a LATER re-upgrade must start from the same blank state a
-            // fresh store does.
-            accumulatedFileChangeCount: 0,
-            coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
-            jumpTargetOrdinal: null,
-            accumulatedFileChangeSummaries: [],
-            accumulatedSummaryGenerationSeated: false,
-            accumulatedSummaryAssemblyStarted: false,
-          },
-          // A downgrade frame is a LEGACY snapshot - full records - so the
-          // scan is again the whole-transcript answer.
+          null,
           latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
         );
+        commitLegacyTranscriptBudget();
+        return;
+      }
+      // A LEGACY snapshot on a session that had negotiated `1.8`: the
+      // reconnect renegotiated onto an older line (a host rolled back below
+      // `1.8`, or a fallback route to an older peer). The windowed state is
+      // not stale-but-usable, it is unaddressable - no current peer serves
+      // the epoch its ordinals live in, so stale placeholders could never
+      // hydrate - and left in place it would make the appliers treat this
+      // WHOLE transcript as a hydrated subset and merge it against a dead
+      // skeleton. Drop all of it, atomically with the snapshot's own publish
+      // (`extra` below), and fall back to the legacy shape the discriminator
+      // now reports.
+      windowedLine = false;
+      clearInFlightHydration();
+      clearStreamCompletionWatchdog();
+      // Not merely unawaited: this line no longer HAS ordinals, so an answer
+      // still in the air describes a coordinate space nothing here can read.
+      // The whole ledger drops with the window - ranges, recovery entries
+      // and summary trust alike.
+      recovery.dropAll();
+      hydrationRequestMarks.clear();
+      // The window itself is going: whatever body was seated in it is not
+      // there to repair any more.
+      forgetCatchUpBudget();
+      clearResnapshotRequestTimer();
+      forgetDeferredWindowedSnapshot();
+      // The buffer belongs to the windowed line too. Left behind, the flag
+      // below and it disagree at the one site whose own comment demands a
+      // blank slate for a later re-upgrade.
+      assemblingSummaries = null;
+      // The witness store's evidence orders copies within the windowed
+      // coordinate space this line is abandoning; a later re-upgrade starts
+      // a new lineage and must not inherit stamps from the old one.
+      imageWitnesses = createImageWitnessStore();
+      applyAuthoritativeSnapshot(
+        frame,
+        {
+          transcriptWindow: emptyTranscriptWindow(),
+          transcriptDerived: null,
+          // The rest of the windowed line's aux state, back to its initial
+          // values: nothing reads either once `transcriptDerived` is null,
+          // but a LATER re-upgrade must start from the same blank state a
+          // fresh store does.
+          accumulatedFileChangeCount: 0,
+          coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+          jumpTargetOrdinal: null,
+          accumulatedFileChangeSummaries: [],
+          accumulatedSummaryGenerationSeated: false,
+          accumulatedSummaryAssemblyStarted: false,
+        },
+        // A downgrade frame is a LEGACY snapshot - full records - so the
+        // scan is again the whole-transcript answer.
+        latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
+      );
+      commitLegacyTranscriptBudget();
+    };
+
+    const legacyTranscriptAdapter = createLegacyChatTranscriptAdapter();
+    legacyTranscriptAdapter.attach({
+      environment: options.environment,
+      emit: applyLegacyTranscriptEvent,
+      // Pre-windowed chat has no cursor and therefore no resume outcome.
+      reportResume: () => {},
+      // The multiplexed `ChatStreamClient` owns connection status; this decode
+      // arm receives only the legacy snapshot callback.
+      reportStatus: () => {},
+      // No epoch/cursor exists on this line from which an authority-side
+      // replacement could be inferred. In particular, this is not a client
+      // reseed escape hatch: AdapterHost intentionally has no such capability.
+      requestReplacement: () => {},
+    });
+
+    const callbacks: ChatStreamCallbacks = {
+      onSnapshot: (frame) => {
+        // The adapter emits synchronously. Keeping the callback itself free of
+        // projection writes is the proof that the legacy arm is behind the
+        // runtime seam rather than a parallel store mutation path.
+        legacyTranscriptAdapter.ingestSnapshot(frame);
       },
       onWorktreeStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3647,6 +4388,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // The frame carries the whole set, so a dropped one can never strand a
         // stale row - the next frame replaces everything either way.
         set({ managedCommands: frame.managedCommands });
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux(() => ({
           managedCommands: frame.managedCommands,
         }));
@@ -3781,6 +4523,16 @@ export function createChatSessionStoreWithNotificationDependencies(
             epoch: window.epoch,
             announcesRebuild: frame.snapshot.indexRevision === null,
           });
+          // The marks go with the entries they date: the boundary subsumes
+          // every open range, so no answer will retire them individually.
+          hydrationRequestMarks.clear();
+          // And so does the obligation they carried, budget included. An
+          // authoritative snapshot re-seats the turn's body from the host,
+          // which IS the repair the catch-up was asking for - carrying the
+          // obligation across would retire the row the boundary just made
+          // current, and carrying an exhausted budget across would deny the
+          // next episode the rounds it is entitled to.
+          forgetCatchUpBudget();
           imageWitnesses.invalidateAll();
         }
         if (window.skeletonComplete) {
@@ -3841,6 +4593,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // would empty the panel on the next approval and leave it empty, with
           // the header still counting the files it can no longer list.
         });
+        commitChatWindowBudget(window);
         // An aux-only re-broadcast - a queue change, an approval - clears the
         // resnapshot latch and `invalidated` while sending no chunks at all
         // (see the comment just above). If the re-stream this client asked for
@@ -3910,46 +4663,43 @@ export function createChatSessionStoreWithNotificationDependencies(
         // anyway is a starvation loop on a chat dominated by one long turn -
         // every answer arrives after the next echo and hydration never lands.
         //
-        // But ONLY while the turn's record is actually HELD. A copy the
-        // window does not hold is not being rewritten - its deltas are
-        // dropped - so an answer generated before them carries blocks the
-        // client can never recover, and it must be superseded and re-asked
-        // exactly as before. The holds scan is gated on there being an
-        // outstanding request at all, so it never runs on the bare per-token
-        // path.
+        // The exemption is NOT gated on the client holding a copy of the
+        // turn, and it used to be. That gate read as the conservative half of
+        // the choice and was the loop's own trigger: the state in which the
+        // window holds no copy - the live record retired by a seated span,
+        // that span then dropped or its answer discarded - is precisely the
+        // state every later echo then re-created. Each echo superseded the
+        // request in flight for the row, the discarded answer re-planned a
+        // new one, and the next echo (one per approval on a tool-heavy turn,
+        // sixty-odd on the turn that surfaced this) caught that one too. The
+        // row stayed a placeholder for the life of the turn and, with nothing
+        // backing it, the turn's live copy was not drawn either - only the
+        // status chip. The completion rebase was the first thing that seated
+        // it.
         //
-        // KNOWN GAP, deliberately not patched here: holding a copy is not the
-        // same as that copy being CURRENT with this echo, which is what the
-        // premise above actually needs. A write dropped while its row was
-        // unheld leaves the client behind, and a range sliced before it then
-        // seats a copy at the same older `blocksVersion` - so the seat's
-        // held-versus-served comparison reads a tie rather than both trailing
-        // the host, and the row is hydrated so no gap is left to repair it.
+        // What the gate was protecting is real and is handled differently: a
+        // copy the window does not hold is not being rewritten - its deltas
+        // are dropped - so an answer sliced before those deltas seats a body
+        // that trails the host, and a hydrated row is never re-asked for. So
+        // the seat is allowed, and the row is marked UNSOUND instead
+        // (`catchUpBudget`, read in `onRange`): the client's copy is not what
+        // the host would serve, and stays so until an answer provably closes
+        // the gap. That puts a trailing body on screen for a round trip rather
+        // than no body for the whole turn.
         //
-        // A latch cleared on the supersede this branch performs does NOT close
-        // it: `supersedeInFlightHydration` marks only requests whose ordinals
-        // intersect the change, so an append-only frame discharges the latch
-        // having covered nothing. Clearing only once nothing is outstanding
-        // fails the other way - each supersede re-plans a fresh request, so
-        // the set never empties and the exemption is disabled for the rest of
-        // the turn, which is the starvation this exemption exists to prevent.
-        // The per-request provenance lives on the recovery ledger's range
-        // entries now, and their honest ends are what retire the wedge: an
-        // answer closes its entry, an authority boundary subsumes it, the cap
-        // replaces it with a wider request - an entry can no longer sit open
-        // for the life of a turn with nothing owed against it. The residual
-        // this gate cannot see (a write dropped while its row was unheld,
-        // leaving held and served tied at the same stale version) is narrowed
-        // by the image witness store - which records writes even for unheld
-        // rows - and what remains rides the `updated` index entry, exactly as
-        // the settled-arm comparison documents.
-        const streamingEcho =
-          isActiveTurnStreamingEcho(frame.changes, activeTurnId) &&
-          (!recovery.hasOpenRanges() ||
-            holdsActiveTurnAssistantMessage(
-              get().transcriptWindow,
-              activeTurnId,
-            ));
+        // The holds scan is gated on there being an outstanding request at
+        // all, so it never runs on the bare per-token path.
+        const streamingEcho = isActiveTurnStreamingEcho(
+          frame.changes,
+          activeTurnId,
+        );
+        const echoWhileUnheld =
+          streamingEcho &&
+          recovery.hasOpenRanges() &&
+          !holdsActiveTurnAssistantMessage(
+            get().transcriptWindow,
+            activeTurnId,
+          );
         // Folded FIRST, but not published yet - the two orderings this has to
         // satisfy pull in opposite directions and this is what satisfies both.
         //
@@ -3982,6 +4732,26 @@ export function createChatSessionStoreWithNotificationDependencies(
             changes: frame.changes,
           });
         }
+        if (streamingEcho && window !== beforeFold && activeTurnId !== null) {
+          // Same acceptance gate as the supersede: a frame the window rejected
+          // reports no write. An accepted one reports a write the host made,
+          // and every write moves the mark whether or not this client had a
+          // body to put it in - that is what lets a request's own mark decide
+          // whether its answer could have contained it.
+          activeTurnWriteMark += 1;
+          if (echoWhileUnheld) {
+            // And this write had nowhere to land, so the copy the client ends
+            // up with is torn around it. What the echo NAMED is deliberately
+            // not recorded - the write staled the turn's records, which every
+            // row of that turn shares, so an obligation keyed on the echoed
+            // ordinal misses the sibling rows carrying the same stale copy.
+            catchUpBudget = {
+              turnId: activeTurnId,
+              unsound: true,
+              rounds: budgetForTurn(activeTurnId).rounds,
+            };
+          }
+        }
         publishWindowedTranscript(window, null);
         // Covers the `reindexed` case too: `requestPlannedHydration` sends a
         // `resnapshot` rather than a range when the window is invalidated.
@@ -3998,6 +4768,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         const tracked = inFlightHydrationRequest;
         const stale = rangeResponseIsStale(frame.range);
+        // Retired here rather than beside the seat, so an answer that never
+        // reaches the seat - stale, or refused by the fold - does not leave its
+        // mark behind for a request id that will never be answered again.
+        const sentUnderMark = takeHydrationRequestMark(frame.range.requestId);
         // This request is answered: it can neither be superseded nor seat
         // anything again, whichever way the staleness check just went.
         recovery.closeRange(frame.range.requestId);
@@ -4016,6 +4790,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           clearInFlightHydration();
         }
         if (stale) {
+          appLogger.warn("[transcript] discarded a range answer as stale", {
+            ...rangeAnswerLogFields(frame.range),
+            // Whether the dedup slot still named this request. `false` is the
+            // late-answer shape (the timeout re-asked, or a re-plan replaced
+            // it); `true` is an answer superseded by an index change while it
+            // was the one being waited for.
+            awaited: tracked?.requestId === frame.range.requestId,
+          });
           // Seat nothing. The ordinals stay unhydrated, so the re-plan below
           // asks for them again - which is the whole point: a discarded
           // response costs a round trip, a seated stale one costs a row that
@@ -4024,12 +4806,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           return;
         }
         const window = evictTranscriptWindowToBudget(
-          applyRangeResponse(
-            get().transcriptWindow,
-            frame.range,
-            get().activeTurn?.turnId ?? null,
-            imageWitnesses,
-          ),
+          seatRangeAnswer(frame.range, sentUnderMark),
           TRANSCRIPT_WINDOW_MAX_BYTES,
           // What the reader is looking at is never evicted - see the
           // function's own doc for the oversized-row re-fetch loop this
@@ -4061,6 +4838,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // then would fold the deltas into the same empty state the hold
           // exists to keep them out of.
           if (deferredWindowedSnapshot === null) flushBlockDeltas();
+          commitChatWindowBudget(window);
         }
         requestPlannedHydration();
       },
@@ -4354,25 +5132,33 @@ export function createChatSessionStoreWithNotificationDependencies(
                 state.acceptedActions,
                 pending,
                 Date.now(),
-                // An ack confirms the host RECEIVED the frame, nothing about
-                // whether the message exists - that rule stands. What CAN
-                // confirm at this door is the transcript the record is born
-                // into: `messageAccepted` legitimately arrives BEFORE the ack
-                // (`takeSetupFailedRestoration` slot 2 documents the order),
-                // and in that order door 5 fired while the send was still
-                // pending, found no accepted record to stamp, and this birth
-                // is the only chance to carry that sighting. A hardcoded
-                // `false` here re-opened the resurrection through the other
-                // arm of the same race.
-                //
-                // The transcript ONLY - deliberately not `state.queue`, which
-                // is merged with locally-minted optimistic items, so reading
-                // it would let our own write confirm our own send. A false
-                // confirmation fails in the dangerous direction (quiet about
-                // a real loss); queue-parked sends are covered in both orders
-                // by the queue and snapshot doors.
-                pending.messageId !== null &&
-                  messageExists(state.messages, pending.messageId),
+                {
+                  // An ack confirms the host RECEIVED the frame, nothing about
+                  // whether the message exists - that rule stands. What CAN
+                  // confirm at this door is the transcript the record is born
+                  // into: `messageAccepted` legitimately arrives BEFORE the ack
+                  // (`takeSetupFailedRestoration` slot 2 documents the order),
+                  // and in that order door 5 fired while the send was still
+                  // pending, found no accepted record to stamp, and this birth
+                  // is the only chance to carry that sighting. A hardcoded
+                  // `false` here re-opened the resurrection through the other
+                  // arm of the same race.
+                  //
+                  // The transcript ONLY - deliberately not `state.queue`, which
+                  // is merged with locally-minted optimistic items, so reading
+                  // it would let our own write confirm our own send. A false
+                  // confirmation fails in the dangerous direction (quiet about
+                  // a real loss); queue-parked sends are covered in both orders
+                  // by the queue and snapshot doors.
+                  confirmedByHost:
+                    pending.messageConfirmedByHost ||
+                    (pending.messageId !== null &&
+                      messageExists(state.messages, pending.messageId)),
+                  messageConfirmedByHost:
+                    pending.messageConfirmedByHost ||
+                    (pending.messageId !== null &&
+                      messageExists(state.messages, pending.messageId)),
+                },
               ),
               pendingUserMessages: nextPendingUsers,
               pendingBackgroundStops: backgroundStopAck.pendingStops,
@@ -4416,6 +5202,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             ),
           };
         });
+        // `queue` is one of the six, and this handler removes an optimistic
+        // item from it. The direction is the OPPOSITE of the growth cases
+        // above, and it is a defect for the same reason: the accountant keeps
+        // over-charging this holder and evicts it ahead of chats that really
+        // are that large. The obligation `chatSlicesOf` states is about every
+        // write, not every growth.
+        commitWholeSetSliceBudget();
         maybeDispatchPendingBackgroundSessionStop(set, get);
       },
       onMessageAccepted: (frame) => {
@@ -4435,6 +5228,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.acceptedActions,
             frame.message.messageId,
           );
+          const pendingActions = releasePendingWorktreeIntentDisplayByMessageId(
+            state.pendingActions,
+            frame.message.messageId,
+          );
           // On the windowed line the record goes into the WINDOW instead (see
           // `takeLiveRecords`), and `messages` is republished from there - so
           // the existence check moves with it, because `state.messages` here
@@ -4446,6 +5243,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           ) {
             return {
               acceptedActions,
+              pendingActions,
               pendingUserMessages,
               queue: removeOptimisticQueuedItemByMessageId(
                 state.queue,
@@ -4455,6 +5253,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           }
           return {
             acceptedActions,
+            pendingActions,
             messages: [...state.messages, frame.message],
             pendingUserMessages,
             queue: removeOptimisticQueuedItemByMessageId(
@@ -4465,7 +5264,16 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
         if (windowedLine) {
           takeLiveRecords({ messages: [frame.message], events: [] });
+          return;
         }
+        // THE LEGACY ARM'S SETTLE. `takeLiveRecords` re-settles through
+        // `publishWindowedTranscript` for the windowed line, and the legacy
+        // line had nothing - it appends straight into `messages` and left the
+        // accountant on the previous figure. `commitLegacyTranscriptBudget`
+        // rather than `commitWholeSetSliceBudget` so both arms of the SAME
+        // handler agree about recency: the windowed arm stamps it, and a
+        // message landing means the same thing on either line.
+        commitLegacyTranscriptBudget();
       },
       onQueueChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -4507,6 +5315,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // that is what the deferred fold's own merge takes as its input, and
         // handing it a list the optimistic items are already in would keep an
         // item whose pending action has since settled.
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux(() => ({ queue: frame.queue }));
       },
       onTurnStateChanged: (frame) => {
@@ -4656,6 +5465,16 @@ export function createChatSessionStoreWithNotificationDependencies(
         // rewrites every record carrying the remapped turn. Same reason, same
         // guard - a no-op unless the fresh tier is genuinely over budget.
         evictWindowAfterInPlaceGrowth();
+        // ...and the eviction guard is NOT the re-settle. It returns without
+        // touching the accountant whenever the window is under
+        // `TRANSCRIPT_WINDOW_MAX_BYTES`, and immediately on the legacy line -
+        // so this handler wrote `backgroundItems` and seated the turn's frozen
+        // row while the accountant kept the pre-turn figure. Buffered deltas
+        // deliberately leave a streaming turn under-read, which makes the
+        // completed turn the moment its real size first exists; a multi-megabyte
+        // response followed by no range or snapshot stayed charged at the
+        // pre-turn size for as long as the chat then stayed quiet.
+        commitWholeSetSliceBudget();
         // Routed through the shared decider rather than calling
         // `restoreStagedWorktreeIntent` directly, so the swept-claimant rule
         // is applied here too.
@@ -4728,6 +5547,25 @@ export function createChatSessionStoreWithNotificationDependencies(
             observedAt,
           });
         }
+        // A block delta is the most direct evidence of a write to the streaming
+        // turn this client ever gets - it needs no index echo to follow it and
+        // no `blocksVersion` to be present. Counted here, before the fold that
+        // may or may not find a body to apply it to, because the mark asks what
+        // the HOST did while the request was in the air, not what this client
+        // could do with it. An echo for the same write counts again; the mark is
+        // a monotonic clock, so double-counting one write costs nothing.
+        //
+        // Except for an event the reducer will reject as belonging to a
+        // different turn - a late `usage.updated` from the previous turn on
+        // OpenCode's SSE ordering, say (see `applyBlockDelta`'s own check). That
+        // is not a write to the streaming turn's body at all, and counting it
+        // retired a perfectly current catch-up answer and spent a round asking
+        // the host to re-send a body that had not changed.
+        if (
+          countsAsActiveTurnWrite(frame.event, get().activeTurn?.turnId ?? null)
+        ) {
+          activeTurnWriteMark += 1;
+        }
         bufferedDeltas.push(frame.event);
         lease.requestFlush();
         // The `code: "auth"` error frame is the one live push that flips the
@@ -4761,6 +5599,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.approval,
           ),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingApprovals: [
             ...upsertApproval(held.pendingApprovals, frame.approval),
@@ -4776,6 +5615,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             (approval) => approval.approvalId !== frame.approvalId,
           ),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingApprovals: held.pendingApprovals.filter(
             (approval) => approval.approvalId !== frame.approvalId,
@@ -4792,6 +5632,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.approval,
           ),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingFileEditApprovals: [
             ...upsertFileEditApproval(
@@ -4810,6 +5651,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             (approval) => approval.approvalId !== frame.approvalId,
           ),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingFileEditApprovals: held.pendingFileEditApprovals.filter(
             (approval) => approval.approvalId !== frame.approvalId,
@@ -4833,6 +5675,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             requestedAt: frame.requestedAt,
           }),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingInterviews: [
             ...upsertPendingInterview(held.pendingInterviews, {
@@ -4893,6 +5736,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // asks whether the STORE still listed this interview; a deferred
         // snapshot is a different list and may still carry it. Settled is
         // settled on either.
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingInterviews: [
             ...withoutPendingInterview(held.pendingInterviews, frame.blockId),
@@ -4955,6 +5799,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // asks whether the STORE still listed this interview; a deferred
         // snapshot is a different list and may still carry it. Settled is
         // settled on either.
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingInterviews: [
             ...withoutPendingInterview(held.pendingInterviews, frame.blockId),
@@ -4979,6 +5824,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             ? state.events
             : [...state.events, frame.event],
         }));
+        // Same asymmetry as `onMessageAccepted`, and the same remedy: the
+        // early return above settles through `takeLiveRecords`, this arm did
+        // not settle at all.
+        commitLegacyTranscriptBudget();
       },
       onRestoreStarted: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -5109,156 +5958,109 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
     };
 
-    const makeCallbacks = (streamGeneration: number): ChatStreamCallbacks => ({
-      onSnapshot: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onSnapshot(frame);
-        const activeTurnId = get().activeTurn?.turnId ?? null;
-        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
-          fatalCloseTurnId = null;
-        }
-      },
-      onWorktreeStateChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onWorktreeStateChanged(frame);
-      },
-      onManagedCommandsChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onManagedCommandsChanged(frame);
-      },
-      onHeldUpdatesChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onHeldUpdatesChanged(frame);
-      },
-      // Guarded like every frame above rather than passed through: whatever
-      // binds these must not apply a hydration response from a stream
-      // generation this store has already replaced.
-      onWindowedSnapshot: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onWindowedSnapshot(frame);
-      },
-      onSkeletonChunk: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onSkeletonChunk(frame);
-      },
-      onIndexChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onIndexChanged(frame);
-      },
-      onRange: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onRange(frame);
-      },
-      onAccumulatedChanges: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onAccumulatedChanges(frame);
-      },
-      onActionAck: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onActionAck(frame);
-      },
-      onMessageAccepted: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onMessageAccepted(frame);
-      },
-      onQueueChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onQueueChanged(frame);
-      },
-      onTurnStateChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onTurnStateChanged(frame);
-        const activeTurnId = get().activeTurn?.turnId ?? null;
-        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
-          fatalCloseTurnId = null;
-        }
-      },
-      onBlockDelta: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onBlockDelta(frame);
-      },
-      onApprovalRequested: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onApprovalRequested(frame);
-      },
-      onApprovalResolved: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onApprovalResolved(frame);
-      },
-      onFileEditApprovalRequested: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onFileEditApprovalRequested(frame);
-      },
-      onFileEditApprovalResolved: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onFileEditApprovalResolved(frame);
-      },
-      onInterviewRequested: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onInterviewRequested(frame);
-      },
-      onInterviewAnswered: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onInterviewAnswered(frame);
-      },
-      onInterviewErrored: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onInterviewErrored(frame);
-      },
-      onEventAppended: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onEventAppended(frame);
-      },
-      onRestoreStarted: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onRestoreStarted(frame);
-      },
-      onRestoreProgress: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onRestoreProgress(frame);
-      },
-      onRestoreCompleted: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onRestoreCompleted(frame);
-      },
-      onErrorNotice: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onErrorNotice(frame);
-      },
-      onConnectionStatus: (status, reason) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        // A RETRYABLE fatalError is the transport saying "not now" - the client
-        // is already reconnecting on its own backoff and the user needs to do
-        // nothing. Notifying on it turned an overnight sleep into a stack of
-        // "Agent stream closed unexpectedly" rows (one per dark wake), which
-        // read as data loss when nothing was lost. Only an adjudicated close -
-        // one the user must act on - is worth a notification.
-        if (
-          status === "closed" &&
-          reason?.kind === "fatalError" &&
-          reason.details.retryable !== true &&
-          fatalCloseNotificationGeneration !== streamGeneration
-        ) {
-          fatalCloseNotificationGeneration = streamGeneration;
-          fatalCloseTurnId = get().activeTurn?.turnId ?? null;
-          notificationDependencies.appLocalNotifications
-            .getState()
-            .upsertRecurringFailure(
-              chatStreamErrorNotification({
-                hostId: options.hostId,
-                epicId: options.epicId,
-                chatId: options.chatId,
-                details: reason.details,
-              }),
-            );
-        }
-        callbacks.onConnectionStatus(status, reason);
-      },
-    });
+    /**
+     * The stream-facing callbacks: every frame this store accepts, each inert
+     * once its generation is retired.
+     *
+     * The guard used to be written out by hand on all twenty-seven, and the bug
+     * it prevents - a superseded socket's frame landing in the live store -
+     * returned the moment a twenty-eighth was added without the line. The
+     * pass-through frames now wire it through the shared {@link guardHandler},
+     * which is the same check in one place; the three that do more than forward
+     * keep their bodies and check {@link streamGuard} themselves, because the
+     * work they do after the frame is this store's, not the guard's.
+     *
+     * `callbacks.onX` is read here, when the handler is wired, rather than per
+     * frame. Nothing reassigns a member of that object, and a future change
+     * that wants to swap one at runtime has to take that up with this line.
+     */
+    const makeCallbacks = (streamGeneration: number): ChatStreamCallbacks => {
+      const guarded = <TArgs extends unknown[]>(
+        handler: (...args: TArgs) => void,
+      ): ((...args: TArgs) => void) =>
+        guardHandler(streamGuard, streamGeneration, handler);
+      return {
+        onSnapshot: (frame) => {
+          if (!streamGuard.isCurrent(streamGeneration)) return;
+          callbacks.onSnapshot(frame);
+          const activeTurnId = get().activeTurn?.turnId ?? null;
+          if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+            fatalCloseTurnId = null;
+          }
+        },
+        onWorktreeStateChanged: guarded(callbacks.onWorktreeStateChanged),
+        onManagedCommandsChanged: guarded(callbacks.onManagedCommandsChanged),
+        onHeldUpdatesChanged: guarded(callbacks.onHeldUpdatesChanged),
+        // Guarded like every frame above rather than passed through: whatever
+        // binds these must not apply a hydration response from a stream
+        // generation this store has already replaced.
+        onWindowedSnapshot: guarded(callbacks.onWindowedSnapshot),
+        onSkeletonChunk: guarded(callbacks.onSkeletonChunk),
+        onIndexChanged: guarded(callbacks.onIndexChanged),
+        onRange: guarded(callbacks.onRange),
+        onAccumulatedChanges: guarded(callbacks.onAccumulatedChanges),
+        onActionAck: guarded(callbacks.onActionAck),
+        onMessageAccepted: guarded(callbacks.onMessageAccepted),
+        onQueueChanged: guarded(callbacks.onQueueChanged),
+        onTurnStateChanged: (frame) => {
+          if (!streamGuard.isCurrent(streamGeneration)) return;
+          callbacks.onTurnStateChanged(frame);
+          const activeTurnId = get().activeTurn?.turnId ?? null;
+          if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+            fatalCloseTurnId = null;
+          }
+        },
+        onBlockDelta: guarded(callbacks.onBlockDelta),
+        onApprovalRequested: guarded(callbacks.onApprovalRequested),
+        onApprovalResolved: guarded(callbacks.onApprovalResolved),
+        onFileEditApprovalRequested: guarded(
+          callbacks.onFileEditApprovalRequested,
+        ),
+        onFileEditApprovalResolved: guarded(
+          callbacks.onFileEditApprovalResolved,
+        ),
+        onInterviewRequested: guarded(callbacks.onInterviewRequested),
+        onInterviewAnswered: guarded(callbacks.onInterviewAnswered),
+        onInterviewErrored: guarded(callbacks.onInterviewErrored),
+        onEventAppended: guarded(callbacks.onEventAppended),
+        onRestoreStarted: guarded(callbacks.onRestoreStarted),
+        onRestoreProgress: guarded(callbacks.onRestoreProgress),
+        onRestoreCompleted: guarded(callbacks.onRestoreCompleted),
+        onErrorNotice: guarded(callbacks.onErrorNotice),
+        onConnectionStatus: (status, reason) => {
+          if (!streamGuard.isCurrent(streamGeneration)) return;
+          // A RETRYABLE fatalError is the transport saying "not now" - the client
+          // is already reconnecting on its own backoff and the user needs to do
+          // nothing. Notifying on it turned an overnight sleep into a stack of
+          // "Agent stream closed unexpectedly" rows (one per dark wake), which
+          // read as data loss when nothing was lost. Only an adjudicated close -
+          // one the user must act on - is worth a notification.
+          if (
+            status === "closed" &&
+            reason?.kind === "fatalError" &&
+            reason.details.retryable !== true &&
+            fatalCloseNotificationGeneration !== streamGeneration
+          ) {
+            fatalCloseNotificationGeneration = streamGeneration;
+            fatalCloseTurnId = get().activeTurn?.turnId ?? null;
+            notificationDependencies.appLocalNotifications
+              .getState()
+              .upsertRecurringFailure(
+                chatStreamErrorNotification({
+                  hostId: options.hostId,
+                  epicId: options.epicId,
+                  chatId: options.chatId,
+                  details: reason.details,
+                }),
+              );
+          }
+          callbacks.onConnectionStatus(status, reason);
+        },
+      };
+    };
 
     const createStreamClient = (): ChatStreamClientHandle => {
-      activeStreamGeneration += 1;
-      const streamGeneration = activeStreamGeneration;
+      const streamGeneration = streamGuard.next();
       return options.streamClientFactory(
         options.epicId,
         options.chatId,
@@ -5275,6 +6077,22 @@ export function createChatSessionStoreWithNotificationDependencies(
       // otherwise the coordinator keeps invoking this store's flush/hasPending
       // callbacks for the lifetime of the process.
       lease.unregister();
+      // The budget holder is attached before the factory runs, and the same
+      // reasoning applies to it: no handle is returned, so `dispose()` - which
+      // holds this exact pair - is unreachable for this id.
+      //
+      // Not hygiene. The leaked `evict` closure calls `get()`, which zustand
+      // has not assigned yet, so measuring residency off `state.messages`
+      // throws a TypeError - and `reconcile` has no catch, so it escapes into
+      // whichever LIVE chat's frame path happened to cross the soft limit.
+      // `touchedAt` is 0 for a holder that never settled, so it sorts first in
+      // LRU order and is the one asked first, every time.
+      //
+      // Rolled back here rather than by moving the attach after the factory:
+      // that ordering would depend on no factory callback settling
+      // synchronously, which nothing enforces.
+      memory.chatWindows.detach(holderId);
+      memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
       throw cause;
     }
 
@@ -5462,6 +6280,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings: input.settings,
             accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
+            displayWorktreeIntent: worktreeIntent,
+            messageConfirmedByHost: false,
             deliveryPolicy: frame.deliveryPolicy,
             createdAt: Date.now(),
           },
@@ -5516,6 +6336,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               optimisticQueuedItem,
             ),
           }));
+          commitWholeSetSliceBudget();
         }
         // Consume the staged worktree once it's on the wire so a later send
         // doesn't re-create it (the frame carries it across transport retries).
@@ -5584,6 +6405,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
+            displayWorktreeIntent: null,
+            messageConfirmedByHost: false,
             // The DISPATCHED context, not a default. A Team-billed first
             // message that strands would otherwise report that it was going
             // to bill personal - a drift statement lying about the very thing
@@ -5690,6 +6513,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
+            displayWorktreeIntent: worktreeIntent,
+            messageConfirmedByHost: false,
             accountContext: null,
             deliveryPolicy: null,
             createdAt: Date.now(),
@@ -5763,6 +6588,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
+            displayWorktreeIntent: null,
+            messageConfirmedByHost: false,
             accountContext: null,
             deliveryPolicy: null,
             createdAt: Date.now(),
@@ -6412,8 +7239,13 @@ export function createChatSessionStoreWithNotificationDependencies(
         clearBufferedDeltas();
         clearInFlightHydration();
         recovery.dropAll();
+        hydrationRequestMarks.clear();
+        forgetCatchUpBudget();
         clearResnapshotRequestTimer();
         clearStreamCompletionWatchdog();
+        legacyTranscriptAdapter.detach("disposed");
+        memory.chatWindows.detach(holderId);
+        memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
         closeStreamClient();
       },
     };
@@ -6514,6 +7346,8 @@ function basicPending(
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
+    messageConfirmedByHost: false,
     accountContext: null,
     deliveryPolicy: null,
     createdAt: Date.now(),
@@ -6547,6 +7381,56 @@ export function projectQueueWithPendingCancellations(
     (item) => !hiddenQueueItemIds.has(item.queueItemId),
   );
   return items.length === queue.items.length ? queue : { ...queue, items };
+}
+
+/**
+ * The worktree choice owned by the dispatch that most recently consumed this
+ * chat's staging slot. This is a render-only bridge across the interval where
+ * the picker choice has left staging but the host has not yet published the
+ * replacement binding.
+ *
+ * The transcript message is the authoritative end of that interval: on an
+ * ordered connection the host publishes the replacement binding before
+ * `messageAccepted`, while queued sends do not enter the transcript until
+ * their deferred worktree setup has completed. Accepted action records may be
+ * retained after that point for recovery bookkeeping, so message presence is
+ * also what prevents a retained record from masking later binding changes.
+ */
+export function dispatchedWorktreeIntentForDisplay(
+  pendingActions: Readonly<Record<string, PendingChatAction>>,
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  clientActionId: string | null,
+): WorktreeIntent | null {
+  if (clientActionId === null) return null;
+  let action: PendingChatAction | AcceptedChatAction | null = null;
+  if (Object.hasOwn(pendingActions, clientActionId)) {
+    action = pendingActions[clientActionId];
+  } else if (Object.hasOwn(acceptedActions, clientActionId)) {
+    action = acceptedActions[clientActionId];
+  }
+  return action?.displayWorktreeIntent ?? null;
+}
+
+function releasePendingWorktreeIntentDisplayByMessageId(
+  pendingActions: Readonly<Record<string, PendingChatAction>>,
+  messageId: string,
+): Readonly<Record<string, PendingChatAction>> {
+  const pending = Object.values(pendingActions).find(
+    (candidate) =>
+      candidate.action === "send" &&
+      candidate.messageId === messageId &&
+      (!candidate.messageConfirmedByHost ||
+        candidate.displayWorktreeIntent !== null),
+  );
+  if (pending === undefined) return pendingActions;
+  return {
+    ...pendingActions,
+    [pending.clientActionId]: {
+      ...pending,
+      displayWorktreeIntent: null,
+      messageConfirmedByHost: true,
+    },
+  };
 }
 
 // The client action id of an in-flight (pending) or accepted-but-unresolved

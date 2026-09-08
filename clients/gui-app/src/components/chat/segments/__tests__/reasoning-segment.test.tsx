@@ -2,13 +2,24 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReasoningSegment } from "@/components/chat/segments/reasoning-segment";
 import { LiveActivityPromoteContext } from "@/components/chat/segments/live-activity-promote-context";
 import { SegmentRow } from "@/components/chat/segments/segment-row";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 describe("<ReasoningSegment />", () => {
   afterEach(() => {

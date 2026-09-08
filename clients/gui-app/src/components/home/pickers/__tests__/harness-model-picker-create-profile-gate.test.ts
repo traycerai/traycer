@@ -33,6 +33,39 @@ describe("resolveCreateProfileGate", () => {
     expect(gate.reason).toContain("terminal");
   });
 
+  // An ACP-authenticate provider (antigravity) has no `terminalLogin` and a
+  // headless sign-in that needs no login subcommand - the host spawns the
+  // server and drives ACP `authenticate` - so its argv is legitimately `[]`.
+  // The gate read `oauthArgs === null || oauthArgs.length === 0` and disabled
+  // Create profile for exactly that provider, with copy telling the user to
+  // find a local host they were already on.
+  it("allows creating a profile when oauthArgs is empty but non-null", () => {
+    const gate = resolveCreateProfileGate(true, {
+      oauthArgs: [],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    });
+    expect(gate.disabled).toBe(false);
+    expect(gate.reason).toBeUndefined();
+  });
+
+  it("still requires a local host when oauthArgs is empty but non-null", () => {
+    // The host check is orthogonal and must survive the argv relaxation: an
+    // empty argv is a sign-in the HOST performs, so the loopback constraint is
+    // unchanged.
+    const gate = resolveCreateProfileGate(false, {
+      oauthArgs: [],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    });
+    expect(gate.disabled).toBe(true);
+    expect(gate.reason).toBe(
+      "Add profiles from a local host with browser sign-in available.",
+    );
+  });
+
   // `providerSupportsTerminalLogin` answers false for both a null and an
   // undefined capability, so the terminal-login branch above must fall
   // through cleanly to the generic reason instead of throwing or matching on
@@ -55,19 +88,26 @@ describe("resolveCreateProfileGate", () => {
     );
   });
 
-  // Unified gate: terminalLogin present but no real oauthArgs must read the
-  // same as "not a terminal-login provider" here too - the generic reason,
-  // not the terminal-specific one.
-  it("uses the generic reason, not the terminal one, when oauthArgs is empty", () => {
-    const gate = resolveCreateProfileGate(true, {
-      oauthArgs: [],
-      token: null,
-      codePaste: null,
-      terminalLogin: {},
-    });
-    expect(gate.disabled).toBe(true);
-    expect(gate.reason).toBe(
-      "Add profiles from a local host with browser sign-in available.",
-    );
-  });
+  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
+  // `terminalLogin` with `oauthArgs: null`. The terminal reason must still
+  // win: the generic one names browser sign-in, which these providers do not
+  // do either. `[]` is covered beside `null` to prove the terminal branch is
+  // answered BEFORE the argv is even read - the two spellings mean different
+  // things past that branch (see the empty-argv test above), so a regression
+  // that reordered the two checks would change this row's answer for `[]`.
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "uses the terminal reason for a terminal-login provider with no oauthArgs (%o)",
+    ({ oauthArgs }) => {
+      const gate = resolveCreateProfileGate(true, {
+        oauthArgs,
+        token: null,
+        codePaste: null,
+        terminalLogin: {},
+      });
+      expect(gate.disabled).toBe(true);
+      expect(gate.reason).toBe(
+        "This provider is signed in from a terminal, not the browser.",
+      );
+    },
+  );
 });

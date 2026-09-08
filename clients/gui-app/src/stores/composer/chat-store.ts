@@ -20,6 +20,7 @@ import type {
   BrowserAnnotationRecord,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
+  AgentMessageReceipt,
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
@@ -138,6 +139,12 @@ export interface ToolSegment {
   // written before the host carried this, which the start card reads as "no
   // live status to show" rather than as a deleted shell.
   managedCommand: ToolCallManagedCommand | null;
+  // Where a `traycer_send_message` call landed: the receiver's transcript
+  // message id, stamped on the block at completion. Lets the "Sent message"
+  // card jump to that row in the receiver's scrollback. Null for every other
+  // tool call, for a TUI receiver, and for sends persisted before the host
+  // carried this (the card then just opens the receiver's tile).
+  agentMessageReceipt: AgentMessageReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
@@ -474,8 +481,6 @@ export interface InterviewSegment {
   /** Block status: "streaming" while pending, otherwise resolved/errored. */
   status: "streaming" | "completed" | "errored";
   toolName: string | null;
-  title: string | null;
-  description: string | null;
   questions: ReadonlyArray<InterviewQuestion>;
   answers: ReadonlyArray<InterviewAnswer>;
   draftAnswers: ReadonlyArray<InterviewAnswer>;

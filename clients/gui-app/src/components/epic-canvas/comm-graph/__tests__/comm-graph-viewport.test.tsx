@@ -1,4 +1,7 @@
 const reactFlowMock = vi.hoisted(() => vi.fn((_props: unknown) => null));
+const registerFindAdapterMock = vi.hoisted(() =>
+  vi.fn<(adapter: TileFindAdapter) => void>(),
+);
 
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
@@ -10,6 +13,10 @@ vi.mock("@/providers/use-resolved-theme", () => ({
     resolvedTheme: "light" as const,
     themePreset: "default",
   }),
+}));
+
+vi.mock("@/components/epic-canvas/tile-find/tile-find-adapter-context", () => ({
+  useRegisterTileFindAdapter: registerFindAdapterMock,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -38,6 +45,7 @@ import {
 } from "@/lib/comm-graph/comm-graph-layout";
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
+import type { TileFindAdapter } from "@/stores/tile-find";
 import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 
@@ -48,8 +56,20 @@ const AGENT: CommGraphAgentNode = {
   hostId: "host-1",
   parentId: null,
   harnessId: null,
+  model: null,
   archived: false,
+  archivedAt: null,
   createdAt: 1,
+};
+
+/**
+ * This suite drives the NODE-GRAPH rendering, so it names that mode
+ * explicitly - the schema default is the office floor, which renders no React
+ * Flow at all.
+ */
+const GRAPH_DEFAULT_VIEW: CommGraphTileViewState = {
+  ...DEFAULT_COMM_GRAPH_VIEW,
+  mode: "graph",
 };
 
 interface RenderCanvasOptions {
@@ -63,6 +83,7 @@ function canvas(view: CommGraphTileViewState, options: RenderCanvasOptions) {
   return (
     <CommGraphCanvas
       epicId="epic-1"
+      tileInstanceId="comm-graph-instance-1"
       agents={[AGENT]}
       agentIds={new Set([AGENT.id])}
       events={[]}
@@ -70,6 +91,8 @@ function canvas(view: CommGraphTileViewState, options: RenderCanvasOptions) {
       initialHistoryCaughtUp={false}
       playing={options.playing}
       pulse={options.pulse}
+      pulseKey={null}
+      modeToggle={null}
       view={view}
       onViewChange={vi.fn()}
       canOpenAgentForEvent={() => true}
@@ -114,6 +137,16 @@ type FlowSetCenter = ReactFlowInstance<
   CommGraphAgentFlowNode,
   CommGraphFlowEdge
 >["setCenter"];
+type FlowFitView = ReactFlowInstance<
+  CommGraphAgentFlowNode,
+  CommGraphFlowEdge
+>["fitView"];
+
+function latestFindAdapter(): TileFindAdapter {
+  const adapter = registerFindAdapterMock.mock.lastCall?.[0];
+  if (adapter === undefined) throw new Error("Find adapter was not registered");
+  return adapter;
+}
 
 function createFlowInstanceStub(
   viewport: Viewport,
@@ -163,13 +196,14 @@ function createFlowInstanceStub(
 
 function installFlowInstance(viewport: Viewport): {
   readonly setCenter: Mock<FlowSetCenter>;
+  readonly fitView: Mock<FlowFitView>;
 } {
   const setCenter = vi.fn<FlowSetCenter>(() => Promise.resolve(true));
   const instance = createFlowInstanceStub(viewport, setCenter);
   act(() => {
     latestReactFlowProps().onInit?.(instance);
   });
-  return { setCenter };
+  return { setCenter, fitView: instance.fitView as Mock<FlowFitView> };
 }
 
 function setCanvasSize(element: HTMLElement): void {
@@ -189,16 +223,21 @@ function receiverOnlyPulse(senderAgentId: string): CommGraphPulse {
 afterEach(() => {
   cleanup();
   reactFlowMock.mockClear();
+  registerFindAdapterMock.mockClear();
   vi.restoreAllMocks();
 });
 
 describe("CommGraphCanvas viewport", () => {
   it("fits every node on first open and permits a full-graph overview", () => {
-    renderCanvas(DEFAULT_COMM_GRAPH_VIEW, STATIC_CANVAS);
+    // `GRAPH_DEFAULT_VIEW` differs from the schema default in `mode` alone, so
+    // this also pins that a mode toggle is not a framing gesture: counting it
+    // would open a never-panned graph at (0, 0) zoom 1 instead of fitting.
+    renderCanvas(GRAPH_DEFAULT_VIEW, STATIC_CANVAS);
 
     expect(reactFlowMock.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
-        defaultViewport: DEFAULT_COMM_GRAPH_VIEW,
+        // React Flow gets the three viewport fields, never the tile's `mode`.
+        defaultViewport: { x: 0, y: 0, zoom: 1 },
         fitView: true,
         minZoom: 0.1,
       }),
@@ -206,20 +245,55 @@ describe("CommGraphCanvas viewport", () => {
   });
 
   it("restores a user-positioned viewport instead of fitting it again", () => {
-    const persistedView = { x: 120, y: -80, zoom: 0.75 };
+    const persistedView: CommGraphTileViewState = {
+      x: 120,
+      y: -80,
+      zoom: 0.75,
+      mode: "graph",
+    };
     renderCanvas(persistedView, STATIC_CANVAS);
 
     expect(reactFlowMock.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
-        defaultViewport: persistedView,
+        defaultViewport: { x: 120, y: -80, zoom: 0.75 },
         fitView: false,
         minZoom: 0.1,
       }),
     );
   });
 
+  it("frames a name match without zooming in and marks its node", async () => {
+    renderCanvas(GRAPH_DEFAULT_VIEW, STATIC_CANVAS);
+    const match = firstFlowNode();
+    const { fitView } = installFlowInstance({ x: 20, y: 30, zoom: 0.6 });
+
+    act(() => {
+      void latestFindAdapter().search({
+        requestId: 9,
+        query: "agent",
+        matchCase: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(fitView).toHaveBeenCalledWith({
+        nodes: [match],
+        padding: 0.35,
+        duration: 200,
+        minZoom: 0.1,
+        maxZoom: 0.6,
+      });
+      expect(firstFlowNode().data).toEqual(
+        expect.objectContaining({
+          searchMatched: true,
+          searchHighlightNonce: 9,
+        }),
+      );
+    });
+  });
+
   it("centers an offscreen playback sender without changing zoom", async () => {
-    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, {
       playing: true,
       pulse: playbackPulse(),
     });
@@ -241,7 +315,7 @@ describe("CommGraphCanvas viewport", () => {
   });
 
   it("does not pan to the receiver when the sender is not rendered", () => {
-    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, {
       playing: true,
       pulse: receiverOnlyPulse("offscreen-sender"),
     });
@@ -256,7 +330,7 @@ describe("CommGraphCanvas viewport", () => {
   });
 
   it("does not move when the playback sender already intersects the viewport", () => {
-    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, {
       playing: true,
       pulse: playbackPulse(),
     });
@@ -273,7 +347,7 @@ describe("CommGraphCanvas viewport", () => {
 
   it("stops following after manual interaction and re-arms on the next Play", async () => {
     const firstPulse = playbackPulse();
-    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, {
       playing: true,
       pulse: firstPulse,
     });
@@ -291,7 +365,7 @@ describe("CommGraphCanvas viewport", () => {
 
     fireEvent.pointerDown(canvasElement);
     result.rerender(
-      canvas(DEFAULT_COMM_GRAPH_VIEW, {
+      canvas(GRAPH_DEFAULT_VIEW, {
         playing: true,
         pulse: playbackPulse(),
       }),
@@ -299,10 +373,10 @@ describe("CommGraphCanvas viewport", () => {
     expect(setCenter).not.toHaveBeenCalled();
 
     result.rerender(
-      canvas(DEFAULT_COMM_GRAPH_VIEW, { playing: false, pulse: null }),
+      canvas(GRAPH_DEFAULT_VIEW, { playing: false, pulse: null }),
     );
     result.rerender(
-      canvas(DEFAULT_COMM_GRAPH_VIEW, {
+      canvas(GRAPH_DEFAULT_VIEW, {
         playing: true,
         pulse: playbackPulse(),
       }),

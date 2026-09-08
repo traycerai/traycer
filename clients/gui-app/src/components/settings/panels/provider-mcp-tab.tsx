@@ -49,7 +49,7 @@ import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutat
 import { useProvidersMcpDiscover } from "@/hooks/providers/use-providers-mcp-discover-mutation";
 import { useProvidersMcpAuth } from "@/hooks/providers/use-providers-mcp-auth-mutation";
 import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { mcpBinaryAbsentNotice } from "./provider-mcp-binary-gate";
 import { redactLogText } from "@/lib/logger";
@@ -380,7 +380,7 @@ export function ProviderMcpTab(props: {
   const mutate = useProvidersMcpMutate();
   const discover = useProvidersMcpDiscover();
   const auth = useProvidersMcpAuth();
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
 
   const existingNames = useMemo(() => servers.map((s) => s.name), [servers]);
 
@@ -584,7 +584,7 @@ export function ProviderMcpTab(props: {
                   instruction: null,
                 });
               }
-              openExternalLink.mutate(result.authorizationUrl);
+              void openLink(result.authorizationUrl, "auth", null);
             } else if (result.kind === "pendingInstruction") {
               setAuthAwaitingNames((prev) => new Set(prev).add(serverName));
               const instruction = redactLogText(result.instruction);
@@ -629,7 +629,7 @@ export function ProviderMcpTab(props: {
       clearRowError,
       hostId,
       markPending,
-      openExternalLink,
+      openLink,
       pendingAuthUpsert,
       scopeTuple,
     ],
@@ -795,6 +795,7 @@ export function ProviderMcpTab(props: {
       />
 
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={deleteTarget !== null}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);

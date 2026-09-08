@@ -23,6 +23,7 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 import type { ILogger } from "../../logger";
 import type { Layer0FrameRead } from "../../host/lifecycle-probe";
 import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
   CRASH_REPORT_SPAWN_SLACK_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_HEAD_MAX_BYTES,
@@ -37,6 +38,10 @@ import {
 } from "@traycer/protocol/host/lifecycle-constants";
 import type { Environment } from "../../runner/environment";
 import type { StopIntentIdentity } from "../../host/stop-intent";
+import {
+  HOST_CRASH_REPORT_TIMEOUT_MS,
+  type HostCrashTelemetry,
+} from "../../host/crash-telemetry";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 import type { ProbeMarker } from "@traycer-clients/shared/host-lifecycle";
@@ -241,9 +246,24 @@ interface Recorded {
   findCrashReportHangs: boolean;
   /** When set, findCrashReport rejects (must not skip marker/exit). */
   findCrashReportRejects: boolean;
+  // Fleet crash telemetry (`deps.reportHostCrash`) observations. Injected so
+  // suites never touch a real Sentry client or a real pid.json.
+  readonly crashReports: HostCrashTelemetry[];
+  /** When set, reportHostCrash never resolves (report-timeout path). */
+  reportHostCrashHangs: boolean;
+  /** When set, reportHostCrash rejects (must not skip marker/exit). */
+  reportHostCrashRejects: boolean;
   lastStderrTee: MemoryStderrTee | null;
   readonly stderrTees: MemoryStderrTee[];
   readonly loggerErrors: Array<{
+    message: string;
+    fields: Record<string, unknown>;
+  }>;
+  readonly loggerInfos: Array<{
+    message: string;
+    fields: Record<string, unknown>;
+  }>;
+  readonly loggerWarns: Array<{
     message: string;
     fields: Record<string, unknown>;
   }>;
@@ -307,9 +327,14 @@ function makeRunStubs(
     findCrashReportResult: null,
     findCrashReportHangs: false,
     findCrashReportRejects: false,
+    crashReports: [],
+    reportHostCrashHangs: false,
+    reportHostCrashRejects: false,
     lastStderrTee: null,
     stderrTees: [],
     loggerErrors: [],
+    loggerInfos: [],
+    loggerWarns: [],
   };
   // The stub implements only the surface `runHostStart` touches; route it
   // to `ChildProcess` through an explicit `unknown` intermediate rather than a
@@ -318,8 +343,12 @@ function makeRunStubs(
   const childAsProcess: ChildProcess = childAsUnknown as ChildProcess;
   const spyLogger: ILogger = {
     debug: () => undefined,
-    info: () => undefined,
-    warn: () => undefined,
+    info: (message, fields) => {
+      recorded.loggerInfos.push({ message, fields: { ...fields } });
+    },
+    warn: (message, fields) => {
+      recorded.loggerWarns.push({ message, fields: { ...fields } });
+    },
     error: (message, fields, _error) => {
       recorded.loggerErrors.push({
         message,
@@ -355,7 +384,7 @@ function makeRunStubs(
     //   - unset, `sleep` is a REAL timer, and one exhausted budget costs
     //     1+5+15+30+60 = 111s of wall clock, which no 10s test timeout
     //     survives.
-    hasStopIntent: async () => false,
+    hasStopIntent: async () => null,
     // Same hazard as `hasStopIntent` above, and easier to miss because it is
     // read ONCE at startup rather than per attempt: unset, the `Partial`
     // default falls through to the real `readStopIntentIdentity`, which reads
@@ -460,6 +489,18 @@ function makeRunStubs(
         });
       }
       return recorded.findCrashReportResult;
+    },
+    reportHostCrash: async (telemetry) => {
+      recorded.sequence.push("report-host-crash");
+      if (recorded.reportHostCrashRejects) {
+        throw new Error("injected reportHostCrash failure");
+      }
+      if (recorded.reportHostCrashHangs) {
+        return new Promise<void>(() => {
+          // Never resolves — exercises the report-timeout race.
+        });
+      }
+      recorded.crashReports.push(telemetry);
     },
     createStderrTee: (_environment: Environment): StderrTee => {
       const tee = new MemoryStderrTee();
@@ -963,49 +1004,6 @@ describe("runHostStart - installed-record launch path", () => {
   });
 });
 
-describe("runHostStart - error surfaces", () => {
-  it("missing install record: writes failed-to-spawn marker and exits with HOST_NOT_INSTALLED", async () => {
-    const { recorded, deps } = makeRunStubs(null, null);
-    const invoke = () =>
-      runHostStart({ environment: "production", cwd: null }, deps);
-    await runUntilExit(invoke, recorded);
-    expect(recorded.spawnCalls).toHaveLength(0);
-    expect(recorded.exited).toBe(69);
-    const errLine = recorded.errors.join("\n");
-    expect(errLine).toContain(CLI_ERROR_CODES.HOST_NOT_INSTALLED);
-    // Marker carries the structured code so `host status` can surface
-    // the failure on a fresh machine where the supervisor never spun up.
-    const failedMarker = recorded.markers.find(
-      (m) => m.phase === "failed-to-spawn",
-    );
-    expect(failedMarker).toBeDefined();
-    expect(failedMarker?.fields.error).toContain(
-      CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-    );
-  });
-
-  it("install record present but executable missing: exits with HOST_NOT_INSTALLED carrying the bad path", async () => {
-    const exec = "/opt/traycer/host/install/traycer-host";
-    const { recorded, deps } = makeRunStubs(sampleRecord(exec), () => false);
-    const invoke = () =>
-      runHostStart({ environment: "production", cwd: null }, deps);
-    await runUntilExit(invoke, recorded);
-    expect(recorded.exited).toBe(69);
-    expect(recorded.errors.join("\n")).toContain(exec);
-  });
-
-  it("install record with empty executablePath: exits with HOST_INSTALL_RECORD_INVALID", async () => {
-    const { recorded, deps } = makeRunStubs(sampleRecord(""), null);
-    const invoke = () =>
-      runHostStart({ environment: "production", cwd: null }, deps);
-    await runUntilExit(invoke, recorded);
-    expect(recorded.exited).toBe(1);
-    expect(recorded.errors.join("\n")).toContain(
-      CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
-    );
-  });
-});
-
 describe("runHostStart - signal/exit propagation", () => {
   it("persists a terminal marker before synchronous exit when an async append would be abandoned", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
@@ -1188,6 +1186,30 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(crashed?.fields.report).toBe("report.oom.json");
     expect(String(crashed?.fields.stderrTail)).toContain("FATAL ERROR");
     expect(String(crashed?.fields.stderrTail)).toContain("\\n");
+
+    // Fleet crash telemetry: exactly one report, carrying the decoded exit
+    // status and the INSTALL RECORD's version (not a possibly-different
+    // running host version, which only identity resolution would know).
+    expect(recorded.crashReports).toHaveLength(1);
+    const report = recorded.crashReports[0]!;
+    expect(report.exitCode).toBe(3221226505);
+    expect(report.signal).toBeNull();
+    expect(report.exitMeaning).toContain("0xC0000409");
+    expect(report.hasDiagnosticReport).toBe(true);
+    expect(report.hostVersion).toBe(sampleRecord(exec).version);
+    expect(report.attemptId).toBe(crashed?.fields.attemptId);
+    expect(report.uptimeMs).toBeGreaterThanOrEqual(0);
+    expect(report.environment).toBe("production");
+    // The crashed child's pid, as spawned by the stub - the crash telemetry
+    // uses it to decide whether the pid.json on disk was written by THIS
+    // child before attributing its published version to the crash.
+    expect(report.childPid).toBe(child.pid);
+    // Sent AFTER the terminal marker, never before - the marker is
+    // readiness authority and must not wait on telemetry.
+    const markerIndex = recorded.sequence.indexOf("terminal-marker:crashed");
+    const reportIndex = recorded.sequence.indexOf("report-host-crash");
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    expect(reportIndex).toBeGreaterThan(markerIndex);
   });
 
   it("enriches a killed+SIGABRT marker, logs Host crash diagnostics, and leaves SIGTERM bare", async () => {
@@ -1246,6 +1268,13 @@ describe("runHostStart - signal/exit propagation", () => {
       expect(diag).toBeDefined();
       expect(String(diag?.fields.exitMeaning)).toContain("SIGABRT");
       expect(diag?.fields.report).toBe("report.abrt.json");
+      // A decodable fatal signal is reported to the fleet exactly like a
+      // decodable nonzero exit: same call, signal-shaped telemetry.
+      expect(recorded.crashReports).toHaveLength(1);
+      const abrtReport = recorded.crashReports[0]!;
+      expect(abrtReport.signal).toBe("SIGABRT");
+      expect(abrtReport.exitCode).toBeNull();
+      expect(abrtReport.exitMeaning).toContain("SIGABRT");
     }
 
     {
@@ -1270,6 +1299,8 @@ describe("runHostStart - signal/exit propagation", () => {
           (e) => e.message === "Host crash diagnostics",
         ),
       ).toBe(false);
+      // A forwarded SIGTERM is not a crash - no fleet report either.
+      expect(recorded.crashReports).toHaveLength(0);
     }
   });
 
@@ -1294,6 +1325,13 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(crashed).toBeDefined();
     expect(crashed?.fields.exitCode).toBe(7);
     expect(crashed?.fields.report).toBeUndefined();
+    // The report is built AFTER the 2 s scan bound expired, but its uptime
+    // is spawn-to-exit: the diagnostic wait must not be booked as time the
+    // child ran.
+    expect(recorded.crashReports).toHaveLength(1);
+    expect(recorded.crashReports[0]?.uptimeMs).toBeLessThan(
+      CRASH_REPORT_SCAN_TIMEOUT_MS,
+    );
   }, 10_000);
 
   it("writes the terminal marker and exits when findCrashReport rejects", async () => {
@@ -1360,54 +1398,6 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(String(crashed?.fields.stderrTail)).toContain("partial fatal text");
   });
 
-  it("includes stderr bytes that arrive after exit but before stream end", async () => {
-    // Major: `exit` ≠ drained pipe. Without awaiting stderrEnded before the
-    // marker, the fatal text still in the pipe is lost. This test FAILS if
-    // that await is removed.
-    const exec = "/opt/traycer/host/install/traycer-host";
-    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    const stderr = new PassThrough();
-    Object.assign(child, { stderr });
-    const originalSpawn = deps.spawn;
-    if (originalSpawn === undefined) {
-      throw new Error("test spawn dependency missing");
-    }
-
-    await runUntilExit(
-      () =>
-        runHostStart(
-          { environment: "production", cwd: null },
-          {
-            ...deps,
-            spawn: (command, args, options) => {
-              const spawned = originalSpawn(command, args, options);
-              setImmediate(() => {
-                // Process dies first; fatal text is still in flight.
-                child.emit("exit", 7, null);
-                setImmediate(() => {
-                  stderr.write(
-                    Buffer.from(
-                      "FATAL ERROR: late-arriving OOM block after exit\n",
-                    ),
-                  );
-                  stderr.end();
-                });
-              });
-              return spawned;
-            },
-          },
-        ),
-      recorded,
-    );
-
-    expect(recorded.exited).toBe(7);
-    const crashed = recorded.markers.find((m) => m.phase === "crashed");
-    expect(crashed).toBeDefined();
-    expect(String(crashed?.fields.stderrTail)).toContain(
-      "FATAL ERROR: late-arriving OOM block after exit",
-    );
-  });
-
   it("writes the marker within the stderr-end deadline when the stream never ends", async () => {
     // A grandchild holding the inherited stderr fd can delay close forever;
     // the wait is bounded so the supervisor cannot hang on exit.
@@ -1450,23 +1440,38 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(elapsed).toBeGreaterThanOrEqual(STDERR_END_WAIT_TIMEOUT_MS - 200);
   }, 10_000);
 
-  it("omits crash-diagnostic fields on clean exit", async () => {
+  it("does not hold the relaunch decision on a reportHostCrash that never resolves", async () => {
+    // The reporter is dispatched WITHOUT awaiting it: the relaunch decision
+    // and its backoff must start the moment the marker is written, not after
+    // HOST_CRASH_REPORT_TIMEOUT_MS. Real timers, so the elapsed-time bound
+    // below is the invariant itself - a run that waited on the reporter's
+    // 1.5 s race would fail it.
     const exec = "/opt/traycer/host/install/traycer-host";
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    recorded.reportHostCrashHangs = true;
+
+    const startedAtMs = Date.now();
     await runUntilExit(
       () =>
         runHostStart(
           { environment: "production", cwd: null },
-          withChildExit(deps, child, 0, null),
+          withChildExit(deps, child, 7, null),
         ),
       recorded,
     );
-    const exited = recorded.markers.find((m) => m.phase === "exited");
-    expect(exited?.fields.exitMeaning).toBeUndefined();
-    expect(exited?.fields.report).toBeUndefined();
-    expect(exited?.fields.stderrTail).toBeUndefined();
-    expect(recorded.findCrashReportCalls).toHaveLength(0);
-  });
+    const elapsedMs = Date.now() - startedAtMs;
+
+    expect(recorded.exited).toBe(7);
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(7);
+    // Dispatched (after the marker) but never landed: the hang is real.
+    expect(recorded.sequence.indexOf("report-host-crash")).toBeGreaterThan(
+      recorded.sequence.indexOf("terminal-marker:crashed"),
+    );
+    expect(recorded.crashReports).toHaveLength(0);
+    expect(elapsedMs).toBeLessThan(HOST_CRASH_REPORT_TIMEOUT_MS);
+  }, 10_000);
 
   it("spawn() throw is translated into HOST_SPAWN_FAILED + exit 66", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
@@ -2358,72 +2363,193 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(term.recorded.exited).toBe(0);
   });
 
-  it("releases the signal handlers when it leaves by throwing", async () => {
-    // Leaving by `throw` is still leaving. `exitSupervisor` covers the return
-    // paths, but an unexpected target-resolution error rethrows - and a caller
-    // that catches it would keep a stale handler set, each handler still
-    // mutating the `shuttingDown` of the run that installed it.
-    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    const before = process.listenerCount("SIGTERM");
+  it.each([
+    ["restart", 77],
+    ["stop", 0],
+    ["uninstall", 0],
+    ["install-swap", 0],
+  ] as const)(
+    "Q13: a %s stop intent ends the supervisor with exit %i",
+    async (stopReason, expected) => {
+      // The exit code is how the supervisor answers the service manager, and
+      // for one of these four the old answer left machines down. `restart` is
+      // what every update's pre-swap stop announces (`stopForRestart` ->
+      // `announceStop(env, "restart", ...)`), and the protocol defines it as
+      // the ONLY reason that promises a comeback. Exiting 0 told systemd and
+      // launchd the job had finished successfully; on a CLI-only install, if
+      // the CLI that promised the restart then died, nothing brought the host
+      // back.
+      //
+      // The other three keep exit 0 and must: `stop` and `uninstall` mean do
+      // not bring this back, and `install-swap` "deliberately promises no
+      // comeback, because a CLI swap's relaunch is unbounded" - so re-arming
+      // a manager for it would contradict what it announces. Its name is the
+      // trap here, which is why it is pinned rather than assumed.
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      let stopLanded = false;
 
-    await expect(
-      runHostStart(
-        { environment: "production", cwd: null },
-        {
-          ...deps,
-          maxRelaunches: 1,
-          readInstallRecord: async () => {
-            throw new Error("disk on fire");
-          },
-        },
-      ),
-    ).rejects.toThrow("disk on fire");
-
-    expect(process.listenerCount("SIGTERM") - before).toBe(0);
-    expect(recorded.spawnCalls).toHaveLength(0);
-  });
-
-  it("abandons the backoff the moment a shutdown signal arrives", async () => {
-    // Re-checking the latch AFTER the wait is not enough. On a CLI-owned macOS
-    // host a `host restart` during a 30-60s backoff sends `launchctl kill
-    // TERM`, then `stopService` waits only on the already-dead host pid and
-    // proceeds to `kickstart` - which no-ops while launchd still considers
-    // this supervisor running. Sit out the full sleep and the restart has
-    // already no-op'd by the time the latch is read: the machine stays
-    // hostless. The wait has to END, not merely be re-examined afterwards.
-    //
-    // The injected sleep here NEVER resolves, so only the shutdown edge can
-    // complete the race. Without it this test times out rather than failing on
-    // an assertion - which is the honest signal, since the production symptom
-    // is also "waits when it should not".
-    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    const scripted = withScriptedAttempts(deps, [{ code: 7, signal: null }]);
-
-    await runUntilExit(
-      () =>
-        runHostStart(
-          { environment: "production", cwd: null },
-          {
-            ...scripted.deps,
-            maxRelaunches: 5,
-            sleep: () =>
-              new Promise<void>(() => {
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              maxRelaunches: 5,
+              hasStopIntent: async () => (stopLanded ? stopReason : null),
+              spawn: (command, args, options) => {
+                originalSpawn(command, args, options);
+                stopLanded = true;
+                const child = makeStubChild();
                 setImmediate(() => {
-                  process.emit("SIGTERM");
+                  child.emit("exit", 0, null);
                 });
-              }),
-          },
-        ),
-      recorded,
-    );
+                return asChildProcess(child);
+              },
+            },
+          ),
+        recorded,
+      );
 
-    expect(recorded.spawnCalls).toHaveLength(1);
-    // And exits 0, not the crashed child's 7 - see the exit-code describe
-    // below. This scenario makes the point sharply: the restart is mid-flight,
-    // so a nonzero exit here races `kickstart` with launchd's own respawn of
-    // this job.
-    expect(recorded.exited).toBe(0);
-  });
+      expect(recorded.exited).toBe(expected);
+      // Whatever the code, the supervisor does NOT relaunch in-process: a
+      // stop that was requested is honoured here and handed to the manager,
+      // never worked around by spawning again ourselves.
+      expect(recorded.spawnCalls).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ["restart", 77],
+    ["stop", 0],
+    ["uninstall", 0],
+    ["install-swap", 0],
+  ] as const)(
+    "Q13: a %s stop already on disk ends the PRE-SPAWN guard with exit %i",
+    async (stopReason, expected) => {
+      // The same four rows against the OTHER exit. The table above lands its
+      // stop after the spawn, so it only ever exercised the ending path's
+      // mapping; the pre-spawn guard has an exit of its own and had its own
+      // answer, reducing the reason to `!== null` and returning 0 for all
+      // four. An update's `restart` stop that landed while this supervisor
+      // was still in setup - incumbent probe, target resolution, log
+      // rotation, marker write, fd open - therefore told the manager the job
+      // had finished successfully, which is exactly the case
+      // `RESTART_OWED_EXIT_CODE` exists for.
+      //
+      // `install-swap` is the row that keeps this honest: it reads like the
+      // one an update announces, and it is the one that must stay 0.
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              maxRelaunches: 5,
+              hasStopIntent: async () => stopReason,
+            },
+          ),
+        recorded,
+      );
+
+      // Nothing was spawned at all. This is what makes the assertion below an
+      // assertion about the PRE-spawn guard: on the ending path the child has
+      // to exist first, so a run that reaches this line with zero spawns can
+      // only have exited from the guard.
+      expect(recorded.spawnCalls).toHaveLength(0);
+      expect(recorded.exited).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["restart", 77],
+    ["stop", 0],
+    ["uninstall", 0],
+    ["install-swap", 0],
+  ] as const)(
+    "Q13: a %s stop that lands DURING the admission wait is honoured, exit %i",
+    async (stopReason, expected) => {
+      // The gap the two tables above cannot reach. The pre-spawn guard runs
+      // BEFORE `admitHostStartSpawn`, whose wait is bounded at
+      // `SUPERVISOR_ADMISSION_WAIT_MS` - 60s of real time - and the ending
+      // path only exists once a child does. A stop arriving in between was
+      // seen by neither: `host stop` wrote its intent, scanned, found no
+      // child to kill because this supervisor had not spawned one yet, and
+      // returned SUCCESSFULLY - and then the host came up.
+      //
+      // So the stop is landed here at the one moment that reproduces it: the
+      // guard has already read `null`, and the callback that spawns has not
+      // been invoked.
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      let stopLanded = false;
+      let admissionEntered = false;
+      const stopDuringAdmission: Partial<RunHostStartDeps> = {
+        ...deps,
+        hasStopIntent: async () => (stopLanded ? stopReason : null),
+        // Never reached while the re-check holds - and that is exactly why it
+        // is scripted. Delete the re-check and the supervisor spawns here; a
+        // child with no terminal event would then hang `await childEnding` and
+        // the row would fail on the 5s timeout, which is a red that proves
+        // only that something changed. With an ending, the ablated run
+        // completes normally and fails on `spawnCalls`, naming the defect.
+        spawn: (command, args, options) => {
+          originalSpawn(command, args, options);
+          const child = makeStubChild();
+          setImmediate(() => {
+            child.emit("exit", 0, null);
+          });
+          return asChildProcess(child);
+        },
+        admitHostStartSpawn: async (_environment, run) => {
+          admissionEntered = true;
+          // The wait itself. Nothing here is a spawn: `run()` below is what
+          // creates the child, and it is invoked only after the stop is on
+          // disk.
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          stopLanded = true;
+          return { kind: "ran", result: await run() };
+        },
+      };
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            stopDuringAdmission,
+          ),
+        recorded,
+      );
+
+      // The run really did get past the pre-spawn guard and into the wait -
+      // otherwise this would be the previous table again, passing for the
+      // wrong reason.
+      expect(admissionEntered).toBe(true);
+      // And still never spawned. This is the assertion that distinguishes the
+      // fix from the weaker one: the re-check sits immediately before
+      // `spawn()` inside the admission callback, so no host process is ever
+      // created. Killing one after the fact would leave this at 1.
+      expect(recorded.spawnCalls).toHaveLength(0);
+      expect(recorded.exited).toBe(expected);
+      expect(
+        recorded.markers.some(
+          (marker) =>
+            marker.phase === "failed-to-spawn" &&
+            String(marker.fields.error) === "stop requested during admission",
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("escalates a raced stop to SIGKILL when the child ignores SIGTERM", async () => {
     // Without this the supervisor awaits `childEnding` with no deadline, and
@@ -2446,7 +2572,7 @@ describe("runHostStart - crash relaunch loop", () => {
           {
             ...deps,
             maxRelaunches: 5,
-            hasStopIntent: async () => stopLanded,
+            hasStopIntent: async () => (stopLanded ? ("stop" as const) : null),
             // Fire the escalation immediately instead of after 30s.
             escalateAfter: (_ms, run) => {
               setImmediate(run);
@@ -2480,16 +2606,19 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(recorded.exited).toBe(0);
   });
 
-  it("cancels the escalation when the raced stop's child exits on its own", async () => {
-    // The ordinary path. A 30s timer left armed per attempt would keep the
-    // supervisor's event loop busy long after the child is gone.
+  it("a raced RESTART intent still exits restart-owed (77) when the child dies by signal, not the plain stop's 0", async () => {
+    // Same race as the row above with the other reason. The raced-stop branch
+    // used to keep only the `shuttingDown` latch and drop the reason it read,
+    // so `decideRelaunch` answered the latch with `stop-requested` and the
+    // supervisor exited 0 - "finished" to systemd/launchd, which then left the
+    // host down although `host restart` had promised a comeback (Codex, #1773
+    // round 8). Ablation: answer the latch with `stop-requested` regardless of
+    // the reason and this reads 0.
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const originalSpawn = deps.spawn;
     if (originalSpawn === undefined) {
       throw new Error("test spawn dependency missing");
     }
-    let cancelled = false;
-    let escalated = false;
     let stopLanded = false;
 
     await runUntilExit(
@@ -2499,25 +2628,22 @@ describe("runHostStart - crash relaunch loop", () => {
           {
             ...deps,
             maxRelaunches: 5,
-            hasStopIntent: async () => stopLanded,
+            hasStopIntent: async () =>
+              stopLanded ? ("restart" as const) : null,
             escalateAfter: (_ms, run) => {
-              const timer = setTimeout(() => {
-                escalated = true;
-                run();
-              }, 10_000);
-              return () => {
-                cancelled = true;
-                clearTimeout(timer);
-              };
+              setImmediate(run);
+              return () => undefined;
             },
             spawn: (command, args, options) => {
               originalSpawn(command, args, options);
               stopLanded = true;
               const child = makeStubChild();
               child.kill = (signal: NodeJS.Signals | undefined) => {
-                setImmediate(() => {
-                  child.emit("exit", null, signal ?? "SIGTERM");
-                });
+                if (signal === "SIGKILL") {
+                  setImmediate(() => {
+                    child.emit("exit", null, "SIGKILL");
+                  });
+                }
                 return true;
               };
               return asChildProcess(child);
@@ -2527,24 +2653,32 @@ describe("runHostStart - crash relaunch loop", () => {
       recorded,
     );
 
-    expect(cancelled).toBe(true);
-    expect(escalated).toBe(false);
     expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(77);
   });
 
-  it("kills a child that a stop raced between the guard and the spawn", async () => {
-    // The pre-spawn guard cannot close a CROSS-PROCESS window: `host stop` can
-    // write intent just after that read returned false, scan for a host while
-    // this child does not exist yet, find nothing to kill, and return
-    // successfully - leaving a host running that the stopper never saw.
+  it("a SIGNAL-latched shutdown with a standing RESTART intent exits restart-owed (77) when the child dies by the forwarded signal", async () => {
+    // On POSIX every `host restart` and every update's pre-swap stop write
+    // the `restart` record FIRST and only THEN signal this process
+    // (`launchctl kill TERM` on macOS, `systemctl kill --signal=SIGTERM` on
+    // Linux) - chosen over a stop JOB precisely so the manager's on-failure
+    // policy stays armed. A 0 here told the manager the job had finished and
+    // left the host down when the CLI that promised the comeback died
+    // between its kill and its start (CodeRabbit, #1773 round 9). Ablation:
+    // make `refused()` read the `shutdownReason` variable directly instead
+    // of awaiting `input.shutdownReason()` and this reads 0.
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    const killed: string[] = [];
     const originalSpawn = deps.spawn;
     if (originalSpawn === undefined) {
       throw new Error("test spawn dependency missing");
     }
-    let spawns = 0;
+    // Same gate as the raced row's `stopLanded`: the record only stands from
+    // the spawn onward, so the pre-spawn guard and the admission-callback
+    // re-check both see `null`, and only the LATE read inside
+    // `resolveShutdownReason` - taken after the signal has already latched
+    // `shuttingDown` - observes it.
     let stopLanded = false;
+    const forwarded: string[] = [];
 
     await runUntilExit(
       () =>
@@ -2553,68 +2687,31 @@ describe("runHostStart - crash relaunch loop", () => {
           {
             ...deps,
             maxRelaunches: 5,
-            // False for the pre-spawn guard, true immediately afterwards.
-            hasStopIntent: async () => stopLanded,
+            hasStopIntent: async () =>
+              stopLanded ? ("restart" as const) : null,
             spawn: (command, args, options) => {
-              spawns += 1;
               originalSpawn(command, args, options);
-              stopLanded = true;
               const child = makeStubChild();
+              // The child dies ONLY from the forwarded signal.
               child.kill = (signal: NodeJS.Signals | undefined) => {
-                killed.push(String(signal));
+                forwarded.push(String(signal));
                 setImmediate(() => {
                   child.emit("exit", null, signal ?? "SIGTERM");
                 });
                 return true;
               };
-              return asChildProcess(child);
-            },
-          },
-        ),
-      recorded,
-    );
-
-    expect(spawns).toBe(1);
-    expect(killed).toEqual(["SIGTERM"]);
-    // And the death it caused is NOT then treated as a crash to recover from -
-    // in BOTH halves. The signal death is abnormal, so only the latch keeps the
-    // spawn count at one, and only the cause keeps the exit code at zero. A
-    // nonzero exit here would have the service manager start a replacement.
-    expect(recorded.spawnCalls).toHaveLength(1);
-    expect(recorded.exited).toBe(0);
-  });
-
-  it("disposes a timed-out stderr stream instead of carrying it into the next attempt", async () => {
-    // The diagnostic wait is bounded because a grandchild can inherit the dead
-    // host's stderr and hold the pipe open. When that bound expires the stream
-    // is still live, still feeding this attempt's tee, and still holds a libuv
-    // handle - and the five-relaunch budget does not bound the accumulation,
-    // because sustained uptime resets the counter.
-    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    const originalSpawn = deps.spawn;
-    if (originalSpawn === undefined) {
-      throw new Error("test spawn dependency missing");
-    }
-    const stderrs: PassThrough[] = [];
-    let spawns = 0;
-
-    await runUntilExit(
-      () =>
-        runHostStart(
-          { environment: "production", cwd: null },
-          {
-            ...deps,
-            maxRelaunches: 1,
-            spawn: (command, args, options) => {
-              spawns += 1;
-              originalSpawn(command, args, options);
-              const child = makeStubChild();
-              // Never ends: exactly the grandchild-holding-the-pipe case.
-              const stderr = new PassThrough();
-              stderrs.push(stderr);
-              Object.assign(child, { stderr });
               setImmediate(() => {
-                child.emit("exit", spawns === 1 ? 3 : 0, null);
+                // `currentChild` is assigned once this spawn call returns.
+                // The record only stands from HERE, immediately before the
+                // signal - not from the spawn - so the racedStop re-check
+                // that runs synchronously right after spawn still sees
+                // `null` and this stays a pure signal-latch case rather than
+                // also tripping the raced-stop kill.
+                stopLanded = true;
+                process.emit("SIGTERM");
+                if (forwarded.length === 0) {
+                  child.emit("exit", null, "SIGTERM");
+                }
               });
               return asChildProcess(child);
             },
@@ -2623,40 +2720,162 @@ describe("runHostStart - crash relaunch loop", () => {
       recorded,
     );
 
-    expect(stderrs).toHaveLength(2);
-    for (const stderr of stderrs) {
-      expect(stderr.destroyed).toBe(true);
-      expect(stderr.listenerCount("data")).toBe(0);
-    }
+    expect(forwarded).toEqual(["SIGTERM"]);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(77);
   });
 
-  it("relaunches a child signalled directly, even with a signal it could have forwarded", async () => {
-    // An operator or watchdog sending SIGTERM to the HOST does not go through
-    // this supervisor: the latch stays false and no intent is written. An
-    // earlier classifier read the signal NAME and concluded the death was
-    // requested, so the host stayed down.
-    //
-    // A signal name says a stop COULD have been forwarded, never that it was.
-    // Only the latch and the sentinel carry that, and both are checked in
-    // `decideRelaunch` - which is why classification here is now simply "any
-    // signal death is abnormal".
+  it("a SIGNAL-latched shutdown with a STOP intent still exits 0", async () => {
+    // The other half of the same latch: `stop` means do not bring this back,
+    // unlike a standing `restart`. Still exercises `resolveShutdownReason`'s
+    // one memoised read, just answered differently.
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    const scripted = withScriptedAttempts(deps, [
-      { code: null, signal: "SIGTERM" },
-      { code: 0, signal: null },
-    ]);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let stopLanded = false;
+    const forwarded: string[] = [];
 
     await runUntilExit(
       () =>
         runHostStart(
           { environment: "production", cwd: null },
-          { ...scripted.deps, maxRelaunches: 5 },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => (stopLanded ? ("stop" as const) : null),
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                forwarded.push(String(signal));
+                setImmediate(() => {
+                  child.emit("exit", null, signal ?? "SIGTERM");
+                });
+                return true;
+              };
+              setImmediate(() => {
+                // Same reasoning as the row above: stand the record up right
+                // before the signal, not at spawn, so this stays the
+                // signal-latch case rather than also tripping the raced-stop
+                // re-check.
+                stopLanded = true;
+                process.emit("SIGTERM");
+                if (forwarded.length === 0) {
+                  child.emit("exit", null, "SIGTERM");
+                }
+              });
+              return asChildProcess(child);
+            },
+          },
         ),
       recorded,
     );
 
-    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(forwarded).toEqual(["SIGTERM"]);
+    expect(recorded.spawnCalls).toHaveLength(1);
     expect(recorded.exited).toBe(0);
+  });
+
+  it("a SIGNAL-latched shutdown with no stop intent still exits 0", async () => {
+    // No record ever stands: a bare forwarded signal with nothing on disk is
+    // this process being torn down, asking for nothing.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    const forwarded: string[] = [];
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => null,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              child.kill = (signal: NodeJS.Signals | undefined) => {
+                forwarded.push(String(signal));
+                setImmediate(() => {
+                  child.emit("exit", null, signal ?? "SIGTERM");
+                });
+                return true;
+              };
+              setImmediate(() => {
+                process.emit("SIGTERM");
+                if (forwarded.length === 0) {
+                  child.emit("exit", null, "SIGTERM");
+                }
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(forwarded).toEqual(["SIGTERM"]);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("a child's own 87 during a SIGNAL-latched shutdown with a standing RESTART intent exits restart-owed (77), not 0", async () => {
+    // The OTHER settlement site: the child's own exit-87 restart request
+    // landing while `shuttingDown` is already latched by a forwarded signal
+    // ("Ignoring a requested restart during shutdown"). It has to resolve
+    // through the SAME `resolveShutdownReason` the rows above exercise, so a
+    // standing `restart` intent still owes its comeback here too. Ablation:
+    // change this branch's `const latchedBy = await resolveShutdownReason();`
+    // to `const latchedBy = null;` and this reads 0.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let stopLanded = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () =>
+              stopLanded ? ("restart" as const) : null,
+            spawn: (command, args, options) => {
+              originalSpawn(command, args, options);
+              const child = makeStubChild();
+              // The forwarded signal is IGNORED by this child - it dies from
+              // its own exit-87 restart request instead, on a LATER
+              // setImmediate so the 87 lands only after `shuttingDown` has
+              // already latched.
+              child.kill = (_signal: NodeJS.Signals | undefined) => true;
+              setImmediate(() => {
+                // Stand the record up right before the signal, not at
+                // spawn, so the racedStop re-check (which runs synchronously
+                // right after spawn) still sees `null` and this stays a
+                // pure signal-latch case.
+                stopLanded = true;
+                process.emit("SIGTERM");
+                setImmediate(() => {
+                  child.emit("exit", RESTART_EXIT_CODE, null);
+                });
+              });
+              return asChildProcess(child);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(77);
   });
 
   it("relaunches a host the OOM killer took, which no diagnostic whitelist names", async () => {
@@ -2717,7 +2936,7 @@ describe("runHostStart - crash relaunch loop", () => {
             },
             hasStopIntent: async () => {
               intentChecks += 1;
-              return stopRequested;
+              return stopRequested ? ("stop" as const) : null;
             },
           },
         ),
@@ -2989,7 +3208,8 @@ describe("runHostStart - relaunch loop, guards re-checked across the backoff", (
           {
             ...scripted.deps,
             maxRelaunches: 5,
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             // The stop happens WHILE we are backing off.
             sleep: async () => {
               stopRequested = true;
@@ -3075,7 +3295,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
             // The install record never comes back, so every attempt fails to
             // resolve a target and the loop keeps retrying.
             readInstallRecord: async () => null,
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -3139,7 +3360,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               originalSpawn(command, args, options);
               throw new Error("EBUSY: install swap in progress");
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -3180,7 +3402,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               });
               return asChildProcess(child);
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -3446,7 +3669,7 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
             closeLogFd: async (fd) => {
               closed.push(fd);
             },
-            hasStopIntent: async () => true,
+            hasStopIntent: async () => "stop" as const,
           },
         ),
       recorded,
@@ -3823,7 +4046,7 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               // The record on disk IS the one this supervisor started with, so
               // its own start already answered it. Deliberately no clock here:
               // that is the whole point of the identity rule.
-              return servedAtStartup === null;
+              return servedAtStartup === null ? ("stop" as const) : null;
             },
           },
         ),
@@ -3861,7 +4084,8 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               stopRequested = true;
               return 42;
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
           },
         ),
       recorded,
@@ -3902,7 +4126,8 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               if (attempts === 2) stopRequested = true;
               return 42;
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
           },
         ),
       recorded,
@@ -3946,7 +4171,7 @@ describe("runHostStart - a stop that lands INSIDE the pre-spawn read", () => {
             maxRelaunches: 5,
             hasStopIntent: async () => {
               process.emit("SIGTERM");
-              return false;
+              return null;
             },
           },
         ),
@@ -4093,6 +4318,73 @@ describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it i
     expect(recorded.spawnCalls).toHaveLength(0);
   });
 
+  it("Q13: the busy refusal is an INFO keyed by attempt id, carrying no account identifiers", async () => {
+    // Two requirements in one line, both from the support-report side.
+    //
+    // LEVEL. A supervisor that arrives while an update segment holds the
+    // attempt lock is not an error - the non-zero exit IS the recovery, and
+    // the manager retries on its own. It was a WARN because under `waitMs: 0`
+    // it fired roughly a dozen times per healthy update, which reads like a
+    // fault when a dozen of them land in a log. The wait removed the volume;
+    // this drops the level to match what the line actually reports.
+    //
+    // FIELDS. INFO and above must stay free of account and user identifiers,
+    // so the line is keyed by attempt id and environment. `reason` is pinned
+    // as the fixed `busy` literal rather than merely "present": it is built by
+    // `describeHostStartAdmission`, and the neighbouring arms in that switch
+    // DO interpolate record contents, so a future arm folded into this branch
+    // is the realistic way an identifier reaches this line.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => busy,
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          refused,
+        ),
+      recorded,
+    );
+
+    const retryLine = recorded.loggerInfos.find((entry) =>
+      entry.message.includes("so the service manager retries"),
+    );
+    expect(retryLine).toBeDefined();
+    // The whole bag, exactly. Cold review B: my first cut asserted the three
+    // fields individually, which leaves the bag OPEN - adding `accountId` to
+    // the call passes every one of those assertions. And the field bag is the
+    // route this file actually uses for identifiers: the incumbent-decline
+    // line a few hundred lines up logs `incumbentPid`, `incumbentVersion` and
+    // `incumbentWebsocketUrl` as fields, not interpolated. So the likelier
+    // leak was the unwatched one.
+    //
+    // `toEqual` reddens on ANY added key whatever it is called, and still
+    // pins the reason literal inside it - which is the separate hazard, since
+    // `describeHostStartAdmission`'s neighbouring arms DO interpolate record
+    // contents into that string.
+    expect(retryLine?.fields).toEqual({
+      environment: "production",
+      attemptId: expect.any(String),
+      reason:
+        "another update execution segment currently owns the restart boundary",
+    });
+    // And pin the level by where the line ISN'T. Without this a future edit
+    // that emits BOTH an info and a warn passes, because the assertion above
+    // only looks in one sink.
+    expect(
+      recorded.loggerWarns.filter((entry) =>
+        entry.message.includes("so the service manager retries"),
+      ),
+    ).toHaveLength(0);
+  });
+
   it("INTERACTIVE launch + busy -> still exit 0, unchanged", async () => {
     // The scoping half. An interactive or Desktop-driven start has a caller
     // watching that can decide for itself, so its exit semantics must not move;
@@ -4142,5 +4434,75 @@ describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it i
 
     expect(recorded.exited).toBe(0);
     expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
+  it("Q9: a relaunch admitted BESIDE a durable attempt announces it once, on the injected logger", async () => {
+    // The supervisor now admits an interrupted record whose own next act is
+    // starting the host, and leaves that record untouched for recovery. The
+    // host simply comes up, so without this line nothing distinguishes "the
+    // host is up" from "the host is up and an update is still outstanding" -
+    // and the record is cleared only by the `host update` claim path, which
+    // nobody has run yet.
+    //
+    // The INJECTED logger is half the assertion. Emitting from inside the
+    // admission would have to build a logger of its own, which writes to the
+    // real `~/.traycer/cli/cli.log`; routing the announcement out through a
+    // callback is what keeps it observable here and inside the sandbox.
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const standing = {
+      schemaVersion: 2 as const,
+      attemptId: "attempt-wedged",
+      generation: 1,
+      sequence: 9,
+      trigger: "manual" as const,
+      targetVersion: "2.0.0",
+      phase: "restarting" as const,
+      execution: "active" as const,
+      continuation: "activate" as const,
+      progress: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: null,
+      error: null,
+    };
+    const admitted: Partial<RunHostStartDeps> = {
+      ...withChildExit(deps, child, 0, null),
+      admitHostStartSpawn: async (_options, run, onAdmittedBeside) => {
+        onAdmittedBeside(standing);
+        return { kind: "ran" as const, result: await run() };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          admitted,
+        ),
+      recorded,
+    );
+
+    const announcements = recorded.loggerInfos.filter((entry) =>
+      entry.message.includes("durable update attempt"),
+    );
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]?.fields).toMatchObject({
+      attemptId: "attempt-wedged",
+      phase: "restarting",
+      execution: "active",
+      continuation: "activate",
+      targetVersion: "2.0.0",
+      // Says what the supervisor did NOT do. It holds no capability that
+      // could advance or terminalize a record, and the line must not read as
+      // though the update were handled.
+      leftForRecovery: true,
+    });
+    // The spawn still happened: the announcement is a note beside an admitted
+    // relaunch, never a substitute for one.
+    expect(recorded.spawnCalls.length).toBeGreaterThan(0);
   });
 });

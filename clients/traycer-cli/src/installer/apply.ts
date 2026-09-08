@@ -15,7 +15,11 @@ import { assertHostNotBusy } from "../host/busy-check";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
-import { commitInstallFromSource, currentInstallPlatform } from "./install";
+import {
+  commitInstallFromSource,
+  currentInstallPlatform,
+  type InstallPhaseHooks,
+} from "./install";
 
 // `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed
 // commands" > `host apply`. Promotes the single-slot staged tree over the
@@ -36,6 +40,24 @@ export interface ApplyHostOptions {
   // value is checked after reconcile, while the caller holds cli-lock.
   // Null means "no fingerprint pin" - callers state that explicitly.
   readonly expectedStageFingerprint: string | null;
+  /**
+   * The version the caller resolved and CONFIRMED before it waited for the
+   * lock - `host update --version X` from a Settings click that validated
+   * X's catalog entry against this host's CLI floor and asked the user
+   * about X. The stage is shared and the wait is unlocked: a `host
+   * download Y` promoted in between leaves Y where X was, and the
+   * fingerprint pin above is `null` on that path. Committing Y would
+   * install a version nobody confirmed and no floor was checked for. A
+   * differing stage is `stage-version-mismatch`, decided before the busy
+   * gate and before `onWillCommitStaged`, so nothing is announced or
+   * disturbed for it. `null` for an implicit "latest": a newer stage
+   * another promoter left is then the better answer to the same request.
+   * Compared as a string, not through `compareHostVersions`: both sides
+   * are the catalog entry's own `version` (the staged record copies it,
+   * the caller resolved it), so this pins the ARTIFACT - build metadata
+   * included - not the release it belongs to.
+   */
+  readonly expectedStagedVersion: string | null;
   // Skips the busy check. Does NOT affect `--no-service`'s own busy-check
   // skip below - the two flags are independent knobs with the same effect
   // on this one gate.
@@ -54,6 +76,59 @@ export interface ApplyHostOptions {
    * `host start` does not deadlock trying to reacquire the same outer lock.
    */
   readonly publishHostStartAdoption?: HostStartAdoptionPublisher;
+  /**
+   * Called once this function has committed to the disruptive half: after
+   * reconcile has settled what is staged (it deletes stale stages and
+   * restores an aside left by a crashed promoter, so what the caller read
+   * before this call is not what is applied), after the no-op and
+   * fingerprint decisions, and after the busy gate where one runs (`force`
+   * and `noService` skip it) - with the version of the stage about to be
+   * committed. `host update` takes ownership of its progress marker here; a
+   * no-op, a fingerprint or version mismatch and a busy refusal never reach
+   * it, so nothing is announced for work that does not happen. `null` for
+   * a caller with nothing to announce (`host apply`).
+   */
+  readonly onWillCommitStaged:
+    | ((stagedVersion: string) => Promise<void>)
+    | null;
+  /**
+   * The disruption boundary: runs once the commit's pre-stop (or, when the
+   * lifecycle decides not to stop, pre-swap) mutation-capability check has
+   * passed and immediately before that actuator - the first point at which
+   * this call can have disturbed the running host. A failure BEFORE it (a
+   * status probe that throws, a refused authority, a busy refusal) left the
+   * host as it was; `host update` uses that to restore a progress marker it
+   * took over instead of stamping its own failure over another updater's
+   * live record. Reported by the actuators
+   * (`CreateServiceInstallLifecycleOptions.onWillStopHost`,
+   * `CommitInstallFromSourceOptions.onWillSwap`), never inferred from the
+   * `service-stop` / `swap` progress lines, which precede those checks.
+   * `null` for a caller not tracking it.
+   */
+  readonly onWillDisruptHost: (() => void) | null;
+  /**
+   * The two swap barriers, threaded into the lifecycle this function builds
+   * internally so a caller reaches them without duplicating the apply path
+   * or its contender wrapper (`host/update-mutation.ts`).
+   *
+   * They sit BESIDE `onWillCommitStaged` and `onWillDisruptHost`, not in
+   * place of either, and they answer a different question. The first two are
+   * ANNOUNCEMENTS aimed at the progress marker - "work is about to start",
+   * "the host may now be disturbed" - and neither may fail the apply. These
+   * two are RECORD ADVANCES: `hooks.beforeSwapCommit` runs after the
+   * cooperative stop SUCCEEDED and before the swap, `hooks.afterSwap` after
+   * it, and each is a durable write the attempt executor must land before
+   * the next irreversible step.
+   *
+   * Ordering, for the four in one place: `onWillCommitStaged` before the
+   * lifecycle exists (so before the cooperative stop), `onWillDisruptHost`
+   * at the pre-stop/pre-swap capability check, `hooks.beforeSwapCommit`
+   * after the stop succeeded, `hooks.afterSwap` after the swap. A stop
+   * denial therefore reaches the first two and neither of the last two.
+   * `--no-service` builds no lifecycle at all and reaches neither barrier.
+   * Callers driving no attempt record pass `NO_INSTALL_PHASE_HOOKS`.
+   */
+  readonly hooks: InstallPhaseHooks;
 }
 
 // The facts `createServiceInstallLifecycle` observed around the swap -
@@ -110,6 +185,15 @@ export type ApplyHostOutcome =
       readonly installedVersion: string;
       readonly expectedStageFingerprint: string | null;
       readonly actualStageFingerprint: string | null;
+    }
+  | {
+      // The stage holds a version other than the one the caller confirmed
+      // (`expectedStagedVersion`). Nothing was consumed, announced or
+      // disturbed; the stage is left for its promoter.
+      readonly outcome: "stage-version-mismatch";
+      readonly installedVersion: string;
+      readonly expectedStagedVersion: string;
+      readonly actualStagedVersion: string;
     };
 
 export async function applyHost(
@@ -172,9 +256,31 @@ export async function applyHost(
     });
     return { outcome: "no-op", installedVersion: installed.version };
   }
+  if (
+    opts.expectedStagedVersion !== null &&
+    staged.version !== opts.expectedStagedVersion
+  ) {
+    logger.info(
+      "Host apply rejected a stage naming a version other than the one requested",
+      {
+        environment: opts.environment,
+        expectedStagedVersion: opts.expectedStagedVersion,
+        actualStagedVersion: staged.version,
+      },
+    );
+    return {
+      outcome: "stage-version-mismatch",
+      installedVersion: installed.version,
+      expectedStagedVersion: opts.expectedStagedVersion,
+      actualStagedVersion: staged.version,
+    };
+  }
 
   if (!opts.noService && !opts.force) {
     await assertHostNotBusy(opts.environment);
+  }
+  if (opts.onWillCommitStaged !== null) {
+    await opts.onWillCommitStaged(staged.version);
   }
 
   // `bootstrap: null` - apply is strictly an update over an existing,
@@ -191,6 +297,8 @@ export async function applyHost(
         // denied the cooperative shutdown claim and `--force` aborted
         // anyway.
         force: opts.force,
+        onWillStopHost: opts.onWillDisruptHost,
+        hooks: opts.hooks,
       });
   if (lifecycleHandle !== null && opts.publishHostStartAdoption !== undefined) {
     lifecycleHandle.lifecycle.setHostStartAdoptionPublisher?.(
@@ -213,7 +321,11 @@ export async function applyHost(
     onProgress: opts.onProgress,
     lifecycle: lifecycleHandle?.lifecycle ?? null,
     onCommitted: () => {},
+    // Apply only ever moves FORWARD (the stage is newer than the install), so
+    // it records no version hold at the swap boundary.
+    onSwapCommitted: null,
     verifyMutationCapability: opts.verifyMutationCapability,
+    onWillSwap: opts.onWillDisruptHost,
   });
 
   // `createServiceInstallLifecycle`'s `afterSwap` already swallows its own
@@ -235,12 +347,15 @@ export async function applyHost(
           postSwapAction: lifecycleHandle.state.postSwapAction,
         };
 
-  const installGeneration = encodeInstallGeneration({
-    installId: record.installId,
-    installedAt: record.installedAt,
-    archiveSha256: record.archiveSha256,
-    version: record.version,
-  });
+  // The RECORD, not a literal rebuilt from it (cold review B, F1). The
+  // fingerprint this returns is compared byte-for-byte against one another
+  // module computed - `host start`'s relaunch admission, the claim baseline a
+  // park records - so byte-identical construction is the whole contract, and a
+  // hand-built literal makes that contract a convention six sites have to keep
+  // remembering. `HostInstallRecord` satisfies `InstallGenerationIdentity`
+  // structurally, so a field added to one side can no longer be forgotten on
+  // the other.
+  const installGeneration = encodeInstallGeneration(record);
 
   logger.info("Host apply completed", {
     environment: opts.environment,

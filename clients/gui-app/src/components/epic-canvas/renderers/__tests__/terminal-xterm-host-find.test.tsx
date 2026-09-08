@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -34,6 +35,16 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 type Disposable = {
   readonly dispose: () => void;
@@ -528,11 +539,23 @@ describe("<TerminalXtermHost /> terminal find", () => {
       );
     });
 
-    // The reshow repair clears the (possibly invalidated) glyph atlas BEFORE
-    // forcing the full repaint, so every cell re-rasterizes in the current
-    // theme instead of painting from a stale/cleared atlas - the blank-grid /
-    // default-color regression after returning from `display:none`.
-    expect(xtermMocks.repaintLog).toEqual(["clearAtlas", "refresh"]);
+    // Two repaints, in this order. This host was born hidden and never held an
+    // addon, so the first refresh is the FIRST presentation loading one - not a
+    // restoration after disposal, which is covered in
+    // terminal-xterm-host-presentation.test.tsx. What this pins is the call
+    // ORDER of the two effects:
+    //   1. the presentation gate loads the canvas addon and repaints into it;
+    //   2. the reshow repair then clears the (possibly invalidated) glyph atlas
+    //      BEFORE forcing its own full repaint, so every cell re-rasterizes in
+    //      the current theme instead of painting from a stale/cleared atlas -
+    //      the blank-grid / default-color regression after returning from
+    //      `display:none`.
+    // Deliberately NOT evidence that the restore happens before paint: the
+    // presentation effect is declared ahead of the repair, so this sequence
+    // would hold even if it were passive. The layout-vs-passive claim is pinned
+    // by the ordering observer in the presentation suite, and first-frame
+    // pixels only by the live render check.
+    expect(xtermMocks.repaintLog).toEqual(["refresh", "clearAtlas", "refresh"]);
   });
 
   it("repairs both visible split terminals while only the focused member owns find and DOM focus", () => {
@@ -588,7 +611,14 @@ describe("<TerminalXtermHost /> terminal find", () => {
       </>,
     );
 
+    // Both split members mount presented, so each one's presentation layout
+    // effect loads a canvas addon and repaints (the two leading refreshes, both
+    // before paint) and each one's passive reshow repair then clears its atlas
+    // and repaints again. Neither pane's presentation is suppressed by the
+    // other's - being unfocused is not being unpresented.
     expect(xtermMocks.repaintLog).toEqual([
+      "refresh",
+      "refresh",
       "clearAtlas",
       "refresh",
       "clearAtlas",

@@ -77,6 +77,7 @@ export type AnalyticsSettingsSection =
   | "keybindings"
   | "link-phone"
   | "notifications"
+  | "opening-behavior"
   | "providers"
   | "shell"
   | "usage"
@@ -91,10 +92,22 @@ export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket";
  * carries no signal here. */
 export type AnalyticsUsageImageExportSource = "epic_dialog" | "settings";
 
-export type AnalyticsEditor = "cursor" | "vscode" | "windsurf" | "zed";
+/**
+ * Mirrors the protocol's `EditorId` registry. Spelled out rather than derived
+ * so a wire-level addition is a deliberate analytics decision: the union is a
+ * reported dimension, and widening it silently would put a value into the
+ * warehouse that no dashboard was built to expect.
+ */
+export type AnalyticsEditor =
+  | "cursor"
+  | "vscode"
+  | "vscodium"
+  | "windsurf"
+  | "zed";
 
 export type AnalyticsHarness =
   | "amp"
+  | "antigravity"
   | "claude"
   | "codex"
   | "copilot"
@@ -187,6 +200,7 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
+  | "login-import"
   | "mobile-switcher"
   | "mobile-tasks"
   | "navigation"
@@ -210,6 +224,7 @@ export type AnalyticsProviderOperation =
 
 export type AnalyticsProvider =
   | "amp"
+  | "antigravity"
   | "claude-code"
   | "codex"
   | "copilot"
@@ -234,7 +249,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
-  | "agentTabSurfacingMode"
+  | "agentTabSurfacing"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "chatTurnMinimapSide"
@@ -247,6 +262,7 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
+  | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
   | "preventSleepWhileRunning"
@@ -261,6 +277,7 @@ export type AnalyticsSetting =
   | "terminalFontFamily"
   | "terminalFontSize"
   | "theme"
+  | "tilePlacement"
   | "themePreset"
   | "uiFontFamily"
   | "uiFontSize"
@@ -339,6 +356,10 @@ export enum AnalyticsEvent {
   WorkspaceRecentForgotten = "workspace_recent_forgotten",
   WorkspaceFileOpened = "workspace_file_opened",
   WorkspaceOpenedInEditor = "workspace_opened_in_editor",
+  // A PDF hit the 20 MiB asset-stream cap and fell back to "Open
+  // Externally" - the metric that decides whether the cap needs a
+  // per-type raise or range streaming (PDF preview design, Q6).
+  PdfPreviewTooLarge = "pdf_preview_too_large",
   WorktreeCreated = "worktree_created",
   WorktreeImported = "worktree_imported",
   WorktreeSelected = "worktree_selected",
@@ -640,6 +661,10 @@ export interface AnalyticsEventProperties {
     readonly surface: AnalyticsWorkspaceSurface;
   };
   readonly [AnalyticsEvent.WorkspaceFileOpened]: SourceProperties;
+  readonly [AnalyticsEvent.PdfPreviewTooLarge]: {
+    /** Which asset-stream surface the over-cap PDF was requested from. */
+    readonly surface: "workspace" | "git-old" | "git-new";
+  };
   readonly [AnalyticsEvent.WorkspaceOpenedInEditor]: SourceProperties & {
     readonly editor: AnalyticsEditor;
   };
@@ -1016,6 +1041,7 @@ const ANALYTICS_COMMANDS = new Set<string>([
 
 const ANALYTICS_HARNESSES = new Set<string>([
   "amp",
+  "antigravity",
   "claude",
   "codex",
   "copilot",
@@ -1039,6 +1065,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
 
 const ANALYTICS_PROVIDERS = new Set<string>([
   "amp",
+  "antigravity",
   "claude-code",
   "codex",
   "copilot",
@@ -1083,6 +1110,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     keybindings: true,
     "link-phone": true,
     notifications: true,
+    "opening-behavior": true,
     providers: true,
     shell: true,
     usage: true,
@@ -1091,6 +1119,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
 );
 
 const ANALYTICS_SETTINGS = new Set<string>([
+  "agentTabSurfacing",
   "allowPrereleaseUpdates",
   "artifactIconColorMode",
   "artifactIconColors",
@@ -1103,6 +1132,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "defaultSelection",
   "defaultServiceTier",
   "diffViewerPreferences",
+  "linkOpen",
   "pinContextUsageBreakdown",
   "pointerCursors",
   "preventSleepWhileRunning",
@@ -1115,6 +1145,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "terminalFontSize",
   "theme",
   "themePreset",
+  "tilePlacement",
   "uiFontFamily",
   "uiFontSize",
   "voiceInputEnabled",
@@ -1281,6 +1312,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.TaskCreationFailed],
     ["source", "blocker", "mode"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.PdfPreviewTooLarge], ["surface"]),
   ...eventKeyEntries(
     [AnalyticsEvent.HostSetupStarted, AnalyticsEvent.HostSetupSucceeded],
     ["reason"],

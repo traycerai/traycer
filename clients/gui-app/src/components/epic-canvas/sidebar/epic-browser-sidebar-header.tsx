@@ -87,11 +87,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const [hostMenuOpen, setHostMenuOpen] = useState(false);
   const resolvedHost = useHostDirectoryEntryForHostId(hostPin.resolvedHostId);
-  const { add: addBrowser, isAdding } = useAddBrowserAction(
-    props.epicId,
-    props.tabId,
-    null,
-  );
+  const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
   const handleAdd = useCallback(() => {
     if (collapsed) setPanelSectionCollapsed("browsers", false);
     addBrowser();

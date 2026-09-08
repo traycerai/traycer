@@ -83,6 +83,23 @@ describe("GlobalResourcesStreamMount", () => {
     streamMock.version = null;
   });
 
+  it("requests interactive cadence only while its monitor is visible", () => {
+    const demands: string[] = [];
+    __setResourcesStreamClientFactoryForTests(() => ({
+      close: () => undefined,
+      setDemand: (demand) => demands.push(demand),
+    }));
+
+    const view = render(<GlobalResourcesStreamMount interactive={false} />);
+    expect(demands).toEqual(["background"]);
+
+    view.rerender(<GlobalResourcesStreamMount interactive />);
+    expect(demands).toEqual(["background", "interactive"]);
+
+    view.rerender(<GlobalResourcesStreamMount interactive={false} />);
+    expect(demands).toEqual(["background", "interactive", "background"]);
+  });
+
   /**
    * The other side of the gate, and the reason it is still the PRE-STREAM
    * verdict: when the pre-check CAN convict — a local host, where the
@@ -95,10 +112,10 @@ describe("GlobalResourcesStreamMount", () => {
     let builds = 0;
     __setResourcesStreamClientFactoryForTests((_scope, _callbacks) => {
       builds += 1;
-      return { close: () => undefined };
+      return { close: () => undefined, setDemand: () => undefined };
     });
 
-    render(<GlobalResourcesStreamMount />);
+    render(<GlobalResourcesStreamMount interactive={false} />);
 
     expect(builds).toBe(0);
     expect(resourcesRegistry.getGlobal()).toBeNull();
@@ -127,10 +144,10 @@ describe("GlobalResourcesStreamMount", () => {
     __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
       builds += 1;
       captured = callbacks;
-      return { close: () => undefined };
+      return { close: () => undefined, setDemand: () => undefined };
     });
 
-    render(<GlobalResourcesStreamMount />);
+    render(<GlobalResourcesStreamMount interactive={false} />);
     expect(builds).toBe(1);
 
     act(() => {
@@ -164,10 +181,10 @@ describe("GlobalResourcesStreamMount", () => {
     __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
       builds += 1;
       captured = callbacks;
-      return { close: () => undefined };
+      return { close: () => undefined, setDemand: () => undefined };
     });
 
-    render(<GlobalResourcesStreamMount />);
+    render(<GlobalResourcesStreamMount interactive={false} />);
     act(() => {
       emit().onScopeSupport("unsupported");
     });
@@ -197,10 +214,10 @@ describe("GlobalResourcesStreamMount", () => {
     __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
       builds += 1;
       captured = callbacks;
-      return { close: () => undefined };
+      return { close: () => undefined, setDemand: () => undefined };
     });
 
-    render(<GlobalResourcesStreamMount />);
+    render(<GlobalResourcesStreamMount interactive={false} />);
     act(() => {
       emit().onScopeSupport("supported");
     });

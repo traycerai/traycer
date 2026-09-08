@@ -1395,6 +1395,7 @@ function toolSegment(
     error: null,
     agentMessageSend: null,
     managedCommand: null,
+    agentMessageReceipt: null,
     isStreaming: false,
     endState: null,
     stopped: false,
@@ -1424,6 +1425,7 @@ function a2aToolSegment(
       expectReply: send.expectReply,
     }),
     managedCommand: null,
+    agentMessageReceipt: null,
     error: null,
     agentMessageSend: send,
     isStreaming: false,
@@ -1561,8 +1563,6 @@ function interviewSegment(
     kind: "interview",
     status: "completed",
     toolName: "question",
-    title: "Question",
-    description: null,
     questions: [
       {
         questionId: null,

@@ -87,7 +87,8 @@ export const epicSchemaSurfaceBaseline = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "model": {
@@ -183,7 +184,8 @@ export const epicSchemaSurfaceBaseline = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "sessionId": {
@@ -304,7 +306,8 @@ export const epicSchemaSurfaceBaseline = {
                               "hermes",
                               "omp",
                               "huggingface",
-                              "reasonix"
+                              "reasonix",
+                              "antigravity"
                             ]
                           },
                           "sessionId": {
@@ -438,7 +441,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "hermes",
                                   "omp",
                                   "huggingface",
-                                  "reasonix"
+                                  "reasonix",
+                                  "antigravity"
                                 ]
                               },
                               "agentId": {
@@ -611,30 +615,6 @@ export const epicSchemaSurfaceBaseline = {
                                               "type": "string"
                                             }
                                           },
-                                          "attributes": {
-                                            "type": "array",
-                                            "items": {
-                                              "type": "object",
-                                              "properties": {
-                                                "name": {
-                                                  "type": "string"
-                                                },
-                                                "value": {
-                                                  "type": "string"
-                                                }
-                                              },
-                                              "required": [
-                                                "name",
-                                                "value"
-                                              ]
-                                            }
-                                          },
-                                          "outerHtml": {
-                                            "type": "string"
-                                          },
-                                          "outerHtmlTruncated": {
-                                            "type": "boolean"
-                                          },
                                           "textPreview": {
                                             "anyOf": [
                                               {
@@ -728,9 +708,6 @@ export const epicSchemaSurfaceBaseline = {
                                           "tagName",
                                           "elementId",
                                           "classNames",
-                                          "attributes",
-                                          "outerHtml",
-                                          "outerHtmlTruncated",
                                           "textPreview",
                                           "ariaRole",
                                           "accessibleName",
@@ -2977,6 +2954,109 @@ export const epicSchemaSurfaceBaseline = {
                                   "sessionWorkspaceSnapshot",
                                   "createdAt"
                                 ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "const": "antigravity"
+                                  },
+                                  "hostId": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "sessionWorkspaceSnapshot": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspaceKind": {
+                                        "type": "string",
+                                        "const": "session-snapshot"
+                                      },
+                                      "primaryWorkspace": {
+                                        "type": "string"
+                                      },
+                                      "secondaryWorkspaces": {
+                                        "default": [],
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "workspaceKind",
+                                      "primaryWorkspace"
+                                    ]
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "coveredUntilMessageId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "profileId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "labelSnapshot": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accountUuid": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accentColor": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt"
+                                ]
                               }
                             ]
                           },
@@ -3035,7 +3115,8 @@ export const epicSchemaSurfaceBaseline = {
                               "hermes",
                               "omp",
                               "huggingface",
-                              "reasonix"
+                              "reasonix",
+                              "antigravity"
                             ]
                           },
                           "agentId": {
@@ -3171,7 +3252,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "hermes",
                                             "omp",
                                             "huggingface",
-                                            "reasonix"
+                                            "reasonix",
+                                            "antigravity"
                                           ]
                                         },
                                         "noticeKind": {
@@ -3648,6 +3730,29 @@ export const epicSchemaSurfaceBaseline = {
                                         "message",
                                         "responseId",
                                         "expectReply"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "agentMessageReceipt": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "receiverAgentId": {
+                                          "type": "string"
+                                        },
+                                        "messageId": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "receiverAgentId",
+                                        "messageId"
                                       ]
                                     },
                                     {
@@ -4739,7 +4844,8 @@ export const epicSchemaSurfaceBaseline = {
                                     "hermes",
                                     "omp",
                                     "huggingface",
-                                    "reasonix"
+                                    "reasonix",
+                                    "antigravity"
                                   ]
                                 },
                                 "source": {
@@ -4767,7 +4873,8 @@ export const epicSchemaSurfaceBaseline = {
                                         "hermes",
                                         "omp",
                                         "huggingface",
-                                        "reasonix"
+                                        "reasonix",
+                                        "antigravity"
                                       ]
                                     },
                                     "sessionId": {
@@ -5458,7 +5565,8 @@ export const epicSchemaSurfaceBaseline = {
                                                 "hermes",
                                                 "omp",
                                                 "huggingface",
-                                                "reasonix"
+                                                "reasonix",
+                                                "antigravity"
                                               ]
                                             },
                                             "agentId": {
@@ -6498,7 +6606,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "hermes",
                                   "omp",
                                   "huggingface",
-                                  "reasonix"
+                                  "reasonix",
+                                  "antigravity"
                                 ]
                               },
                               "agentId": {
@@ -8138,7 +8247,8 @@ export const epicSchemaSurfaceBaseline = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "model": {
@@ -8237,7 +8347,8 @@ export const epicSchemaSurfaceBaseline = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "sessionId": {
@@ -8363,7 +8474,8 @@ export const epicSchemaSurfaceBaseline = {
                               "hermes",
                               "omp",
                               "huggingface",
-                              "reasonix"
+                              "reasonix",
+                              "antigravity"
                             ]
                           },
                           "sessionId": {
@@ -8504,7 +8616,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "hermes",
                                   "omp",
                                   "huggingface",
-                                  "reasonix"
+                                  "reasonix",
+                                  "antigravity"
                                 ]
                               },
                               "agentId": {
@@ -8683,31 +8796,6 @@ export const epicSchemaSurfaceBaseline = {
                                               "type": "string"
                                             }
                                           },
-                                          "attributes": {
-                                            "type": "array",
-                                            "items": {
-                                              "type": "object",
-                                              "properties": {
-                                                "name": {
-                                                  "type": "string"
-                                                },
-                                                "value": {
-                                                  "type": "string"
-                                                }
-                                              },
-                                              "required": [
-                                                "name",
-                                                "value"
-                                              ],
-                                              "additionalProperties": false
-                                            }
-                                          },
-                                          "outerHtml": {
-                                            "type": "string"
-                                          },
-                                          "outerHtmlTruncated": {
-                                            "type": "boolean"
-                                          },
                                           "textPreview": {
                                             "anyOf": [
                                               {
@@ -8803,9 +8891,6 @@ export const epicSchemaSurfaceBaseline = {
                                           "tagName",
                                           "elementId",
                                           "classNames",
-                                          "attributes",
-                                          "outerHtml",
-                                          "outerHtmlTruncated",
                                           "textPreview",
                                           "ariaRole",
                                           "accessibleName",
@@ -11221,6 +11306,117 @@ export const epicSchemaSurfaceBaseline = {
                                   "accentColor"
                                 ],
                                 "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "const": "antigravity"
+                                  },
+                                  "hostId": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "sessionWorkspaceSnapshot": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspaceKind": {
+                                        "type": "string",
+                                        "const": "session-snapshot"
+                                      },
+                                      "primaryWorkspace": {
+                                        "type": "string"
+                                      },
+                                      "secondaryWorkspaces": {
+                                        "default": [],
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "workspaceKind",
+                                      "primaryWorkspace",
+                                      "secondaryWorkspaces"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "coveredUntilMessageId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "profileId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "labelSnapshot": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accountUuid": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accentColor": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt",
+                                  "coveredUntilMessageId",
+                                  "profileId",
+                                  "labelSnapshot",
+                                  "accountUuid",
+                                  "accentColor"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -11280,7 +11476,8 @@ export const epicSchemaSurfaceBaseline = {
                               "hermes",
                               "omp",
                               "huggingface",
-                              "reasonix"
+                              "reasonix",
+                              "antigravity"
                             ]
                           },
                           "agentId": {
@@ -11421,7 +11618,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "hermes",
                                             "omp",
                                             "huggingface",
-                                            "reasonix"
+                                            "reasonix",
+                                            "antigravity"
                                           ]
                                         },
                                         "noticeKind": {
@@ -11919,6 +12117,30 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
+                                "agentMessageReceipt": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "receiverAgentId": {
+                                          "type": "string"
+                                        },
+                                        "messageId": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "receiverAgentId",
+                                        "messageId"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "managedCommand": {
                                   "default": null,
                                   "anyOf": [
@@ -12299,6 +12521,7 @@ export const epicSchemaSurfaceBaseline = {
                                 "taskTodoItems",
                                 "error",
                                 "agentMessageSend",
+                                "agentMessageReceipt",
                                 "managedCommand",
                                 "progress",
                                 "backgroundOutput",
@@ -13056,7 +13279,8 @@ export const epicSchemaSurfaceBaseline = {
                                     "hermes",
                                     "omp",
                                     "huggingface",
-                                    "reasonix"
+                                    "reasonix",
+                                    "antigravity"
                                   ]
                                 },
                                 "source": {
@@ -13084,7 +13308,8 @@ export const epicSchemaSurfaceBaseline = {
                                         "hermes",
                                         "omp",
                                         "huggingface",
-                                        "reasonix"
+                                        "reasonix",
+                                        "antigravity"
                                       ]
                                     },
                                     "sessionId": {
@@ -13752,7 +13977,8 @@ export const epicSchemaSurfaceBaseline = {
                                                 "hermes",
                                                 "omp",
                                                 "huggingface",
-                                                "reasonix"
+                                                "reasonix",
+                                                "antigravity"
                                               ]
                                             },
                                             "agentId": {
@@ -14839,7 +15065,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "hermes",
                                   "omp",
                                   "huggingface",
-                                  "reasonix"
+                                  "reasonix",
+                                  "antigravity"
                                 ]
                               },
                               "agentId": {

@@ -14,6 +14,10 @@ import {
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   cloudChatListAuthorizesRecordSweep,
@@ -22,6 +26,7 @@ import {
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
+  epicNodeRecency,
   useEpicArtifactRecords,
   useEpicChatRecordListAuthoritative,
   useEpicLastFocusedArtifactId,
@@ -45,6 +50,8 @@ import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-foc
 import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { isCurrentEpicTabRoute } from "@/lib/epic-nested-focus-navigation";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
@@ -103,7 +110,6 @@ export function useEpicRouteSynchronization(
   });
   const currentTab = useEpicTab(tabId);
   const renameTab = useEpicCanvasStore((s) => s.renameTab);
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
   const applyNestedRouteFocus = useEpicCanvasStore(
     (s) => s.applyNestedRouteFocus,
   );
@@ -376,10 +382,20 @@ export function useEpicRouteSynchronization(
     }
 
     lastAutoOpenKey.current = key;
+    // Auto-open's recency input, read HERE rather than subscribed to. Every
+    // value in it moves on each streamed token, and this decision fires once
+    // per key - a subscription would re-render this hook at the token rate to
+    // feed a branch that has already run. The projection it reads is the same
+    // one `records` comes from, so the two are always in step: whatever agent
+    // rows this device has, it has their activity clocks, and an epic whose
+    // projection carries no agent rows yields an empty map - the resolver's
+    // "no recency available" input, which lands on the first node in tree
+    // order exactly as before.
     const target = resolveAutoOpenTarget(
       records,
       focusArtifactId ?? null,
       persistedFocus,
+      epicNodeRecency(handle.store.getState()),
     );
     if (target === null) {
       return;
@@ -387,21 +403,54 @@ export function useEpicRouteSynchronization(
     if (activeArtifactId === target.id) {
       return;
     }
-    openTileInTab(tabId, {
-      id: target.id,
-      instanceId: uuidv4(),
-      type: target.type,
-      name: target.name,
-      hostId: target.hostId,
-    });
+    // Route landing uses the same gesture mapping as a link click (C11), but
+    // it is the LANDING itself: the focus params it derives belong on the
+    // entry the user already navigated to, so the commit REPLACES rather than
+    // pushing a second entry they would have to press Back through twice.
+    openTileWithNavigation(
+      tileIntent(
+        {
+          id: target.id,
+          instanceId: uuidv4(),
+          type: target.type,
+          name: target.name,
+          hostId: target.hostId,
+        },
+        { tabId },
+        "single",
+        "deep_link",
+      ),
+      (targetEpicId, targetTabId, prepare) => {
+        const focusTarget = prepare();
+        if (focusTarget === null) return null;
+        if (
+          !isCurrentEpicTabRoute(
+            router.state.location.pathname,
+            targetEpicId,
+            targetTabId,
+          )
+        ) {
+          return focusTarget;
+        }
+        replaceNestedFocusRoute(
+          navigate,
+          { epicId: targetEpicId, tabId: targetTabId },
+          focusTarget,
+        );
+        return focusTarget;
+      },
+      MANUAL_TILE_OPEN,
+    );
   }, [
     snapshotLoaded,
     records,
+    handle,
     focusArtifactId,
     focusedAt,
     persistedFocus,
     hasRestoredCanvas,
-    openTileInTab,
+    navigate,
+    router,
     activeArtifactId,
     epicId,
     tabId,

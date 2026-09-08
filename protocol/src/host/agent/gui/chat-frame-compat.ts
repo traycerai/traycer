@@ -344,6 +344,29 @@ function projectQueue(value: unknown): unknown {
   return changed ? { ...value, items } : value;
 }
 
+/**
+ * Drop `relaunchOnHostRestart` from a list of managed commands. `1.6` shipped
+ * binding the command WITHOUT it (`managedCommandSchemaPreRelaunch`), and the
+ * flag rides `1.7`+ only; the same strip serves the snapshot's set and the
+ * `managedCommandsChanged` frame. Identity when nothing carries the key.
+ */
+function projectManagedCommands(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  let changed = false;
+  const projected = value.map((command) => {
+    if (
+      !isRecord(command) ||
+      !Object.hasOwn(command, "relaunchOnHostRestart")
+    ) {
+      return command;
+    }
+    changed = true;
+    const { relaunchOnHostRestart: _relaunchOnHostRestart, ...rest } = command;
+    return rest;
+  });
+  return changed ? projected : value;
+}
+
 function projectSnapshot(
   frame: ProjectedChatSubscribeServerFrame,
 ): ProjectedChatSubscribeServerFrame {
@@ -351,11 +374,18 @@ function projectSnapshot(
   if (!isRecord(snapshot)) return frame;
   const chat = snapshot.chat;
   if (!isRecord(chat)) return frame;
+  // Only rewrite the key when the snapshot carries it: a pre-`1.6` peer's
+  // snapshot has already had the set stripped, and must not grow it back as
+  // an explicit `undefined`.
+  const managedCommands = Object.hasOwn(snapshot, "managedCommands")
+    ? { managedCommands: projectManagedCommands(snapshot.managedCommands) }
+    : {};
   return {
     ...frame,
     snapshot: {
       ...snapshot,
       queue: projectQueue(snapshot.queue),
+      ...managedCommands,
       chat: {
         ...chat,
         messages: projectMessages(chat.messages),
@@ -394,7 +424,10 @@ function projectSnapshot(
  * - `eventAppended` and the snapshot's `chat.events` → interview settlement
  *   metadata on durable chat events (see `INTERVIEW_SETTLEMENT_METADATA_KEY`);
  * - `interviewAnswered` → answers plus the delivery projection;
- * - `interviewErrored` → outcome, saved drafts and delivery.
+ * - `interviewErrored` → outcome, saved drafts and delivery;
+ * - the snapshot's `managedCommands` and the `managedCommandsChanged` frame →
+ *   `relaunchOnHostRestart` on each command (the `1.6` line binds the
+ *   pre-relaunch command shape).
  *
  * Queue prompt items carry the same user-authored browser payload as accepted
  * messages, so snapshots and `queueChanged` frames project that payload too.
@@ -431,6 +464,12 @@ export function projectChatServerFrameForVersion(
     case "queueChanged": {
       const queue = projectQueue(frame.queue);
       return queue === frame.queue ? frame : { ...frame, queue };
+    }
+    case "managedCommandsChanged": {
+      const managedCommands = projectManagedCommands(frame.managedCommands);
+      return managedCommands === frame.managedCommands
+        ? frame
+        : { ...frame, managedCommands };
     }
     case "eventAppended": {
       const event = projectChatEvent(frame.event);

@@ -10,6 +10,7 @@ interface RestartHostConfirmDialogProps {
 export function RestartHostConfirmDialog(props: RestartHostConfirmDialogProps) {
   return (
     <ConfirmDestructiveDialog
+      blockedReason={null}
       open={props.open}
       onOpenChange={props.onOpenChange}
       title="Restart host?"

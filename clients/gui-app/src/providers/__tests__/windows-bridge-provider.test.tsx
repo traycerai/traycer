@@ -130,7 +130,7 @@ function createDesktopWindowsBridge(): FakeWindowsBridgeHandle {
           }),
         set: (snapshot) => {
           authSessionSets.push(snapshot);
-          return Promise.resolve();
+          return Promise.resolve({ outcome: "accepted" as const });
         },
         onChange: (handler) => {
           authSessionHandlers.add(handler);

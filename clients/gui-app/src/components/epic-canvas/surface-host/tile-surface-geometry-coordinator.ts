@@ -99,6 +99,21 @@ function applyAllRegisteredRects(): void {
 }
 
 /**
+ * Re-reads every registered slot's rect right now, outside any observer
+ * callback. The shared `ResizeObserver` only fires on a SIZE change, so a
+ * layout change that moves a slot without resizing it - "Reverse views" on
+ * a top-level split, which swaps the two panes' `left` offsets while each
+ * keeps its own width - never reaches `applyAllRegisteredRects` on its own,
+ * and every hosted body stays painted at its pre-move rect while the pane
+ * chrome around it (tab strip, sidebar) has already moved. The layout that
+ * performs such a move calls this after commit, from a layout effect, so the
+ * rects it reads are the post-move ones.
+ */
+export function remeasureTileSurfaceGeometry(): void {
+  applyAllRegisteredRects();
+}
+
+/**
  * Registers the plane's own root element as the coordinate origin every
  * slot rect is reported relative to. Exactly one host element is expected
  * live at a time; a later register replaces the origin outright (the

@@ -1,4 +1,4 @@
-import { use, type MouseEvent, type ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
@@ -19,9 +19,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   ownerWorkspaceMetadataItems,
   worktreePrReferences,
@@ -33,6 +32,7 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
  * PR pills for the Epic history list (page background) and the chat/owner
@@ -233,8 +233,7 @@ function WorktreePrAnchor(props: {
   readonly className: string | undefined;
   readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const openPr = (event: MouseEvent<HTMLAnchorElement>): void => {
     event.stopPropagation();
     // Cmd/Ctrl-click is the platform gesture for "open this where it actually
@@ -249,20 +248,18 @@ function WorktreePrAnchor(props: {
       props.openPrInApp(props.reference);
       return;
     }
-    if (runnerHost === null) return;
     event.preventDefault();
-    openExternalLink.mutate(props.reference.url);
+    void openLink(props.reference.url, "github", event);
   };
   return (
     <a
       href={props.reference.url}
-      target="_blank"
-      rel="noreferrer"
       aria-label={props.reference.ariaLabel}
       className={props.className}
       data-testid="worktree-context-pr-pill"
       data-pr-state={props.reference.state}
       onClick={openPr}
+      onAuxClick={onMiddleClick(openPr)}
     >
       <WorktreePrPillContent
         label={props.reference.label}

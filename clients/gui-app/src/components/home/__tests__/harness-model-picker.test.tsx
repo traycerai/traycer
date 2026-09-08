@@ -1056,6 +1056,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           createProfileHostId={resolvedInput.createProfileHostId ?? null}
           runTargetHostId={resolvedInput.createProfileHostId ?? null}
           profileAdmission={resolvedInput.profileAdmission ?? null}
+          terminalLoginSurface={null}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>

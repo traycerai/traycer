@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type {
-  AppResourceSnapshotWire,
-  EpicResourceSnapshotWire,
-  HostTreeResourceSnapshotWire,
-  OtherResourceSnapshotWire,
-  OwnerResourceSnapshotWireV14,
-  ResourceProcessSnapshotWire,
+  AppResourceSnapshotWireV15,
+  EpicResourceSnapshotWireV15,
+  HostTreeResourceSnapshotWireV15,
+  OtherResourceSnapshotWireV15,
+  OwnerResourceSnapshotWireV15,
+  ResourceProcessSnapshotWireV15,
   ResourceOwnerKindWire,
+  RestrictedResourceSnapshotWireV15,
 } from "@traycer/protocol/host/resources/subscribe";
 import type {
   ResourcesProjectionPayload,
@@ -20,8 +21,8 @@ import {
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 
 function makeProcess(
-  over: Partial<ResourceProcessSnapshotWire>,
-): ResourceProcessSnapshotWire {
+  over: Partial<ResourceProcessSnapshotWireV15>,
+): ResourceProcessSnapshotWireV15 {
   return {
     pid: 1,
     parentPid: null,
@@ -30,6 +31,9 @@ function makeProcess(
     command: "/bin/bash",
     cpuPercent: 10,
     rssBytes: 1_000,
+    pssBytes: null,
+    privateBytes: null,
+    descriptor: null,
     ...over,
   };
 }
@@ -37,8 +41,8 @@ function makeProcess(
 function makeOwner(
   kind: ResourceOwnerKindWire,
   ownerId: string,
-  over: Partial<OwnerResourceSnapshotWireV14>,
-): OwnerResourceSnapshotWireV14 {
+  over: Partial<OwnerResourceSnapshotWireV15>,
+): OwnerResourceSnapshotWireV15 {
   return {
     owner: { kind, hostId: "host-1", epicId: "epic-1", ownerId },
     sampledAt: 1_000,
@@ -49,14 +53,16 @@ function makeOwner(
     processCount: 2,
     cpuPercent: 10,
     rssBytes: 1_000,
+    pssBytes: null,
+    privateBytes: null,
     processes: [makeProcess({})],
     ...over,
   };
 }
 
 function makeEpic(
-  over: Partial<EpicResourceSnapshotWire>,
-): EpicResourceSnapshotWire {
+  over: Partial<EpicResourceSnapshotWireV15>,
+): EpicResourceSnapshotWireV15 {
   return {
     hostId: "host-1",
     epicId: "epic-1",
@@ -65,13 +71,15 @@ function makeEpic(
     processCount: 2,
     cpuPercent: 10,
     rssBytes: 1_000,
+    pssBytes: null,
+    privateBytes: null,
     ...over,
   };
 }
 
 function makeApp(
-  over: Partial<AppResourceSnapshotWire>,
-): AppResourceSnapshotWire {
+  over: Partial<AppResourceSnapshotWireV15>,
+): AppResourceSnapshotWireV15 {
   return {
     sampledAt: 1_000,
     hostTotalMemoryBytes: 16_000,
@@ -86,32 +94,52 @@ function makeApp(
     processCount: 1,
     cpuPercent: 2,
     rssBytes: 500,
+    pssBytes: null,
+    privateBytes: null,
     ...over,
   };
 }
 
 function makeHostTree(
-  over: Partial<HostTreeResourceSnapshotWire>,
-): HostTreeResourceSnapshotWire {
+  over: Partial<HostTreeResourceSnapshotWireV15>,
+): HostTreeResourceSnapshotWireV15 {
   return {
     sampledAt: 1_000,
     processCount: 4,
     cpuPercent: 25,
     rssBytes: 2_500,
+    pssBytes: null,
+    privateBytes: null,
     ...over,
   };
 }
 
 function makeOther(
-  over: Partial<OtherResourceSnapshotWire>,
-): OtherResourceSnapshotWire {
+  over: Partial<OtherResourceSnapshotWireV15>,
+): OtherResourceSnapshotWireV15 {
   return {
     sampledAt: 1_000,
     rootPids: [20],
     processCount: 1,
     cpuPercent: 5,
     rssBytes: 400,
+    pssBytes: null,
+    privateBytes: null,
     processes: [makeProcess({ pid: 20, rootPid: 20 })],
+    ...over,
+  };
+}
+
+function makeRestricted(
+  over: Partial<RestrictedResourceSnapshotWireV15>,
+): RestrictedResourceSnapshotWireV15 {
+  return {
+    sampledAt: 1_000,
+    processCount: 1,
+    cpuPercent: 5,
+    rssBytes: 400,
+    pssBytes: null,
+    privateBytes: null,
     ...over,
   };
 }
@@ -128,6 +156,7 @@ function projection(
     epics: [],
     hostTree: undefined,
     other: undefined,
+    restricted: undefined,
     ...over,
   };
 }
@@ -148,6 +177,7 @@ function makeFakeClient(): FakeClient {
         close: () => {
           closed = true;
         },
+        setDemand: () => undefined,
       };
     },
     callbacks: () => {
@@ -289,6 +319,114 @@ describe("createResourcesStore", () => {
     handle.dispose();
   });
 
+  it("preserves restricted/owner/process identity across non-null pssBytes and privateBytes readings, and swaps it when they move", () => {
+    const fake = makeFakeClient();
+    const handle = createResourcesStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      streamClientFactory: fake.factory,
+    });
+    const key = resourceOwnerKey("terminal", "s1", "host-1");
+
+    fake.callbacks().onSnapshot(
+      projection({
+        restricted: makeRestricted({ pssBytes: 5_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            pssBytes: 2_000,
+            privateBytes: 1_500,
+            processes: [makeProcess({ pssBytes: 200, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    const restricted1 = handle.store.getState().restricted;
+    const owner1 = handle.store.getState().owners.get(key);
+    const process1 = owner1?.processes[0];
+
+    // Same tick, identical readings -> every reference is preserved.
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 2_000,
+        restricted: makeRestricted({ pssBytes: 5_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 2_000,
+            pssBytes: 2_000,
+            privateBytes: 1_500,
+            processes: [makeProcess({ pssBytes: 200, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    expect(handle.store.getState().restricted).toBe(restricted1);
+    expect(handle.store.getState().owners.get(key)).toBe(owner1);
+    expect(handle.store.getState().owners.get(key)?.processes[0]).toBe(
+      process1,
+    );
+
+    // Restricted's pssBytes moves alone -> fresh reference, new value visible,
+    // owner untouched.
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 3_000,
+        restricted: makeRestricted({ pssBytes: 6_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 3_000,
+            pssBytes: 2_000,
+            privateBytes: 1_500,
+            processes: [makeProcess({ pssBytes: 200, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    const restricted3 = handle.store.getState().restricted;
+    expect(restricted3).not.toBe(restricted1);
+    expect(restricted3?.pssBytes).toBe(6_000);
+    expect(handle.store.getState().owners.get(key)).toBe(owner1);
+
+    // Owner's privateBytes moves alone -> fresh owner reference, restricted
+    // untouched.
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 4_000,
+        restricted: makeRestricted({ pssBytes: 6_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 4_000,
+            pssBytes: 2_000,
+            privateBytes: 1_600,
+            processes: [makeProcess({ pssBytes: 200, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    const owner4 = handle.store.getState().owners.get(key);
+    expect(owner4).not.toBe(owner1);
+    expect(owner4?.privateBytes).toBe(1_600);
+    expect(handle.store.getState().restricted).toBe(restricted3);
+
+    // Only the nested process's pssBytes moves -> owner reference swaps again.
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 5_000,
+        restricted: makeRestricted({ pssBytes: 6_000, privateBytes: 4_000 }),
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 5_000,
+            pssBytes: 2_000,
+            privateBytes: 1_600,
+            processes: [makeProcess({ pssBytes: 300, privateBytes: 150 })],
+          }),
+        ],
+      }),
+    );
+    const owner5 = handle.store.getState().owners.get(key);
+    expect(owner5).not.toBe(owner4);
+    expect(owner5?.processes[0]?.pssBytes).toBe(300);
+    handle.dispose();
+  });
+
   it("preserves owner object identity when only sampledAt moves, and swaps it when metrics change", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
@@ -327,6 +465,56 @@ describe("createResourcesStore", () => {
     const third = handle.store.getState().owners.get(key);
     expect(third).not.toBe(first);
     expect(third?.cpuPercent).toBe(55);
+    handle.dispose();
+  });
+
+  it("swaps owner identity when only a process descriptor changes", () => {
+    const fake = makeFakeClient();
+    const handle = createResourcesStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      streamClientFactory: fake.factory,
+    });
+    const key = resourceOwnerKey("terminal", "s1", "host-1");
+
+    fake.callbacks().onSnapshot(
+      projection({
+        owners: [
+          makeOwner("terminal", "s1", {
+            processes: [makeProcess({ pid: 10, descriptor: null })],
+          }),
+        ],
+      }),
+    );
+    const first = handle.store.getState().owners.get(key);
+
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 2_000,
+        owners: [
+          makeOwner("terminal", "s1", {
+            sampledAt: 2_000,
+            processes: [
+              makeProcess({
+                pid: 10,
+                descriptor: {
+                  family: "chromium",
+                  runtime: "sessions",
+                  role: "browser",
+                },
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+
+    const updated = handle.store.getState().owners.get(key);
+    expect(updated).not.toBe(first);
+    expect(updated?.processes[0]?.descriptor).toEqual({
+      family: "chromium",
+      runtime: "sessions",
+      role: "browser",
+    });
     handle.dispose();
   });
 
@@ -494,6 +682,14 @@ describe("resourcesRegistry", () => {
     first.callbacks().onSnapshot(
       projection({
         app: makeApp({ sampledAt: 1_000, cpuPercent: 5, rssBytes: 500 }),
+        restricted: {
+          sampledAt: 1_000,
+          processCount: 1,
+          cpuPercent: 3,
+          rssBytes: 300,
+          pssBytes: null,
+          privateBytes: null,
+        },
         owners: [
           makeOwner("terminal", "term-1", {
             cpuPercent: 10,
@@ -506,6 +702,14 @@ describe("resourcesRegistry", () => {
       projection({
         epicId: "epic-2",
         app: makeApp({ sampledAt: 2_000, cpuPercent: 7, rssBytes: 700 }),
+        restricted: {
+          sampledAt: 2_000,
+          processCount: 1,
+          cpuPercent: 10,
+          rssBytes: 100,
+          pssBytes: null,
+          privateBytes: null,
+        },
         owners: [
           makeOwner("chat", "chat-1", {
             cpuPercent: 3,
@@ -520,6 +724,12 @@ describe("resourcesRegistry", () => {
     // Only the latest app snapshot is exposed (charged once, not summed per epic).
     expect(global.app?.sampledAt).toBe(2_000);
     expect(global.owners).toHaveLength(2);
+    expect(global.entries.every((entry) => entry.restricted !== null)).toBe(
+      true,
+    );
+    // Each epic's value means "outside this epic" and overlaps the owners
+    // already combined above, so no one epic-relative bucket is globally safe.
+    expect(global.restricted).toBeNull();
   });
 });
 
@@ -563,7 +773,7 @@ describe("global scope support", () => {
             upgradeGuidance: null,
           },
         });
-        return { close: () => undefined };
+        return { close: () => undefined, setDemand: () => undefined };
       },
     });
 

@@ -28,10 +28,6 @@ import type { RunnerIpcBridge } from "./runner-ipc-bridge";
  */
 const UPDATE_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 500;
 
-const finalBrowserStateCapturedSchema = z.object({
-  requestId: z.string().min(1),
-});
-
 export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(RunnerHostInvoke.appLifecycleQuit, () => {
     log.info("[runner-ipc] app quit requested by renderer");
@@ -192,25 +188,6 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
       bridge.appLifecycleReadyWindowIds.add(windowId);
       bridge.unsyncedEditsSnapshots.set(windowId, parsed.snapshot);
       waiter.resolve(parsed.snapshot);
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.finalBrowserStateCaptured,
-    (event, payload: unknown) => {
-      const windowId = bridge.resolveSenderWindowId(event);
-      const parsed = finalBrowserStateCapturedSchema.safeParse(payload);
-      if (windowId === null || !parsed.success) {
-        // Without this the sender's `requestFinalBrowserCapture` waits out
-        // FINAL_BROWSER_CAPTURE_TIMEOUT_MS and logs only a timeout, so the
-        // real cause of a quit-path stall is unrecoverable from the logs.
-        log.warn("[runner-ipc] finalBrowserStateCaptured ack rejected", {
-          windowId,
-          payload,
-        });
-        return;
-      }
-      bridge.acknowledgeFinalBrowserCapture(windowId, parsed.data.requestId);
     },
   );
 }

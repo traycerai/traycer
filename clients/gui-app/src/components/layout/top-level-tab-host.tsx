@@ -1,6 +1,7 @@
 import {
   Suspense,
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -59,10 +60,12 @@ import {
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import { STABLE_TILE_SURFACE_HOST_ENABLED } from "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch";
 import { renderHostedChatSurfaceBody } from "@/components/epic-canvas/surface-host/hosted-chat-surface-body";
+import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 import {
   activateHostedTopLevelSurface,
   refIsFocused,
   refsMatch,
+  registerHostedTopLevelActivationClaims,
 } from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
 
 export { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
@@ -135,11 +138,32 @@ export function TopLevelTabHost() {
       },
     ];
   });
+  // Hosted chat bodies (`StableTileSurfaceHost`) are positioned by rects the
+  // geometry coordinator reads inside a ResizeObserver callback, and a
+  // ResizeObserver reports SIZE changes only. A placement change here can move
+  // a surface without resizing it - "Reverse views" swaps the two sides'
+  // `left` offsets while each side keeps its width (`1 - leftRatio` on the
+  // other side is the same width it already had) - so without this the two
+  // hosted bodies stay painted at their pre-swap rects while the tab strips
+  // and sidebars around them have already crossed over. Layout effect, not
+  // effect: the surface styles above are applied in this same commit and the
+  // re-read has to see them before paint. Parent layout effects run after the
+  // children's, so every record's own registration already exists by now.
+  const placementSignature = mounts
+    .map((mount) => surfacePlacementKey(mount.tab, mount.placement))
+    .join("\u001f");
+  useLayoutEffect(() => {
+    remeasureTileSurfaceGeometry();
+  }, [placementSignature]);
 
   return (
     <div
       ref={hostBoundsRef}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
+      // `overflow-clip`, not `overflow-hidden`: see the content viewport in
+      // `app-shell.tsx`. Every box between the header and a surface must be
+      // unscrollable, or a stray `focus()` / `scrollIntoView` can park it at a
+      // non-zero offset and push the surface's top row under the header.
+      className="relative flex min-h-0 min-w-0 flex-1 overflow-clip"
       data-testid="top-level-tab-host"
     >
       <PhaseMigrationControllerHost />
@@ -193,9 +217,9 @@ function HostedTileSurfaceHostMount(props: {
     claimPointerDown: claimActivationPointerDown,
   } = activation;
 
-  const claimFocus = useCallback(
-    (event: FocusEvent<HTMLDivElement>): void => {
-      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+  const claimFocusFromTarget = useCallback(
+    (target: EventTarget | null, defaultPrevented: boolean): void => {
+      activateHostedTopLevelSurface(target, defaultPrevented, {
         tabsByRefKey,
         activeItem,
         activate:
@@ -205,17 +229,17 @@ function HostedTileSurfaceHostMount(props: {
                 pendingTabRef.current = tab;
                 claimActivationFocus({
                   defaultPrevented: false,
-                  scope: event.target,
-                  target: event.target,
+                  scope: target,
+                  target,
                 });
               },
       });
     },
     [activeItem, activateSurface, claimActivationFocus, tabsByRefKey],
   );
-  const claimPointerDown = useCallback(
-    (event: PointerEvent<HTMLDivElement>): void => {
-      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+  const claimPointerDownFromTarget = useCallback(
+    (target: EventTarget | null, defaultPrevented: boolean): void => {
+      activateHostedTopLevelSurface(target, defaultPrevented, {
         tabsByRefKey,
         activeItem,
         activate:
@@ -225,13 +249,34 @@ function HostedTileSurfaceHostMount(props: {
                 pendingTabRef.current = tab;
                 claimActivationPointerDown({
                   defaultPrevented: false,
-                  scope: event.target,
-                  target: event.target,
+                  scope: target,
+                  target,
                 });
               },
       });
     },
     [activeItem, activateSurface, claimActivationPointerDown, tabsByRefKey],
+  );
+  const claimFocus = useCallback(
+    (event: FocusEvent<HTMLDivElement>): void => {
+      claimFocusFromTarget(event.target, event.defaultPrevented);
+    },
+    [claimFocusFromTarget],
+  );
+  const claimPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>): void => {
+      claimPointerDownFromTarget(event.target, event.defaultPrevented);
+    },
+    [claimPointerDownFromTarget],
+  );
+
+  useLayoutEffect(
+    () =>
+      registerHostedTopLevelActivationClaims({
+        claimFocus: claimFocusFromTarget,
+        claimPointerDown: claimPointerDownFromTarget,
+      }),
+    [claimFocusFromTarget, claimPointerDownFromTarget],
   );
 
   return (
@@ -504,9 +549,26 @@ function splitSidePlacement(
   };
 }
 
+function surfacePlacementKey(
+  tab: HeaderTab,
+  placement: SurfacePlacement,
+): string {
+  switch (placement.kind) {
+    case "hidden":
+    case "single":
+      return `${tabRefKey(tab)}:${placement.kind}`;
+    case "left":
+      return `${tabRefKey(tab)}:left:${placement.width}`;
+    case "right":
+      return `${tabRefKey(tab)}:right:${placement.left}:${placement.width}`;
+  }
+}
+
 function surfaceClassName(placement: SurfacePlacement): string {
   return cn(
-    "absolute inset-y-0 flex h-full min-h-0 min-w-0 flex-col overflow-hidden",
+    // `overflow-clip`, not `overflow-hidden` - same reason as the host above:
+    // a surface mount that can scroll programmatically never scrolls back.
+    "absolute inset-y-0 flex h-full min-h-0 min-w-0 flex-col overflow-clip",
     placement.kind === "single" && "inset-x-0",
     placement.kind === "hidden" && "hidden pointer-events-none",
   );
