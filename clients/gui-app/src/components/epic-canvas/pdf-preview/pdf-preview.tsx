@@ -65,7 +65,7 @@ const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
 
 export interface PdfPreviewProps {
-  /** Blob URL of the validated PDF bytes (from `useFileAsset`). */
+  /** Blob URL of the validated PDF bytes (from `useFileBytes`, `delivery: "blob"`). */
   readonly url: string;
   /** Toolbar caption; surfaces pass their path-like label of choice. */
   readonly fileName: string;

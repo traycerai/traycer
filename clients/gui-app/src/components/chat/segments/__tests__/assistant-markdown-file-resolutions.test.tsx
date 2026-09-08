@@ -22,10 +22,12 @@ import type {
 import type { EpicFileRecord } from "@/stores/epics/open-epic/types";
 import type { FileByteSource, FileBytesState } from "@/lib/files/byte-source";
 
-// -- mock: the byte half. Keyed by `path`, the only field an epic-file source
-// carries that a workspace/git/chat-attachment source does not. A `null`
-// source (or any non-epic-file source, which this test never constructs)
-// returns the LOADING shape - the real contract every caller relies on.
+// -- mock: the byte half. Epic-file sources are keyed by `path`, the only
+// field an epic-file source carries that a workspace/git/chat-attachment
+// source does not. Chat-attachment sources delegate to `blobSrcState` below:
+// since ticket 27 the imageResolutions path goes through this seam too, so a
+// mock that answered LOADING for them would hide the very case the
+// regression test at the bottom exists to hold.
 const fileBytesState = vi.hoisted(() => {
   const loading: FileBytesState = {
     status: "loading",
@@ -40,16 +42,25 @@ const fileBytesState = vi.hoisted(() => {
   return {
     loading,
     byPath: new Map<string, FileBytesState>(),
-    calls: 0,
+    /** Sources by kind, so the regression test can assert on the epic-file leg alone. */
+    kinds: [] as Array<string>,
   };
 });
 
 vi.mock("@/lib/files/byte-source", () => ({
   useFileBytes: (source: FileByteSource | null): FileBytesState => {
-    fileBytesState.calls += 1;
-    if (source === null || source.kind !== "epic-file") {
-      return fileBytesState.loading;
+    if (source !== null) fileBytesState.kinds.push(source.kind);
+    if (source === null) return fileBytesState.loading;
+    if (source.kind === "chat-attachment") {
+      const blob = blobSrcState.value;
+      if (blob.status === "ready" && blob.src !== null) {
+        return readyBytes(blob.src, blob.mediaType, "blob");
+      }
+      return blob.status === "unavailable"
+        ? { ...fileBytesState.loading, status: "unavailable", reason: null }
+        : fileBytesState.loading;
     }
+    if (source.kind !== "epic-file") return fileBytesState.loading;
     return fileBytesState.byPath.get(source.path) ?? fileBytesState.loading;
   },
 }));
@@ -227,7 +238,7 @@ function renderNode(
 
 beforeEach(() => {
   fileBytesState.byPath.clear();
-  fileBytesState.calls = 0;
+  fileBytesState.kinds.length = 0;
   epicFilesState.entryByPath.clear();
   epicFilesState.posterByRecordingId.clear();
   blobSrcState.value = { status: "loading", src: null, mediaType: "image/png" };
@@ -446,7 +457,7 @@ describe("percent-encoded markdown targets still match a file resolution", () =>
 });
 
 describe("regression: an imageResolutions-only message is unchanged", () => {
-  it("renders the image through the chat-attachment blob path and never calls useFileBytes", () => {
+  it("renders the image through the chat-attachment leg and never reaches the epic-file one", () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/regression-diagram",
@@ -468,7 +479,9 @@ describe("regression: an imageResolutions-only message is unchanged", () => {
     expect(img.getAttribute("src")).toBe(
       "blob:http://localhost/regression-diagram",
     );
-    expect(fileBytesState.calls).toBe(0);
+    // The seam is shared now (ticket 27 phase B3); what must not happen is an
+    // imageResolutions image resolving through the epic-file plane.
+    expect(fileBytesState.kinds).toEqual(["chat-attachment"]);
   });
 
   it("renders a plain markdown link with no matching file resolution as an ordinary anchor", () => {

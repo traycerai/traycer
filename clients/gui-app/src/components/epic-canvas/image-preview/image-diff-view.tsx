@@ -209,7 +209,7 @@ export interface ImageDiffViewProps {
    * stage) at the OLD revision keeps that revision's shared pre-header
    * subscription alive (e.g. the same file open in two panes, one remounts
    * before the other's git-status catches up) - without this, the
-   * remounted side's fresh `useFileAsset` call would still coalesce onto
+   * remounted side's fresh byte-source call would still coalesce onto
    * that surviving old-revision subscription and replay its stale header
    * (sol re-review).
    */

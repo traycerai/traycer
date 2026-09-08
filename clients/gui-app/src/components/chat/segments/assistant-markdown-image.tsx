@@ -6,7 +6,6 @@ import {
   useScrollToChatBlock,
   type ScrollToChatBlock,
 } from "@/components/chat/chat-scroll-to-block";
-import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
@@ -676,8 +675,16 @@ function ResolvedImage(props: {
   readonly hash: string;
   readonly mediaType: string;
 }): ReactNode {
-  const image = useChatAttachmentBlobSrc(props.hash, props.mediaType, null);
-  if (image.status === "loading") {
+  // Through the same seam as the epic-file image above (ticket 27): the chat
+  // plane is one of `useFileBytes`'s four contracts, and this surface has no
+  // tile - so the legs that address a tab host go inert here rather than
+  // throwing (D27 amendment).
+  const image = useFileBytes({
+    kind: "chat-attachment",
+    hash: props.hash,
+    mediaType: props.mediaType,
+  });
+  if (image.status !== "ready" && image.status !== "unavailable") {
     return (
       <AttachmentImageLoading
         label="Waiting for image sync"
@@ -685,7 +692,7 @@ function ResolvedImage(props: {
       />
     );
   }
-  if (image.status === "unavailable") {
+  if (image.status !== "ready") {
     return (
       <AttachmentImageFailure
         alt={props.alt}
@@ -697,11 +704,11 @@ function ResolvedImage(props: {
     <AttachmentImage
       key={image.src}
       src={image.src}
-      // The resolved blob's OWN type, not `props.mediaType`: the latter is the
-      // claim stored on the message, and `AttachmentImage` gates SVG
-      // sanitization on what it is handed. A host-sniffed type overrides the
-      // claim (see `ImageBlobResolution`), so bytes that are really SVG cannot
-      // slip past the gate behind a stored `image/png`.
+      // The DELIVERED type, not `props.mediaType`: the latter is the claim
+      // stored on the message, and `AttachmentImage` gates SVG sanitization on
+      // what it is handed. A host-sniffed type overrides the claim (see
+      // `ImageBlobResolution`), so bytes that are really SVG cannot slip past
+      // the gate behind a stored `image/png`.
       mediaType={image.mediaType}
       alt={props.alt}
       suggestedName={null}
