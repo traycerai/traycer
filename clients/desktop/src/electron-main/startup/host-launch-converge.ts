@@ -77,6 +77,24 @@ function isUnavailableInstalledHost(status: HostControllerStatus): boolean {
   );
 }
 
+// The installed host is the exact install instance the user DELIBERATELY held
+// (a downgrade), so the launch reconcile must not apply the staged newer bytes
+// over it. Matched on the install INSTANCE (`installId`), not the version: a
+// hold left behind after the host has since moved forward - or a later
+// reinstall that happens to land the same version - names a DIFFERENT install
+// instance and must not suppress a legitimate update. `updateReady` stays true
+// and the stage stays on disk either way, so the GUI still advertises the
+// update and a user click still applies it fast - the hold parks the APPLY,
+// never the download.
+function isStagedApplyHeldBack(status: HostControllerStatus): boolean {
+  return (
+    status.updateReady &&
+    status.heldInstall !== null &&
+    status.installedInstallId !== null &&
+    status.heldInstall.installId === status.installedInstallId
+  );
+}
+
 // "Update to X" gates on `updateReady` OR activation debt (Renderer
 // surfaces cutover ticket, D4/D5): a ready update supersedes debt (its own
 // version is the label); debt alone labels the already-installed version,
@@ -482,17 +500,45 @@ export async function runLaunchHostConvergeReconcile(
     return;
   }
 
+  // A deliberately-held install parks the launch-time staged-apply: fall
+  // through to the activation/recovery arms so a HELD host that is down still
+  // gets started (on its own bytes, via the `--keep-installed` converge),
+  // while a held host already running is simply left alone with the stage
+  // parked. Only the automatic apply is suppressed; a user "Update now" is not
+  // this path and always applies.
+  const heldBack = isStagedApplyHeldBack(status);
+  if (heldBack) {
+    log.info(
+      "[host-controller] launch converge parking staged apply for held host",
+      {
+        heldVersion: status.heldInstall?.version ?? null,
+        stagedVersion: status.stagedVersion,
+      },
+    );
+  }
+
   let outcome: MutationOutcome<
     ApplyStagedOk | ActivateInstalledOk | ConvergeReadyOk
   > | null = null;
-  if (status.updateReady) {
+  if (status.updateReady && !heldBack) {
     const applied = await hostController.applyStaged("launch", false);
     outcome = await recoverAfterFailedApply(hostController, applied);
   } else if (
     status.activation === "pendingActivation" ||
     status.activation === "activationUnknown"
   ) {
-    outcome = await hostController.activateInstalled(false);
+    // `promoteReadyStage: false` for EVERY launch activation. A launch
+    // activation exists to activate the INSTALLED bytes when there is
+    // activation debt - never to promote a stage. Passing `!heldBack` was not
+    // enough: a held host with activation debt and NO stage at the first sample
+    // reads `updateReady === false` (so `heldBack === false`), yet
+    // `activateInstalled` re-runs `stageLatest()` internally and would promote
+    // a stage that becomes ready across that await, reverting the downgrade
+    // with `respectHold: false`. A known-ready update is already handled by the
+    // `applyStaged("launch")` branch above, under the authoritative CLI
+    // `--respect-hold` guard; anything that only becomes ready mid-activation
+    // waits for the next launch's apply branch. So launch never promotes here.
+    outcome = await hostController.activateInstalled(false, false);
   } else if (isUnavailableInstalledHost(status) && recovery === null) {
     // `recovery === null` keeps this from re-running a recovery the pre-stage
     // pass already attempted, since repeating a failure seconds later helps

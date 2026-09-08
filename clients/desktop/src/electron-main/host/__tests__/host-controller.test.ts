@@ -551,6 +551,19 @@ function writeStagedRecord(
   );
 }
 
+function writeHeldVersion(
+  environment: "production" | "dev",
+  version: string,
+  installId: string,
+): void {
+  const layout = getHostFsLayout(environment);
+  mkdirSync(layout.rootDir, { recursive: true });
+  writeFileSync(
+    layout.heldVersionRecordFile,
+    JSON.stringify({ version, installId }),
+  );
+}
+
 function writePidMetadata(
   environment: "production" | "dev",
   fields: {
@@ -1052,7 +1065,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -1411,8 +1424,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
       return { data: {} };
     });
 
-    const first = controller.activateInstalled(false);
-    const second = controller.activateInstalled(false);
+    const first = controller.activateInstalled(false, true);
+    const second = controller.activateInstalled(false, true);
     expect(first).toBe(second);
     await Promise.all([first, second]);
 
@@ -1772,7 +1785,7 @@ describe("two lanes: mutation vs download independence", () => {
       return { data: {} };
     });
 
-    const activatePromise = controller.activateInstalled(false);
+    const activatePromise = controller.activateInstalled(false, true);
     await downloadStarted.promise;
 
     const convergePromise = controller.convergeReady(false, {
@@ -2009,7 +2022,7 @@ describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)"
       return { outcome: "stamped" };
     });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("ok");
     const stampCalls = vi
@@ -2058,7 +2071,7 @@ describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup
       throw new Error("failed to seed a held lock for this test");
     }
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("deferred");
     await held.handle.release();
@@ -2430,7 +2443,7 @@ describe("canonical status: activation-state derivation", () => {
     // observed pid/startedAt/version - publish it as the CLI-owned restart
     // "would" once the host is actually up.
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    const activated = await launch1.activateInstalled(false);
+    const activated = await launch1.activateInstalled(false, true);
     expect(activated.kind).toBe("ok");
     expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.arrayContaining(["stamp-runtime"]),
@@ -2451,6 +2464,65 @@ describe("canonical status: activation-state derivation", () => {
     const launch2 = newController("production");
     const status2 = await launch2.getStatus();
     expect(status2.activation).toBe("activated");
+  });
+});
+
+// Ticket 4 (installId-bound): `getStatus().heldInstall` is a straight
+// passthrough of `readDesktopHeldHostVersion` over the controller's own
+// layout, and `installedInstallId` is the installed record's own id - the
+// read side the launch-converge gate and the menu/renderer both consult. The
+// two are reported separately rather than pre-compared, since the GATE
+// (`isStagedApplyHeldBack`) is what decides installId equality.
+describe("canonical status: heldInstall / installedInstallId", () => {
+  it("heldInstall is null when nothing is held", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+      installId: "install-a",
+    });
+
+    const status = await newController("production").getStatus();
+
+    expect(status.heldInstall).toBeNull();
+    expect(status.installedInstallId).toBe("install-a");
+  });
+
+  it("reflects the held-host-version record when present", async () => {
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+      installId: "install-a",
+    });
+    writeHeldVersion("production", "1.2.0", "install-a");
+
+    const status = await newController("production").getStatus();
+
+    expect(status.heldInstall).toEqual({
+      version: "1.2.0",
+      installId: "install-a",
+    });
+    expect(status.installedInstallId).toBe("install-a");
+  });
+
+  // installId-binding: a held record naming a DIFFERENT installId than the
+  // currently installed record (a reinstall of the same version got a fresh
+  // instance) is reported as-is - the mismatch is a fact for the gate to act
+  // on, not something `getStatus` resolves itself.
+  it("reports a mismatched installId as-is (a reinstall does not inherit the prior hold's identity)", async () => {
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+      installId: "install-b",
+    });
+    writeHeldVersion("production", "1.2.0", "install-a");
+
+    const status = await newController("production").getStatus();
+
+    expect(status.heldInstall).toEqual({
+      version: "1.2.0",
+      installId: "install-a",
+    });
+    expect(status.installedInstallId).toBe("install-b");
   });
 });
 
@@ -3107,8 +3179,49 @@ describe("yank/apply ordering", () => {
       reason: "ready",
     });
 
-    expect((await controller.activateInstalled(false)).kind).toBe("ok");
+    expect((await controller.activateInstalled(false, true)).kind).toBe("ok");
     expect(applyFingerprints).toEqual(["stage-1.8.0", "stage-replaced"]);
+  });
+
+  // Finding 1 (cold review, version-hold design): `promoteReadyStage: false`
+  // must NEVER promote a ready newer stage, even when one is genuinely ready -
+  // this is the guard the launch reconcile relies on to keep a held host from
+  // being reverted through activateInstalled's own "ready update supersedes
+  // debt" optimisation. Pinned at the controller level (not just the launch
+  // module's call site) because the promotion decision lives here.
+  it("promoteReadyStage: false activates the installed bytes and never shells `host apply`, even with a ready newer stage", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    const streamedArgs: (readonly string[])[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      streamedArgs.push(opts.args);
+      if (opts.args.includes("restart")) {
+        return { data: { activated: true } };
+      }
+      return { data: {} };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const outcome = await controller.activateInstalled(false, false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(streamedArgs).not.toContainEqual(expect.arrayContaining(["apply"]));
+    expect(streamedArgs).toContainEqual(
+      expect.arrayContaining(["restart", "--if-idle"]),
+    );
   });
 
   it("uses the prerelease registry view when the stage is an RC", async () => {
@@ -3681,7 +3794,7 @@ describe("yank/apply ordering", () => {
       return { data: {} };
     });
 
-    const outcome = await controller.activateInstalled(false);
+    const outcome = await controller.activateInstalled(false, true);
 
     expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -4576,6 +4689,108 @@ describe("platform matrix", () => {
     expect(streamBundledTraycerCliJson).toHaveBeenCalled();
     expect(outcome.kind).toBe("ok");
   });
+  // Finding (final hold model): `convergeReady` is now UNCONDITIONALLY
+  // liveness-only - `isInstalledVersionHeld()` is gone, and both a
+  // background and a user-repair converge always pass `--keep-installed`
+  // regardless of whether anything is held. Version movement is never this
+  // path's job (an explicit update or `host ensure --release` owns that),
+  // so a held OR unheld install alike stays exactly where it is; the
+  // version-hold record is consulted only at the launch-activation gate
+  // (`host-launch-converge.test.ts`), not here.
+  it("a user-repair over an unheld install still passes --keep-installed (liveness-only, unconditionally)", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    await controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
+  it("a user-repair over a held install also passes --keep-installed, keeping the held version", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    writeHeldVersion("production", "1.2.0", "install-1");
+
+    await controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
+  // A "stale" hold (the record names a version that has since moved past it)
+  // is no longer a distinct case for `convergeReady`: with the hold read
+  // removed from this path entirely, a stale record has exactly the same
+  // (unconditional) `--keep-installed` outcome as no record at all.
+  it("a user-repair with a stale hold (no longer matching the installed version) still passes --keep-installed", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeHeldVersion("production", "1.2.0", "install-1");
+
+    await controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
+  it("a user-repair over a held install on packaged macOS also passes --keep-installed", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.2.0",
+      runtimeVersion: "1.2.0",
+    });
+    writeHeldVersion("production", "1.2.0", "install-1");
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.2.0", action: "noop" },
+    });
+
+    await controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["--keep-installed"]),
+      }),
+    );
+  });
+
   it("a user-repair whose guard abandons mutates nothing", async () => {
     // The host was replaced while the repair waited in the lane. Nothing may
     // run — and critically the sentinel must NOT be cleared, since clearing
@@ -5534,7 +5749,7 @@ describe("packaged-macOS null-runtime readiness budget", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.activateInstalled(false);
+    const outcome = await controller.activateInstalled(false, true);
 
     expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -5704,9 +5919,12 @@ describe("Windows bundled-host --from fallback", () => {
 
     await controller.convergeReady(false, { kind: "background" });
 
+    // A background converge is liveness-only (the mid-session revert guard),
+    // so `--keep-installed` accompanies `--from` here - the archive is only
+    // the first-install source, never a reason to move a viable install.
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "ensure", "--from", archive],
+        args: ["host", "ensure", "--keep-installed", "--from", archive],
       }),
     );
   });
@@ -5735,7 +5953,7 @@ describe("Windows bundled-host --from fallback", () => {
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ["host", "ensure", "--from", archive],
+        args: ["host", "ensure", "--keep-installed", "--from", archive],
       }),
     );
   });
@@ -5757,7 +5975,7 @@ describe("Windows bundled-host --from fallback", () => {
     await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["host", "ensure"] }),
+      expect.objectContaining({ args: ["host", "ensure", "--keep-installed"] }),
     );
   });
   it("omits --from on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
@@ -5780,7 +5998,7 @@ describe("Windows bundled-host --from fallback", () => {
     await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["host", "ensure"] }),
+      expect.objectContaining({ args: ["host", "ensure", "--keep-installed"] }),
     );
   });
 });
@@ -7013,7 +7231,9 @@ describe("Class B CLI-owned caller publication", () => {
     });
     configureRestartAndStamp();
 
-    await expect(controller.activateInstalled(false)).resolves.toMatchObject({
+    await expect(
+      controller.activateInstalled(false, true),
+    ).resolves.toMatchObject({
       kind: "ok",
       value: { activated: true },
     });
@@ -8573,7 +8793,7 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
         data: { restarted: true, version: "1.7.0" },
       });
 
-      const outcome = await controller.activateInstalled(true);
+      const outcome = await controller.activateInstalled(true, true);
 
       expect(outcome.kind).toBe("ok");
       const argv = takeoverCallArgv();
@@ -9016,7 +9236,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     });
     configureStampAndServiceAttestation();
 
-    expect((await controller.activateInstalled(false)).kind).toBe("ok");
+    expect((await controller.activateInstalled(false, true)).kind).toBe("ok");
     expectCommandGenerationWasStamped();
   });
 
@@ -9348,7 +9568,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
         reason: "ready",
       });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("ok");
     // The retry is a FULL cycle - a second register, not a second wait on
@@ -9361,7 +9581,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     const controller = stagePackagedMacWorld();
     vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -9400,7 +9620,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
       return NOT_READY;
     });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("ok");
     // The point of the guard: no second bootout, no second wait.
@@ -9415,7 +9635,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     // host being evicted, still answering because teardown has not finished.
     // Reachable, and worth nothing as evidence.
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     expect(waitForHostReady).toHaveBeenCalledTimes(2);
@@ -9478,7 +9698,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -9511,7 +9731,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       new Error("takeover exploded"),
     );
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     // The raw `Error` path classifies to `failed` before enrichment; the
     // helper must preserve that kind, not just append text to it.
@@ -9541,7 +9761,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       ),
     );
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     // Fixup B8 (already shipped) classifies workload-busy as `busy` with
     // retry guidance, distinct from `deferred` (lock contention). The
@@ -9570,7 +9790,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       reason: "pid metadata never appeared",
     });
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -9607,7 +9827,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
         : "enabled",
     );
 
-    const activateOutcome = await controller.activateInstalled(true);
+    const activateOutcome = await controller.activateInstalled(true, true);
 
     expect(activateOutcome.kind).toBe("failed");
     // Guards against a vacuous pass: the pre-bootout `requires-approval`
@@ -9624,7 +9844,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     // resurrect the exact registration the user just removed.
     vi.mocked(registerHostLoginItem).mockResolvedValue("removed-by-user");
 
-    const outcome = await controller.activateInstalled(true);
+    const outcome = await controller.activateInstalled(true, true);
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {

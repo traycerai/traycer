@@ -228,6 +228,8 @@ class FakeHostController implements IpcHostController {
     installedVersion: null,
     latestVersion: null,
     stagedVersion: null,
+    heldInstall: null,
+    installedInstallId: null,
     installedRuntimeVersion: null,
     runningRuntimeVersion: null,
     updateReady: false,

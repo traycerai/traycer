@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => ({
   assertHostNotBusyMock: vi.fn(),
   isVersionYankedMock: vi.fn(),
   resolveServiceCliInvocationMock: vi.fn(),
+  holdVersionIfDowngradeMock: vi.fn(async () => undefined),
+  holdVersionOnSwapCommittedMock: vi.fn(),
+  onSwapCommittedSentinel: (async () => undefined) as (
+    ...args: unknown[]
+  ) => Promise<void>,
   lockHeld: false,
   lockAcquisitions: 0,
 }));
@@ -136,6 +141,29 @@ vi.mock("../../registry/client", () => ({
   }),
 }));
 
+// Version hold (final model, T6-safe write site): `provisionHost` no longer
+// calls `holdVersionIfDowngrade` itself after the committer returns -
+// `commitHostInstallSourceWithAttempt`'s phase hooks can reject AFTER the
+// swap (T6), so a write scheduled for after the call returns could be lost
+// for a committed downgrade. Instead it passes the committer an
+// `onSwapCommitted` OBSERVER, built by `holdVersionOnSwapCommitted`, which
+// fires the write itself right after the atomic swap. This suite therefore
+// asserts WHICH observer (a function, or `null`) `provisionHost` hands to
+// the (mocked) committer when `opts.holdExplicitDowngrade` is set - not that
+// `holdVersionIfDowngrade` was called directly. The observer's own
+// write/no-write matrix has its own coverage in `held-host-version.test.ts`.
+vi.mock("../held-host-version", () => ({
+  holdVersionIfDowngrade: (
+    ...callArgs: Parameters<typeof mocks.holdVersionIfDowngradeMock>
+  ) => mocks.holdVersionIfDowngradeMock(...callArgs),
+  holdVersionOnSwapCommitted: (
+    ...callArgs: Parameters<typeof mocks.holdVersionOnSwapCommittedMock>
+  ) => {
+    mocks.holdVersionOnSwapCommittedMock(...callArgs);
+    return mocks.onSwapCommittedSentinel;
+  },
+}));
+
 const {
   stageHostInstallSourceMock,
   commitHostInstallSourceMock,
@@ -147,6 +175,8 @@ const {
   assertHostNotBusyMock,
   isVersionYankedMock,
   resolveServiceCliInvocationMock,
+  holdVersionIfDowngradeMock,
+  holdVersionOnSwapCommittedMock,
 } = mocks;
 
 import { provisionHost, type ProvisionHostOptions } from "../provision";
@@ -183,11 +213,21 @@ function makeOpts(
     lockReason: "test-provision",
     onProgress: null,
     force: false,
+    holdExplicitDowngrade: false,
     adoption: undefined,
     beforeMutate: null,
     ...overrides,
   };
 }
+
+// The on-disk record's `version` field, unlike the parsed `HostInstallRecord`
+// type, can genuinely be unreadable (corrupt/missing) - `readHostInstallRecord`
+// only PARSES the file's other fields strictly, tolerating a bad version string
+// as `null` rather than rejecting the whole record. This intermediate type lets
+// the fixture below express that shape without a type-system-bypassing cast.
+type RecordWithUnreadableVersion = Omit<HostInstallRecord, "version"> & {
+  readonly version: string | null;
+};
 
 function sampleRecord(version: string): HostInstallRecord {
   return {
@@ -970,5 +1010,348 @@ describe("provisionHost - beforeMutate gate", () => {
     const result = await provisionHost(makeOpts({ beforeMutate: null }));
 
     expect(result.action).toBe("installed");
+  });
+});
+
+// Ticket 1 (downgrade-revert RCA): the `viability` satisfaction policy -
+// installed + not-yanked, asking nothing about which version. Liveness-only,
+// so a background converge that fires on a "host down" gap keeps whatever is
+// installed - older, newer, or equal - rather than reinstalling this build's
+// preferred pin over it. Mirrors the "Finding D: implicit-registry-minimum"
+// suite's fixtures/mocking shape above.
+describe("provisionHost - Ticket 1: viability satisfaction (downgrade-revert RCA)", () => {
+  beforeEach(() => {
+    mocks.callOrder = [];
+    mocks.lockHeld = false;
+    mocks.lockAcquisitions = 0;
+    serviceLabelForMock.mockReturnValue({
+      id: "ai.traycer.host",
+      environment: "production",
+    });
+    assertHostNotBusyMock.mockResolvedValue(undefined);
+    discardStagedHostInstallSourceMock.mockResolvedValue(undefined);
+    createServiceInstallLifecycleMock.mockReturnValue(sampleLifecycleHandle());
+    stageHostInstallSourceMock.mockResolvedValue(sampleStaged("1.3.0-rc.4"));
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("1.3.0-rc.4"),
+      previous: null,
+      installGeneration: "id:install-1.3.0-rc.4",
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function runningController() {
+    return {
+      status: async () => ({
+        state: "running" as const,
+        version: "host",
+        listenUrl: "ws://127.0.0.1:7100/rpc",
+        pid: 4242,
+      }),
+      install: vi.fn(),
+      start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    };
+  }
+
+  function stoppedController() {
+    let current: "stopped" | "running" = "stopped";
+    return {
+      status: async () => ({
+        state: current,
+        version: "host",
+        listenUrl: current === "running" ? "ws://127.0.0.1:7100/rpc" : null,
+        pid: current === "running" ? 4242 : null,
+      }),
+      install: vi.fn(),
+      start: vi.fn(async () => {
+        current = "running";
+      }),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    };
+  }
+
+  function notInstalledController() {
+    let current: "not-installed" | "running" = "not-installed";
+    return {
+      status: async () => ({
+        state: current,
+        version: null,
+        listenUrl: current === "running" ? "ws://127.0.0.1:7100/rpc" : null,
+        pid: current === "running" ? 4242 : null,
+      }),
+      install: vi.fn(async () => {
+        current = "running";
+      }),
+      start: vi.fn(async () => {
+        current = "running";
+      }),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    };
+  }
+
+  it("a viable OLDER install that is already running is a no-op - never reinstalled to the pin", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.2.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: { kind: "viability" } }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(isVersionYankedMock).toHaveBeenCalledWith("1.2.0");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  // This is the RCA's exact regression shape: an older install must not be
+  // reinstalled to a newer pin just because it is a pre-release/rc string a
+  // naive comparator would otherwise treat as "less than".
+  it("regression: installed 1.2.0, pin 1.3.0-rc.4, viability - no-op, no reinstall", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.2.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({
+        resolveInstallSource: async () => ({
+          kind: "registry",
+          versionRequest: "1.3.0-rc.4",
+        }),
+        satisfaction: { kind: "viability" },
+      }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("a viable OLDER install that is DOWN is started on its own bytes, never reinstalled", async () => {
+    const controller = stoppedController();
+    createServiceControllerMock.mockReturnValue(controller);
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.2.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: { kind: "viability" } }),
+    );
+
+    expect(result.action).toBe("started");
+    expect(controller.start).toHaveBeenCalledTimes(1);
+    // No install branch reached at all - staging is the tell for "predicted
+    // install", and it must never run for a viable install.
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("a yanked installed version is replaced even under viability", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.2.0"));
+    isVersionYankedMock.mockResolvedValue(true);
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: { kind: "viability" } }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs the resolved pin when nothing is installed (viability cannot bootstrap)", async () => {
+    createServiceControllerMock.mockReturnValue(notInstalledController());
+    readHostInstallRecordMock.mockResolvedValue(null);
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: { kind: "viability" } }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    // Nothing installed means `versionSatisfied` returns false before ever
+    // reaching the yank lookup - viability asks nothing about "yanked" for a
+    // host that does not exist yet.
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+
+  // `isVersionYanked` fails open on a registry miss (real implementation in
+  // `registry/client.ts`); this suite mocks the yank lookup directly, so a
+  // resolved `false` here stands in for that same fail-open outcome on an
+  // unreachable registry - the two are indistinguishable from `versionSatisfied`'s
+  // point of view, which is exactly the point: a network blip must not tear
+  // down a working host.
+  it("an installed host is kept alive when the registry is unreachable (fail-open yank check)", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.2.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: { kind: "viability" } }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  // A null-version record cannot be shown viable at all - `versionSatisfied`'s
+  // shared `state.version === null` guard rejects it before any
+  // satisfaction-kind branch runs (including viability's), so this
+  // reinstalls rather than trusting an unreadable version. Never reaches the
+  // yank lookup: the `less`-style short-circuit happens earlier than that.
+  it("reinstalls (never trusts) an install whose version record cannot be read, without consulting the yank lookup", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    const unreadableVersionRecord: RecordWithUnreadableVersion = {
+      ...sampleRecord("1.2.0"),
+      version: null,
+    };
+    readHostInstallRecordMock.mockResolvedValue(unreadableVersionRecord);
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: { kind: "viability" } }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Final hold model (T6-safe write site): `commitHostInstallSourceWithAttempt`
+// is not a no-throw-after-commit boundary - its phase hooks can reject AFTER
+// the bytes commit and the host restarts - so `provisionHost` cannot write the
+// hold itself after the call returns; a committed downgrade's write could be
+// lost. Instead it hands the committer an `onSwapCommitted` OBSERVER (built by
+// `holdVersionOnSwapCommitted`, which the committer fires right after the
+// atomic swap, still inside its own try/catch), only when
+// `opts.holdExplicitDowngrade` is set - the flag `host ensure --release
+// <concrete>` passes. This suite pins the PROPAGATION - which observer
+// (a function, or `null`) reaches the (mocked) committer, and when - not the
+// observer's own write/no-write matrix (covered in `held-host-version.test.ts`,
+// alongside `holdVersionOnSwapCommitted` itself).
+describe("provisionHost - version hold write (holdExplicitDowngrade)", () => {
+  beforeEach(() => {
+    mocks.callOrder = [];
+    mocks.lockHeld = false;
+    mocks.lockAcquisitions = 0;
+    serviceLabelForMock.mockReturnValue({
+      id: "ai.traycer.host",
+      environment: "production",
+    });
+    assertHostNotBusyMock.mockResolvedValue(undefined);
+    discardStagedHostInstallSourceMock.mockResolvedValue(undefined);
+    createServiceInstallLifecycleMock.mockReturnValue(sampleLifecycleHandle());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function runningController() {
+    return {
+      status: async () => ({
+        state: "running" as const,
+        version: "host",
+        listenUrl: "ws://127.0.0.1:7100/rpc",
+        pid: 4242,
+      }),
+      install: vi.fn(),
+      start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    };
+  }
+
+  it("holdExplicitDowngrade:true passes an onSwapCommitted observer (built from the actual runtime environment) to the committer", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.5.0"));
+    stageHostInstallSourceMock.mockResolvedValue(sampleStaged("1.2.0"));
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("1.2.0"),
+      previous: sampleRecord("1.5.0"),
+      installGeneration: "id:install-1.2.0",
+    });
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "exact", version: "1.2.0" },
+        holdExplicitDowngrade: true,
+      }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(holdVersionOnSwapCommittedMock).toHaveBeenCalledWith("production");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onSwapCommitted: mocks.onSwapCommittedSentinel,
+      }),
+    );
+  });
+
+  it("holdExplicitDowngrade:true builds the observer BEFORE the committer resolves (still under the mocked lock)", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.5.0"));
+    stageHostInstallSourceMock.mockResolvedValue(sampleStaged("1.2.0"));
+    let builtWhileLockHeld = false;
+    holdVersionOnSwapCommittedMock.mockImplementation(() => {
+      builtWhileLockHeld = mocks.lockHeld;
+    });
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("1.2.0"),
+      previous: sampleRecord("1.5.0"),
+      installGeneration: "id:install-1.2.0",
+    });
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "exact", version: "1.2.0" },
+        holdExplicitDowngrade: true,
+      }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(builtWhileLockHeld).toBe(true);
+  });
+
+  it("holdExplicitDowngrade:false passes onSwapCommitted: null, even on what would be a downgrade (implicit convergence never creates a hold)", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.5.0"));
+    stageHostInstallSourceMock.mockResolvedValue(sampleStaged("1.2.0"));
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("1.2.0"),
+      previous: sampleRecord("1.5.0"),
+      installGeneration: "id:install-1.2.0",
+    });
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "exact", version: "1.2.0" },
+        holdExplicitDowngrade: false,
+      }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(holdVersionOnSwapCommittedMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ onSwapCommitted: null }),
+    );
+  });
+
+  it("holdExplicitDowngrade:true never builds an observer when the install branch is never reached (already satisfied, fast-path noop)", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.2.0"));
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "exact", version: "1.2.0" },
+        holdExplicitDowngrade: true,
+      }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(holdVersionOnSwapCommittedMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
   });
 });

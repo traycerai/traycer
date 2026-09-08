@@ -164,6 +164,32 @@ export type HostStagedRecordWireV10 = z.infer<
   typeof hostStagedRecordWireV10Schema
 >;
 
+/**
+ * The CLI-owned "held host version" record: names a host version the user
+ * DELIBERATELY installed - a downgrade below what was already installed - and
+ * that no IMPLICIT path may move off: the background liveness converge, the
+ * Desktop's launch-time staged-apply, and a Doctor "converge-ready" repair all
+ * honour it.
+ *
+ * BOUND TO A SPECIFIC INSTALL INSTANCE by `installId` (the per-install UUID
+ * minted at every commit), not to the version alone. The consulting gate fires
+ * only while `held.installId === installedRecord.installId`, so a LATER install
+ * of the same version - whether an implicit yanked-pin replacement or an
+ * explicit re-install - has a fresh `installId` and can never inherit a stale
+ * hold. This is what makes "set at a committed downgrade, never cleared on a
+ * forward move" safe: a forward move installs a new instance whose id no longer
+ * matches, and a re-downgrade writes a new record for its own instance.
+ *
+ * The CLI is the sole writer; every reader treats a missing OR malformed record
+ * as "nothing held", so the hold always fails safe toward the normal update
+ * path rather than wedging a converge.
+ */
+export const hostHeldVersionRecordSchema = z.object({
+  version: z.string().min(1),
+  installId: z.string().min(1),
+});
+export type HostHeldVersionRecord = z.infer<typeof hostHeldVersionRecordSchema>;
+
 export const cliInstallSourceSchema = z.enum([
   "desktop",
   "homebrew",

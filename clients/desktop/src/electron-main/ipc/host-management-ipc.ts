@@ -1112,7 +1112,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostActivateInstalled,
     async (_event, raw: unknown) => {
       const force = optionalBoolean(raw, "force");
-      return bridge.options.hostController.activateInstalled(force);
+      // Explicit user activate/Update: keep the "ready update supersedes
+      // activation debt" promotion (`promoteReadyStage: true`). Only the
+      // implicit launch reconcile suppresses promotion, and it does so for
+      // every launch activation.
+      return bridge.options.hostController.activateInstalled(force, true);
     },
   );
 

@@ -151,6 +151,7 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
     installRecordFile: join(tempDir, "install.json"),
     stagedDir: join(tempDir, "staged"),
     stagedRecordFile: join(tempDir, "staged.json"),
+    heldVersionRecordFile: join(tempDir, "held-host-version.json"),
     pendingLoginItemRevisionFile: join(tempDir, "login-item"),
     substrateFile: join(tempDir, "substrate.json"),
     transitionJournalFile: join(tempDir, "transition.json"),

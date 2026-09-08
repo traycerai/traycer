@@ -150,6 +150,20 @@ export interface HostFsLayout {
   readonly installRecordFile: string;
   readonly stagedDir: string;
   readonly stagedRecordFile: string;
+  /**
+   * `held-host-version.json` - the CLI-owned marker naming a host version the
+   * user deliberately downgraded/pinned to, which the launch-time staged-apply
+   * and the Doctor "converge-ready" repair honour by standing down while it is
+   * the installed version. A sibling of `install/`/`staged/` (NOT inside
+   * `install/`, so an atomic swap of the install dir leaves it in place).
+   *
+   * Lockstep with the CLI's `hostHeldVersionRecordPath`
+   * (`@traycer/protocol/config/installation`, whose
+   * `HOST_HELD_VERSION_RECORD_FILENAME` is the single source of the name);
+   * hand-mirrored here for the same reason `substrateFile` is - the desktop
+   * reads this on-disk contract by path rather than importing the CLI's writer.
+   */
+  readonly heldVersionRecordFile: string;
   readonly pendingLoginItemRevisionFile: string;
   /**
    * `substrate.json` - the durable CURRENT SERVICE-REGISTRATION OWNER
@@ -237,6 +251,10 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
     installRecordFile: join(installDir, "install.json"),
     stagedDir,
     stagedRecordFile: join(stagedDir, "staged.json"),
+    // Lockstep with `HOST_HELD_VERSION_RECORD_FILENAME` in
+    // `@traycer/protocol/config/installation`; a sibling of `install/`, under
+    // `rootDir` (== the CLI's `hostInstallHomeDir`).
+    heldVersionRecordFile: join(rootDir, "held-host-version.json"),
     pendingLoginItemRevisionFile: join(
       rootDir,
       "pending-login-item-revision.json",

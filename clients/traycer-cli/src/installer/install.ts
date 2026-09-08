@@ -251,6 +251,8 @@ export async function installHost(
     lifecycle: opts.lifecycle,
     verifyMutationCapability: legacyMutationVerifier,
     onWillSwap: null,
+    // Legacy/test convenience path: records no version hold.
+    onSwapCommitted: null,
   });
   logger.info("Host install completed", {
     environment: opts.environment,
@@ -492,6 +494,8 @@ export interface CommitHostInstallSourceOptions {
   readonly verifyMutationCapability: () => Promise<void>;
   /** See `CommitInstallFromSourceOptions.onWillSwap`. */
   readonly onWillSwap: (() => void) | null;
+  /** See `CommitInstallFromSourceOptions.onSwapCommitted`. */
+  readonly onSwapCommitted: HostInstallCommitObserver | null;
 }
 
 export interface CommitHostInstallSourceResult {
@@ -546,6 +550,7 @@ export async function commitHostInstallSource(
       onCommitted: () => {
         swapped = true;
       },
+      onSwapCommitted: opts.onSwapCommitted,
     });
 
     await reconcileHostStageWithAttempt(
@@ -646,6 +651,23 @@ async function cleanupStagingArtifacts(
   }
 }
 
+/**
+ * A best-effort observer fired the instant the atomic swap has committed the
+ * new install record - AFTER {@link CommitInstallFromSourceOptions.onCommitted}
+ * and BEFORE the post-swap lifecycle hook (whose bookkeeping write may reject
+ * with the bytes nevertheless committed and the host restarting, per the T6
+ * contract). It receives the ACTUAL committed record and the record it
+ * replaced, so a caller can record install-instance-scoped state (e.g. the
+ * version hold, keyed on `record.installId`) at the true successful-swap
+ * boundary, under the same lock, without a pre-lock snapshot and without being
+ * lost to a later hook throw. Its own rejection is swallowed by the committer
+ * and never aborts the commit or masks a hook failure.
+ */
+export type HostInstallCommitObserver = (info: {
+  readonly record: HostInstallRecord;
+  readonly previous: HostInstallRecord | null;
+}) => Promise<void>;
+
 export interface CommitInstallFromSourceOptions {
   readonly environment: Environment;
   // A pre-staged tree ready to become `install/` wholesale - either a
@@ -671,6 +693,12 @@ export interface CommitInstallFromSourceOptions {
   // are committed, a later step failed" from "never swapped, the source dir
   // still needs cleanup", without re-deriving that boundary itself.
   readonly onCommitted: () => void;
+  /**
+   * Best-effort post-swap observer (see {@link HostInstallCommitObserver}).
+   * `null` when the caller records nothing at the swap boundary (e.g. an apply,
+   * which only ever moves forward and holds nothing).
+   */
+  readonly onSwapCommitted: HostInstallCommitObserver | null;
   /** See `CommitHostInstallSourceOptions.verifyMutationCapability`. */
   readonly verifyMutationCapability: () => Promise<void>;
   /**
@@ -827,6 +855,25 @@ export async function commitInstallFromSource(
     version: record.version,
     replacedPreviousInstall: previous !== null,
   });
+  // The true successful-swap boundary: the record is committed and the record
+  // it replaced is still known, but the post-swap lifecycle hook below has not
+  // run and cannot yet have rejected. A caller records install-instance-scoped
+  // state (the version hold) HERE so a T6 hook failure - which leaves the bytes
+  // committed and the host restarting, then rethrows - can never lose it.
+  // Best-effort: swallow its rejection so it neither aborts the commit nor
+  // masks the hook failure surfaced below.
+  if (opts.onSwapCommitted !== null) {
+    try {
+      await opts.onSwapCommitted({ record, previous });
+    } catch (err) {
+      logger.warn("Host install swap-committed observer failed", {
+        environment: opts.environment,
+        version: record.version,
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
+      });
+    }
+  }
 
   // Post-swap start/restart, and the second barrier: the bytes are
   // committed and the service has not been asked to come back up yet. The

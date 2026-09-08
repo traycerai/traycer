@@ -113,6 +113,8 @@ function fakeStatus(
     installedVersion: "1.4.0",
     latestVersion: "1.4.1",
     stagedVersion: updateReady ? "1.4.1" : null,
+    heldInstall: null,
+    installedInstallId: "install-a",
     installedRuntimeVersion: null,
     runningRuntimeVersion: null,
     updateReady,
@@ -143,7 +145,7 @@ function fakeHostController(
   activateInstalledOutcome: MutationOutcome<ActivateInstalledOk>,
 ): IpcHostController & {
   readonly applyStagedCalls: readonly [ApplyStagedTrigger, boolean][];
-  readonly activateInstalledCalls: readonly boolean[];
+  readonly activateInstalledCalls: readonly [boolean, boolean][];
   readonly convergeReadyCalls: readonly boolean[];
   readonly stageLatestCalls: number;
   /**
@@ -160,7 +162,7 @@ function fakeHostController(
   readonly callOrder: readonly string[];
 } {
   const applyStagedCalls: [ApplyStagedTrigger, boolean][] = [];
-  const activateInstalledCalls: boolean[] = [];
+  const activateInstalledCalls: [boolean, boolean][] = [];
   const convergeReadyCalls: boolean[] = [];
   const callOrder: string[] = [];
   let stageLatestCalls = 0;
@@ -198,8 +200,9 @@ function fakeHostController(
     },
     async activateInstalled(
       force: boolean,
+      promoteReadyStage: boolean,
     ): Promise<MutationOutcome<ActivateInstalledOk>> {
-      activateInstalledCalls.push(force);
+      activateInstalledCalls.push([force, promoteReadyStage]);
       return activateInstalledOutcome;
     },
     async convergeReady(
@@ -291,6 +294,113 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.activateInstalledCalls).toEqual([]);
   });
 
+  // The version hold (Ticket 4, installId-bound): a deliberately-downgraded
+  // install must not be reverted by the launch reconcile's automatic apply.
+  // `heldInstall.installId` equal to `installedInstallId` is what "the user
+  // chose to keep THIS install instance" means on disk; the stage stays and
+  // `updateReady` stays true (the GUI still offers the update), but the
+  // apply itself is parked.
+  it("parks the staged apply when the installed version is held, falling through to activation instead", async () => {
+    const held = {
+      ...fakeStatus(true, "unavailable", false),
+      installedVersion: "1.4.0",
+      heldInstall: { version: "1.4.0", installId: "install-a" },
+    };
+    const controller = fakeHostController(
+      held,
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([]);
+    // `activation: "unavailable"` on an installed host falls through to the
+    // recovery arm - the held host still comes up, just on its own bytes.
+    expect(controller.convergeReadyCalls).toEqual([false]);
+  });
+
+  // Finding 1 (cold review): a held host whose apply is parked but which
+  // still carries activation debt (not merely "unavailable") must reach the
+  // activate branch with `promoteReadyStage: false` - otherwise
+  // `activateInstalled`'s own "ready update supersedes debt" optimisation
+  // would promote the very stage the hold exists to park, an indirect apply
+  // through a different code path than `applyStaged`.
+  it("parks the apply for a held host with activation debt and activates WITHOUT promoting the ready stage", async () => {
+    const heldWithDebt = {
+      ...fakeStatus(true, "pendingActivation", false),
+      installedVersion: "1.4.0",
+      heldInstall: { version: "1.4.0", installId: "install-a" },
+    };
+    const controller = fakeHostController(
+      heldWithDebt,
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([[false, false]]);
+  });
+
+  it("still applies a staged update when the installed version is unheld (normal update preserved)", async () => {
+    const unheld = {
+      ...fakeStatus(true, "unavailable", false),
+      installedVersion: "1.4.0",
+      heldInstall: null,
+    };
+    const controller = fakeHostController(
+      unheld,
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  // installId-binding superseded the old version-string gate: the record's
+  // OWN `version` field is no longer what the gate compares (it is purely
+  // informational, e.g. for status display) - only `installId` decides
+  // whether a hold applies. A held record naming the CURRENT version but a
+  // DIFFERENT installId (a reinstall of that same version minted a fresh
+  // install instance) must not be treated as held - the hold names an
+  // instance, not merely a version string, so a resurrection of the same
+  // version number is not the deliberate choice the hold recorded.
+  it("a held record matching the version but not the installId (a reinstall of the held version) does not park the apply", async () => {
+    const mismatchedInstallId = {
+      ...fakeStatus(true, "unavailable", false),
+      installedVersion: "1.4.0",
+      installedInstallId: "install-fresh",
+      heldInstall: { version: "1.4.0", installId: "install-old" },
+    };
+    const controller = fakeHostController(
+      mismatchedInstallId,
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
   it("F7: stages a release before deciding launch convergence, then applies that same launch", async () => {
     const initial = fakeStatus(false, "activated", false);
     const staged = fakeStatus(true, "activated", false);
@@ -326,7 +436,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
     await runLaunchHostConvergeReconcile(controller, fakeMenu());
 
-    expect(controller.activateInstalledCalls).toEqual([false]);
+    // Finding (final): every launch activation suppresses stage promotion
+    // unconditionally - `promoteReadyStage` is always `false` here, not just
+    // for a held host, so a launch never indirectly reverts a held install
+    // via the "ready update supersedes activation debt" optimization.
+    expect(controller.activateInstalledCalls).toEqual([[false, false]]);
     expect(controller.applyStagedCalls).toEqual([]);
     // The activate branch never moves `installedVersion` - no re-probe needed.
     expect(refreshRegistryUpdateStateMock).not.toHaveBeenCalled();
@@ -370,6 +484,30 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   // unreachable until it is. `stageLatest()` joins a controller-owned release
   // download that can run for minutes on a slow link; recovering after it
   // would leave the user hostless for that entire window.
+  // A held DOWN host (no ready stage at all - the hold's only job is
+  // parking the apply arm, never the recovery arm) still starts on its own
+  // bytes via the ordinary unavailable-installed-host recovery.
+  it("still recovers a held host that is down when nothing is staged", async () => {
+    const heldDown = {
+      ...fakeStatus(false, "unavailable", false),
+      installedVersion: "1.4.0",
+      heldInstall: { version: "1.4.0", installId: "install-a" },
+    };
+    const controller = fakeHostController(
+      heldDown,
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([false]);
+    expect(controller.applyStagedCalls).toEqual([]);
+  });
+
   it("recovers an unavailable service BEFORE joining the release download", async () => {
     const controller = fakeHostController(
       fakeStatus(false, "unavailable", false),
@@ -556,7 +694,9 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       await vi.waitFor(() => {
         expect(background).toHaveBeenCalledOnce();
         expect(launchOneController.applyStagedCalls).toEqual([]);
-        expect(launchOneController.activateInstalledCalls).toEqual([false]);
+        expect(launchOneController.activateInstalledCalls).toEqual([
+          [false, false],
+        ]);
       });
 
       __setDesktopStartupTestHooks(hooks(launchTwoController));

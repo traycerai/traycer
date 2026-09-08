@@ -387,6 +387,7 @@ describe("readHostServiceOwner", () => {
       installRecordFile: join(root, "install", "install.json"),
       stagedDir: join(root, "staged"),
       stagedRecordFile: join(root, "staged", "staged.json"),
+      heldVersionRecordFile: join(root, "held-host-version.json"),
       pendingLoginItemRevisionFile: join(
         root,
         "pending-login-item-revision.json",

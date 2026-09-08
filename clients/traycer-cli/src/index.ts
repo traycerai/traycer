@@ -1400,6 +1400,10 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Reinstall and restart the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
+      .option(
+        "--keep-installed",
+        "Liveness only: keep whatever non-yanked host is installed, whatever its version, instead of converging to this build's default. Ignored when --release names a version. The default when nothing is installed still installs the packaged/pinned host.",
+      )
       .addOption(attemptAdoptionOption()),
     (opts) => {
       const explicitVersion =
@@ -1429,6 +1433,7 @@ function registerHostCommands(program: Command): void {
           // `serviceRegister: false`.
           noServiceRegister: opts.serviceRegister === false,
           force: opts.force === true,
+          keepInstalled: opts.keepInstalled === true,
         })(ctx);
       };
     },
@@ -1457,6 +1462,12 @@ function registerHostCommands(program: Command): void {
         new Option(
           "--no-service",
           "Internal: skip the busy check and service stop/start; rejected on Windows",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--respect-hold",
+          "Internal: for an implicit (launch/reconcile) apply - no-op instead of applying when the installed version is the deliberately-held one, re-checked under the CLI lock",
         ).hideHelp(),
       )
       .addOption(attemptAdoptionOption())
@@ -1490,6 +1501,7 @@ function registerHostCommands(program: Command): void {
           typeof opts.expectedStageFingerprint === "string"
             ? opts.expectedStageFingerprint
             : null,
+        respectHold: opts.respectHold === true,
         attemptAdoption: attemptAdoptionNonce(opts),
       }),
   );

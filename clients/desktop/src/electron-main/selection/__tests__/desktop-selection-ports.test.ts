@@ -1378,6 +1378,8 @@ function buildControllerStatus(
     installedVersion: "1.0.0",
     latestVersion: "1.0.0",
     stagedVersion: null,
+    heldInstall: null,
+    installedInstallId: null,
     installedRuntimeVersion: "1.0.0",
     runningRuntimeVersion: "1.0.0",
     updateReady: false,

@@ -31,6 +31,8 @@ function fakeStatus(
     installedVersion: "1.4.0",
     latestVersion: "1.4.0",
     stagedVersion: null,
+    heldInstall: null,
+    installedInstallId: null,
     installedRuntimeVersion: null,
     runningRuntimeVersion: null,
     updateReady: false,

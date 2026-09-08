@@ -494,6 +494,7 @@ describe("commitInstallFromSource", () => {
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        onSwapCommitted: null,
         onCommitted: () => {},
       }),
     ).rejects.toThrow();
@@ -531,6 +532,7 @@ describe("commitInstallFromSource", () => {
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        onSwapCommitted: null,
         onCommitted: () => {
           committed = true;
         },
@@ -573,6 +575,7 @@ describe("commitInstallFromSource", () => {
         },
         swapLockRecovery: null,
       },
+      onSwapCommitted: null,
       onCommitted: () => {},
     });
 
@@ -612,6 +615,7 @@ describe("commitInstallFromSource", () => {
           afterSwap: async () => {},
           swapLockRecovery: null,
         },
+        onSwapCommitted: null,
         onCommitted: () => {},
       }),
     ).rejects.toThrow("host busy");
@@ -648,6 +652,7 @@ describe("commitInstallFromSource", () => {
       sizeBytes: 0,
       onProgress: () => {},
       lifecycle: null,
+      onSwapCommitted: null,
       onCommitted: () => {},
     });
 
@@ -1275,6 +1280,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        onSwapCommitted: null,
       }),
     ).rejects.toThrow();
 
@@ -1298,6 +1304,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
       onProgress: () => {},
       lifecycle: null,
       onWillSwap: null,
+      onSwapCommitted: null,
     });
 
     expect(result.record.version).toBe("2.0.0");
@@ -1321,6 +1328,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        onSwapCommitted: null,
       }),
     ).rejects.toMatchObject({ code: "E_HOST_INSTALL_RECORD_INVALID" });
 

@@ -116,8 +116,27 @@ export interface HostControllerStatus {
   readonly download: DownloadLaneStatus | null;
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;
+  /**
+   * The installed host's per-install `installId` (the record's UUID), or `null`
+   * for a legacy record without one. Paired with {@link heldInstall} to gate
+   * the implicit staged-apply on the install INSTANCE, not merely its version.
+   */
+  readonly installedInstallId: string | null;
   readonly latestVersion: string | null;
   readonly stagedVersion: string | null;
+  /**
+   * The install the user deliberately downgraded to (CLI-owned
+   * `held-host-version.json`: its `{ version, installId }`), or `null` when
+   * nothing is held. Consulted ONLY to make the implicit staged-apply stand
+   * down while `heldInstall.installId === installedInstallId` (the SAME install
+   * instance, so a later reinstall of the same version never matches); it never
+   * changes `updateReady`, so the GUI still advertises an available update and
+   * an explicit apply still moves forward.
+   */
+  readonly heldInstall: {
+    readonly version: string;
+    readonly installId: string;
+  } | null;
   readonly installedRuntimeVersion: string | null;
   readonly runningRuntimeVersion: string | null;
   readonly updateReady: boolean;

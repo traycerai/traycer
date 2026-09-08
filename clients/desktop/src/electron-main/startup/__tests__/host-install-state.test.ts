@@ -21,6 +21,8 @@ function statusWith(installedVersion: string | null): HostControllerStatus {
     installedVersion,
     latestVersion: null,
     stagedVersion: null,
+    heldInstall: null,
+    installedInstallId: null,
     installedRuntimeVersion: null,
     runningRuntimeVersion: null,
     updateReady: false,

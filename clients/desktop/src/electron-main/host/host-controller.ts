@@ -86,6 +86,7 @@ import {
   deriveUpdateReady,
   isStrictlyNewerHostVersion,
   probeHostBusyVerdict,
+  readDesktopHeldHostVersion,
   readDesktopHostInstallRecord,
   readDesktopHostStagedRecord,
   readReachableHostIdentity,
@@ -1141,8 +1142,10 @@ export class HostController {
       download: this.downloadStatus,
       mutation: this.mutationStatus,
       installedVersion,
+      installedInstallId: installed?.installId ?? null,
       latestVersion: this.latestVersionCache,
       stagedVersion: staged?.version ?? null,
+      heldInstall: await readDesktopHeldHostVersion(this.layout),
       installedRuntimeVersion,
       runningRuntimeVersion,
       updateReady: deriveUpdateReady(installedVersion, staged?.version ?? null),
@@ -2889,10 +2892,23 @@ export class HostController {
         if (intent.kind === "background" && (await isHostRemovedByUser())) {
           return { kind: "ok", value: { running: false, version: null } };
         }
+        // ALWAYS liveness-only (`host ensure --keep-installed`, the
+        // `viability` policy), for a background AND a user-repair converge
+        // alike. `convergeReady` is the liveness path - it brings a down host
+        // back up on WHATEVER non-yanked version is installed and never moves
+        // the version as a matter of client preference (version movement is the
+        // channel's / an explicit update's job). This is also what makes it
+        // race-free against a deliberate downgrade: `viability` re-reads the
+        // installed version UNDER the CLI mutation lock, so there is no stale
+        // desktop-side "is it held?" sample a terminal downgrade could slip
+        // past between the sample and the CLI acquiring its lock (finding 3,
+        // Doctor path). A genuinely absent/yanked install still gets the pinned
+        // host (first-install bootstrap), since viability is only satisfied by
+        // an existing usable install.
         if (await this.isPackagedMacOwned()) {
-          return this.convergeReadyPackagedMac(force);
+          return this.convergeReadyPackagedMac(force, true);
         }
-        return this.convergeReadyCliOwned(force);
+        return this.convergeReadyCliOwned(force, true);
       },
     );
   }
@@ -2959,13 +2975,18 @@ export class HostController {
 
   private async convergeReadyCliOwned(
     force: boolean,
+    keepInstalled: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
     const bundledHostFrom = await resolveWindowsBundledHostArchive();
+    // `--keep-installed` and `--from` coexist deliberately: on this (Windows)
+    // route `--from` is only the FIRST-INSTALL source, so a viable install is
+    // kept and the bundled archive is used only when nothing is installed.
     const args = [
       "host",
       "ensure",
       ...(force ? ["--force"] : []),
+      ...(keepInstalled ? ["--keep-installed"] : []),
       ...(bundledHostFrom !== null ? ["--from", bundledHostFrom] : []),
     ];
     let raw: unknown;
@@ -3016,14 +3037,17 @@ export class HostController {
 
   private async convergeReadyPackagedMac(
     force: boolean,
+    keepInstalled: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     let raw: unknown;
     try {
-      raw = await this.streamBundled<unknown>(
-        force
-          ? ["host", "ensure", "--force", "--no-service-register"]
-          : ["host", "ensure", "--no-service-register"],
-      );
+      raw = await this.streamBundled<unknown>([
+        "host",
+        "ensure",
+        ...(force ? ["--force"] : []),
+        ...(keepInstalled ? ["--keep-installed"] : []),
+        "--no-service-register",
+      ]);
     } catch (err) {
       return this.classifyEnsureLikeError(err);
     }
@@ -3583,10 +3607,22 @@ export class HostController {
                 message: HOST_REMOVED_BY_USER_MESSAGE,
               };
             }
+            // An implicit LAUNCH apply respects the hold under the CLI lock
+            // (the desktop preflight in `runLaunchHostConvergeReconcile` can be
+            // stale against a terminal downgrade that raced the staging
+            // window). A `manual` "Update now" is explicit and always applies.
+            const respectHold = trigger === "launch";
             if (await this.isPackagedMacOwned()) {
-              return this.applyStagedPackagedMac(eligibleStage.fingerprint);
+              return this.applyStagedPackagedMac(
+                eligibleStage.fingerprint,
+                respectHold,
+              );
             }
-            return this.applyStagedCliOwned(force, eligibleStage.fingerprint);
+            return this.applyStagedCliOwned(
+              force,
+              eligibleStage.fingerprint,
+              respectHold,
+            );
           });
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
@@ -3602,6 +3638,7 @@ export class HostController {
   private async applyStagedCliOwned(
     force: boolean,
     expectedStageFingerprint: string,
+    respectHold: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
     let raw: unknown;
@@ -3612,6 +3649,7 @@ export class HostController {
         "--expected-stage-fingerprint",
         expectedStageFingerprint,
         ...(force ? ["--force"] : []),
+        ...(respectHold ? ["--respect-hold"] : []),
       ]);
     } catch (err) {
       await this.reloadAfterServiceCycleFailure();
@@ -3662,6 +3700,7 @@ export class HostController {
 
   private async applyStagedPackagedMac(
     expectedStageFingerprint: string,
+    respectHold: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
     let raw: unknown;
     try {
@@ -3671,6 +3710,7 @@ export class HostController {
         "--no-service",
         "--expected-stage-fingerprint",
         expectedStageFingerprint,
+        ...(respectHold ? ["--respect-hold"] : []),
       ]);
     } catch (err) {
       // `--no-service` never busy-checks CLI-side, so any error here is a
@@ -3717,13 +3757,26 @@ export class HostController {
 
   activateInstalled(
     force: boolean,
+    // When false, activate the installed bytes only and NEVER promote a ready
+    // newer stage, even when `updateReady` is true. The implicit launch
+    // reconcile passes false for EVERY launch activation: otherwise this
+    // method's "ready update supersedes activation debt" branch is an INDIRECT
+    // apply, and a stage that becomes ready across its internal `stageLatest()`
+    // could revert a deliberately-held downgrade (a held host with activation
+    // debt and no stage at the first sample reads `updateReady === false`). A
+    // known-ready update is applied by the launch reconcile's own
+    // `applyStaged("launch")` branch under the CLI `--respect-hold` guard.
+    // Explicit callers (the GUI activate/Update click) pass true and keep that
+    // supersede-debt optimisation. Part of the coalesce/lane key so an implicit
+    // and an explicit activation never collapse into one job.
+    promoteReadyStage: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
     // Fixup A6: reconcile BEFORE entering the exclusive mutation lane, same
     // reasoning as `applyStaged` - determining whether a ready update
     // supersedes activation debt needs fresh `updateReady` state, and
     // fetching it must never hold the lane hostage across a WAN download.
     return this.coalesceIntent<ActivateInstalledOk>(
-      `activate:${force}`,
+      `activate:${force}:${promoteReadyStage}`,
       async () => {
         // Match `applyStaged`'s at-most-once freshness retry: the first
         // fingerprint can be invalidated by a replacement stage after the
@@ -3736,14 +3789,17 @@ export class HostController {
 
           const outcome = await this.enqueueMutation<
             MutationOutcome<ActivateInstalledOk>
-          >("activate", `activate:${force}`, async () => {
+          >("activate", `activate:${force}:${promoteReadyStage}`, async () => {
             // A ready update supersedes activation debt - prevents the
             // restart-old -> stamp -> restart-new double cycle. The reconcile
             // already ran above; this only re-reads the (now-fresh) state and
             // performs the apply/activate choreography, no further download.
+            // Skipped entirely when `promoteReadyStage` is false (a held host):
+            // the caller wants the installed bytes activated, never the stage.
             const installed = await readDesktopHostInstallRecord(this.layout);
             const staged = await readDesktopHostStagedRecord(this.layout);
             if (
+              promoteReadyStage &&
               deriveUpdateReady(
                 installed?.version ?? null,
                 staged?.version ?? null,
@@ -3757,11 +3813,20 @@ export class HostController {
                     "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
                 };
               }
+              // `respectHold: false` - this promotion is reached only via the
+              // explicit IPC activate/Update path. Every launch activation
+              // passes `promoteReadyStage: false`, so this branch never runs
+              // implicitly, and a known-ready update at launch goes through the
+              // reconcile's own `applyStaged("launch")` guarded by --respect-hold.
               const applied = (await this.isPackagedMacOwned())
-                ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
+                ? await this.applyStagedPackagedMac(
+                    eligibleStage.fingerprint,
+                    false,
+                  )
                 : await this.applyStagedCliOwned(
                     force,
                     eligibleStage.fingerprint,
+                    false,
                   );
               if (applied.kind === "stage-fingerprint-mismatch") {
                 return applied;
