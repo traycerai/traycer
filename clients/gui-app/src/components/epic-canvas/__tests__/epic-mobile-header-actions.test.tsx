@@ -212,6 +212,10 @@ describe("<EpicMobileSwitcherTrigger />", () => {
     expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
     act(() => useMobileSwitcherStore.getState().unregisterMount("tab-1"));
     expect(trigger.disabled).toBe(true);
+    // Losing the mount re-disables the trigger without closing the sheet. The
+    // component-level form of this - a real unmount, not a direct store call -
+    // is pinned in `mobile-tab-switcher-mount.test.tsx`.
+    expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
   });
 
   it("renders for a viewer role too - switching tabs is not permission-gated", () => {
