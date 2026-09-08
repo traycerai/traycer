@@ -68,8 +68,14 @@ import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-state
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
   const persistedStripCount = useTabsStore((s) => s.stripOrder.length);
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
   if (!hasHydrated) {
-    return <TabStripSkeleton count={persistedStripCount} />;
+    return (
+      <TabStripSkeleton
+        count={persistedStripCount}
+        reserveHome={homeTabEnabled}
+      />
+    );
   }
   return <TabStripBody />;
 }

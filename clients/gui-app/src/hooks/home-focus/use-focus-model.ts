@@ -57,8 +57,8 @@ const focusModelCache = new WeakMap<object, FocusModel>();
  * Which means a title here can be BEHIND for a task not open in this window,
  * and ABSENT for a brand-new task the cloud index has not published yet -
  * `null`, not a placeholder. Rendering an id is honest; inventing "Untitled" as
- * if it were the task's name is not. The ticket named `useHistoryQuery` for
- * this; that hook resolves a SEARCH PAGE (with debouncing, local fuzzy ranking
+ * if it were the task's name is not. Not `useHistoryQuery`, the app's other
+ * title reader: it resolves a SEARCH PAGE (with debouncing, local fuzzy ranking
  * and worktree probes) and would answer for the epics that happen to be on the
  * current page rather than the epics that are actually running.
  * `useEpicGetTaskContexts` is the by-id primitive `useHistoryQuery` itself uses

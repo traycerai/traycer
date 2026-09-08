@@ -38,6 +38,7 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
@@ -227,5 +228,45 @@ describe("<TabStrip /> - Home placement", () => {
     expect(screen.getByTestId("tab-home").hasAttribute("data-tab-index")).toBe(
       false,
     );
+  });
+});
+
+/**
+ * Before the windows bridge hydrates, the strip is a skeleton. Home is a fixed
+ * tab rather than a persisted ref, so nothing in `stripOrder` accounts for it -
+ * and a skeleton that leaves its slot out drops the whole strip one tab's width
+ * to the left, then snaps it back the instant hydration lands.
+ */
+describe("<TabStrip /> - pre-hydration skeleton", () => {
+  function renderSkeleton(): void {
+    render(
+      <WindowsBridgeContext.Provider
+        value={{ bridge: null, hasHydrated: false }}
+      >
+        <TabStrip />
+      </WindowsBridgeContext.Provider>,
+    );
+  }
+
+  beforeEach(() => {
+    useSettingsStore.setState({ homeTabEnabled: false });
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useSettingsStore.setState({ homeTabEnabled: false });
+    resetStores();
+  });
+
+  it("reserves the Home slot when the flag is on", () => {
+    useSettingsStore.setState({ homeTabEnabled: true });
+    renderSkeleton();
+    expect(screen.getByTestId("tab-strip-skeleton-home")).not.toBeNull();
+  });
+
+  it("reserves nothing when the flag is off", () => {
+    renderSkeleton();
+    expect(screen.queryByTestId("tab-strip-skeleton-home")).toBeNull();
   });
 });

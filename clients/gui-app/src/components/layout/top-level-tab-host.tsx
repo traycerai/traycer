@@ -99,6 +99,18 @@ export function TopLevelTabHost() {
   // Home holds the selection as `activeItemId === null`, so it is the one
   // surface whose visibility is not a question about `items`.
   const homeIsActive = homeTabEnabled && activeItemId === null;
+  // Home mounts on its FIRST activation and stays mounted from then on. Its
+  // surface reads live cross-task streams - running agents, pending prompts,
+  // every mounted epic's projection - so it has to be warm the moment the user
+  // comes back to it, which is why it is never unmounted once opened. But a
+  // window that never opens Home should pay none of that, and mounting on the
+  // flag alone charged every window for the life of the session. The latch is
+  // adjusted during render rather than in an effect - the same pattern
+  // `useMountedSurfaceKeys` uses below - so the activating render is the one
+  // that mounts, with no empty frame in between.
+  const [homeHasBeenActive, setHomeHasBeenActive] = useState(false);
+  if (homeIsActive && !homeHasBeenActive) setHomeHasBeenActive(true);
+  const homeIsMounted = homeTabEnabled && homeHasBeenActive;
   useHomeTabDisabledFallback(homeTabEnabled, activeItemId);
   const hostBoundsRef = useRef<HTMLDivElement | null>(null);
   const [previewRatio, setPreviewRatio] = useState<number | null>(null);
@@ -187,7 +199,7 @@ export function TopLevelTabHost() {
       data-testid="top-level-tab-host"
     >
       <PhaseMigrationControllerHost />
-      {homeTabEnabled ? (
+      {homeIsMounted ? (
         <TopLevelSurfaceMount
           mount={homeMount}
           activateSurface={activateSurface}
@@ -412,13 +424,14 @@ function useHomeTabDisabledFallback(
 /**
  * The MRU keep-alive set, and the one surface deliberately left out of it.
  *
- * Home is mounted unconditionally by `TopLevelTabHost` instead of competing for
- * a slot here. Two reasons: it reads live cross-task streams (running agents,
- * pending prompts) whose whole value is being warm the moment the user looks at
- * them, so an eviction after a few tab switches would defeat the surface's
- * purpose; and it has no strip ref, so there is no key for it to occupy a slot
- * with in the first place - `availableRefKeys` derives from `items`, which Home
- * is never in. It therefore cannot displace a task surface from the cap.
+ * Home is mounted by `TopLevelTabHost` itself - latched on its first activation
+ * and kept for the rest of the session - instead of competing for a slot here.
+ * Two reasons: it reads live cross-task streams (running agents, pending
+ * prompts) whose whole value is being warm the moment the user looks at them,
+ * so an eviction after a few tab switches would defeat the surface's purpose;
+ * and it has no strip ref, so there is no key for it to occupy a slot with in
+ * the first place - `availableRefKeys` derives from `items`, which Home is
+ * never in. It therefore cannot displace a task surface from the cap.
  */
 function useMountedSurfaceKeys(
   availableRefKeys: ReadonlyArray<string>,
