@@ -280,8 +280,13 @@ export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
  * passes above do not reach: `normalizeV16BrowserPayloadsInFrame` owns the
  * USER-authored browser payloads, and `normalizeV16MessagesInShallowSnapshot`
  * neutralizes a message history but nothing beside it. A pre-`1.7` peer's
- * interview fields otherwise arrive VALIDATED - the same smuggling the two
- * passes above refuse, through the doors beside them.
+ * interview fields otherwise reach consumers unopposed - the same smuggling
+ * the two passes above refuse, through the doors beside them. On the TYPED
+ * carriers they arrive validated, which is the sharper version of the problem:
+ * the live union accepted them, so nothing downstream has reason to doubt
+ * them. On a chat event's `metadata` - `record(string, unknown)` - and on a
+ * shallow snapshot's `z.custom` histories they arrive unexamined instead, and
+ * this pass is the only thing that looks at them at all.
  *
  * TWO ROUTES REACH THIS, and the second is easy to lose. Most frames fall
  * through to the generic live parse and are handed here after it. But the
@@ -306,8 +311,10 @@ export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
  * with no case at all). What is checked here is the INTERVIEW surface, against
  * the schemas and the receive call sites.
  *
- * Its three non-interview cases are accounted for by name rather than by
- * silence: `queueChanged` carries browser payloads, owned by
+ * Its other non-interview cases are accounted for by name rather than by
+ * silence. `messageAccepted` is one of them - see the bullet below for why it
+ * is not a live interview carrier despite having an arm here. Of the rest:
+ * `queueChanged` carries browser payloads, owned by
  * `normalizeV16BrowserPayloadsInFrame` beside this; `managedCommandsChanged`
  * has no interview surface at all; and `actionAck`'s only `1.7` delta is the
  * `interviewDeliveryRetry` value in its `action` enum, which no consumer
@@ -777,6 +784,46 @@ export const INTERVIEW_DELIVERY_METADATA_KEY = "interviewDelivery";
  */
 const INTERVIEW_ANSWER_METADATA_KEYS: ReadonlyArray<string> = ["answers"];
 
+/**
+ * The content-free companion fact proving a provider accepted an
+ * already-settled delivery. Carries `settlementId` and `deliveryId` - `1.7`
+ * identities both - on a durable `interview.errored` event.
+ */
+export const INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY =
+  "interviewDeliveryAcceptance";
+
+/**
+ * The companion fact for the settlement→outbox repair path, carrying
+ * `settlementId`, `diagnosticId`, `code` and `source`.
+ */
+export const INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY =
+  "interviewDeliveryRepairDiagnostic";
+
+/**
+ * EVERY `1.7`-only structured interview key a durable chat event's metadata
+ * may carry, as one list both directions read.
+ *
+ * A list rather than four named deletions, and the reason is a bug this
+ * already caused. The doc on `INTERVIEW_SETTLEMENT_METADATA_KEY` above states
+ * the obligation plainly - "a typed projector cannot strip a key it was never
+ * told about" - and the host then added the two companion keys below as its
+ * OWN local constants while importing the first two from here. Protocol had
+ * never heard of them, so both projectors passed them straight through to
+ * every pre-`1.7` peer, `settlementId` included, for as long as they existed.
+ *
+ * So the vocabulary lives here and the host imports all four. Adding a key
+ * means adding it to this list, which is the only edit that makes it
+ * strippable in either direction. `answers` is deliberately NOT here - it is a
+ * pre-`1.7` key whose CONTENTS are filtered rather than removed, which is a
+ * different operation.
+ */
+const INTERVIEW_STRUCTURED_METADATA_KEYS: ReadonlyArray<string> = [
+  INTERVIEW_SETTLEMENT_METADATA_KEY,
+  INTERVIEW_DELIVERY_METADATA_KEY,
+  INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY,
+  INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY,
+];
+
 const INTERVIEW_CHAT_EVENT_TYPES: ReadonlyArray<string> = [
   "interview.requested",
   "interview.resolved",
@@ -796,19 +843,18 @@ function projectChatEvent(event: unknown): unknown {
   const metadata = event.metadata;
   if (!isRecord(metadata)) return event;
 
-  const hasSettlement = Object.hasOwn(
-    metadata,
-    INTERVIEW_SETTLEMENT_METADATA_KEY,
+  const structuredKeys = INTERVIEW_STRUCTURED_METADATA_KEYS.filter((key) =>
+    Object.hasOwn(metadata, key),
   );
-  const hasDelivery = Object.hasOwn(metadata, INTERVIEW_DELIVERY_METADATA_KEY);
   const answerKeys = INTERVIEW_ANSWER_METADATA_KEYS.filter((key) =>
     Array.isArray(metadata[key]),
   );
-  if (!hasSettlement && !hasDelivery && answerKeys.length === 0) return event;
+  if (structuredKeys.length === 0 && answerKeys.length === 0) return event;
 
   const projectedMetadata: Record<string, unknown> = { ...metadata };
-  delete projectedMetadata[INTERVIEW_SETTLEMENT_METADATA_KEY];
-  delete projectedMetadata[INTERVIEW_DELIVERY_METADATA_KEY];
+  for (const key of structuredKeys) {
+    delete projectedMetadata[key];
+  }
   for (const key of answerKeys) {
     projectedMetadata[key] = stripAnswerSelection(metadata[key]);
   }
@@ -817,8 +863,14 @@ function projectChatEvent(event: unknown): unknown {
 
 /**
  * The inbound mirror of `projectChatEvent`: neutralize the `1.7`-only
- * interview metadata on ONE durable chat event that arrived on a pre-`1.7`
- * line and was parsed with the LIVE union.
+ * interview metadata on ONE durable chat event received on a pre-`1.7` line.
+ *
+ * Deliberately NOT stated as "parsed with the live union", because on the
+ * carrier this pass exists for it never is. `chatEventSchema.metadata` is
+ * `record(string, unknown)`, so even a deep parse leaves these values opaque -
+ * and on the `1.6` snapshot route the events are `z.custom` and not parsed at
+ * all. This helper is the only thing between that metadata and a consumer,
+ * which is why it validates the shapes it walks rather than trusting them.
  *
  * Deliberately adjacent to the projector, gated on the same event types and
  * the same enumerated keys. The event log reaches a subscriber through two
@@ -856,8 +908,9 @@ function neutralizeChatEventInterviewMetadata(event: unknown): void {
   if (!INTERVIEW_CHAT_EVENT_TYPES.includes(event.type)) return;
   const metadata = event.metadata;
   if (!isRecord(metadata)) return;
-  delete metadata[INTERVIEW_SETTLEMENT_METADATA_KEY];
-  delete metadata[INTERVIEW_DELIVERY_METADATA_KEY];
+  for (const key of INTERVIEW_STRUCTURED_METADATA_KEYS) {
+    delete metadata[key];
+  }
   for (const key of INTERVIEW_ANSWER_METADATA_KEYS) {
     neutralizeAnswerSelection(metadata[key]);
   }

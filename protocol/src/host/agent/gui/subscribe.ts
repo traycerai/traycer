@@ -2523,11 +2523,12 @@ export const chatSubscribeV16 = defineStreamRpcContract({
  * which covers both — it delegates the message history to
  * `normalizeV16MessagesInShallowSnapshot` and walks the event log beside it.
  * Callers MUST run it on the whole frame before handing the snapshot to
- * consumers. Pairing this schema with the message pass ALONE is a live bug,
- * not a lesser version of the same thing: consumers then read fields typed as
- * present that are genuinely missing — the exact hazard the live schema's doc
- * above describes — and the event log reaches them carrying `1.7` facts this
- * line cannot express.
+ * consumers, and the two omissions fail DIFFERENTLY. Omitting the pass
+ * entirely leaves consumers reading message fields typed as present that are
+ * genuinely missing — the exact hazard the live schema's doc above describes.
+ * Pairing this schema with the message pass ALONE repairs the messages and
+ * still hands the event log to consumers carrying `1.7` metadata this line
+ * cannot express; nothing reads as missing, which is why it went unnoticed.
  *
  * Every bounded envelope field is still validated deeply, against the FROZEN
  * `1.6` shapes, which is what makes this exact rather than merely permissive.

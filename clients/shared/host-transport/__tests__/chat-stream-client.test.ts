@@ -395,12 +395,28 @@ function smuggledV16InterviewEvent(): Record<string, unknown> {
     blockId: "iv-1",
     severity: "info",
     metadata: {
-      // A pre-1.7 key that COLLIDES with the settlement vocabulary. It must
-      // survive: today's host writes it, and stripping settlement facts by
-      // flat name would take it too.
+      // An unrelated flat key that COLLIDES with the settlement vocabulary
+      // (the settlement envelope has a `source` of its own). It must survive:
+      // stripping settlement facts by flat name would take it too. Synthetic
+      // here - the durable events the host actually writes carry `reason` and
+      // `code` beside the envelopes, while `source: "traycer_a2a"` is set on a
+      // RUNTIME event - so this stands for the class, not for one producer.
       source: "traycer_a2a",
       interviewSettlement: { settlementId: "gui-1", outcome: "answered" },
       interviewDelivery: { outboxId: "ob-1" },
+      // The two COMPANION facts the host writes on durable interview events.
+      // They were declared in the host rather than in protocol, so neither
+      // projector knew them and both carried `settlementId` past the boundary.
+      interviewDeliveryAcceptance: {
+        settlementId: "gui-1",
+        deliveryId: "dlv-1",
+      },
+      interviewDeliveryRepairDiagnostic: {
+        settlementId: "gui-1",
+        diagnosticId: "diag-1",
+        code: "OUTBOX_MISSING",
+        source: "repair",
+      },
       answers: [
         {
           questionId: "q1",
@@ -932,8 +948,9 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     // envelope against the frozen 1.6 schemas and then re-parses shallowly -
     // and BOTH schemas leave `chat.events` structural
     // (`z.custom(isStructuralRecord)`), exactly as they leave `chat.messages`.
-    // So nothing on this path validates or strips what is inside an event's
-    // `metadata`, and the GUI assigns these events straight into its store.
+    // So neither SCHEMA on this path validates or strips what is inside an
+    // event's `metadata` - only the normalize pass does - and the GUI assigns
+    // these events straight into its store.
     //
     // Wiring this branch to the message-only pass therefore left the shipped
     // 1.6 cohort's durable log open while the message history beside it was
@@ -942,8 +959,10 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     //
     // FALSIFICATION: call `normalizeV16MessagesInShallowSnapshot(
     // shallowV16.data.snapshot.chat.messages)` here again instead of the
-    // whole-frame pass, and every event expectation below reddens while the
-    // interview-block test above stays green.
+    // whole-frame pass, and the neutralization assertions below redden - the
+    // four key deletions and the nulled `selection` - while the interview-block
+    // test above stays green. The count, `source` and `values` expectations are
+    // preservation checks and survive that mutation by design.
     const { factory, sockets } = makeFactory();
     const deliveredEvents: unknown[] = [];
 
@@ -971,8 +990,14 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     const metadata = event.metadata;
     // Deleted, not nulled: `metadata` is an open record, so absence is the
     // state a conforming 1.6 host produces.
-    expect(Object.hasOwn(metadata, "interviewSettlement")).toBe(false);
-    expect(Object.hasOwn(metadata, "interviewDelivery")).toBe(false);
+    for (const key of [
+      "interviewSettlement",
+      "interviewDelivery",
+      "interviewDeliveryAcceptance",
+      "interviewDeliveryRepairDiagnostic",
+    ]) {
+      expect(Object.hasOwn(metadata, key)).toBe(false);
+    }
     // The colliding pre-1.7 key survives - it is not a settlement fact.
     expect(metadata.source).toBe("traycer_a2a");
     if (!Array.isArray(metadata.answers) || !isRecord(metadata.answers[0])) {

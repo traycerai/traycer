@@ -649,11 +649,15 @@ export class ChatStreamClient {
       normalizeV16BrowserPayloadsInFrame(frame);
       // The third door: every remaining pre-`1.7` carrier of an interview -
       // `1.0`-`1.5` snapshots (which match NEITHER fast path above and reach
-      // here whole), `messageAccepted`, the durable event log on both the
-      // frames that carry it, the two interview lifecycle frames, and
-      // `blockDelta`'s two arms. The set is the outbound projector's own case
-      // list; the function's comment says why that is the completeness
-      // argument.
+      // here whole), the durable event log on both frames that carry it, the
+      // two interview lifecycle frames, and `blockDelta`'s two arms.
+      // `messageAccepted` has an arm too, but defensively: its `message` binds
+      // `userMessageSchema`, so a parsed frame cannot hold an assistant
+      // message with interview blocks.
+      //
+      // That set was DERIVED from the outbound projector's case list rather
+      // than recalled - see the function's own comment, which also says why
+      // that is a heuristic and not a completeness proof.
       normalizeV16InterviewFieldsInFrame(frame);
     }
     switch (frame.kind) {

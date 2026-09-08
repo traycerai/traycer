@@ -12,7 +12,9 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
+  INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY,
   INTERVIEW_DELIVERY_METADATA_KEY,
+  INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY,
   INTERVIEW_SETTLEMENT_METADATA_KEY,
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
@@ -269,6 +271,19 @@ function chatEventFixture(
  * `chatEventSchema` would fail the frozen deep parse before the assertion
  * under test is reached.
  */
+/**
+ * The four `1.7`-only structured keys a durable chat event's metadata may
+ * carry. Mirrors the protocol's own list; both directions must remove all of
+ * them, and the two companion facts are here because they were declared in the
+ * HOST while the other two were imported - so neither projector knew them.
+ */
+const STRUCTURED_METADATA_KEYS: ReadonlyArray<string> = [
+  INTERVIEW_SETTLEMENT_METADATA_KEY,
+  INTERVIEW_DELIVERY_METADATA_KEY,
+  INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY,
+  INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY,
+];
+
 function chatEventWith(
   eventId: string,
   timestamp: number,
@@ -989,6 +1004,20 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
         source: "traycer_a2a",
         [INTERVIEW_SETTLEMENT_METADATA_KEY]: nestedSettlementFacts(),
         [INTERVIEW_DELIVERY_METADATA_KEY]: { outboxId: "ob-1" },
+        // The two COMPANION facts the host writes on durable
+        // `interview.errored` events. They were declared in the host rather
+        // than here, so neither projector knew them and both leaked
+        // `settlementId` to every pre-1.7 peer.
+        [INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY]: {
+          settlementId: "gui-1",
+          deliveryId: "dlv-1",
+        },
+        [INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY]: {
+          settlementId: "gui-1",
+          diagnosticId: "diag-1",
+          code: "OUTBOX_MISSING",
+          source: "repair",
+        },
       }),
     );
     // Seeded with BOTH keys, like the appended one: an assertion that a key is
@@ -997,7 +1026,28 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
       ...resolvedAnswersMetadata(),
       [INTERVIEW_SETTLEMENT_METADATA_KEY]: nestedSettlementFacts(),
       [INTERVIEW_DELIVERY_METADATA_KEY]: { outboxId: "ob-2" },
+      [INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY]: {
+        settlementId: "gui-1",
+        deliveryId: "dlv-2",
+      },
+      [INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY]: {
+        settlementId: "gui-1",
+        diagnosticId: "diag-2",
+        code: "OUTBOX_MISSING",
+        source: "repair",
+      },
     });
+
+    // PRECONDITION, because `hasOwn(...) === false` is the assertion below and
+    // it passes trivially on a fixture that never carried the key. Every
+    // structured key must be present before the pass runs, or the deletions
+    // prove nothing.
+    for (const seeded of [eventFromProjected(appended), inSnapshot]) {
+      const before = asRecord(seeded.metadata, "seeded metadata");
+      for (const key of STRUCTURED_METADATA_KEYS) {
+        expect(Object.hasOwn(before, key)).toBe(true);
+      }
+    }
 
     normalizeV16InterviewFieldsInFrame(appended);
     normalizeV16InterviewFieldsInFrame({
@@ -1010,12 +1060,9 @@ describe("normalizeV16InterviewFieldsInFrame", () => {
       // Deleted, not nulled: `metadata` is an open record, so absence is the
       // state a conforming pre-1.7 peer produces and the state the outbound
       // projector hands one.
-      expect(Object.hasOwn(metadata, INTERVIEW_SETTLEMENT_METADATA_KEY)).toBe(
-        false,
-      );
-      expect(Object.hasOwn(metadata, INTERVIEW_DELIVERY_METADATA_KEY)).toBe(
-        false,
-      );
+      for (const key of STRUCTURED_METADATA_KEYS) {
+        expect(Object.hasOwn(metadata, key)).toBe(false);
+      }
       const answers = recordAnswers(metadata.answers);
       expect(answers[0].selection).toBeNull();
       expect(answers[0].values).toEqual(["date-fns"]);
@@ -2285,6 +2332,60 @@ describe("chat-event metadata projection", () => {
       expect(Object.hasOwn(answers[0], "selection")).toBe(false);
       expect(answers[0].values).toEqual(["date-fns"]);
       expect(answers[0].questionId).toBe("q1");
+    }
+  });
+
+  it("removes the host's two COMPANION metadata facts, not just the two protocol declared", () => {
+    // The gap this pins: the host wrote `interviewDeliveryAcceptance` and
+    // `interviewDeliveryRepairDiagnostic` as its OWN local constants while
+    // importing the settlement/delivery keys from protocol. Both ride durable
+    // `interview.errored` events and both carry `settlementId`, so both
+    // projectors passed a 1.7 identity to every pre-1.7 peer - the exact
+    // failure `INTERVIEW_SETTLEMENT_METADATA_KEY`'s own doc warns about, "a
+    // typed projector cannot strip a key it was never told about".
+    //
+    // FALSIFICATION: drop either companion key from
+    // `INTERVIEW_STRUCTURED_METADATA_KEYS` and this reddens while the
+    // settlement/delivery arms stay green.
+    const event = chatEventWith("e-errored", 30, "interview.errored", {
+      // The legacy fields a 1.4-1.6 peer has always received. They must NOT
+      // move: the companion events write `code` beside the envelope, and
+      // `reason` is the user-visible text.
+      reason: "Interview delivery repair required.",
+      code: "OUTBOX_MISSING",
+      [INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY]: {
+        settlementId: "gui-1",
+        deliveryId: "dlv-1",
+      },
+      [INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY]: {
+        settlementId: "gui-1",
+        diagnosticId: "diag-1",
+        code: "OUTBOX_MISSING",
+        source: "repair",
+      },
+    });
+    const frame = eventAppendedFrame(event);
+
+    // Identity on the live line: a 1.7 peer is entitled to both facts.
+    expect(projectChatServerFrameForVersion(frame, live)).toBe(frame);
+
+    for (const version of legacyLines()) {
+      const projected = projectChatServerFrameForVersion(frame, version);
+      expect(projected).not.toBe(frame);
+      const projectedEvent = expectProjectedEventParses(projected);
+      const metadata = asRecord(projectedEvent.metadata, "metadata");
+      expect(
+        Object.hasOwn(metadata, INTERVIEW_DELIVERY_ACCEPTANCE_METADATA_KEY),
+      ).toBe(false);
+      expect(
+        Object.hasOwn(
+          metadata,
+          INTERVIEW_DELIVERY_REPAIR_DIAGNOSTIC_METADATA_KEY,
+        ),
+      ).toBe(false);
+      // Byte for byte what this line has always carried.
+      expect(metadata.reason).toBe("Interview delivery repair required.");
+      expect(metadata.code).toBe("OUTBOX_MISSING");
     }
   });
 
