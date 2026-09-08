@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ILogger, LogFields } from "../../logger";
 import type { Environment } from "../../runner/environment";
 import type { HostPidMetadata, HostPidMetadataEvidence } from "../pid-metadata";
+import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataEvidenceMock: vi.fn(),
@@ -74,7 +75,13 @@ describe("observeSwapQuiescence", () => {
     } satisfies HostPidMetadataEvidence);
     const logger = fakeLogger();
 
-    await expect(observeSwapQuiescence(ENVIRONMENT, logger)).resolves.toEqual({
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot("/tmp/host-home"),
+        logger,
+      ),
+    ).resolves.toEqual({
       established: true,
     });
   });
@@ -86,7 +93,13 @@ describe("observeSwapQuiescence", () => {
     } satisfies HostPidMetadataEvidence);
     const logger = fakeLogger();
 
-    await expect(observeSwapQuiescence(ENVIRONMENT, logger)).resolves.toEqual({
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot("/tmp/host-home"),
+        logger,
+      ),
+    ).resolves.toEqual({
       established: false,
       reason: "writer-unknown",
     });
@@ -103,7 +116,13 @@ describe("observeSwapQuiescence", () => {
     } satisfies HostPidMetadataEvidence);
     const logger = fakeLogger();
 
-    await expect(observeSwapQuiescence(ENVIRONMENT, logger)).resolves.toEqual({
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot("/tmp/host-home"),
+        logger,
+      ),
+    ).resolves.toEqual({
       established: true,
     });
   });
@@ -118,9 +137,46 @@ describe("observeSwapQuiescence", () => {
     } satisfies HostPidMetadataEvidence);
     const logger = fakeLogger();
 
-    await expect(observeSwapQuiescence(ENVIRONMENT, logger)).resolves.toEqual({
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot("/tmp/host-home"),
+        logger,
+      ),
+    ).resolves.toEqual({
       established: false,
       reason: "writer-still-running",
     });
+  });
+
+  it("is NOT established, with reason unseen-writers, when the survey spans more than one root - and never even consults the pid record", async () => {
+    // `pid.json` is SLOT-scoped while the chat stores are IDENTITY-scoped.
+    // A pooled identity home carries no pid record at all, and the host
+    // holding it publishes into its own slot, which this process cannot
+    // enumerate - so every root beyond the one whose pid we can read is a
+    // store whose writer we cannot see, and its silence proves nothing.
+    // This check has to run BEFORE the pid read, not merely produce the
+    // same outcome after it - asserting the mock's call count is what
+    // proves the ordering rather than just the result. Cleared first since
+    // this file has no shared `beforeEach` and earlier tests left calls on
+    // the same mock.
+    mocks.readHostPidMetadataEvidenceMock.mockClear();
+    const logger = fakeLogger();
+
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        {
+          roots: [
+            { path: "/tmp/host-home", label: "host" },
+            { path: "/tmp/identity-a", label: "identity-a" },
+          ],
+          enumerationFailed: false,
+        },
+        logger,
+      ),
+    ).resolves.toEqual({ established: false, reason: "unseen-writers" });
+
+    expect(mocks.readHostPidMetadataEvidenceMock).not.toHaveBeenCalled();
   });
 });

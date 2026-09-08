@@ -817,7 +817,11 @@ async function assertFloorAfterStopOrRestore(
   operands: CommitFloorOperands,
   logger: ILogger,
 ): Promise<void> {
-  const quiescence = await observeSwapQuiescence(opts.environment, logger);
+  const quiescence = await observeSwapQuiescence(
+    opts.environment,
+    operands.surveyRoots,
+    logger,
+  );
   try {
     await assertStoreFormatFloorAfterStop({
       environment: opts.environment,

@@ -38,6 +38,7 @@ import {
   publishedHostProcessGone,
   readHostPidMetadataEvidence,
 } from "./pid-metadata";
+import type { ChatStoreSurveyRoots } from "./chat-store-survey-roots";
 import type { ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 
@@ -49,7 +50,19 @@ export type SwapQuiescenceGap =
   /** `pid.json` names a process that is still running, or may be. */
   | "writer-still-running"
   /** `pid.json` exists but could not be read, so nothing can be concluded. */
-  | "writer-unknown";
+  | "writer-unknown"
+  /**
+   * The survey spans a data root this process cannot see the writer of.
+   *
+   * `pid.json` is SLOT-scoped while the chat stores are IDENTITY-scoped (see
+   * the host's `paths.ts`: the slot home holds "pid.json, logs, crash
+   * reports", the identity home holds the chat/epic stores). A pooled
+   * identity home therefore carries no pid record at all, and the host that
+   * acquired it publishes its pid in ITS OWN slot - which this process cannot
+   * enumerate. So a second dev slot can be live and migrating one of the very
+   * stores the survey just read.
+   */
+  | "unseen-writers";
 
 export type SwapQuiescence =
   | { readonly established: true }
@@ -68,8 +81,21 @@ const QUIESCED: SwapQuiescence = { established: true };
  */
 export async function observeSwapQuiescence(
   environment: Environment,
+  surveyRoots: ChatStoreSurveyRoots,
   logger: ILogger,
 ): Promise<SwapQuiescence> {
+  // The pid record this process can read belongs to ONE root - the host home
+  // it was handed. Every additional root the survey covers is a store whose
+  // writer lives somewhere this process cannot look, so its silence proves
+  // nothing. Production always resolves exactly one root, so the shipped path
+  // is untouched; only a dev machine with a slot or an identity pool has more.
+  if (surveyRoots.roots.length > 1) {
+    logger.info(
+      "Host store-format floor cannot establish quiescence: the survey spans data roots whose writers this process cannot see",
+      { environment, surveyedRoots: surveyRoots.roots.length },
+    );
+    return { established: false, reason: "unseen-writers" };
+  }
   const evidence = await readHostPidMetadataEvidence(environment);
   if (evidence.kind === "absent") return QUIESCED;
   if (evidence.kind === "unreadable") {
@@ -87,6 +113,9 @@ export async function observeSwapQuiescence(
 export function describeQuiescenceGap(reason: SwapQuiescenceGap): string {
   if (reason === "writer-still-running") {
     return "the host that writes them is still running, so it can stamp a store after this check and before the swap";
+  }
+  if (reason === "unseen-writers") {
+    return "they span more than one host data root on this machine and only one publishes a process record here, so another host could still be writing them";
   }
   return "this CLI could not read the host's pid record, so it cannot tell whether a host is still writing them";
 }

@@ -277,9 +277,20 @@ export function createServiceInstallLifecycle(
      * Put back the host `beforeSwap` stopped, for a swap that was abandoned
      * between the two.
      *
-     * A plain start, not `relaunchAfterRestart`: nothing was replaced, so
-     * there is no new generation to force a recycle onto - the job is to
-     * return the machine to the host it was already running. Gated on
+     * The SAME recycle route `afterSwap` takes after a resolved stop, not a
+     * plain start. An earlier version of this used `controller.start` on the
+     * reasoning that nothing was replaced so no new generation needs forcing
+     * onto the job. That reasoning was about the wrong thing: on macOS
+     * `stopService` waits on the HOST pid from `pid.json`, while the launchd
+     * job is the SUPERVISOR, which outlives its child by the whole post-mortem
+     * - so there is a window where the host is gone, the stop has returned,
+     * and launchd still considers the job running. A plain kickstart against a
+     * running job is a silent no-op (see `relaunchServiceAfterRestart` in
+     * `platforms/macos.ts`, which names this hazard). The recovery would then
+     * report success and leave the machine HOSTLESS on the old, untouched
+     * install - the worst outcome available to a refusal whose whole promise
+     * is that it changed nothing.
+     *
      * Gated on TWO things, because `stoppedBeforeSwap` alone is not the
      * question. It is set whenever `controller.stop` was issued - and on
      * Windows that happens even for a service the probe found `stopped`,
@@ -299,7 +310,8 @@ export function createServiceInstallLifecycle(
           publishHostStartAdoption,
           controller,
           label,
-          async () => controller.start(label),
+          async () =>
+            controller.relaunchAfterRestart(label, { forcedRecycle: true }),
         ),
       );
     },

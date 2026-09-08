@@ -1239,7 +1239,15 @@ describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
   });
 
   describe("service lifecycle", () => {
-    it("restarts a host that was RUNNING before the stop", async () => {
+    it("restarts a host that was RUNNING before the stop via relaunchAfterRestart, not a plain start", async () => {
+      // NOT `controller.start` - macOS's `stopService` waits on the HOST
+      // pid from `pid.json`, while the launchd job is the SUPERVISOR, which
+      // outlives its child by the whole post-mortem. There is a window
+      // where the host is gone, the stop has returned, and launchd still
+      // considers the job running - and a plain kickstart against a
+      // running job is a silent no-op (`relaunchServiceAfterRestart`,
+      // `platforms/macos.ts`). The recovery would report success and leave
+      // the machine hostless on the old install.
       const harness = makeController("running");
       mocks.createServiceControllerMock.mockReturnValue(harness.controller);
       const handle = createServiceInstallLifecycle({
@@ -1255,7 +1263,10 @@ describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
 
       await handle.lifecycle.restartAfterAbortedSwap();
 
-      expect(harness.start).toHaveBeenCalledTimes(1);
+      expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+      expect(harness.relaunchAfterRestart).toHaveBeenCalledWith(label, {
+        forcedRecycle: true,
+      });
     });
 
     it("on Windows, never restarts a service the probe found STOPPED, even though the handle-kill stop still ran", async () => {
@@ -1280,12 +1291,19 @@ describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
         handle.lifecycle.restartAfterAbortedSwap(),
       );
 
+      // Both routes, so a future regression cannot slip through on
+      // whichever one this suite left unwatched.
       expect(harness.start).not.toHaveBeenCalled();
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
     });
   });
 
   describe("bytes-only lifecycle", () => {
-    it("on Windows, restarts a host that was RUNNING before the handle-kill stop", async () => {
+    it("on Windows, restarts a host that was RUNNING before the handle-kill stop via a plain start - deliberately NOT relaunchAfterRestart", async () => {
+      // This lifecycle only ever restores on Windows, where there is no
+      // launchd supervisor and therefore no kickstart-against-a-running-job
+      // hazard - `controller.start` is correct here, unlike the service
+      // lifecycle above.
       const harness = makeController("running");
       const lifecycle = createBytesOnlyInstallLifecycle(
         harness.controller,
@@ -1301,6 +1319,7 @@ describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
       );
 
       expect(harness.start).toHaveBeenCalledTimes(1);
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
     });
 
     it("on Windows, leaves a STOPPED service stopped, but the handle-kill stop still ran - the regression this pins", async () => {
@@ -1324,6 +1343,7 @@ describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
       );
 
       expect(harness.start).not.toHaveBeenCalled();
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
     });
 
     it("on POSIX, stops nothing before the swap, so restartAfterAbortedSwap is already a no-op", async () => {
