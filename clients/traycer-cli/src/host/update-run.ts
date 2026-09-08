@@ -1024,7 +1024,11 @@ async function startSelection(
       initialPhase:
         plan.plan.kind === "already-staged" ? "preparing" : "downloading",
       initialContinuation: null,
-      claim: baselineFrom(identity, args.allowDowngrade),
+      claim: baselineFrom(
+        identity,
+        args.allowDowngrade,
+        args.acceptStoreFormatLoss,
+      ),
     },
   };
 }
@@ -1095,6 +1099,7 @@ async function selectDebtStart(
         installGeneration: installGenerationOf(installed),
         stageFingerprint: null,
         allowDowngrade: args.allowDowngrade,
+        acceptStoreFormatLoss: args.acceptStoreFormatLoss,
       },
     },
   };
@@ -1507,13 +1512,36 @@ function hostNotInstalled(environment: Environment): CliError {
 function baselineFrom(
   identity: HostUpdatePlanIdentity,
   allowDowngrade: boolean,
+  acceptStoreFormatLoss: boolean,
 ): HostUpdateAttemptClaimBaseline {
   return {
     installedVersion: identity.installedVersion,
     installGeneration: identity.installGeneration,
     stageFingerprint: identity.stageFingerprint,
     allowDowngrade,
+    acceptStoreFormatLoss,
   };
+}
+
+/**
+ * Whether the store-format floor may be overridden on this arm: the consent
+ * this invocation carries, OR the consent the park's claim recorded.
+ *
+ * The claim is what makes a bound resume work at all. `host.update.continue`
+ * spawns `host update --intent continue` with no `--accept-store-format-loss`
+ * (the dispatcher never carries it, the same way it never carries
+ * `--allow-downgrade`), so a downgrade the person consented to through
+ * "Install anyway" would park on a busy host and then be refused by the very
+ * floor that consent was given for. The claim carries the authorization the
+ * park was made under, exactly as `allowDowngrade` does in `selectBoundResume`.
+ * A fresh run's claim was just minted from `args`, so the two operands agree
+ * there and this is the resume's rule alone.
+ */
+function storeFormatLossAccepted(input: RunArmInput): boolean {
+  return (
+    input.args.acceptStoreFormatLoss ||
+    input.claim.record.claim?.acceptStoreFormatLoss === true
+  );
 }
 
 function installGenerationOf(record: HostInstallRecord): string {
@@ -2518,8 +2546,10 @@ async function applyArm(
           // The apply arm can land older bytes too: a stage this executor did
           // not promote may be incomparable to the install, which reconcile's
           // stale-or-equal rule does not remove and no version test can prove
-          // is an upgrade. `applyHost` gates it before its busy check.
-          acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+          // is an upgrade. `applyHost` gates it before its busy check. The
+          // consent is the CLAIM's as much as the argument's - see
+          // `storeFormatLossAccepted`.
+          acceptStoreFormatLoss: storeFormatLossAccepted(input),
           expectedStageFingerprint,
           // The ONE version binding (#1752 round 10/14, ticket 08 decision 2).
           // The executor feeds the installer the CLAIM's target - not the
@@ -2961,7 +2991,7 @@ async function downgradeArm(
         environment: args.environment,
         version: target,
         force: args.force,
-        acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+        acceptStoreFormatLoss: storeFormatLossAccepted(input),
         onProgress: input.onProgress,
         // The coarse marker is record-driven here as on the apply arm, so
         // there is nothing to take over at this hook. See the field's doc.

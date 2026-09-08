@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ILogger, LogFields } from "../../logger";
 import type { Environment } from "../../runner/environment";
@@ -11,11 +14,60 @@ const mocks = vi.hoisted(() => ({
   linuxServiceMayRespawnMock: vi.fn(),
 }));
 
+// The observer reads every record by PATH (`readHostPidMetadataEvidenceAt`),
+// so one mock serves the single-root tests, which never look at the path,
+// and the dev-slot tests, which answer per path.
 vi.mock("../pid-metadata", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../pid-metadata")>();
   return {
     ...actual,
-    readHostPidMetadataEvidence: mocks.readHostPidMetadataEvidenceMock,
+    readHostPidMetadataEvidenceAt: mocks.readHostPidMetadataEvidenceMock,
+  };
+});
+
+// The dev-slot walk resolves `host/dev-runs`, the unslotted `host/dev` home
+// and this process's own pid path through `store/paths` - genuine filesystem
+// I/O against the operator's real `~/.traycer` if left unmocked. While a
+// sandbox is set, the three resolve under it; otherwise they are the real
+// functions, which the single-root tests only ever use for path arithmetic.
+const sandbox = vi.hoisted(() => ({
+  root: null as string | null,
+  // Path to make `readdir` reject with EACCES for - `null` lets every call
+  // through to the real filesystem.
+  readdirEaccesForPath: null as string | null,
+}));
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  const { join } = await import("node:path");
+  return {
+    ...actual,
+    hostPidMetadataPath: (environment: Environment | undefined) =>
+      sandbox.root === null
+        ? actual.hostPidMetadataPath(environment)
+        : join(sandbox.root, "host", "dev-runs", "slot-a", "pid.json"),
+    hostDevHomeDir: () =>
+      sandbox.root === null
+        ? actual.hostDevHomeDir()
+        : join(sandbox.root, "host", "dev"),
+    hostDevRunsRoot: () =>
+      sandbox.root === null
+        ? actual.hostDevRunsRoot()
+        : join(sandbox.root, "host", "dev-runs"),
+  };
+});
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readdir: async (
+      path: Parameters<typeof actual.readdir>[0],
+      options: Parameters<typeof actual.readdir>[1],
+    ) => {
+      if (path === sandbox.readdirEaccesForPath) {
+        throw Object.assign(new Error("simulated EACCES"), { code: "EACCES" });
+      }
+      return actual.readdir(path, options);
+    },
   };
 });
 
@@ -231,17 +283,15 @@ describe("observeSwapQuiescence", () => {
     });
   });
 
-  it("is NOT established, with reason unseen-writers, when the survey spans more than one root - and never even consults the pid record", async () => {
-    // `pid.json` is SLOT-scoped while the chat stores are IDENTITY-scoped.
-    // A pooled identity home carries no pid record at all, and the host
-    // holding it publishes into its own slot, which this process cannot
-    // enumerate - so every root beyond the one whose pid we can read is a
-    // store whose writer we cannot see, and its silence proves nothing.
-    // This check has to run BEFORE the pid read, not merely produce the
-    // same outcome after it - asserting the mock's call count is what
-    // proves the ordering rather than just the result. Cleared first since
-    // this file has no shared `beforeEach` and earlier tests left calls on
-    // the same mock.
+  it("is NOT established, with reason unseen-writers, when a NON-dev survey spans more than one root - and never even consults the pid record", async () => {
+    // Only the dev survey unions roots (`resolveChatStoreSurveyRoots`), and
+    // only dev hosts publish into enumerable run slots. A multi-root survey
+    // under any other environment is outside the observer's model of who
+    // writes what, so it refuses rather than guesses. This check has to run
+    // BEFORE any pid read - asserting the mock's call count is what proves
+    // the ordering rather than just the result. Cleared first since this
+    // file has no shared `beforeEach` and earlier tests left calls on the
+    // same mock.
     mocks.readHostPidMetadataEvidenceMock.mockClear();
     const logger = fakeLogger();
 
@@ -260,6 +310,151 @@ describe("observeSwapQuiescence", () => {
     ).resolves.toEqual({ established: false, reason: "unseen-writers" });
 
     expect(mocks.readHostPidMetadataEvidenceMock).not.toHaveBeenCalled();
+  });
+
+  describe("a dev survey spanning more than one root walks every run slot's pid record", () => {
+    // `pid.json` is SLOT-scoped while the chat stores are IDENTITY-scoped.
+    // A pooled identity home carries no pid record at all; the host holding
+    // it publishes into the run slot it was started in - `host/dev-runs/
+    // <slot>`, or the unslotted `host/dev` home. So the records that can
+    // vouch for every surveyed root are exactly those, and the observer
+    // reads each of them instead of refusing on the root count.
+    const DEV_ROOTS = {
+      roots: [
+        { path: "/tmp/dev-runs/slot-a", label: "host" },
+        { path: "/tmp/dev/identities/identity-a", label: "identity-a" },
+      ],
+      enumerationFailed: false,
+    };
+    let root: string;
+    beforeEach(async () => {
+      root = await mkdtemp(join(tmpdir(), "swap-quiescence-dev-slots-"));
+      sandbox.root = root;
+      sandbox.readdirEaccesForPath = null;
+      mocks.readHostPidMetadataEvidenceMock.mockReset();
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+    });
+    afterEach(async () => {
+      sandbox.root = null;
+      sandbox.readdirEaccesForPath = null;
+      await rm(root, { recursive: true, force: true });
+    });
+
+    function recordPath(...segments: string[]): string {
+      return join(root, "host", ...segments, "pid.json");
+    }
+    function readPaths(): string[] {
+      return mocks.readHostPidMetadataEvidenceMock.mock.calls.map(
+        (call) => call[0] as string,
+      );
+    }
+
+    it("reads the unslotted dev home's record and every dev-runs slot's, and is established when each is absent", async () => {
+      await mkdir(join(root, "host", "dev-runs", "slot-a"), {
+        recursive: true,
+      });
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+      // A stray file under `dev-runs` is not a slot and is skipped - the
+      // same rule the identity pool applies to a `.DS_Store`.
+      await writeFile(join(root, "host", "dev-runs", ".DS_Store"), "", "utf8");
+      await mkdir(join(root, "host", "dev"), { recursive: true });
+
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({ established: true });
+
+      // Sorted, so a refusal's log lists the records in one stable order.
+      expect(readPaths()).toEqual(
+        [
+          recordPath("dev"),
+          recordPath("dev-runs", "slot-a"),
+          recordPath("dev-runs", "slot-b"),
+        ].sort(),
+      );
+    });
+
+    it("still reads its own slot's record and the unslotted home's when dev-runs does not exist", async () => {
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({ established: true });
+      expect(readPaths()).toEqual(
+        [recordPath("dev"), recordPath("dev-runs", "slot-a")].sort(),
+      );
+    });
+
+    it("is NOT established, with reason writer-still-running, when ANOTHER slot's record names a live process", async () => {
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+      mocks.readHostPidMetadataEvidenceMock.mockImplementation(
+        async (path: string) =>
+          path === recordPath("dev-runs", "slot-b")
+            ? {
+                kind: "read",
+                // This very process: alive, and with no start identity on
+                // record it cannot be proven to be an impostor.
+                metadata: samplePidMetadata({ pid: process.pid }),
+              }
+            : { kind: "absent" },
+      );
+
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({
+        established: false,
+        reason: "writer-still-running",
+      });
+    });
+
+    it("is NOT established, with reason writer-unknown, when another slot's record cannot be read", async () => {
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+      mocks.readHostPidMetadataEvidenceMock.mockImplementation(
+        async (path: string) =>
+          path === recordPath("dev-runs", "slot-b")
+            ? { kind: "unreadable", cause: "not valid JSON" }
+            : { kind: "absent" },
+      );
+
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({ established: false, reason: "writer-unknown" });
+    });
+
+    it("is NOT established, with reason unseen-writers, when dev-runs cannot be read - and consults no record", async () => {
+      await mkdir(join(root, "host", "dev-runs"), { recursive: true });
+      sandbox.readdirEaccesForPath = join(root, "host", "dev-runs");
+
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({ established: false, reason: "unseen-writers" });
+      expect(mocks.readHostPidMetadataEvidenceMock).not.toHaveBeenCalled();
+    });
+
+    // `symlink()` is EPERM for a Windows developer without the create-
+    // symbolic-link privilege - see `chat-store-survey.test.ts`'s same guard.
+    it.skipIf(process.platform === "win32")(
+      "is NOT established, with reason unseen-writers, when a dev-runs entry is a symlink - followed it could leave the slots, ignored it could hide one",
+      async () => {
+        await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+          recursive: true,
+        });
+        await symlink(
+          join(root, "host", "dev-runs", "slot-b"),
+          join(root, "host", "dev-runs", "slot-link"),
+        );
+
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: false, reason: "unseen-writers" });
+        expect(mocks.readHostPidMetadataEvidenceMock).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("is NOT established, with reason unseen-writers, for a SINGLE root that failed to ENUMERATE - and never even consults the pid record", async () => {

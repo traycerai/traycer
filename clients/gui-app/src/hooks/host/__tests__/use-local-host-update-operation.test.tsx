@@ -246,6 +246,7 @@ function statusWith(
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
+    install: null,
   };
 }
 

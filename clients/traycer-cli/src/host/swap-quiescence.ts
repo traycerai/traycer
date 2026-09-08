@@ -60,14 +60,23 @@
  * registration whose other child was still booting, unpublished), and the
  * exemption cleared both.
  */
+import type { Dirent } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import {
   publishedHostProcessGone,
-  readHostPidMetadataEvidence,
+  readHostPidMetadataEvidenceAt,
 } from "./pid-metadata";
 import type { ChatStoreSurveyRoots } from "./chat-store-survey-roots";
 import { serviceManagerMayRespawn } from "../service";
 import type { ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
+import {
+  hostDevHomeDir,
+  hostDevRunsRoot,
+  hostPidMetadataPath,
+  hostPidMetadataPathIn,
+} from "../store/paths";
 
 /**
  * Why the writer could not be shown to be gone. Rendered into the refusal, so
@@ -79,16 +88,20 @@ export type SwapQuiescenceGap =
   /** `pid.json` exists but could not be read, so nothing can be concluded. */
   | "writer-unknown"
   /**
-   * The survey covers a data root this process cannot see the writer of - or
-   * could not list the roots at all.
+   * The survey covers a data root whose writers this process could not
+   * enumerate - or could not list the roots at all.
    *
    * `pid.json` is SLOT-scoped while the chat stores are IDENTITY-scoped (see
    * the host's `paths.ts`: the slot home holds "pid.json, logs, crash
    * reports", the identity home holds the chat/epic stores). A pooled
-   * identity home therefore carries no pid record at all, and the host that
-   * acquired it publishes its pid in ITS OWN slot - which this process cannot
-   * enumerate. So a second dev slot can be live and migrating one of the very
-   * stores the survey just read.
+   * identity home therefore carries no pid record at all; the host that
+   * acquired it publishes its pid in the run slot it was started in -
+   * `host/dev-runs/<slot>`, or the unslotted `host/dev` home. So a survey
+   * that spans more than one root reads EVERY slot's record
+   * (`resolveWriterPidRecords`), and this is the answer when that walk could
+   * not be completed: the survey's own roots could not be listed, `dev-runs`
+   * could not be read, or an entry under it is a symlink (followed, it could
+   * point at a tree that is not a slot; ignored, it could hide one that is).
    */
   | "unseen-writers"
   /**
@@ -136,39 +149,114 @@ export async function observeSwapQuiescence(
   surveyRoots: ChatStoreSurveyRoots,
   logger: ILogger,
 ): Promise<SwapQuiescence> {
-  // The pid record this process can read belongs to ONE root - the host home
-  // it was handed. Two shapes put a store beyond that record, and both mean
-  // the same thing here:
-  //
-  //   - MORE ROOTS than the one whose writer we can see. Every extra root is
-  //     a store whose writer lives somewhere this process cannot look, so its
-  //     silence proves nothing.
-  //   - A root set that could not be fully ENUMERATED. Then the count itself
-  //     is unreliable and there may be a root - hence a writer - we never
-  //     listed at all.
-  //
-  // The survey turns `enumerationFailed` into its own `*` failure and would
-  // refuse on that anyway, so this arm changes no outcome today. It is here
-  // because quiescence is asked as its own question and must answer honestly
-  // on its own: "I could not enumerate the roots" is not evidence that
-  // nothing is writing them.
-  //
-  // Production always resolves exactly one root and never fails to enumerate,
-  // so the shipped path is untouched.
-  if (surveyRoots.enumerationFailed || surveyRoots.roots.length > 1) {
-    logger.info(
-      "Host store-format floor cannot establish quiescence: this process cannot account for every host data root on this machine",
-      {
-        environment,
-        surveyedRoots: surveyRoots.roots.length,
-        enumerationFailed: surveyRoots.enumerationFailed,
-      },
-    );
-    return { established: false, reason: "unseen-writers" };
+  const writers = await resolveWriterPidRecords(environment, surveyRoots);
+  if (writers.kind === "unenumerable") {
+    return unseenWriters(environment, surveyRoots, writers.cause, logger);
   }
-  const processGap = await publishedHostProcessState(environment, logger);
+  const processGap = await publishedHostProcessState(
+    environment,
+    writers.paths,
+    logger,
+  );
   if (processGap !== null) return processGap;
-  return await quiescenceOnceServiceSettles(environment, logger);
+  return await quiescenceOnceServiceSettles(environment, surveyRoots, logger);
+}
+
+type WriterPidRecords =
+  | { readonly kind: "records"; readonly paths: readonly string[] }
+  | { readonly kind: "unenumerable"; readonly cause: string };
+
+/**
+ * Every pid record that could name a writer of the surveyed roots.
+ *
+ * ONE root is the shipped path: the record in that root's own home, and
+ * nothing new is read. MORE than one is the dev survey's union (the run slot's
+ * home, the unslotted dev home, the identity pool), and its writers are dev
+ * hosts. A dev host publishes its pid into the run slot it was started in -
+ * `host/dev-runs/<slot>`, or `host/dev` when it was started unslotted - and
+ * never into an identity home, so the records that can vouch for every root
+ * are exactly the unslotted home's and every slot's under `dev-runs`.
+ *
+ * Resolved on EVERY ask rather than once per swap: a slot can appear while
+ * the service manager is being waited on, and the read after that wait has to
+ * see it. A `dev-runs` that does not exist is the ordinary single-desktop
+ * machine and yields no slots; one that cannot be read, or that holds a
+ * symlink, is a walk this process cannot complete and answers `unseen-writers`
+ * - the same rule the identity pool's own enumeration follows, for the same
+ * two-directional reason (a followed link could point outside the slots, an
+ * ignored one could hide a slot).
+ */
+async function resolveWriterPidRecords(
+  environment: Environment,
+  surveyRoots: ChatStoreSurveyRoots,
+): Promise<WriterPidRecords> {
+  if (surveyRoots.enumerationFailed) {
+    return {
+      kind: "unenumerable",
+      cause: "the survey could not enumerate its roots",
+    };
+  }
+  const own = hostPidMetadataPath(environment);
+  if (surveyRoots.roots.length <= 1) return { kind: "records", paths: [own] };
+  if (environment !== "dev") {
+    // Only the dev survey unions roots (`resolveChatStoreSurveyRoots`). A
+    // multi-root survey under any other environment is outside this module's
+    // model of who writes what, and a model it does not have refuses rather
+    // than guesses.
+    return {
+      kind: "unenumerable",
+      cause: `a ${environment} survey spans ${surveyRoots.roots.length} roots`,
+    };
+  }
+  const paths = new Set<string>([own, hostPidMetadataPathIn(hostDevHomeDir())]);
+  const runsRoot = hostDevRunsRoot();
+  let slots: Dirent[];
+  try {
+    slots = await readdir(runsRoot, { withFileTypes: true });
+  } catch (error: unknown) {
+    if (errorCode(error) === "ENOENT") {
+      return { kind: "records", paths: [...paths].sort() };
+    }
+    return { kind: "unenumerable", cause: `${runsRoot} could not be read` };
+  }
+  for (const slot of slots) {
+    if (slot.isSymbolicLink()) {
+      return {
+        kind: "unenumerable",
+        cause: `${join(runsRoot, slot.name)} is a symlink`,
+      };
+    }
+    if (!slot.isDirectory()) continue;
+    paths.add(hostPidMetadataPathIn(join(runsRoot, slot.name)));
+  }
+  return { kind: "records", paths: [...paths].sort() };
+}
+
+function unseenWriters(
+  environment: Environment,
+  surveyRoots: ChatStoreSurveyRoots,
+  cause: string,
+  logger: ILogger,
+): SwapQuiescence {
+  logger.info(
+    "Host store-format floor cannot establish quiescence: this process cannot account for every host data root on this machine",
+    {
+      environment,
+      surveyedRoots: surveyRoots.roots.length,
+      enumerationFailed: surveyRoots.enumerationFailed,
+      cause,
+    },
+  );
+  return { established: false, reason: "unseen-writers" };
+}
+
+function errorCode(error: unknown): string | null {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+    ? error.code
+    : null;
 }
 
 /**
@@ -176,23 +264,28 @@ export async function observeSwapQuiescence(
  * stands in the way (no record, or a record whose process is provably gone),
  * else the gap that does. Asked twice - before the service manager is
  * consulted, and again after a wait for it to settle, since a host can
- * publish while this process is waiting.
+ * publish while this process is waiting. Every record is read, and the first
+ * one that cannot be cleared answers for the whole set: one live writer is
+ * enough to refuse, whichever slot it is in.
  */
 async function publishedHostProcessState(
   environment: Environment,
+  pidRecordPaths: readonly string[],
   logger: ILogger,
 ): Promise<SwapQuiescence | null> {
-  const evidence = await readHostPidMetadataEvidence(environment);
-  if (evidence.kind === "absent") return null;
-  if (evidence.kind === "unreadable") {
-    logger.warn(
-      "Host pid metadata could not be read, so the swap cannot be shown to be quiescent",
-      { environment, cause: evidence.cause },
-    );
-    return { established: false, reason: "writer-unknown" };
-  }
-  if (!publishedHostProcessGone(evidence.metadata)) {
-    return { established: false, reason: "writer-still-running" };
+  for (const path of pidRecordPaths) {
+    const evidence = await readHostPidMetadataEvidenceAt(path, environment);
+    if (evidence.kind === "absent") continue;
+    if (evidence.kind === "unreadable") {
+      logger.warn(
+        "Host pid metadata could not be read, so the swap cannot be shown to be quiescent",
+        { environment, path, cause: evidence.cause },
+      );
+      return { established: false, reason: "writer-unknown" };
+    }
+    if (!publishedHostProcessGone(evidence.metadata)) {
+      return { established: false, reason: "writer-still-running" };
+    }
   }
   return null;
 }
@@ -250,6 +343,7 @@ const SERVICE_PROBE_TIMEOUT_MS = 10_000;
  */
 async function quiescenceOnceServiceSettles(
   environment: Environment,
+  surveyRoots: ChatStoreSurveyRoots,
   logger: ILogger,
 ): Promise<SwapQuiescence> {
   const startedAt = performance.now();
@@ -283,7 +377,17 @@ async function quiescenceOnceServiceSettles(
     });
     mayRespawn = await probe();
   }
-  const processGap = await publishedHostProcessState(environment, logger);
+  // Re-resolved, not reused: a slot that appeared during the wait holds a
+  // record the first walk never listed.
+  const writers = await resolveWriterPidRecords(environment, surveyRoots);
+  if (writers.kind === "unenumerable") {
+    return unseenWriters(environment, surveyRoots, writers.cause, logger);
+  }
+  const processGap = await publishedHostProcessState(
+    environment,
+    writers.paths,
+    logger,
+  );
   return processGap ?? QUIESCED;
 }
 
@@ -296,7 +400,7 @@ export function describeQuiescenceGap(reason: SwapQuiescenceGap): string {
     return "no host is running, but the service manager still held a host job that can start one after waiting for it to settle - a recent crash, or a host that was still starting when the stop ran - so it can stamp a store before the swap lands; retry once it has settled";
   }
   if (reason === "unseen-writers") {
-    return "this CLI cannot account for every host data root on this machine - only one of them publishes a process record here - so another host could still be writing them";
+    return "this CLI could not list every host that can write them on this machine - a data root, or a dev run slot under host/dev-runs, could not be enumerated - so another host could still be writing them";
   }
   return "this CLI could not read the host's pid record, so it cannot tell whether a host is still writing them";
 }

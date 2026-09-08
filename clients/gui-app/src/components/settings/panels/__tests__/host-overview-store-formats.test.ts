@@ -23,9 +23,204 @@ function offer(overrides: Partial<HostStoreFormatOffer>): HostStoreFormatOffer {
         survey: "complete",
       },
     },
+    install: null,
     ...overrides,
   };
 }
+
+describe("hostStoreFormatRestriction over a local-file install (the CLI's local-archive identity)", () => {
+  // A desktop provisions from its bundled archive: the record is
+  // `local-file` under the CLI's own version, so the CLI withholds the
+  // installed version from applicability and EVERY move evaluates - an
+  // upgrade included. It clears from formats when the installed side can be
+  // placed (the sidecar beside the executable, or the table on the recorded
+  // version) and walks the survey when it cannot. Each row here is a case
+  // the registry-side estimate used to call unrestricted.
+  const UPGRADE = "1.4.0";
+  const pendingSurvey = {
+    chatDb: { current: 9, onDiskMax: null, epicCount: 0, survey: "pending" },
+  } as const;
+
+  it("clears an upgrade from the sidecar's declaration alone, without waiting on the survey", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: { chatDb: 9 },
+          storeFormats: pendingSurvey,
+          install: {
+            source: "local-file",
+            version: "1.3.0.1757000000000.abc1234",
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("places an undeclared install by the fixed table when its recorded version is on it", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: { chatDb: 9 },
+          storeFormats: pendingSurvey,
+          install: {
+            source: "local-file",
+            version: "1.3.0-rc.4",
+            declaredFormats: null,
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  describe("an install the CLI cannot place - undeclared, recorded above the table's ceiling - walks the survey, upgrade or not", () => {
+    const unplaceable = {
+      source: "local-file",
+      version: "1.3.0.1757000000000.abc1234",
+      declaredFormats: null,
+    } as const;
+
+    it("holds the upgrade on a pending survey instead of clearing it on this build's own stamp", () => {
+      // `current` is 9 and the target reads 9, which the registry-side
+      // estimate cleared. The CLI never sees `current`; it sees an installed
+      // side nobody can place, and walks.
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: { chatDb: 9 },
+            storeFormats: pendingSurvey,
+            install: unplaceable,
+          }),
+        ),
+      ).toMatchObject({ kind: "pending", confirmation: null });
+    });
+
+    it("clears the upgrade on a completed empty survey", () => {
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: { chatDb: 9 },
+            storeFormats: {
+              chatDb: {
+                current: 9,
+                onDiskMax: null,
+                epicCount: 0,
+                survey: "complete",
+              },
+            },
+            install: unplaceable,
+          }),
+        ),
+      ).toBeNull();
+    });
+
+    it("clears the upgrade when every surveyed store is within the target's format", () => {
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: { chatDb: 9 },
+            install: unplaceable,
+          }),
+        ),
+      ).toBeNull();
+    });
+
+    it("offers Install anyway on a failed survey - the refusal the CLI would otherwise send", () => {
+      const restriction = hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: { chatDb: 9 },
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: null,
+              epicCount: 2,
+              survey: "failed",
+            },
+          },
+          install: unplaceable,
+        }),
+      );
+      expect(restriction?.kind).toBe("failed");
+      expect(restriction?.confirmation).toContain(`v${UPGRADE}`);
+    });
+
+    it("blocks the upgrade when a store is stamped above what the target reads", () => {
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: { chatDb: 9 },
+            storeFormats: {
+              chatDb: {
+                current: 9,
+                onDiskMax: 10,
+                epicCount: 1,
+                survey: "complete",
+              },
+            },
+            install: unplaceable,
+          }),
+        ),
+      ).toMatchObject({ kind: "blocked" });
+    });
+
+    it("refuses an upgrade whose own format is unknown, since nothing can clear it", () => {
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: null,
+            install: unplaceable,
+          }),
+        ),
+      ).toMatchObject({ kind: "unknown" });
+    });
+  });
+
+  it("judges a registry install exactly as before: an upgrade is not evaluated at all", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: null,
+          storeFormats: pendingSurvey,
+          install: {
+            source: "registry",
+            version: RUNNING_VERSION,
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("judges a same-format downgrade over a local-file install from the installed side's placement, not this build's stamp", () => {
+    // Recorded rc.4 (table: 9), declaring nothing; the target 1.3.0-rc.1
+    // reads 9 too, so the move clears before any survey - the same rc→rc
+    // rollback the registry-side rule clears, reached through the CLI's
+    // operands.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0-rc.1",
+          publishedFormats: null,
+          storeFormats: pendingSurvey,
+          install: {
+            source: "local-file",
+            version: "1.3.0-rc.4",
+            declaredFormats: null,
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("hostStoreFormatRestriction", () => {
   it("never restricts the running version's own row - a catalog row is judged by its version, not by its published formats", () => {

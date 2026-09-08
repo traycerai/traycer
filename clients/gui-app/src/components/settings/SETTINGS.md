@@ -2510,7 +2510,15 @@ aria-live="polite"` carrying the equivalent text for
       places no bytes, and `continue` resumes bytes the attempt was authorized
       to fetch when it was created — a downgrade park re-downloads the same
       version it was created for, which is the case a staged-version force
-      cannot even express). They are METHODS rather than an intent field
+      cannot even express). The same holds for the store-format floor's
+      consent: neither bound request carries `acceptStoreFormatLoss`, because
+      the CLI records the consent an attempt was created under on the
+      attempt's claim (`HostUpdateAttemptClaimBaseline.acceptStoreFormatLoss`,
+      beside `allowDowngrade`) and a resume acts on that recorded authority,
+      so a downgrade dispatched from a row's Install anyway that parks on a
+      busy host finishes through Force update without a second consent — and
+      its dialog names no loss, for the same reason it does not re-ask the
+      downgrade. They are METHODS rather than an intent field
       precisely so an older host, which has neither, is refused at dispatch by
       the transport: `useHostSupportsMethod` withholds the control per method
       and the page keeps today's `host.restart` / `installForce` routes. Each

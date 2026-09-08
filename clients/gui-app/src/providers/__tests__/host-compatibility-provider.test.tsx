@@ -146,6 +146,7 @@ const compatibleHostStatus: HostStatusResponse = {
   updateOperation: null,
   updateTransaction: null,
   storeFormats: null,
+  install: null,
 };
 
 let restoreFetch: () => void = () => undefined;
