@@ -2744,23 +2744,49 @@ describe("canonical status: installedYanked", () => {
     expect(status.installedYanked).toBe(true);
   });
 
-  it("retries the registry probe at most once even when the install keeps changing", async () => {
+  it("retries the registry probe at most once even when the install keeps changing, discarding the exhausted pass's stale listing", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "2.0.0",
       runtimeVersion: "2.0.0",
     });
+    // Seed the caches with a known-good answer from a CLEAN pass, before the
+    // keeps-changing scenario below runs: a `latest` that is NOT the
+    // (yanked) installed version, so `latestVersionFromSnapshot` still
+    // resolves it (an entry the listing marks yanked is never "available").
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        return availableSnapshotFixtureWithYanked(
+          "2.1.0",
+          ["2.0.0", "2.1.0"],
+          ["2.0.0"],
+        );
+      }
+      return {};
+    });
+    await controller.stageLatest();
+    const seededStatus = await controller.getStatus();
+    expect(seededStatus.latestVersion).toBe("2.1.0");
+    expect(seededStatus.installedYanked).toBe(true);
+
     let availableCalls = 0;
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
         availableCalls += 1;
         // Every pass observes a DIFFERENT install than it queried for, which
-        // would spin forever without the single-retry cap.
+        // would spin forever without the single-retry cap. The exhausted
+        // (second) pass's listing carries an obviously different `latest` and
+        // marks nothing yanked, so either leaking into the caches is
+        // observable below.
         writeInstallRecord("production", {
           version: `1.9.0-beta.${availableCalls}`,
           runtimeVersion: `1.9.0-beta.${availableCalls}`,
         });
-        return availableSnapshotFixtureWithYanked("2.0.0", ["2.0.0"], []);
+        return availableSnapshotFixtureWithYanked(
+          "9.9.9",
+          [`1.9.0-beta.${availableCalls}`],
+          [],
+        );
       }
       return {};
     });
@@ -2768,6 +2794,20 @@ describe("canonical status: installedYanked", () => {
     await expect(controller.stageLatest()).resolves.toBeUndefined();
 
     expect(availableCalls).toBe(2);
+    // The exhausted pass's `latest` ("9.9.9") never overwrote the seeded
+    // cache.
+    const statusAfterExhaustedRetry = await controller.getStatus();
+    expect(statusAfterExhaustedRetry.latestVersion).toBe("2.1.0");
+
+    // The exhausted pass's listing (which marked nothing yanked) did not
+    // replace the yank cache either: re-installing the version the SEEDED
+    // listing marked yanked still reads as yanked.
+    writeInstallRecord("production", {
+      version: "2.0.0",
+      runtimeVersion: "2.0.0",
+    });
+    const statusAfterRewrite = await controller.getStatus();
+    expect(statusAfterRewrite.installedYanked).toBe(true);
   });
 });
 

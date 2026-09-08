@@ -3194,24 +3194,22 @@ export class HostController {
       await this.runStageLatest();
       return;
     }
-    await this.reconcileEligibleStage();
+    await this.reconcileEligibleStage(true);
   }
 
-  private reconcileEligibleStage(): Promise<void> {
-    return this.reconcileEligibleStageFrom(true);
-  }
-
-  // `retryOnInstallChange`: the install record is an INPUT to the registry
-  // request below (it decides the channel mode and whether the listing is
-  // widened to pre-releases), and the request is a WAN round-trip a terminal
+  // `retryOnInstallChange` (callers pass `true`; only the internal retry
+  // passes `false`): the install record is an INPUT to the registry request
+  // below (it decides the channel mode and whether the listing is widened to
+  // pre-releases), and the request is a WAN round-trip a terminal
   // `host update --allow-downgrade` can land inside. A listing fetched for the
   // OLD install may then omit the new one entirely - a beta is hidden from a
   // stable-only listing - so `yankedVersionsCache` would silently record a
   // withdrawn build as viable and the launch gate would park on it without
   // ever reaching the CLI's authoritative lookup. So the record is re-read
   // once the listing is back, and a changed version restarts the reconcile
-  // from the top - exactly once, so two back-to-back changes cannot spin it.
-  private async reconcileEligibleStageFrom(
+  // from the top - exactly once, so two back-to-back changes cannot spin it;
+  // a second change discards that listing instead (see below).
+  private async reconcileEligibleStage(
     retryOnInstallChange: boolean,
   ): Promise<void> {
     if (await isHostRemovedByUser()) return;
@@ -3288,8 +3286,20 @@ export class HostController {
         },
       );
       if (retryOnInstallChange) {
-        return this.reconcileEligibleStageFrom(false);
+        return this.reconcileEligibleStage(false);
       }
+      // Retry exhausted and the install moved AGAIN: this listing still
+      // answers for a different install, so it is discarded exactly like a
+      // failed probe - the caches keep their previous answers, and a
+      // fingerprinted stage already on disk stays eligible as it was. The
+      // next reconcile (periodic, resume, or launch) starts clean.
+      if (staged?.stageId !== null && staged?.stageId !== undefined) {
+        this.eligibleStage = {
+          version: staged.version,
+          fingerprint: encodeStageFingerprint(staged.stageId),
+        };
+      }
+      return;
     }
     this.latestVersionCache = latestVersionFromSnapshot(snapshot);
     // Remembered beside `latestVersionCache` for the same reason: `getStatus`
