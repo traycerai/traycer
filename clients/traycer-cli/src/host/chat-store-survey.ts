@@ -47,7 +47,8 @@
  * Absent stores are neither readings nor failures. An epic directory without
  * `chat/chat.db` has nothing the target could fail to read.
  */
-import { readdir, stat } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { join } from "node:path";
 import type {
   ChatDbStampFailure,
@@ -55,12 +56,18 @@ import type {
   ChatDbStampReading,
   ChatDbStampSurvey,
 } from "@traycer/protocol/host/store-formats";
+import type {
+  ChatStoreSurveyRoot,
+  ChatStoreSurveyRoots,
+} from "./chat-store-survey-roots";
 
 /** Directory under the host home holding one directory per epic. */
 export const EPIC_STATE_DIRNAME = "epic-state";
 
 /** The chat store's path within an epic's state directory. */
-export const CHAT_DB_RELATIVE_PATH = join("chat", "chat.db");
+const CHAT_DIRNAME = "chat";
+const CHAT_DB_FILENAME = "chat.db";
+export const CHAT_DB_RELATIVE_PATH = join(CHAT_DIRNAME, CHAT_DB_FILENAME);
 
 /** The table and key the host stamps its schema version under. */
 const CHAT_DB_META_TABLE = "chat_db_meta";
@@ -98,83 +105,202 @@ export function chatDbPathFor(hostHome: string, epicId: string): string {
 }
 
 /**
- * Read the schema stamp of every chat store under `hostHome`.
+ * Read the schema stamp of every chat store under every root.
  *
- * `hostHome` is the host DATA root the target install would serve - the
- * `hostHomeDir(environment)` the CLI passes as `--host-data-dir`, never the
- * install directory. A missing `epic-state` directory is an empty survey: a
- * host that has never opened an epic has nothing at risk.
+ * Each root is a host DATA root - a directory holding `epic-state/`, never an
+ * install directory. There is more than one only on dev, where a pooled
+ * identity home can hold the stores the run slot does not; see
+ * `resolveChatStoreSurveyRoots`, which is the only thing that should be
+ * deciding what they are. A missing `epic-state` under a root contributes
+ * nothing: a host that has never opened an epic there has nothing at risk.
  */
 export async function surveyChatDbStamps(
-  hostHome: string,
+  surveyRoots: ChatStoreSurveyRoots,
 ): Promise<ChatDbStampSurvey> {
-  const epicStateDir = join(hostHome, EPIC_STATE_DIRNAME);
-  let entries: readonly string[];
-  try {
-    entries = await readdir(epicStateDir);
-  } catch (error: unknown) {
-    // ENOENT ALONE is emptiness. Everything else - EACCES on a root that is
-    // there, ENOTDIR for a root that exists but is a file - is a root this
-    // survey could not ENUMERATE, and reporting that as "no stores" would hand
-    // `decideStoreFormatFloor` an empty survey, which it clears
-    // unconditionally. A floor that cannot read the directory must refuse, so
-    // the inability travels as a failure entry.
-    if (isNotFound(error)) return { readings: [], failures: [] };
-    return {
-      readings: [],
-      failures: [
-        {
-          epicId: WHOLE_SURVEY_EPIC_ID,
-          reason: "unreadable-epic-state-directory",
-        },
-      ],
-    };
-  }
-  const epicIds = [...entries].sort();
-  // Nothing to open, so the engine is never asked for. This matters beyond
-  // speed: a machine with no epics must not report `engine-unavailable` and
-  // refuse, because there is no data there for any target to fail to read.
-  if (epicIds.length === 0) return { readings: [], failures: [] };
-
-  const reader = await openChatDbStampReader();
-  if (reader === null) {
-    // ONE entry, not one per epic. The runtime has no SQLite; that is a fact
-    // about this process, and N copies of it would read as N damaged files.
-    return {
-      readings: [],
-      failures: [
-        { epicId: WHOLE_SURVEY_EPIC_ID, reason: "engine-unavailable" },
-      ],
-    };
-  }
-
+  const roots = surveyRoots.roots;
   const readings: ChatDbStampReading[] = [];
   const failures: ChatDbStampFailure[] = [];
-  for (const epicId of epicIds) {
-    const dbPath = chatDbPathFor(hostHome, epicId);
-    if (!(await chatDbExists(dbPath))) continue;
-    const outcome = reader.readStamp(dbPath);
-    if (outcome.kind === "stamp") {
-      readings.push({
-        epicId: renderEpicId(epicId),
-        schemaVersion: outcome.schemaVersion,
+  // A candidate SOURCE of roots that could not be read - a dev identity pool
+  // that exists but will not enumerate. It travels as a failure rather than as
+  // silence for the same reason an unreadable `epic-state` does: the survey
+  // knows it may be blind to stores that exist, and an empty survey is
+  // CLEARED unconditionally.
+  if (surveyRoots.enumerationFailed) {
+    failures.push({
+      epicId: WHOLE_SURVEY_EPIC_ID,
+      reason: "unreadable-epic-state-directory",
+    });
+  }
+  // Resolved ONCE for the whole survey, not once per root and never per epic:
+  // a missing engine is a fact about this process, and N copies of it would
+  // read as N damaged files.
+  let reader: ChatDbStampReader | null = null;
+  // Qualified only when there is more than one root. Two roots can hold the
+  // same epic id, and "epic-a at format 9; epic-a at format 8" helps nobody -
+  // but the single-root case is every production machine, and prefixing there
+  // would change every refusal the shipped path prints.
+  const qualify = roots.length > 1;
+  for (const root of roots) {
+    const epicIds = await listEpicDirs(root.path);
+    if (epicIds === null) {
+      failures.push({
+        epicId: qualify
+          ? rootScopedId(root, WHOLE_SURVEY_EPIC_ID)
+          : WHOLE_SURVEY_EPIC_ID,
+        reason: "unreadable-epic-state-directory",
       });
       continue;
     }
-    failures.push({ epicId: renderEpicId(epicId), reason: outcome.reason });
+    for (const epicId of epicIds) {
+      const path = await inspectChatDbPath(root.path, epicId);
+      if (path.kind === "absent") continue;
+      const reported = qualify
+        ? rootScopedId(root, renderEpicId(epicId))
+        : renderEpicId(epicId);
+      if (path.kind === "failure") {
+        failures.push({ epicId: reported, reason: path.reason });
+        continue;
+      }
+      // Resolved at the FIRST store there is actually something to read, not
+      // once a root has entries: an epic directory with no `chat.db` needs no
+      // engine, and asking for one there would let a machine with epics but no
+      // stores report `engine-unavailable` and refuse over nothing.
+      if (reader === null) reader = await openChatDbStampReader();
+      if (reader === null) {
+        // Everything already collected travels with it. No reading can have
+        // landed - the reader is what produces them - but a root that would
+        // not enumerate is a second thing this survey could not see, and the
+        // diagnostic that prints both is the one place someone finds out.
+        return {
+          readings: [],
+          failures: [
+            ...failures,
+            { epicId: WHOLE_SURVEY_EPIC_ID, reason: "engine-unavailable" },
+          ],
+        };
+      }
+      const outcome = reader.readStamp(path.dbPath);
+      if (outcome.kind === "stamp") {
+        readings.push({
+          epicId: reported,
+          schemaVersion: outcome.schemaVersion,
+        });
+        continue;
+      }
+      failures.push({ epicId: reported, reason: outcome.reason });
+    }
   }
   return { readings, failures };
 }
 
-async function chatDbExists(dbPath: string): Promise<boolean> {
+/**
+ * The epic directory names under one root, or `null` when the root exists but
+ * could not be enumerated.
+ *
+ * ENOENT ALONE is emptiness. Everything else - EACCES on a root that is there,
+ * ENOTDIR for a root that exists but is a file - is a root this survey could
+ * not ENUMERATE, and reporting that as "no stores" would hand
+ * `decideStoreFormatFloor` an empty survey, which it clears unconditionally. A
+ * floor that cannot read the directory must refuse, so the inability travels
+ * back as `null` and becomes a failure entry.
+ */
+async function listEpicDirs(
+  rootPath: string,
+): Promise<readonly string[] | null> {
   try {
-    return (await stat(dbPath)).isFile();
+    return [...(await readdir(join(rootPath, EPIC_STATE_DIRNAME)))].sort();
   } catch (error: unknown) {
-    if (isMissingPath(error)) return false;
-    // Anything else (a permission error, a dangling link) is left to the
-    // open below to fail loudly, rather than quietly reading as "no store".
-    return true;
+    if (isNotFound(error)) return [];
+    return null;
   }
+}
+
+/** `<root label>/<epic id>`, for a survey spanning more than one root. */
+function rootScopedId(root: ChatStoreSurveyRoot, epicId: string): string {
+  return `${renderEpicId(root.label)}/${epicId}`;
+}
+
+/**
+ * What the survey found at one epic's chat-store path.
+ *
+ * `absent` is ENOENT and nothing else. Every other shape - a link, a directory
+ * where a file belongs, a component that is not a directory - is a FAILURE
+ * rather than "no store here", because an otherwise empty survey is cleared
+ * unconditionally and "I could not look" must never read as "there is nothing
+ * to look at".
+ */
+type ChatDbPathCheck =
+  | { readonly kind: "absent" }
+  | { readonly kind: "failure"; readonly reason: ChatDbStampFailureReason }
+  | { readonly kind: "ready"; readonly dbPath: string };
+
+interface ChatDbPathLevel {
+  readonly path: string;
+  readonly linked: ChatDbStampFailureReason;
+  readonly wrongType: ChatDbStampFailureReason;
+  readonly wantDirectory: boolean;
+}
+
+/**
+ * Classify an epic's chat-store path, refusing links before reading anything.
+ *
+ * Mirrors the host ledger's `inspectChatDbPath` reason for reason, because the
+ * two producers fill the same closed protocol set and a machine surveyed by
+ * both must not get two different answers about one directory.
+ *
+ * `lstat` at every level, never `stat`: checking only the final file follows a
+ * linked parent, so a symlinked epic or chat directory would be read straight
+ * through. It is also why the entry walk above deliberately does NOT ask
+ * `readdir` for `Dirent` types - on NFS, CIFS and FUSE homes `d_type` comes
+ * back unknown, which makes `isDirectory()` and `isSymbolicLink()` BOTH false
+ * and silently skips the entry. Every entry gets an `lstat` and is classified
+ * here instead.
+ */
+async function inspectChatDbPath(
+  rootPath: string,
+  epicId: string,
+): Promise<ChatDbPathCheck> {
+  const epicDir = join(rootPath, EPIC_STATE_DIRNAME, epicId);
+  const chatDir = join(epicDir, CHAT_DIRNAME);
+  const dbPath = join(chatDir, CHAT_DB_FILENAME);
+  const levels: readonly ChatDbPathLevel[] = [
+    {
+      path: epicDir,
+      linked: "linked-epic-directory",
+      wrongType: "epic-state-not-a-directory",
+      wantDirectory: true,
+    },
+    {
+      path: chatDir,
+      linked: "linked-chat-directory",
+      wrongType: "chat-directory-not-a-directory",
+      wantDirectory: true,
+    },
+    {
+      path: dbPath,
+      linked: "chat-db-not-a-file",
+      wrongType: "chat-db-not-a-file",
+      wantDirectory: false,
+    },
+  ];
+  for (const level of levels) {
+    let entry: Stats;
+    try {
+      entry = await lstat(level.path);
+    } catch (error: unknown) {
+      if (isNotFound(error)) return { kind: "absent" };
+      // Something IS here and this process cannot read it. Not absent.
+      return { kind: "failure", reason: "unreadable-chat-db" };
+    }
+    if (entry.isSymbolicLink()) {
+      return { kind: "failure", reason: level.linked };
+    }
+    const rightType = level.wantDirectory
+      ? entry.isDirectory()
+      : entry.isFile();
+    if (!rightType) return { kind: "failure", reason: level.wrongType };
+  }
+  return { kind: "ready", dbPath };
 }
 
 /** One store's outcome: a stamp, or the finite reason there is none. */
@@ -336,22 +462,17 @@ function renderEpicId(epicId: string): string {
 }
 
 /**
- * Absent, and nothing else. Used for the `epic-state` root, where "not there"
- * is the legitimate empty answer and every other errno is an enumeration this
- * survey owes the caller as a failure.
+ * Absent, and nothing else - ENOENT alone.
+ *
+ * The only "this is legitimately not here" answer either caller accepts. There
+ * used to be a second, laxer predicate that also took ENOTDIR as absence, for
+ * the per-epic probe; it is gone with the probe it served. ENOTDIR now means a
+ * component of the path is not a directory, which `inspectChatDbPath`
+ * classifies deliberately rather than swallowing - reading it as "no store
+ * here" is precisely the bug that let an otherwise empty survey clear.
  */
 function isNotFound(error: unknown): boolean {
   return errnoCodeOf(error) === "ENOENT";
-}
-
-/**
- * Absent OR shadowed by a non-directory component. Used for the per-epic
- * `chat/chat.db` probe, where both mean the same thing - this epic has no chat
- * store - and neither is anything the target build could fail to open.
- */
-function isMissingPath(error: unknown): boolean {
-  const code = errnoCodeOf(error);
-  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 function errnoCodeOf(error: unknown): string | null {

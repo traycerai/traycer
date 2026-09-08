@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ILogger, LogFields } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { EPIC_STATE_DIRNAME } from "../chat-store-survey";
+import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
 import { SOURCE_TREE_HOST_VERSION } from "@traycer/protocol/host/store-formats";
 
 const fetchTextMock = vi.fn();
@@ -14,12 +15,14 @@ vi.mock("../../registry/fetch-resource", () => ({
 
 import {
   assertHostStoreFormatFloor,
+  assertStoreFormatFloorAfterStop,
   assertStoreFormatFloorAtCommit,
   gateStoreFormatFloor,
   storeFormatFloorTargetVersion,
   STORE_FORMAT_FLOOR_LISTED_EPICS,
   ungatedStoreFormatFloorEvidence,
 } from "../store-format-floor";
+import type { SwapQuiescence } from "../swap-quiescence";
 
 interface RecordedCall {
   readonly level: "debug" | "info" | "warn" | "error";
@@ -98,7 +101,7 @@ describe("assertHostStoreFormatFloor", () => {
     await expect(
       assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.4.0",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -125,7 +128,7 @@ describe("assertHostStoreFormatFloor", () => {
     await expect(
       assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.3.0-rc.1",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -161,7 +164,7 @@ describe("assertHostStoreFormatFloor", () => {
     try {
       await assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -207,7 +210,7 @@ describe("assertHostStoreFormatFloor", () => {
     try {
       await assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -250,7 +253,7 @@ describe("assertHostStoreFormatFloor", () => {
     try {
       await assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -284,7 +287,7 @@ describe("assertHostStoreFormatFloor", () => {
     try {
       await assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -315,7 +318,7 @@ describe("assertHostStoreFormatFloor", () => {
     try {
       await assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.5.0",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -343,7 +346,7 @@ describe("assertHostStoreFormatFloor", () => {
     await expect(
       assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.5.0",
         publishedStoreFormats: { chatDb: 9 },
         declaredStoreFormats: null,
@@ -363,7 +366,7 @@ describe("assertHostStoreFormatFloor", () => {
     await expect(
       assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -390,7 +393,7 @@ describe("assertHostStoreFormatFloor", () => {
     await expect(
       assertHostStoreFormatFloor({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         targetVersion: "1.2.0",
         publishedStoreFormats: null,
         declaredStoreFormats: null,
@@ -421,7 +424,7 @@ describe("assertHostStoreFormatFloor", () => {
       await expect(
         assertHostStoreFormatFloor({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           targetVersion: OFF_LADDER_TARGET,
           publishedStoreFormats: null,
           declaredStoreFormats: null,
@@ -449,7 +452,7 @@ describe("assertHostStoreFormatFloor", () => {
       try {
         await assertHostStoreFormatFloor({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           targetVersion: OFF_LADDER_TARGET,
           publishedStoreFormats: null,
           declaredStoreFormats: { chatDb: 8 },
@@ -476,7 +479,7 @@ describe("assertHostStoreFormatFloor", () => {
       await expect(
         assertHostStoreFormatFloor({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           targetVersion: OFF_LADDER_TARGET,
           publishedStoreFormats: null,
           declaredStoreFormats: { chatDb: 9 },
@@ -497,7 +500,7 @@ describe("assertHostStoreFormatFloor", () => {
       try {
         await assertHostStoreFormatFloor({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           targetVersion: "1.2.0",
           publishedStoreFormats: null,
           declaredStoreFormats: null,
@@ -531,7 +534,7 @@ describe("assertHostStoreFormatFloor", () => {
       await expect(
         assertHostStoreFormatFloor({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           targetVersion: "1.3.0-rc.4",
           publishedStoreFormats: null,
           declaredStoreFormats: null,
@@ -567,7 +570,7 @@ describe("assertHostStoreFormatFloor", () => {
       try {
         await assertHostStoreFormatFloor({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           targetVersion: "1.3.0-rc.4",
           publishedStoreFormats: null,
           declaredStoreFormats: null,
@@ -604,7 +607,7 @@ describe("assertHostStoreFormatFloor", () => {
       try {
         await assertHostStoreFormatFloor({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           targetVersion: "1.2.0",
           publishedStoreFormats: null,
           declaredStoreFormats: null,
@@ -632,7 +635,7 @@ describe("gateStoreFormatFloor", () => {
 
     const evidence = await gateStoreFormatFloor({
       environment: "production",
-      hostHome,
+      surveyRoots: singleChatStoreSurveyRoot(hostHome),
       targetVersion: "1.4.0",
       installedVersion: "1.3.0-rc.4",
       installedStoreFormats: null,
@@ -651,7 +654,7 @@ describe("gateStoreFormatFloor", () => {
 
     const evidence = await gateStoreFormatFloor({
       environment: "production",
-      hostHome,
+      surveyRoots: singleChatStoreSurveyRoot(hostHome),
       targetVersion: "1.3.0-rc.1",
       installedVersion: "1.3.0-rc.4",
       installedStoreFormats: null,
@@ -676,7 +679,7 @@ describe("gateStoreFormatFloor", () => {
 
     const evidence = await gateStoreFormatFloor({
       environment: "production",
-      hostHome,
+      surveyRoots: singleChatStoreSurveyRoot(hostHome),
       targetVersion: "local-something",
       installedVersion: "1.3.0-rc.4",
       installedStoreFormats: null,
@@ -718,7 +721,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
     try {
       await assertStoreFormatFloorAtCommit({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         committingVersion: "1.5.0",
         declaredRuntimeVersion: null,
         declaredStoreFormats: null,
@@ -752,7 +755,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
     await expect(
       assertStoreFormatFloorAtCommit({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         committingVersion: "1.5.0",
         declaredRuntimeVersion: null,
         declaredStoreFormats: null,
@@ -780,7 +783,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
     await expect(
       assertStoreFormatFloorAtCommit({
         environment: "production",
-        hostHome,
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
         committingVersion: "1.5.0",
         declaredRuntimeVersion: null,
         declaredStoreFormats: { chatDb: 9 },
@@ -815,7 +818,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
       try {
         await assertStoreFormatFloorAtCommit({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           committingVersion: LOCAL_COMMITTING_VERSION,
           declaredRuntimeVersion: "1.2.0",
           declaredStoreFormats: null,
@@ -845,7 +848,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
       await expect(
         assertStoreFormatFloorAtCommit({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           committingVersion: LOCAL_COMMITTING_VERSION,
           declaredRuntimeVersion: "1.2.0",
           declaredStoreFormats: { chatDb: 9 },
@@ -864,7 +867,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
       await expect(
         assertStoreFormatFloorAtCommit({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           committingVersion: LOCAL_COMMITTING_VERSION,
           declaredRuntimeVersion: null,
           declaredStoreFormats: null,
@@ -887,7 +890,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
       await expect(
         assertStoreFormatFloorAtCommit({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           committingVersion: LOCAL_COMMITTING_VERSION,
           declaredRuntimeVersion: "1.2.0",
           declaredStoreFormats: null,
@@ -917,7 +920,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
       await expect(
         assertStoreFormatFloorAtCommit({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           committingVersion: LOCAL_COMMITTING_VERSION,
           declaredRuntimeVersion: "1.2.0",
           declaredStoreFormats: null,
@@ -953,7 +956,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
       try {
         await assertStoreFormatFloorAtCommit({
           environment: "production",
-          hostHome,
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
           committingVersion: LOCAL_COMMITTING_VERSION,
           declaredRuntimeVersion: "1.2.0",
           declaredStoreFormats: null,
@@ -982,6 +985,159 @@ describe("assertStoreFormatFloorAtCommit", () => {
       );
       expect(warnedAboutDifferentBytes).toBe(true);
     });
+  });
+});
+
+describe("assertStoreFormatFloorAfterStop", () => {
+  const NOT_ESTABLISHED: SwapQuiescence = {
+    established: false,
+    reason: "writer-still-running",
+  };
+  const ESTABLISHED: SwapQuiescence = { established: true };
+
+  it("refuses on an unproven quiescence WITHOUT ever surveying disk - the reason is named, not the epics", async () => {
+    // A garbage fixture that would surface as an "unreadable" epic-named
+    // failure if the survey ran at all. The point of this arm is that it
+    // does not: it refuses on the quiescence gap alone.
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        quiescence: NOT_ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    const details = err.details as {
+      readonly verdict: string;
+      readonly quiescenceGap: string;
+    };
+    expect(details.verdict).toBe("quiescence-unproven");
+    expect(details.quiescenceGap).toBe("writer-still-running");
+    // Names the GAP, not the epics - the garbage fixture's id must never
+    // appear, because naming it would claim a survey ran.
+    expect(err.message).toContain("still running");
+    expect(err.message).not.toContain("epic-would-fail-if-walked");
+  });
+
+  it("--accept-store-format-loss bypasses the quiescence refusal, and the warn carries the same message", async () => {
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        quiescence: NOT_ESTABLISHED,
+        acceptStoreFormatLoss: true,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+
+    const warnCall = logger.calls.find(
+      (call) =>
+        call.level === "warn" &&
+        call.message.toLowerCase().includes("quiescence"),
+    );
+    expect(warnCall).toBeDefined();
+    const warnedMessage = warnCall?.fields.message;
+    expect(warnedMessage).toContain("still running");
+  });
+
+  it("resolves when quiescence is established and every store is fine", async () => {
+    await writeStampedChatDb("epic-fine", 8);
+    const logger = fakeLogger();
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        quiescence: ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses with the ordinary blocked message when quiescence is established but a store reads newer than the target", async () => {
+    await writeStampedChatDb("epic-newer-store", 9);
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        quiescence: ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    const details = err.details as { readonly verdict: string };
+    expect(details.verdict).toBe("blocked");
+    expect(err.message).toContain("epic-newer-store");
+    expect(err.message).toContain("format 8");
+  });
+
+  it("resolves without consulting quiescence at all when the floor does not apply (an upgrade) - the ordering guard", async () => {
+    // The regression this pins: if the arms ran in the wrong order, every
+    // ordinary upgrade on a machine with a running host would start
+    // refusing. Quiescence is NOT established here, and the call must still
+    // resolve, because applicability is checked first and an upgrade
+    // returns before the quiescence arm is ever reached.
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.4.0",
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        quiescence: NOT_ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

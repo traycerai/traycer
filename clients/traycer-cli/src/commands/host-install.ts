@@ -34,6 +34,7 @@ import {
 } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
+import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
 import {
   gateStoreFormatFloor,
@@ -177,7 +178,7 @@ async function gateInstallStoreFormatFloor(
   );
   return await gateStoreFormatFloor({
     environment: ctx.runtime.environment,
-    hostHome: hostHomeDir(ctx.runtime.environment),
+    surveyRoots: await resolveChatStoreSurveyRoots(ctx.runtime.environment),
     targetVersion: args.versionRequest,
     installedVersion: installed.version,
     installedStoreFormats: installed.storeFormats,

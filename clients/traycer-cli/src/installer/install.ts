@@ -35,9 +35,16 @@ import {
   readExtractedStoreFormats,
 } from "./version-sidecar";
 import {
+  assertStoreFormatFloorAfterStop,
   assertStoreFormatFloorAtCommit,
+  storeFormatFloorTargetVersion,
   type StoreFormatFloorEvidence,
 } from "../host/store-format-floor";
+import { observeSwapQuiescence } from "../host/swap-quiescence";
+import {
+  resolveChatStoreSurveyRoots,
+  type ChatStoreSurveyRoots,
+} from "../host/chat-store-survey-roots";
 import {
   invalidateAsideDir,
   legacyMutationVerifier,
@@ -122,6 +129,20 @@ export interface InstallHostLifecycle {
   readonly beforeSwap: () => Promise<void>;
   readonly beforeSwapCommit: () => Promise<void>;
   readonly afterSwap: () => Promise<void>;
+  /**
+   * Undo `beforeSwap`'s stop when the swap is abandoned after it.
+   *
+   * The one caller is the store-format floor's post-stop refusal: the host is
+   * down, nothing has been replaced, and an install that declines to install
+   * owes the machine the host it had. Deliberately NOT `afterSwap`, which is
+   * the post-swap relaunch and does things that are wrong when no swap
+   * happened - it announces the caller's swap barrier, retires a competing
+   * registration, and records a `postSwapAction`.
+   *
+   * A lifecycle that stopped nothing must no-op. Only the implementation knows
+   * whether it stopped, which is why this is its decision and not the caller's.
+   */
+  readonly restartAfterAbortedSwap: () => Promise<void>;
   readonly swapLockRecovery: SwapLockRecovery | null;
   /**
    * The contender facade supplies its live-capability verifier immediately
@@ -768,6 +789,71 @@ export interface CommitInstallFromSourceResult {
 // no record on a crash in between (the on-disk state the reconcile
 // "orphan"/target-missing rules are built to heal either side of, never a
 // bytes-with-no-record gap).
+/** The operands both store-format checks in the commit tail share. */
+interface CommitFloorOperands {
+  readonly surveyRoots: ChatStoreSurveyRoots;
+  readonly declaredStoreFormats: HostStoreFormats | null;
+  readonly installedVersion: string | null;
+  readonly installedStoreFormats: HostStoreFormats | null;
+}
+
+/**
+ * The post-stop floor check, and the restart it owes the machine if it
+ * refuses.
+ *
+ * The restart is the whole reason this is a function rather than a call. By
+ * the time this runs the lifecycle has stopped the host, so a bare `throw`
+ * would leave the user with no host at all - and the command they ran was an
+ * INSTALL, which they are entitled to have change nothing when it declines.
+ * The lifecycle decides whether there is anything to restart; a lifecycle that
+ * never stopped anything no-ops.
+ *
+ * A restart that itself fails must not replace the refusal: the refusal is why
+ * the user is here, and "could not restart" is a second, lesser fact that
+ * belongs in the log beside it.
+ */
+async function assertFloorAfterStopOrRestore(
+  opts: CommitInstallFromSourceOptions,
+  operands: CommitFloorOperands,
+  logger: ILogger,
+): Promise<void> {
+  const quiescence = await observeSwapQuiescence(opts.environment, logger);
+  try {
+    await assertStoreFormatFloorAfterStop({
+      environment: opts.environment,
+      surveyRoots: operands.surveyRoots,
+      targetVersion: storeFormatFloorTargetVersion(
+        opts.runtimeVersion,
+        opts.version,
+      ),
+      declaredStoreFormats: operands.declaredStoreFormats,
+      installedVersion: operands.installedVersion,
+      installedStoreFormats: operands.installedStoreFormats,
+      quiescence,
+      acceptStoreFormatLoss: opts.storeFormatFloor.acceptStoreFormatLoss,
+      site: opts.storeFormatFloor.site,
+      logger,
+    });
+  } catch (refusal) {
+    if (opts.lifecycle !== null) {
+      try {
+        await opts.lifecycle.restartAfterAbortedSwap();
+      } catch (err) {
+        logger.warn(
+          "Host install could not restart the host after the store-format floor refused the swap",
+          {
+            environment: opts.environment,
+            version: opts.version,
+            errorName: errorFromUnknown(err).name,
+            errorMessage: errorFromUnknown(err).message,
+          },
+        );
+      }
+    }
+    throw refusal;
+  }
+}
+
 export async function commitInstallFromSource(
   opts: CommitInstallFromSourceOptions,
 ): Promise<CommitInstallFromSourceResult> {
@@ -780,11 +866,34 @@ export async function commitInstallFromSource(
     opts.lifecycle.setMutationVerifier(verifyMutationCapability);
   }
   const previous = await readHostInstallRecord(opts.environment);
+  // Read ONCE and reused by the post-stop check below. Both need the same four
+  // operands, and re-deriving them after the stop would re-read two sidecars
+  // for no gain - worse, it would let the two checks silently disagree about
+  // which build is landing.
+  const floorOperands: CommitFloorOperands = {
+    // Resolved once for both checks: on dev this can span a run slot AND the
+    // pooled identity homes, and the two checks must judge the same machine.
+    surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
+    declaredStoreFormats: await readExtractedStoreFormats(
+      dirname(opts.executablePath),
+      opts.environment,
+      logger,
+    ),
+    installedVersion: previous?.version ?? null,
+    installedStoreFormats:
+      previous === null
+        ? null
+        : await readExtractedStoreFormats(
+            dirname(previous.executablePath),
+            opts.environment,
+            logger,
+          ),
+  };
   // Before the record is materialized and before the lifecycle stops
   // anything: a refusal here has moved nothing and taken nothing down.
   await assertStoreFormatFloorAtCommit({
     environment: opts.environment,
-    hostHome: hostHomeDir(opts.environment),
+    surveyRoots: floorOperands.surveyRoots,
     committingVersion: opts.version,
     // The stamp the archive gave itself, which for `host install --from` is
     // the ONLY thing that names the build: `opts.version` there is
@@ -798,25 +907,14 @@ export async function commitInstallFromSource(
     // install bundles - this is the ONLY thing that can place it, so without
     // it the floor would stand aside on exactly the convergence a developer
     // runs daily.
-    declaredStoreFormats: await readExtractedStoreFormats(
-      dirname(opts.executablePath),
-      opts.environment,
-      logger,
-    ),
-    installedVersion: previous?.version ?? null,
+    declaredStoreFormats: floorOperands.declaredStoreFormats,
+    installedVersion: floorOperands.installedVersion,
     // The OUTGOING tree's declaration, for the short-circuit that lets a
-    // non-downgrade skip the disk walk. Read here rather than carried in the
-    // evidence for the same reason as the target's: the record on disk at the
-    // swap is the one that matters, and it may not be the one the early gate
-    // saw.
-    installedStoreFormats:
-      previous === null
-        ? null
-        : await readExtractedStoreFormats(
-            dirname(previous.executablePath),
-            opts.environment,
-            logger,
-          ),
+    // non-downgrade skip the disk walk. Read from the record on disk rather
+    // than carried in the evidence for the same reason as the target's: the
+    // record at the swap is the one that matters, and it may not be the one
+    // the early gate saw.
+    installedStoreFormats: floorOperands.installedStoreFormats,
     evidence: opts.storeFormatFloor,
     logger,
   });
@@ -877,6 +975,18 @@ export async function commitInstallFromSource(
       version: record.version,
     });
     await opts.lifecycle.beforeSwap();
+  }
+
+  // The floor's LAST word, after the stop and before anything is announced or
+  // moved. The check above it ran before the stop, which is where a refusal
+  // belongs - but it is not authoritative: the executable hash, the record
+  // write and the stop itself all happen with a host that may still be up, and
+  // a chat opened in that window migrates a store past what these bytes can
+  // read. A refusal here has still moved nothing, so the recovery is a
+  // restart rather than a rollback.
+  await assertFloorAfterStopOrRestore(opts, floorOperands, logger);
+
+  if (opts.lifecycle !== null) {
     // The stop RESOLVED - a busy host's denial threw above and never
     // reaches here, which is the whole point of the barrier sitting on this
     // side of the call. Nothing has moved yet: the swap is next.

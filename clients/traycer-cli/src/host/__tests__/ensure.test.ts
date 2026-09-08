@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   withCliLockMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
   gateStoreFormatFloorMock: vi.fn(),
+  isVersionYankedMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -115,6 +116,23 @@ vi.mock("../busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusyMock,
 }));
 
+// `provisionHost` constructs a REAL registry yank-lookup up front
+// (`provision.ts` - see `../../registry/client`), and only the
+// "regression: installed 1.2.0, pin 1.3.0-rc.4, --keep-installed" case
+// below actually calls it (it is the one path that asks whether the
+// installed version is yanked). Left unmocked, that one test makes a
+// genuine network `fetchText` to the manifest URL: `YANK_LOOKUP_TIMEOUT_MS`
+// is 10s, twice vitest's 5s default, so a sandboxed CI runner with no
+// egress cannot finish the test before vitest kills it - invisible on a
+// developer machine, where the connection is refused fast enough to just
+// look like a 20x-slower outlier. Mirrors `provision.test.ts`'s own mock of
+// this same boundary.
+vi.mock("../../registry/client", () => ({
+  createRegistryYankLookup: () => ({
+    isVersionYanked: mocks.isVersionYankedMock,
+  }),
+}));
+
 // The real `publishHostStartAdoption` waits (up to 30s) for a service-
 // manager child to ack a spawn that never happens under a stubbed
 // controller. This suite pins `ensureHost`'s orchestration, not the
@@ -140,6 +158,7 @@ const {
   createBytesOnlyInstallLifecycleMock,
   withCliLockMock,
   assertHostNotBusyMock,
+  isVersionYankedMock,
 } = mocks;
 
 import { ensureHost, type EnsureHostOptions } from "../ensure";
@@ -239,6 +258,7 @@ beforeEach(() => {
     args: [],
   });
   resolveBundledHostArchiveMock.mockResolvedValue(null);
+  isVersionYankedMock.mockResolvedValue(false);
   withCliLockMock.mockImplementation(
     async (_opts: unknown, fn: () => Promise<unknown>) => {
       mocks.callOrder.push("lock-enter");

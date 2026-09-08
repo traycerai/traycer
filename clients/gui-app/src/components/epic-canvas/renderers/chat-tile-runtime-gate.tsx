@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
@@ -37,16 +37,19 @@ import {
 export const STALLED_CHAT_LOAD_ATTEMPTS = 3;
 
 /**
- * ...and how long a single unrecovered attempt may sit before the same pane is
- * shown anyway.
+ * ...and how long the wait itself may run before the same pane is shown
+ * anyway, counted from when the wait began rather than from any failure.
  *
- * The count alone is not enough because the reconnect ladder backs off: a host
- * that refuses slowly, or a dial that hangs before failing, can spend a long
- * time on attempt one. 20s is deliberately more patient than
- * `TILE_CONTENT_BUDGET_MS` (15s), which bounds a wait with NO evidence at all;
- * here the transport is visibly retrying, and this pane is not terminal, so
- * the cost of waiting slightly longer is only a few more seconds of spinner
- * where the load was about to succeed.
+ * The count alone is not enough, for two different reasons. The reconnect
+ * ladder backs off, so a host that refuses slowly - or a dial that hangs
+ * before failing - can spend a long time on attempt one. And a host that acks
+ * `chat.subscribe` and then goes silent never produces an attempt to count at
+ * all, which is the case that would otherwise spin forever.
+ *
+ * 20s is deliberately more patient than `TILE_CONTENT_BUDGET_MS` (15s): this
+ * pane is not terminal and the load may still land on its own, so the cost of
+ * waiting slightly longer is a few more seconds of spinner where it was about
+ * to succeed.
  */
 export const STALLED_CHAT_LOAD_ELAPSED_MS = 20_000;
 
@@ -66,10 +69,11 @@ export interface ChatTileFatalDetails {
  * Which pre-snapshot state the tile is in, and the only place that decides.
  *
  * The three arms are ordered by how much they know: a fatal close is the
- * host's own verdict on this attempt, a stalled streak is our observation
- * about attempts it never answered, and the spinner is what remains when the
- * load is still ordinary. Mounted only while `snapshotLoaded` is false, so a
- * tile showing a transcript pays for none of it.
+ * host's own verdict on this attempt, a stall is our own observation - either
+ * a streak of attempts the host never answered or simply a wait that has run
+ * too long - and the spinner is what remains when the load is still ordinary.
+ * Mounted only while `snapshotLoaded` is false, so a tile showing a transcript
+ * pays for none of it.
  *
  * It needs a ROUTER above it, which the pre-snapshot path did not before:
  * `useChatTileHostUpdate` reaches `useRouter()` through
@@ -84,15 +88,31 @@ export function ChatTilePreSnapshotGate(props: {
   readonly onRetry: () => void;
 }): ReactNode {
   const hostUpdate = useChatTileHostUpdate();
-  // The elapsed arm is evaluated HERE rather than in the session store: the
-  // store records the wall-clock instant the streak began and the React layer
-  // watches for it, which is also what lets a tile mounting into a stall that
-  // is already old inherit it instead of restarting the budget.
-  const stalledAt =
+  // The wait starts when this gate first renders for this session, NOT at the
+  // first failure - that distinction is the whole deadline.
+  //
+  // A host can ack `chat.subscribe` and then send neither a snapshot nor a
+  // close, with heartbeat pongs keeping the socket alive underneath. Nothing
+  // ever transitions to `reconnecting`, so `retries` stays null forever, and a
+  // budget anchored on the first failure never arms at all: the tile spins
+  // until the tab is closed. Invariant 6 asks for a deadline on every
+  // host-dependent loading state, and "no evidence yet" is precisely the state
+  // that needs one most, because it is the one nothing else can end.
+  const [waitStartedAt] = useState(() => Date.now());
+  // The streak's own start still wins where it is EARLIER, so a tile mounting
+  // into a stall that is already old inherits it instead of restarting the
+  // budget. `Math.min` rather than a preference for one or the other: whichever
+  // came first is when this wait actually began, and a failure that lands after
+  // this gate mounted does not restart it.
+  const waitBeganAt =
     props.retries === null
-      ? null
-      : props.retries.firstAt + STALLED_CHAT_LOAD_ELAPSED_MS;
-  const stalledLongEnough = useDeadlineReached(stalledAt);
+      ? waitStartedAt
+      : Math.min(props.retries.firstAt, waitStartedAt);
+  // Evaluated HERE rather than in the session store, which records the instant
+  // and never reads a clock to compare against it.
+  const stalledLongEnough = useDeadlineReached(
+    waitBeganAt + STALLED_CHAT_LOAD_ELAPSED_MS,
+  );
   if (props.fatalClose !== null) {
     return (
       <ChatTileError
@@ -102,11 +122,14 @@ export function ChatTilePreSnapshotGate(props: {
       />
     );
   }
-  // `retries !== null` already means at least one attempt failed, so the
-  // elapsed arm carries the spec's "count >= 1" with it.
+  // Either arm alone is enough, and the elapsed one no longer requires a
+  // failure to have happened: a wait long enough to give up presenting as
+  // ordinary is a wait long enough whether the host refused three times or
+  // said nothing at all.
   if (
-    props.retries !== null &&
-    (props.retries.count >= STALLED_CHAT_LOAD_ATTEMPTS || stalledLongEnough)
+    stalledLongEnough ||
+    (props.retries !== null &&
+      props.retries.count >= STALLED_CHAT_LOAD_ATTEMPTS)
   ) {
     return (
       <ChatTileStillTrying
@@ -234,16 +257,22 @@ function fatalRemedyIsHostUpdate(details: ChatTileFatalDetails): boolean {
  * terminal presentation - this is the deadline for the one wait that has no
  * terminal close to trigger the pane above).
  *
- * NOT a terminal state: the transport is still reconnecting underneath, and a
- * snapshot that finally arrives replaces this with the transcript on its own.
- * A retryable fatal - the shape a host too old for its own chat store answers
- * `chat.subscribe` with, forever - is handled inside the transport as an
- * ordinary drop, so there is no close for this pane to quote. It says what it
- * can see instead: how many attempts have failed, and, when the versions prove
- * the bound host is behind this app, the update that ends it.
+ * NOT a terminal state: the stream is still live or still reconnecting
+ * underneath, and a snapshot that finally arrives replaces this with the
+ * transcript on its own. A retryable fatal - the shape a host too old for its
+ * own chat store answers `chat.subscribe` with, forever - is handled inside
+ * the transport as an ordinary drop, so there is no close for this pane to
+ * quote. It says what it can see instead: how many attempts have failed, and,
+ * when the versions prove the bound host is behind this app, the update that
+ * ends it.
+ *
+ * `retries` is nullable because the two ways a load stalls do not look alike.
+ * A host that refuses produces a streak to count; a host that acks and then
+ * goes quiet produces NO evidence at all, and that silence is the case the
+ * elapsed deadline exists for. The body says only what is true in each.
  */
 export function ChatTileStillTrying(props: {
-  readonly retries: PreSnapshotRetryEvidence;
+  readonly retries: PreSnapshotRetryEvidence | null;
   readonly hostUpdate: ChatTileHostUpdate;
   readonly onRetry: () => void;
 }): ReactNode {
@@ -258,11 +287,10 @@ export function ChatTileStillTrying(props: {
     hostAppVersion: props.hostUpdate.hostAppVersion,
     clientAppVersion: props.hostUpdate.clientAppVersion,
   });
-  const attempts = describeAttempts(props.retries.count);
   return (
     <ChatTilePane
       testId="chat-tile-still-trying"
-      errorCode={props.retries.code}
+      errorCode={props.retries?.code ?? null}
       // The reconnects continue underneath, so this keeps the spinner it
       // replaced - and the spinner's live region, so a reader who was told the
       // agent was loading is told when that stops being the whole story.
@@ -270,16 +298,16 @@ export function ChatTileStillTrying(props: {
       title={
         hostIsBehind ? HOST_UPDATE_SKEW_COPY.title : "Still opening this agent"
       }
-      body={`The host has not opened this agent after ${attempts}.`}
+      body={describeStall(props.retries)}
       hostUpdateLabel={hostIsBehind ? HOST_UPDATE_SKEW_COPY.action : null}
       hostUpdate={props.hostUpdate}
       onRetry={props.onRetry}
       reportContext={createReportIssueContext({
         title: "This agent has not opened",
-        message: "The agent's stream keeps reconnecting without loading.",
+        message: "The agent's stream has not delivered this agent's history.",
         // Null unless the transport surfaced the host's own code, which is
         // exactly why it is worth carrying into a report when it is there.
-        code: props.retries.code,
+        code: props.retries?.code ?? null,
         source: "Chat",
       })}
     />
@@ -363,6 +391,21 @@ function ChatTilePane(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * What this pane can honestly say happened.
+ *
+ * With a streak it counts it. Without one there is nothing to count - the
+ * stream never dropped - so it reports the silence itself rather than
+ * inventing a "0 attempts", which would read as a failure that never occurred
+ * and send a reader looking for one.
+ */
+function describeStall(retries: PreSnapshotRetryEvidence | null): string {
+  if (retries === null) {
+    return "The host has not sent this agent's messages yet.";
+  }
+  return `The host has not opened this agent after ${describeAttempts(retries.count)}.`;
 }
 
 function describeAttempts(count: number): string {

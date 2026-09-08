@@ -295,6 +295,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
       beforeSwap: async () => {},
       beforeSwapCommit: async () => {},
       afterSwap: async () => {},
+      restartAfterAbortedSwap: async () => {},
       swapLockRecovery: null,
     },
   };

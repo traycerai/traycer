@@ -427,4 +427,97 @@ describe("<ChatTilePreSnapshotGate />", () => {
     expect(screen.getByTestId("chat-tile-error")).toBeTruthy();
     expect(screen.queryByTestId("chat-tile-still-trying")).toBeNull();
   });
+
+  it("stalls a host that acks chat.subscribe and then goes silent, once the elapsed budget passes", () => {
+    // retries never becomes non-null here - the host never produces a
+    // failure to count - so only the gate's own wait-since-mount deadline
+    // can end this spin.
+    vi.useFakeTimers();
+    render(
+      <ChatTilePreSnapshotGate
+        fatalClose={null}
+        retries={null}
+        onRetry={() => undefined}
+      />,
+    );
+
+    expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS);
+    });
+
+    expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
+    expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
+  });
+
+  it("does not stall early for a host that acks chat.subscribe and then goes silent", () => {
+    vi.useFakeTimers();
+    render(
+      <ChatTilePreSnapshotGate
+        fatalClose={null}
+        retries={null}
+        onRetry={() => undefined}
+      />,
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS - 1000);
+    });
+
+    expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
+    expect(screen.queryByTestId("chat-tile-still-trying")).toBeNull();
+  });
+
+  it("says only that nothing has arrived yet when the stall carries no retry evidence", () => {
+    vi.useFakeTimers();
+    render(
+      <ChatTilePreSnapshotGate
+        fatalClose={null}
+        retries={null}
+        onRetry={() => undefined}
+      />,
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS);
+    });
+
+    const pane = screen.getByTestId("chat-tile-still-trying");
+    expect(
+      screen.getByText("The host has not sent this agent's messages yet."),
+    ).toBeTruthy();
+    expect(pane.textContent).not.toMatch(/attempt/);
+  });
+
+  it("lets a fatal close outrank a stall that has no retry evidence", () => {
+    vi.useFakeTimers();
+    const { rerender } = render(
+      <ChatTilePreSnapshotGate
+        fatalClose={null}
+        retries={null}
+        onRetry={() => undefined}
+      />,
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS);
+    });
+    expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
+
+    rerender(
+      <ChatTilePreSnapshotGate
+        fatalClose={{
+          code: "UNAUTHORIZED",
+          reason: "CHAT_INVALID: nope",
+          upgradeGuidance: null,
+        }}
+        retries={null}
+        onRetry={() => undefined}
+      />,
+    );
+
+    expect(screen.getByTestId("chat-tile-error")).toBeTruthy();
+    expect(screen.queryByTestId("chat-tile-still-trying")).toBeNull();
+  });
 });

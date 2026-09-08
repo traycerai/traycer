@@ -45,6 +45,7 @@ import { holdVersionOnSwapCommitted } from "./held-host-version";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { assertHostNotBusy } from "./busy-check";
 import { hostHomeDir } from "../store/paths";
+import { resolveChatStoreSurveyRoots } from "./chat-store-survey-roots";
 import {
   gateStoreFormatFloor,
   ungatedStoreFormatFloorEvidence,
@@ -399,7 +400,7 @@ async function gateProvisionStoreFormatFloor(
   );
   return await gateStoreFormatFloor({
     environment: opts.runtime.environment,
-    hostHome: hostHomeDir(opts.runtime.environment),
+    surveyRoots: await resolveChatStoreSurveyRoots(opts.runtime.environment),
     targetVersion: opts.satisfaction.version,
     // Both operands from that ONE read, never the version from `fast` and the
     // formats from here: a mix could describe two different installs if a

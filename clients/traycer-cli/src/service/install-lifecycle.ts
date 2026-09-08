@@ -58,8 +58,10 @@ function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
 //   - `stoppedBeforeSwap` - true iff we issued `controller.stop()`
 //     because the service was running (or because Windows needs a
 //     force-kill of stray host processes before the install-dir
-//     rename). Used for reporting only; the post-swap path no longer
-//     branches on it.
+//     rename). The post-swap path no longer branches on it, but
+//     `restartAfterAbortedSwap` does: it is what distinguishes "put the
+//     host back" from "start one the user did not have" when a swap is
+//     abandoned after the stop.
 //   - `postSwapAction` - what we actually attempted after the swap.
 //     `install` when we rewrote/re-registered the OS service manifest
 //     (fresh bootstrap or an existing registration that needs the
@@ -213,6 +215,20 @@ export function createServiceInstallLifecycle(
       // Installing is strictly better than refusing there, and
       // `afterSwap` kickstarts the agent either way, so the degrade never
       // leaves the machine hostless.
+      //
+      // THAT DEGRADE IS NOT THE WHOLE STORY ANY MORE, and both halves have
+      // to be read together. It still holds for every move the store-format
+      // floor does not apply to - an upgrade, a same-version reinstall - and
+      // those are the overwhelming majority. But a `hung` outcome here means
+      // the pid was observed STILL ALIVE after the full grace, and swallowing
+      // it leaves a live 1.3 host writing chat stores while older bytes land
+      // underneath. So for a move the floor DOES apply to, the commit tail
+      // refuses instead: `observeSwapQuiescence` cannot prove the writer is
+      // gone, and `assertStoreFormatFloorAfterStop` turns that into a refusal
+      // naming the reason, with `--accept-store-format-loss` the only way
+      // past. The decision lives there rather than here because only the tail
+      // knows whether the floor applies - this branch cannot see the target
+      // version at all.
       if (
         status.state === "externally-managed" &&
         process.platform === "darwin"
@@ -242,6 +258,28 @@ export function createServiceInstallLifecycle(
           );
         }
       }
+    },
+    /**
+     * Put back the host `beforeSwap` stopped, for a swap that was abandoned
+     * between the two.
+     *
+     * A plain start, not `relaunchAfterRestart`: nothing was replaced, so
+     * there is no new generation to force a recycle onto - the job is to
+     * return the machine to the host it was already running. Gated on
+     * `stoppedBeforeSwap` so a lifecycle that never stopped anything (a
+     * service that was not running, the `externally-managed` degrade) does not
+     * start a host the user did not have.
+     */
+    restartAfterAbortedSwap: async () => {
+      if (!state.stoppedBeforeSwap) return;
+      await withServiceMutationAuthority(verifyMutationCapability, () =>
+        runWithPublishedHostStartAdoption(
+          publishHostStartAdoption,
+          controller,
+          label,
+          async () => controller.start(label),
+        ),
+      );
     },
     afterSwap: async () => {
       // At the TOP, before every branch below: the bytes are committed and
@@ -520,6 +558,7 @@ export function createBytesOnlyInstallLifecycle(
   hooks: InstallPhaseHooks,
 ): InstallHostLifecycle {
   let verifyMutationCapability = async (): Promise<void> => {};
+  let stoppedForSwap = false;
   return {
     swapLockRecovery: swapLockRecoveryFor(label),
     setMutationVerifier: (verify) => {
@@ -529,6 +568,17 @@ export function createBytesOnlyInstallLifecycle(
       if (process.platform !== "win32") return;
       await withServiceMutationAuthority(verifyMutationCapability, () =>
         controller.stop(label, { force: false }),
+      );
+      stoppedForSwap = true;
+    },
+    // Only Windows ever stopped anything here, so only Windows has anything
+    // to put back. On POSIX this lifecycle is bytes-only by contract - it
+    // leaves the running host alone - and starting one after an abandoned
+    // swap would be this path doing the very thing it promises not to.
+    restartAfterAbortedSwap: async (): Promise<void> => {
+      if (!stoppedForSwap) return;
+      await withServiceMutationAuthority(verifyMutationCapability, () =>
+        controller.start(label),
       );
     },
     beforeSwapCommit: () => hooks.beforeSwapCommit(),

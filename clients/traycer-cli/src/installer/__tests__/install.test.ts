@@ -64,6 +64,7 @@ const mocks = vi.hoisted(() => ({
   // directory and never reaches the registry at all.
   registryClient: null as RegistryClient | null,
   assertStoreFormatFloorAtCommitMock: vi.fn(),
+  assertStoreFormatFloorAfterStopMock: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -188,6 +189,20 @@ vi.mock("../../host/store-format-floor", async (importOriginal) => {
       }
       mocks.assertStoreFormatFloorAtCommitMock(...callArgs);
       return actual.assertStoreFormatFloorAtCommit(...callArgs);
+    },
+    // Same pass-through-by-default shape as the commit-tail spy above: real
+    // by default (an empty sandboxed `hostHome` and an absent pid.json clear
+    // it unconditionally), so every existing test still exercises the
+    // genuine post-stop check. Only the tests proving the
+    // `restartAfterAbortedSwap` wiring configure a rejection.
+    assertStoreFormatFloorAfterStop: async (
+      ...callArgs: Parameters<typeof actual.assertStoreFormatFloorAfterStop>
+    ) => {
+      if (mocks.assertStoreFormatFloorAfterStopMock.getMockImplementation()) {
+        return mocks.assertStoreFormatFloorAfterStopMock(...callArgs);
+      }
+      mocks.assertStoreFormatFloorAfterStopMock(...callArgs);
+      return actual.assertStoreFormatFloorAfterStop(...callArgs);
     },
   };
 });
@@ -401,6 +416,7 @@ describe("sweepOldTrash", () => {
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
+    mocks.assertStoreFormatFloorAfterStopMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -450,6 +466,7 @@ describe("installHost", () => {
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
+    mocks.assertStoreFormatFloorAfterStopMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -524,6 +541,7 @@ describe("commitInstallFromSource", () => {
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
+    mocks.assertStoreFormatFloorAfterStopMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -605,6 +623,7 @@ describe("commitInstallFromSource", () => {
           },
           beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: null,
         },
         onWillSwap: null,
@@ -620,6 +639,158 @@ describe("commitInstallFromSource", () => {
     expect(mocks.assertStoreFormatFloorAtCommitMock).toHaveBeenCalledTimes(1);
     expect(beforeSwapCalled).toBe(false);
     expect(existsSync(installDirFor(ENV))).toBe(false);
+  });
+
+  describe("the post-stop refusal (assertStoreFormatFloorAfterStop) and restartAfterAbortedSwap", () => {
+    it("calls restartAfterAbortedSwap and never reaches atomicSwap - the install dir still holds the old bytes", async () => {
+      // The host is stopped by the time this arm runs (it sits after
+      // `lifecycle.beforeSwap()`), so a refusal here owes the machine its
+      // host back - that is the whole reason the member exists.
+      const sourceDir = join(sandboxRoot, "pre-staged");
+      writeLocalHostSource(sourceDir, "v2");
+      const executablePath = join(sourceDir, "traycer-host");
+      // A real prior install, so "the install dir still holds the old
+      // bytes" is something this test can actually observe rather than
+      // just "no install dir was ever created".
+      const oldInstallDir = installDirFor(ENV);
+      mkdirSync(oldInstallDir, { recursive: true });
+      writeFileSync(join(oldInstallDir, "traycer-host"), "binary-v1");
+      mocks.assertStoreFormatFloorAfterStopMock.mockRejectedValue(
+        Object.assign(
+          new Error("host install: refusing to install host 1.0.0"),
+          { code: "E_HOST_STORE_FORMAT_FLOOR" },
+        ),
+      );
+      const restartAfterAbortedSwap = vi.fn(async () => {});
+
+      await expect(
+        commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: "1.0.0",
+          runtimeVersion: null,
+          source: { kind: "local-file", value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            beforeSwap: async () => {},
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            restartAfterAbortedSwap,
+            swapLockRecovery: null,
+          },
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(mocks.assertStoreFormatFloorAfterStopMock).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(restartAfterAbortedSwap).toHaveBeenCalledTimes(1);
+      expect(readFileSync(join(oldInstallDir, "traycer-host"), "utf8")).toBe(
+        "binary-v1",
+      );
+    });
+
+    it("a restartAfterAbortedSwap that itself rejects does NOT replace the original refusal - the caller still sees E_HOST_STORE_FORMAT_FLOOR, and the restart failure is a warn", async () => {
+      const sourceDir = join(sandboxRoot, "pre-staged");
+      writeLocalHostSource(sourceDir, "v2");
+      const executablePath = join(sourceDir, "traycer-host");
+      mocks.assertStoreFormatFloorAfterStopMock.mockRejectedValue(
+        Object.assign(
+          new Error("host install: refusing to install host 1.0.0"),
+          { code: "E_HOST_STORE_FORMAT_FLOOR" },
+        ),
+      );
+      const restartAfterAbortedSwap = vi.fn(async () => {
+        throw new Error("simulated restart failure");
+      });
+
+      let thrown: unknown;
+      try {
+        await commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: "1.0.0",
+          runtimeVersion: null,
+          source: { kind: "local-file", value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            beforeSwap: async () => {},
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            restartAfterAbortedSwap,
+            swapLockRecovery: null,
+          },
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      // The ORIGINAL refusal, not the restart failure.
+      expect(thrown).toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+      expect(restartAfterAbortedSwap).toHaveBeenCalledTimes(1);
+    });
+
+    it("an ordinary successful install calls restartAfterAbortedSwap zero times", async () => {
+      const sourceDir = join(sandboxRoot, "pre-staged");
+      writeLocalHostSource(sourceDir, "v1");
+      const executablePath = join(sourceDir, "traycer-host");
+      const restartAfterAbortedSwap = vi.fn(async () => {});
+
+      const { record } = await commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: "1.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
+          afterSwap: async () => {},
+          restartAfterAbortedSwap,
+          swapLockRecovery: null,
+        },
+        onWillSwap: null,
+        onCommitted: () => {},
+        onSwapCommitted: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+
+      expect(record.version).toBe("1.0.0");
+      expect(restartAfterAbortedSwap).not.toHaveBeenCalled();
+    });
   });
 
   it("invokes onCommitted only after the rename succeeds, never on a failed swap", async () => {
@@ -689,6 +860,7 @@ describe("commitInstallFromSource", () => {
         afterSwap: async () => {
           order.push("afterSwap");
         },
+        restartAfterAbortedSwap: async () => {},
         swapLockRecovery: null,
       },
       onSwapCommitted: null,
@@ -730,6 +902,7 @@ describe("commitInstallFromSource", () => {
             beforeSwapCommitCalled = true;
           },
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: null,
         },
         onSwapCommitted: null,
@@ -844,6 +1017,7 @@ describe("commitInstallFromSource", () => {
             },
             beforeSwapCommit: async () => {},
             afterSwap: async () => {},
+            restartAfterAbortedSwap: async () => {},
             swapLockRecovery: null,
           },
           onWillSwap: null,
@@ -1048,6 +1222,7 @@ describe("commitInstallFromSource", () => {
         afterSwap: async () => {
           order.push("afterSwap");
         },
+        restartAfterAbortedSwap: async () => {},
         swapLockRecovery: null,
       },
       onSwapCommitted: async () => {
@@ -1335,6 +1510,7 @@ describe("atomicSwap - swap-lock recovery", () => {
         beforeSwap: async () => {},
         beforeSwapCommit: async () => {},
         afterSwap: async () => {},
+        restartAfterAbortedSwap: async () => {},
         swapLockRecovery: {
           killLingeringProcesses: kill,
           describeLockHolders: async () => [],
@@ -1369,6 +1545,7 @@ describe("atomicSwap - swap-lock recovery", () => {
           beforeSwap: async () => {},
           beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},
             describeLockHolders: async () => [
@@ -1429,6 +1606,7 @@ describe("atomicSwap - swap-lock recovery", () => {
           beforeSwap: async () => {},
           beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},
             describeLockHolders: async () => [
@@ -1500,6 +1678,7 @@ describe("atomicSwap - swap-lock recovery", () => {
           beforeSwap: async () => {},
           beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: kill,
             describeLockHolders: async () => [],
@@ -1562,6 +1741,7 @@ describe("atomicSwap - swap-lock recovery", () => {
           beforeSwap: async () => {},
           beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: kill,
             describeLockHolders: async () => [],
@@ -1611,6 +1791,7 @@ describe("atomicSwap - swap-lock recovery", () => {
           beforeSwap: async () => {},
           beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},
             describeLockHolders: async () => [],
@@ -1660,6 +1841,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
+    mocks.assertStoreFormatFloorAfterStopMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 

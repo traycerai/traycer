@@ -11,6 +11,7 @@ import {
 } from "../manifest/host-install";
 import { readHostStagedRecord } from "../manifest/host-staged";
 import { hostHomeDir, hostStagedDir } from "../store/paths";
+import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { assertHostNotBusy } from "../host/busy-check";
 import {
   assertHostStoreFormatFloor,
@@ -322,7 +323,7 @@ export async function applyHost(
   );
   await assertHostStoreFormatFloor({
     environment: opts.environment,
-    hostHome: hostHomeDir(opts.environment),
+    surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
     targetVersion: floorTargetVersion,
     publishedStoreFormats: null,
     declaredStoreFormats: await readExtractedStoreFormats(

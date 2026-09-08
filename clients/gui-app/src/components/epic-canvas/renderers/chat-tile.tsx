@@ -185,6 +185,7 @@ import {
   type ChatDeadTileBannerReason,
 } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
@@ -794,6 +795,18 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // `epic.readChatAttachment`" verdict per build so the upgrade re-probes.
   const attachmentHostEntry = useHostDirectoryEntry(hostId);
   const attachmentHostVersion = attachmentHostEntry?.version ?? null;
+  // What this live open learned about its host, for the sidebar's and the
+  // canvas's NEXT open decision: a `HOST_OLDER_THAN_DATA` close means every
+  // chat in this epic is unreadable on this host build, so their rows route
+  // to the published copy until the host is updated (the build key above is
+  // what retires that verdict) or a snapshot lands here again.
+  useRecordHostOlderThanDataRefusal({
+    hostId,
+    epicId: view.currentEpicId,
+    hostVersion: attachmentHostVersion,
+    fatalCloseCode: view.fatalClose?.code ?? null,
+    snapshotLoaded: view.snapshotLoaded,
+  });
   const attachmentScope = useMemo<ChatAttachmentScopeValue>(
     () => ({
       epicId: view.currentEpicId,
@@ -3292,7 +3305,15 @@ function ChatSessionMessagesSurface(
   // transition; there is no optimistic seed.
   if (!props.snapshotLoaded) {
     return (
+      // Keyed by the chat, because the gate's stall deadline is anchored at
+      // its own first render. Tiles are one chat for life and the surface host
+      // keys records by instance, so this never actually remounts today - it
+      // is here so that stays true by construction rather than by a property
+      // of a component two layers up: a gate instance carried over to another
+      // chat would inherit the first one's start and declare the new load
+      // stalled on sight.
       <ChatTilePreSnapshotGate
+        key={props.node.id}
         fatalClose={props.fatalClose}
         retries={props.preSnapshotRetries}
         onRetry={props.onRetry}

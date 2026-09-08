@@ -63,6 +63,12 @@ import { fetchText } from "../registry/fetch-resource";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
 import { surveyChatDbStamps } from "./chat-store-survey";
+import type { ChatStoreSurveyRoots } from "./chat-store-survey-roots";
+import {
+  describeQuiescenceGap,
+  type SwapQuiescence,
+  type SwapQuiescenceGap,
+} from "./swap-quiescence";
 
 /**
  * How many epics the refusal names before it collapses the rest into
@@ -96,10 +102,15 @@ export type StoreFormatFloorSite =
 export interface StoreFormatFloorInput {
   readonly environment: Environment;
   /**
-   * The host DATA root the target build would serve - `hostHomeDir(...)`, the
-   * directory holding `epic-state/`, never the install directory.
+   * Every host DATA root the target build could find stores in, from
+   * `resolveChatStoreSurveyRoots`. More than one only on dev, where a pooled
+   * identity home can hold what the run slot does not.
+   *
+   * An INPUT rather than something this module resolves, so a suite can state
+   * a temp directory instead of inheriting the developer's own `~/.traycer` -
+   * the same reason `installedStoreFormats` is passed in.
    */
-  readonly hostHome: string;
+  readonly surveyRoots: ChatStoreSurveyRoots;
   /** The version whose bytes are about to be placed. */
   readonly targetVersion: string;
   /**
@@ -211,7 +222,7 @@ export async function assertHostStoreFormatFloor(
     });
     return;
   }
-  const survey = await surveyChatDbStamps(input.hostHome);
+  const survey = await surveyChatDbStamps(input.surveyRoots);
   // An empty survey is `clear` inside `decideStoreFormatFloor` - a machine
   // with no chat stores has nothing an older target could fail to open, so an
   // unknown target format protects nothing there. This is why
@@ -532,7 +543,8 @@ export function storeFormatFloorTargetVersion(
  */
 export async function assertStoreFormatFloorAtCommit(args: {
   readonly environment: Environment;
-  readonly hostHome: string;
+  /** See `StoreFormatFloorInput.surveyRoots`. */
+  readonly surveyRoots: ChatStoreSurveyRoots;
   /**
    * The version the install RECORD will carry. Not necessarily the version
    * judged - see `declaredRuntimeVersion`.
@@ -587,7 +599,7 @@ export async function assertStoreFormatFloorAtCommit(args: {
   }
   await assertHostStoreFormatFloor({
     environment: args.environment,
-    hostHome: args.hostHome,
+    surveyRoots: args.surveyRoots,
     targetVersion,
     publishedStoreFormats: sameBytesAsGated
       ? args.evidence.publishedStoreFormats
@@ -601,6 +613,131 @@ export async function assertStoreFormatFloorAtCommit(args: {
     acceptStoreFormatLoss: args.evidence.acceptStoreFormatLoss,
     site: args.evidence.site,
     logger: args.logger,
+  });
+}
+
+/**
+ * The floor's LAST word, run after the writer has been stopped and immediately
+ * before the swap.
+ *
+ * The commit-tail check above still runs, and still runs first: it refuses
+ * before anything is stopped, which is where a refusal belongs. This one
+ * exists because that check is not authoritative. Between it and the rename
+ * the installer hashes the executable, writes the record and stops the host -
+ * and a host still up for any of that can open a chat and migrate a store
+ * forward, so the survey that cleared the move describes a machine that no
+ * longer exists.
+ *
+ * Three arms, and the third is the new one:
+ *
+ * | floor applies | quiescence | outcome |
+ * | --- | --- | --- |
+ * | no | - | return; every upgrade pays nothing here |
+ * | yes | established | re-survey, and refuse on what it finds |
+ * | yes | **not established** | **refuse** |
+ *
+ * The third arm is not pedantry. A survey taken while a writer is live cannot
+ * be shown to still hold at the rename, and the paths that reach it are real:
+ * the POSIX bytes-only lifecycle stops nothing at all, and the Desktop-managed
+ * macOS route deliberately swallows a `hung` stop - the pid observed STILL
+ * ALIVE after the full grace - and proceeds. Those are exactly the machines
+ * where a downgrade would land under a running 1.3 host.
+ *
+ * It costs the ordinary update nothing: applicability answers from two version
+ * strings, so an upgrade returns before the quiescence probe or any disk walk.
+ */
+export async function assertStoreFormatFloorAfterStop(args: {
+  readonly environment: Environment;
+  /** See `StoreFormatFloorInput.surveyRoots`. */
+  readonly surveyRoots: ChatStoreSurveyRoots;
+  /** Already resolved through {@link storeFormatFloorTargetVersion}. */
+  readonly targetVersion: string;
+  readonly declaredStoreFormats: HostStoreFormats | null;
+  readonly installedVersion: string | null;
+  readonly installedStoreFormats: HostStoreFormats | null;
+  readonly quiescence: SwapQuiescence;
+  readonly acceptStoreFormatLoss: boolean;
+  readonly site: StoreFormatFloorSite;
+  readonly logger: ILogger;
+}): Promise<void> {
+  const applicability = storeFloorApplicability(
+    args.targetVersion,
+    args.installedVersion,
+    args.declaredStoreFormats,
+  );
+  if (!applicability.applies) {
+    logFloorNotApplicable({
+      environment: args.environment,
+      site: args.site,
+      targetVersion: args.targetVersion,
+      installedVersion: args.installedVersion,
+      reason: applicability.reason,
+      logger: args.logger,
+    });
+    return;
+  }
+  if (!args.quiescence.established) {
+    const refusal = quiescenceRefusal(args, args.quiescence.reason);
+    const fields = {
+      environment: args.environment,
+      site: args.site,
+      targetVersion: args.targetVersion,
+      installedVersion: args.installedVersion,
+      quiescenceGap: args.quiescence.reason,
+    };
+    if (args.acceptStoreFormatLoss) {
+      args.logger.warn(
+        "Host store-format floor could not establish quiescence; overridden by --accept-store-format-loss",
+        { ...fields, message: refusal.message },
+      );
+      return;
+    }
+    args.logger.error(
+      "Host store-format floor refused a downgrade it could not survey authoritatively",
+      fields,
+      null,
+    );
+    throw refusal;
+  }
+  // Quiesced, so this survey describes the machine as the target will find it.
+  // The published formats are deliberately NOT carried here: the tail check
+  // above already applied them, and re-reading a manifest with the host
+  // stopped would put a network round trip inside the swap window.
+  await assertHostStoreFormatFloor({
+    environment: args.environment,
+    surveyRoots: args.surveyRoots,
+    targetVersion: args.targetVersion,
+    publishedStoreFormats: null,
+    declaredStoreFormats: args.declaredStoreFormats,
+    installedVersion: args.installedVersion,
+    installedStoreFormats: args.installedStoreFormats,
+    acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+    site: args.site,
+    logger: args.logger,
+  });
+}
+
+function quiescenceRefusal(
+  args: {
+    readonly environment: Environment;
+    readonly targetVersion: string;
+    readonly installedVersion: string | null;
+    readonly site: StoreFormatFloorSite;
+  },
+  reason: SwapQuiescenceGap,
+): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    message: `${args.site}: refusing to install host ${args.targetVersion} over ${describeInstalled(args.installedVersion)} - it reads an older chat store format, and ${describeQuiescenceGap(reason)}. Nothing has been replaced. Stop the host and retry, or rerun with --accept-store-format-loss to install it anyway and lose access to any chats it cannot open.`,
+    details: {
+      environment: args.environment,
+      site: args.site,
+      verdict: "quiescence-unproven",
+      quiescenceGap: reason,
+      targetVersion: args.targetVersion,
+      installedVersion: args.installedVersion,
+    },
+    exitCode: 1,
   });
 }
 
@@ -644,7 +781,8 @@ export function ungatedStoreFormatFloorEvidence(
  */
 export async function gateStoreFormatFloor(args: {
   readonly environment: Environment;
-  readonly hostHome: string;
+  /** See `StoreFormatFloorInput.surveyRoots`. */
+  readonly surveyRoots: ChatStoreSurveyRoots;
   readonly targetVersion: string;
   readonly installedVersion: string | null;
   /**
@@ -697,7 +835,7 @@ export async function gateStoreFormatFloor(args: {
     : null;
   await assertHostStoreFormatFloor({
     environment: args.environment,
-    hostHome: args.hostHome,
+    surveyRoots: args.surveyRoots,
     targetVersion: args.targetVersion,
     publishedStoreFormats,
     declaredStoreFormats: null,

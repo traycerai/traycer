@@ -3,6 +3,7 @@ import {
   CHAT_DB_FORMAT_TABLE_CEILING,
 } from "@traycer/protocol/host/store-formats";
 import { surveyChatDbStamps } from "../host/chat-store-survey";
+import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { readInstalledFloorOperands } from "../host/installed-store-formats";
 import { hostHomeDir } from "../store/paths";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -43,7 +44,9 @@ export function buildHostStoreFormatsCommand(): CommandFn {
       ctx.runtime.logger,
     );
     const installedVersion = installed.version;
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      await resolveChatStoreSurveyRoots(environment),
+    );
     const installedFormats =
       installedVersion === null
         ? null

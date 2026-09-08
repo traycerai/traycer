@@ -1,4 +1,11 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
@@ -8,6 +15,7 @@ import {
   EPIC_STATE_DIRNAME,
   surveyChatDbStamps,
 } from "../chat-store-survey";
+import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
 
 // `node:sqlite` is available under this package's vitest runner (Node 26
 // workers) but not under bare `bun` - the survey itself imports it
@@ -61,7 +69,9 @@ async function epicDbPath(epicId: string): Promise<string> {
 
 describe("surveyChatDbStamps", () => {
   it("returns a missing epic-state directory as an empty survey", async () => {
-    await expect(surveyChatDbStamps(hostHome)).resolves.toEqual({
+    await expect(
+      surveyChatDbStamps(singleChatStoreSurveyRoot(hostHome)),
+    ).resolves.toEqual({
       readings: [],
       failures: [],
     });
@@ -73,7 +83,9 @@ describe("surveyChatDbStamps", () => {
     // survey now reads as unconditionally `clear` downstream.
     await writeFile(join(hostHome, EPIC_STATE_DIRNAME), "", "utf8");
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey.readings).toEqual([]);
     expect(survey.failures).toEqual([
@@ -94,7 +106,9 @@ describe("surveyChatDbStamps", () => {
       await chmod(join(hostHome, EPIC_STATE_DIRNAME), 0o000);
 
       try {
-        const survey = await surveyChatDbStamps(hostHome);
+        const survey = await surveyChatDbStamps(
+          singleChatStoreSurveyRoot(hostHome),
+        );
 
         expect(survey.readings).toEqual([]);
         expect(survey.failures).toEqual([
@@ -111,7 +125,9 @@ describe("surveyChatDbStamps", () => {
     const dbPath = await epicDbPath("epic-1");
     await writeStampedChatDb(dbPath, 9);
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey).toEqual({
       readings: [{ epicId: "epic-1", schemaVersion: 9 }],
@@ -133,7 +149,9 @@ describe("surveyChatDbStamps", () => {
       );
     });
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey).toEqual({
       readings: [{ epicId: "epic-int", schemaVersion: 9 }],
@@ -149,7 +167,9 @@ describe("surveyChatDbStamps", () => {
       );
     });
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey.readings).toEqual([]);
     expect(survey.failures).toEqual([
@@ -163,7 +183,9 @@ describe("surveyChatDbStamps", () => {
       db.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)");
     });
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey.readings).toEqual([]);
     // Was the raw SQLite "no such table" message before the reason codes
@@ -179,7 +201,9 @@ describe("surveyChatDbStamps", () => {
     const dbPath = await epicDbPath("epic-garbage");
     await writeFile(dbPath, "not a sqlite file at all", "utf8");
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey.readings).toEqual([]);
     expect(survey.failures).toEqual([
@@ -187,9 +211,11 @@ describe("surveyChatDbStamps", () => {
     ]);
   });
 
-  it("treats a FILE under epic-state (not a directory) as neither a reading nor a failure", async () => {
-    // There is no `chat/chat.db` under a file - the survey has nothing to
-    // open, and nothing to report failing to open.
+  it("records a failure when the epic entry under epic-state is a FILE rather than a directory", async () => {
+    // This WAS the bug: a plain file under `epic-state` used to be skipped
+    // silently, so an otherwise empty survey cleared unconditionally over
+    // an epic this process could not actually rule out. "I could not look"
+    // must never read as "there is nothing to look at".
     await mkdir(join(hostHome, EPIC_STATE_DIRNAME), { recursive: true });
     await writeFile(
       join(hostHome, EPIC_STATE_DIRNAME, "not-a-dir"),
@@ -197,9 +223,14 @@ describe("surveyChatDbStamps", () => {
       "utf8",
     );
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
-    expect(survey).toEqual({ readings: [], failures: [] });
+    expect(survey.readings).toEqual([]);
+    expect(survey.failures).toEqual([
+      { epicId: "not-a-dir", reason: "epic-state-not-a-directory" },
+    ]);
   });
 
   it("treats an epic directory with no chat/chat.db as neither a reading nor a failure", async () => {
@@ -207,9 +238,154 @@ describe("surveyChatDbStamps", () => {
       recursive: true,
     });
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey).toEqual({ readings: [], failures: [] });
+  });
+
+  describe("inspectChatDbPath (via surveyChatDbStamps) - only ENOENT is absent", () => {
+    // The rule this whole describe block pins: an empty survey is cleared
+    // UNCONDITIONALLY, so "I could not look" must never read as "there is
+    // nothing to look at". Only a genuinely absent (ENOENT) path level is
+    // silence; everything else - a link, a wrong type, a permission denial -
+    // is a failure this survey owes the caller.
+
+    it("refuses a symlinked epic directory as linked-epic-directory, without following it", async () => {
+      const realTarget = await mkdtemp(
+        join(tmpdir(), "chat-store-survey-test-link-target-"),
+      );
+      try {
+        // A real, readable chat.db behind the link - proves the refusal is
+        // about the LINK, not about anything downstream being unreadable.
+        await mkdir(join(realTarget, "chat"), { recursive: true });
+        await writeStampedChatDb(join(realTarget, "chat", "chat.db"), 9);
+        await mkdir(join(hostHome, EPIC_STATE_DIRNAME), { recursive: true });
+        await symlink(
+          realTarget,
+          join(hostHome, EPIC_STATE_DIRNAME, "epic-linked"),
+        );
+
+        const survey = await surveyChatDbStamps(
+          singleChatStoreSurveyRoot(hostHome),
+        );
+
+        expect(survey.readings).toEqual([]);
+        expect(survey.failures).toEqual([
+          { epicId: "epic-linked", reason: "linked-epic-directory" },
+        ]);
+      } finally {
+        await rm(realTarget, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses a symlinked chat directory as linked-chat-directory, without following it", async () => {
+      const realTarget = await mkdtemp(
+        join(tmpdir(), "chat-store-survey-test-link-target-"),
+      );
+      try {
+        await writeStampedChatDb(join(realTarget, "chat.db"), 9);
+        await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-linked"), {
+          recursive: true,
+        });
+        await symlink(
+          realTarget,
+          join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-linked", "chat"),
+        );
+
+        const survey = await surveyChatDbStamps(
+          singleChatStoreSurveyRoot(hostHome),
+        );
+
+        expect(survey.readings).toEqual([]);
+        expect(survey.failures).toEqual([
+          { epicId: "epic-chat-linked", reason: "linked-chat-directory" },
+        ]);
+      } finally {
+        await rm(realTarget, { recursive: true, force: true });
+      }
+    });
+
+    it("records chat-directory-not-a-directory when 'chat' is a FILE", async () => {
+      await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-is-file"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(hostHome, EPIC_STATE_DIRNAME, "epic-chat-is-file", "chat"),
+        "",
+        "utf8",
+      );
+
+      const survey = await surveyChatDbStamps(
+        singleChatStoreSurveyRoot(hostHome),
+      );
+
+      expect(survey.readings).toEqual([]);
+      expect(survey.failures).toEqual([
+        {
+          epicId: "epic-chat-is-file",
+          reason: "chat-directory-not-a-directory",
+        },
+      ]);
+    });
+
+    it("records chat-db-not-a-file when 'chat.db' is a DIRECTORY", async () => {
+      await mkdir(
+        join(hostHome, EPIC_STATE_DIRNAME, "epic-db-is-dir", "chat", "chat.db"),
+        { recursive: true },
+      );
+
+      const survey = await surveyChatDbStamps(
+        singleChatStoreSurveyRoot(hostHome),
+      );
+
+      expect(survey.readings).toEqual([]);
+      expect(survey.failures).toEqual([
+        { epicId: "epic-db-is-dir", reason: "chat-db-not-a-file" },
+      ]);
+    });
+
+    it("contributes neither a reading nor a failure when every level is genuinely absent (ENOENT)", async () => {
+      await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-nothing-here"), {
+        recursive: true,
+      });
+
+      const survey = await surveyChatDbStamps(
+        singleChatStoreSurveyRoot(hostHome),
+      );
+
+      expect(survey).toEqual({ readings: [], failures: [] });
+    });
+
+    // Root cause is `os.access`, permission bits don't restrict `root` (nor,
+    // reliably, Windows) - see the same guard elsewhere in this file.
+    const canSimulateEacces = platform !== "win32" && process.getuid?.() !== 0;
+    (canSimulateEacces ? it : it.skip)(
+      "records unreadable-chat-db for an epic directory this process cannot read (EACCES)",
+      async () => {
+        const epicDir = join(
+          hostHome,
+          EPIC_STATE_DIRNAME,
+          "epic-unreadable-dir",
+        );
+        await mkdir(epicDir, { recursive: true });
+        await chmod(epicDir, 0o000);
+
+        try {
+          const survey = await surveyChatDbStamps(
+            singleChatStoreSurveyRoot(hostHome),
+          );
+
+          expect(survey.readings).toEqual([]);
+          expect(survey.failures).toEqual([
+            { epicId: "epic-unreadable-dir", reason: "unreadable-chat-db" },
+          ]);
+        } finally {
+          await chmod(epicDir, 0o755);
+        }
+      },
+    );
   });
 
   it("surveys multiple epics with readings and failures disjoint by epic", async () => {
@@ -223,7 +399,9 @@ describe("surveyChatDbStamps", () => {
       recursive: true,
     });
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey.readings).toEqual(
       expect.arrayContaining([
@@ -253,7 +431,9 @@ describe("surveyChatDbStamps", () => {
       );
     });
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey.readings).toEqual([]);
     expect(survey.failures).toEqual([
@@ -274,7 +454,9 @@ describe("surveyChatDbStamps", () => {
     const dbPath = await epicDbPath(rawEpicId);
     await writeStampedChatDb(dbPath, 9);
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey.failures).toEqual([]);
     expect(survey.readings).toEqual([
@@ -290,7 +472,9 @@ describe("surveyChatDbStamps", () => {
     const dbPath = await epicDbPath(rawEpicId);
     await writeStampedChatDb(dbPath, 9);
 
-    const survey = await surveyChatDbStamps(hostHome);
+    const survey = await surveyChatDbStamps(
+      singleChatStoreSurveyRoot(hostHome),
+    );
 
     expect(survey.failures).toEqual([]);
     expect(survey.readings).toHaveLength(1);
@@ -319,12 +503,45 @@ describe("surveyChatDbStamps", () => {
       const { surveyChatDbStamps: surveyWithoutEngine } =
         await import("../chat-store-survey");
 
-      const survey = await surveyWithoutEngine(hostHome);
+      const survey = await surveyWithoutEngine(
+        singleChatStoreSurveyRoot(hostHome),
+      );
 
       expect(survey.readings).toEqual([]);
       expect(survey.failures).toEqual([
         { epicId: "*", reason: "engine-unavailable" },
       ]);
+    } finally {
+      vi.doUnmock("node:sqlite");
+      vi.resetModules();
+    }
+  });
+
+  it("never reports engine-unavailable when epic directories exist but NONE has a chat.db - the engine is resolved lazily, at the first store worth reading", async () => {
+    // Phase-1 wart this pins the fix for: the engine used to be resolved as
+    // soon as a ROOT had any entries at all, so a machine with epic
+    // directories but no store yet - the ordinary state under Bun, or any
+    // runtime without the engine - reported `engine-unavailable` and
+    // refused over nothing. It must now resolve only at the first store
+    // there is actually something to read.
+    await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-no-store-a"), {
+      recursive: true,
+    });
+    await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-no-store-b"), {
+      recursive: true,
+    });
+
+    vi.resetModules();
+    vi.doMock("node:sqlite", () => {
+      throw new Error("no node:sqlite in this simulated runtime");
+    });
+    try {
+      const { surveyChatDbStamps: surveyWithoutEngine } =
+        await import("../chat-store-survey");
+
+      await expect(
+        surveyWithoutEngine(singleChatStoreSurveyRoot(hostHome)),
+      ).resolves.toEqual({ readings: [], failures: [] });
     } finally {
       vi.doUnmock("node:sqlite");
       vi.resetModules();
@@ -345,7 +562,9 @@ describe("surveyChatDbStamps", () => {
       const { surveyChatDbStamps: surveyWithoutEngine } =
         await import("../chat-store-survey");
 
-      await expect(surveyWithoutEngine(hostHome)).resolves.toEqual({
+      await expect(
+        surveyWithoutEngine(singleChatStoreSurveyRoot(hostHome)),
+      ).resolves.toEqual({
         readings: [],
         failures: [],
       });
@@ -353,5 +572,77 @@ describe("surveyChatDbStamps", () => {
       vi.doUnmock("node:sqlite");
       vi.resetModules();
     }
+  });
+
+  describe("multi-root surveys", () => {
+    it("surveys two roots holding the SAME epic id - both appear, qualified as <label>/<id>", async () => {
+      const secondRoot = await mkdtemp(
+        join(tmpdir(), "chat-store-survey-test-second-"),
+      );
+      try {
+        const firstPath = chatDbPathFor(hostHome, "epic-shared");
+        await mkdir(join(hostHome, EPIC_STATE_DIRNAME, "epic-shared", "chat"), {
+          recursive: true,
+        });
+        await writeStampedChatDb(firstPath, 7);
+        const secondPath = chatDbPathFor(secondRoot, "epic-shared");
+        await mkdir(
+          join(secondRoot, EPIC_STATE_DIRNAME, "epic-shared", "chat"),
+          { recursive: true },
+        );
+        await writeStampedChatDb(secondPath, 8);
+
+        const survey = await surveyChatDbStamps({
+          roots: [
+            { path: hostHome, label: "host" },
+            { path: secondRoot, label: "second" },
+          ],
+          enumerationFailed: false,
+        });
+
+        expect(survey.readings).toEqual(
+          expect.arrayContaining([
+            { epicId: "host/epic-shared", schemaVersion: 7 },
+            { epicId: "second/epic-shared", schemaVersion: 8 },
+          ]),
+        );
+        expect(survey.readings).toHaveLength(2);
+        expect(survey.failures).toEqual([]);
+      } finally {
+        await rm(secondRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("a single root leaves epic ids unqualified, whatever its label", async () => {
+      const dbPath = await epicDbPath("epic-solo");
+      await writeStampedChatDb(dbPath, 9);
+
+      const survey = await surveyChatDbStamps({
+        roots: [{ path: hostHome, label: "host" }],
+        enumerationFailed: false,
+      });
+
+      expect(survey).toEqual({
+        readings: [{ epicId: "epic-solo", schemaVersion: 9 }],
+        failures: [],
+      });
+    });
+
+    it("enumerationFailed: true reports a * failure even when every root reads fine - a blind source must not read as silence", async () => {
+      const dbPath = await epicDbPath("epic-fine");
+      await writeStampedChatDb(dbPath, 9);
+
+      const survey = await surveyChatDbStamps({
+        roots: [{ path: hostHome, label: "host" }],
+        enumerationFailed: true,
+      });
+
+      expect(survey.readings).toEqual([
+        { epicId: "epic-fine", schemaVersion: 9 },
+      ]);
+      expect(survey.failures).toEqual([
+        { epicId: "*", reason: "unreadable-epic-state-directory" },
+      ]);
+    });
   });
 });

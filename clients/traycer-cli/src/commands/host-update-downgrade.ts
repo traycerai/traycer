@@ -21,6 +21,7 @@ import type { ProgressInfo } from "../runner/output";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { createCliLogger } from "../logger";
 import { hostHomeDir } from "../store/paths";
+import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { gateStoreFormatFloor } from "../host/store-format-floor";
 import { readInstalledFloorOperands } from "../host/installed-store-formats";
 
@@ -115,7 +116,7 @@ export async function installHostDowngradeInSegment(
   const installed = await readInstalledFloorOperands(input.environment, logger);
   const storeFormatFloor = await gateStoreFormatFloor({
     environment: input.environment,
-    hostHome: hostHomeDir(input.environment),
+    surveyRoots: await resolveChatStoreSurveyRoots(input.environment),
     targetVersion: input.version,
     installedVersion: installed.version,
     installedStoreFormats: installed.storeFormats,

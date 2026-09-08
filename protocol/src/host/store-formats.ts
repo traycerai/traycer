@@ -205,9 +205,16 @@ export type StoreFloorApplicability =
  * Whether landing `targetVersion` over `installedVersion` has to consult the
  * store floor at all.
  *
- * Only a move to an OLDER build can leave data unreadable, so an upgrade or a
- * same-version reinstall skips the floor entirely - no table lookup, no disk
- * walk.
+ * Only a move to an OLDER build can leave data unreadable, so the floor is
+ * skipped entirely - no table lookup, no disk walk - for exactly two moves:
+ * the target version string is IDENTICAL to the installed one, or it is
+ * STRICTLY newer by SemVer precedence.
+ *
+ * Equal precedence with a different string is not one of them. SemVer ignores
+ * build metadata, so `2.0.0+old` over `2.0.0+new` compares equal while being a
+ * different artifact - and the install path already classifies that as a
+ * sideways downgrade needing `--allow-downgrade`. Standing aside there let the
+ * one move a user was warned about skip the check meant to protect it.
  *
  * That shortcut is available only when the INSTALLED version is itself a
  * released one, because it is an argument about the ladder and only a ladder
@@ -238,11 +245,34 @@ export function storeFloorApplicability(
   if (installedVersion === null || !isReleasedHostVersion(installedVersion)) {
     return { applies: true };
   }
-  const relation = compareHostVersions(targetVersion, installedVersion);
-  if (!relation.comparable || relation.ordering === "less") {
-    return { applies: true };
+  // The SAME BUILD, by string. A reinstall of the identical version cannot
+  // move the store format, and this is the only equality that means identity:
+  // SemVer precedence ignores build metadata, so `2.0.0+a` and `2.0.0+b`
+  // compare EQUAL while being different artifacts with possibly different
+  // formats. Treating that as "not older" is what let a sideways move - one
+  // the install path itself classifies as a downgrade needing
+  // `--allow-downgrade` - skip the floor entirely.
+  //
+  // This arm is reachable ONLY for a released version, and deliberately so: an
+  // identical string means both sides are the same string, and the guard above
+  // has already sent every unreleased installed version to the floor. So
+  // `0.0.0-dev` over `0.0.0-dev`, and a repeated `<target>.<epochMs>.<sha>`,
+  // both EVALUATE - which is the behaviour that matters for the team's daily
+  // local rebuilds, where two builds share a string and can differ in format.
+  // Do not "tighten" this by adding an `isReleasedHostVersion(targetVersion)`
+  // test: it would be unreachable, and it would suggest the guarantee lives
+  // here rather than in the guard that actually provides it.
+  if (targetVersion === installedVersion) {
+    return { applies: false, reason: "target-not-older" };
   }
-  return { applies: false, reason: "target-not-older" };
+  const relation = compareHostVersions(targetVersion, installedVersion);
+  // STRICTLY newer, and comparable. Everything else evaluates: older,
+  // incomparable, and equal-precedence-different-identity alike. None of those
+  // proves the target can read what the installed build wrote.
+  if (relation.comparable && relation.ordering === "greater") {
+    return { applies: false, reason: "target-not-older" };
+  }
+  return { applies: true };
 }
 
 /**

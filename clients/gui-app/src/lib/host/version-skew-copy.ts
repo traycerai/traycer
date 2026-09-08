@@ -162,8 +162,11 @@ function compareAppVersions(
   return "same";
 }
 
-function cleanVersion(version: string | null): string | null {
-  if (version === null) {
+// `undefined` as well as `null`: a directory row is built from a snapshot
+// whose version field predates some hosts and some test doubles, and a tile
+// must render (with no version verdict) rather than throw on a missing one.
+function cleanVersion(version: string | null | undefined): string | null {
+  if (version === null || version === undefined) {
     return null;
   }
   const trimmed = version.trim();

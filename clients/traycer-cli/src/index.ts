@@ -1312,13 +1312,13 @@ function registerHostCommands(program: Command): void {
       )
       // Hidden: the CLI-owned pin gate (Doctor's controller-driven install
       // path), not a user-facing switch - see commands/host-install.ts.
-      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(
         new Option(
           "--if-idle",
           "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before the service stop",
         ).hideHelp(),
       )
+      .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(attemptAdoptionOption())
       .addHelpText(
         "after",

@@ -200,6 +200,113 @@ describe("store floor format helpers", () => {
     );
   });
 
+  // R-bot: the rule SemVer precedence ignores build metadata, so `2.0.0+a`
+  // and `2.0.0+b` compare EQUAL while being different artifacts with possibly
+  // different chatDb formats - the install path itself treats that move as a
+  // DOWNGRADE needing `--allow-downgrade`, so the floor must not skip it
+  // either. No existing test pinned this before the bot round landed it - the
+  // suite passed 54/54 straight through the change, which was its own
+  // finding.
+  it.each([
+    [
+      "different build metadata, same SemVer precedence",
+      "2.0.0+old",
+      "2.0.0+new",
+      null,
+      { applies: true },
+    ],
+    [
+      "identical string (same released build)",
+      "2.0.0",
+      "2.0.0",
+      null,
+      { applies: false, reason: "target-not-older" },
+    ],
+    [
+      "strictly newer released target",
+      "2.1.0",
+      "2.0.0",
+      null,
+      { applies: false, reason: "target-not-older" },
+    ],
+    [
+      "strictly older released target",
+      "1.2.0",
+      "1.3.0",
+      null,
+      { applies: true },
+    ],
+    [
+      "strictly newer rc target",
+      "1.3.0-rc.4",
+      "1.3.0-rc.1",
+      null,
+      { applies: false, reason: "target-not-older" },
+    ],
+    [
+      "off-ladder target with a declaration, over a release",
+      "local-x",
+      "1.3.0",
+      { chatDb: 9 },
+      { applies: true },
+    ],
+  ] as const)(
+    "applicability (build-metadata / precedence): %s",
+    (_label, target, installed, formats, expected) => {
+      expect(storeFloorApplicability(target, installed, formats)).toEqual(
+        expected,
+      );
+    },
+  );
+
+  // An identical RELEASED string still stands aside (the row above) - these
+  // three do not, and the reason is NOT the exact-match arm. It is the
+  // installed-side guard ABOVE it: `!isReleasedHostVersion(installedVersion)
+  // -> applies: true`. An identical unreleased string means both sides are
+  // the SAME unreleased string, so it never reaches the exact-match arm at
+  // all - the installed-side guard sends it to `applies: true` first. That
+  // makes this a property of two arms INTERACTING rather than of either
+  // alone: a future edit to either arm could silently remove it while every
+  // other test here stays green. If this fails, the real cause is the
+  // installed-side `isReleasedHostVersion` guard, not the string-equality
+  // check below it - and the fix is deliberately NOT to add an
+  // `isReleasedHostVersion(targetVersion)` test to the exact-match arm,
+  // which would be unreachable dead code (the off-ladder guard above already
+  // sends every unreleased TARGET out before the exact-match arm runs) and
+  // would misattribute where the guarantee actually lives.
+  //
+  // Each row declares a format ({chatDb: 9}) purely to satisfy that
+  // off-ladder guard for the TARGET side - a precondition to reach the
+  // installed-side guard at all, not the thing under test. The declaration
+  // has no bearing on the outcome: swap it for a different chatDb number and
+  // every row still resolves `applies: true` the same way, because the
+  // decision is made one arm earlier, on the INSTALLED side, before the
+  // target's own formats are ever consulted.
+  it.each([
+    [
+      "the source-tree sentinel repeated on both sides",
+      SOURCE_TREE_HOST_VERSION,
+      SOURCE_TREE_HOST_VERSION,
+    ],
+    [
+      "a repeated desktop build stamp",
+      "production.1757000000000.abc1234",
+      "production.1757000000000.abc1234",
+    ],
+    [
+      "a repeated local-file install stamp",
+      "local-host.tar.gz-x",
+      "local-host.tar.gz-x",
+    ],
+  ] as const)(
+    "applies (never stands aside) for an identical UNRELEASED string: %s",
+    (_label, target, installed) => {
+      expect(storeFloorApplicability(target, installed, { chatDb: 9 })).toEqual(
+        { applies: true },
+      );
+    },
+  );
+
   const clearanceCases: ReadonlyArray<
     [string, HostStoreFormatsKnowledge, HostStoreFormatsKnowledge, boolean]
   > = [
