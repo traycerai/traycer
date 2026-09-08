@@ -36,7 +36,7 @@ import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
-import { useMaybeRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   hostTransportKey,
   remoteAwareOwnerIdentity,
@@ -350,49 +350,6 @@ export function buildHostStreamClient(params: {
 }
 
 /**
- * Builds a `WsStreamClient` that opens streams against a CHOSEN host (the
- * per-tab host binding) WITHOUT touching the app-wide active-host stream
- * transport (`HostStreamProvider`). Powers the durable per-tab chat and
- * terminal streams as well as the transient Settings ▸ Worktrees
- * `worktree.deleteByPath` stream.
- *
- * `auth` is the stream-side recovery that durable consumers MUST pass (via
- * `useStreamAuthRevalidator`): on an `UNAUTHORIZED` open-frame rejection the
- * client revalidates the credential and reconnects instead of going terminal -
- * the same recovery the app-wide epic stream uses. Pass `null` ONLY for
- * genuinely short-lived one-shot streams (worktree delete), where a terminal
- * auth rejection is the desired outcome. Callers must pass a referentially
- * stable `auth` (the hook returns one) so it does not churn the client memo.
- *
- * The bearer reads live from the binding's client's `RequestContext` (auth is
- * per-user, valid across hosts) so a credential-lease rotation is reflected.
- * The BINDING's client, not `useHostClient()`, deliberately: everything this
- * hook needs is the transport identity (request context, user id, bearer
- * rotation), which every requester binds to the same underlying client - and
- * `useHostClient()` returns a requester re-minted whenever the effective host
- * moves. With that object in the build effect's dependencies, each Activate or
- * failover tore down and re-dialed every stream client this hook owns,
- * including ones bound to hosts the move never touched; the notifications
- * provider read the local host's fresh instance as a respawn and wiped its
- * replica. Same source the app-wide `HostStreamProvider` uses for its bearer.
- * Returns `null` when there is no target, no authenticated request context, or
- * no bound user - including transiently on first mount and right after a
- * dependency change, until the acquire effect below commits (see that
- * effect's doc comment for why the build lives there, not in a memo).
- * Callers should treat the authenticated transport identity (+ auth
- * revalidator) as what identifies "the same stream", not the `target` object
- * identity, so a directory refresh that allocates a fresh but equivalent
- * entry does not tear down an active stream session.
- */
-/**
- * The loud error stays exactly where it means something: a caller that NAMED
- * a machine to dial and has no runtime to dial it with. With no target there
- * is nothing to build, so a hook mounted inert on a provider-free surface
- * (`useFileBytes` mounts every byte leg on every render, whatever the source
- * kind is - ticket 27 phase A2) settles at `null` instead of taking the whole
- * tree down.
- */
-/**
  * The four values this hook reads off the runtime, all `null` when there is
  * no runtime at all. Its own function so the hook body stays a straight line
  * (and under the repo's `complexity` ceiling): the tolerance is a property of
@@ -432,12 +389,54 @@ function assertStreamRuntimePresent(
   );
 }
 
+/**
+ * Builds a `WsStreamClient` that opens streams against a CHOSEN host (the
+ * per-tab host binding) WITHOUT touching the app-wide active-host stream
+ * transport (`HostStreamProvider`). Powers the durable per-tab chat and
+ * terminal streams as well as the transient Settings ▸ Worktrees
+ * `worktree.deleteByPath` stream.
+ *
+ * `auth` is the stream-side recovery that durable consumers MUST pass (via
+ * `useStreamAuthRevalidator`): on an `UNAUTHORIZED` open-frame rejection the
+ * client revalidates the credential and reconnects instead of going terminal -
+ * the same recovery the app-wide epic stream uses. Pass `null` ONLY for
+ * genuinely short-lived one-shot streams (worktree delete), where a terminal
+ * auth rejection is the desired outcome. Callers must pass a referentially
+ * stable `auth` (the hook returns one) so it does not churn the client memo.
+ *
+ * The bearer reads live from the binding's client's `RequestContext` (auth is
+ * per-user, valid across hosts) so a credential-lease rotation is reflected.
+ * The BINDING's client, not `useHostClient()`, deliberately: everything this
+ * hook needs is the transport identity (request context, user id, bearer
+ * rotation), which every requester binds to the same underlying client - and
+ * `useHostClient()` returns a requester re-minted whenever the effective host
+ * moves. With that object in the build effect's dependencies, each Activate or
+ * failover tore down and re-dialed every stream client this hook owns,
+ * including ones bound to hosts the move never touched; the notifications
+ * provider read the local host's fresh instance as a respawn and wiped its
+ * replica. Same source the app-wide `HostStreamProvider` uses for its bearer.
+ * Returns `null` when there is no target, no authenticated request context, or
+ * no bound user - including transiently on first mount and right after a
+ * dependency change, until the acquire effect below commits (see that
+ * effect's doc comment for why the build lives there, not in a memo).
+ * Callers should treat the authenticated transport identity (+ auth
+ * revalidator) as what identifies "the same stream", not the `target` object
+ * identity, so a directory refresh that allocates a fresh but equivalent
+ * entry does not tear down an active stream session.
+ *
+ * The loud error stays exactly where it means something: a caller that NAMED
+ * a machine to dial and has no runtime to dial it with. With no target there
+ * is nothing to build, so a hook mounted inert on a provider-free surface
+ * (`useFileBytes` mounts every byte leg on every render, whatever the source
+ * kind is - ticket 27 phase A2) settles at `null` instead of taking the whole
+ * tree down.
+ */
 export function useHostStreamClientBindingFor(
   target: HostDirectoryEntry | null,
   auth: StreamAuthRevalidator | null,
 ): HostStreamClientBinding | null {
   const runtimeBinding = useHostBinding();
-  const runnerHost = useMaybeRunnerHost();
+  const runnerHost = useRunnerHostOrNull();
   assertStreamRuntimePresent(target, runtimeBinding, runnerHost);
   const { globalClient, authnBaseUrl, requestContext, userId } =
     streamRuntimeReads(runtimeBinding, runnerHost);

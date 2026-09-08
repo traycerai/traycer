@@ -284,14 +284,14 @@ function resetState(): void {
     status: "ready",
     url: "blob:image",
     meta: {
-    // The real hook always has a header by the time it is `ready` (it is
-    // set in `onHeader`), and the byte core reads the delivered media type
-    // off it - so a `ready` fixture without one is not a state the stream
-    // can produce (ticket 27 phase B2).
-    mediaType: "image/png",
-    sizeBytes: 42,
-    width: null,
-    height: null,
+      // The real hook always has a header by the time it is `ready` (it is
+      // set in `onHeader`), and the byte core reads the delivered media type
+      // off it - so a `ready` fixture without one is not a state the stream
+      // can produce (ticket 27 phase B2).
+      mediaType: "image/png",
+      sizeBytes: 42,
+      width: null,
+      height: null,
     },
     reason: null,
     totalBytes: null,
@@ -446,15 +446,15 @@ describe("<WorkspaceFileTile /> image mode", () => {
       status: "ready",
       url: "blob:image-new",
       meta: {
-      // The real hook always has a header by the time it is `ready` (it is
-      // set in `onHeader`), and the byte core reads the delivered media type
-      // off it - so a `ready` fixture without one is not a state the stream
-      // can produce (ticket 27 phase B2).
-      mediaType: "image/png",
-      sizeBytes: 42,
-      width: null,
-      height: null,
-    },
+        // The real hook always has a header by the time it is `ready` (it is
+        // set in `onHeader`), and the byte core reads the delivered media type
+        // off it - so a `ready` fixture without one is not a state the stream
+        // can produce (ticket 27 phase B2).
+        mediaType: "image/png",
+        sizeBytes: 42,
+        width: null,
+        height: null,
+      },
       reason: null,
       totalBytes: null,
       servedFromCache: false,

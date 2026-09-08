@@ -61,7 +61,7 @@ vi.mock("@/providers/use-runner-host", () => ({
   // inert (target `null`) by callers that may have no runtime above them at
   // all, and only a caller that NAMED a machine to dial still gets the loud
   // error (ticket 27 phase A2).
-  useMaybeRunnerHost: () => ({ authnBaseUrl: "http://localhost:5005" }),
+  useRunnerHostOrNull: () => ({ authnBaseUrl: "http://localhost:5005" }),
 }));
 
 import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";

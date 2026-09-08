@@ -18,15 +18,3 @@ export function useRunnerHost(): IRunnerHost {
 export function useRunnerHostOrNull(): IRunnerHost | null {
   return use(RunnerHostContext);
 }
-
-/**
- * The runner host, or `null` outside `<RunnerHostProvider>`.
- *
- * The tolerant twin of {@link useRunnerHost}, for a hook that is mounted on
- * every render but only REACHED for some inputs - see
- * `useHostStreamClientBindingFor`, which needs an `authnBaseUrl` only once it
- * has a target to dial.
- */
-export function useMaybeRunnerHost(): IRunnerHost | null {
-  return use(RunnerHostContext);
-}

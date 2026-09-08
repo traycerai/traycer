@@ -286,14 +286,14 @@ describe("workspace file tile PDF routing", () => {
       status: "ready",
       url: "blob:pdf",
       meta: {
-      // See the image suite: `ready` without a header is not a state the
-      // asset stream can produce, and the byte core reads the delivered
-      // media type off it (ticket 27 phase B2).
-      mediaType: "application/pdf",
-      sizeBytes: 42,
-      width: null,
-      height: null,
-    },
+        // See the image suite: `ready` without a header is not a state the
+        // asset stream can produce, and the byte core reads the delivered
+        // media type off it (ticket 27 phase B2).
+        mediaType: "application/pdf",
+        sizeBytes: 42,
+        width: null,
+        height: null,
+      },
       reason: null,
       totalBytes: null,
       servedFromCache: false,

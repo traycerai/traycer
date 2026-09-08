@@ -71,10 +71,7 @@ import {
   isPdfAssetPath,
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
-import {
-  useFileBytes,
-  type FileBytesState,
-} from "@/lib/files/byte-source";
+import { useFileBytes, type FileBytesState } from "@/lib/files/byte-source";
 import {
   PDF_VIEWER_UNAVAILABLE_REASON,
   PdfPreviewLazy,
