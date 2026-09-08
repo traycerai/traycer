@@ -695,7 +695,7 @@ function HeaderTabMotionFrame(props: {
       data-strip-item-mergeable="true"
       // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
       // resolution harness.
-      className="relative flex w-56 min-w-[120px] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
+      className="relative flex w-56 min-w-[min(40vw,12rem)] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
     >
       {props.children}
     </m.div>

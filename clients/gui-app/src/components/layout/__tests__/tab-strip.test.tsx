@@ -774,7 +774,7 @@ describe("<TabStrip />", () => {
     const frame = tab.parentElement;
     if (frame === null) throw new Error("Expected tab frame");
 
-    expect(frame.className).toContain("min-w-[120px]");
+    expect(frame.className).toContain("min-w-[min(40vw,12rem)]");
     expect(frame.className).toContain("w-56");
     expect(frame.className).toContain("max-w-56");
     expect(frame.className).toContain("flex-[1_1_14rem]");
