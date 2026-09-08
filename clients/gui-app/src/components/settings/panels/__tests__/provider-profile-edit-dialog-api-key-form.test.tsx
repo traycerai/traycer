@@ -63,8 +63,8 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
 // it, and only the second keeps `useQueryClient` off surfaces that have no
 // `QueryClientProvider`.
 const apiKeyMutation = vi.hoisted(() => ({
-  set: { mutate: vi.fn(), isPending: false, used: vi.fn() },
-  clear: { mutate: vi.fn(), isPending: false, used: vi.fn() },
+  set: { mutate: vi.fn(), reset: vi.fn(), isPending: false, used: vi.fn() },
+  clear: { mutate: vi.fn(), reset: vi.fn(), isPending: false, used: vi.fn() },
 }));
 
 vi.mock("@/hooks/providers/use-set-provider-profile-api-key-mutation", () => ({
@@ -72,6 +72,7 @@ vi.mock("@/hooks/providers/use-set-provider-profile-api-key-mutation", () => ({
     apiKeyMutation.set.used();
     return {
       mutate: apiKeyMutation.set.mutate,
+      reset: apiKeyMutation.set.reset,
       isPending: apiKeyMutation.set.isPending,
       error: null,
     };
@@ -84,6 +85,7 @@ vi.mock(
       apiKeyMutation.clear.used();
       return {
         mutate: apiKeyMutation.clear.mutate,
+        reset: apiKeyMutation.clear.reset,
         isPending: apiKeyMutation.clear.isPending,
         error: null,
       };
@@ -437,6 +439,29 @@ describe("<ProfileEditDialog /> API-key submission", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove key" }));
 
     expect(keyField()?.value).toBe("");
+  });
+
+  it("drops the SIBLING mutation's error when starting either operation", () => {
+    // The two are separate observers and the form renders
+    // `setApiKey.error ?? clearApiKey.error`, so without this a failure from
+    // one outlives the other's success - a stale "couldn't save" sitting under
+    // a profile that now reads "Not set", and the mirror image the other way.
+    // Only the most recently attempted mutation should be able to speak.
+    //
+    // FALSIFICATION: remove either `reset()` call and the matching assertion
+    // reddens. Asserted on the SIBLING each time, which is the whole point -
+    // resetting the one being started would clear nothing that was showing.
+    renderDialog(profileWithApiKey({ supported: true, configured: true }));
+
+    const field = keyField();
+    expect(field).not.toBeNull();
+    if (field === null) return;
+    fireEvent.change(field, { target: { value: "sk-replacement" } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace key" }));
+    expect(apiKeyMutation.clear.reset).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove key" }));
+    expect(apiKeyMutation.set.reset).toHaveBeenCalledTimes(1);
   });
 
   it("CONTROL: a removal that never settles KEEPS the draft, so the clear above is the callback and not the click", () => {

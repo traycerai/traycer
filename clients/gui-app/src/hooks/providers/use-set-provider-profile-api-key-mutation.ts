@@ -7,7 +7,10 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import {
+  PROFILE_API_KEY_MUTATION_SCOPE,
+  PROVIDER_INVALIDATIONS,
+} from "@/hooks/providers/invalidations";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
@@ -56,6 +59,9 @@ export function useSetProviderProfileApiKey(): SetProviderProfileApiKeyMutationR
     mapVariables: (variables) => variables,
     options: {
       mutationKey: providersMutationKeys.setProfileApiKey(),
+      // Serializes this pair against each other - see the scope's own note
+      // for why `fifo` in the policy table cannot.
+      scope: PROFILE_API_KEY_MUTATION_SCOPE,
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (_data, _variables, context) => {
         if (context.hostId === null) return;

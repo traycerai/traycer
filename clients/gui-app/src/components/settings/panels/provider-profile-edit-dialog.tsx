@@ -261,6 +261,11 @@ function ProfileApiKeyForm(props: {
     // rather than reading it as a clear. Refuse it here too so the slip never
     // becomes a round trip.
     if (busy || trimmed.length === 0) return;
+    // Drop the sibling's error before starting: the two are separate observers,
+    // so a failure from one otherwise outlives the other's success and gets
+    // rendered underneath a profile whose state contradicts it. Only the most
+    // recently attempted mutation should be able to speak.
+    clearApiKey.reset();
     setApiKey.mutate(
       {
         providerId: props.providerId,
@@ -320,6 +325,9 @@ function ProfileApiKeyForm(props: {
             className="text-destructive"
             onClick={() => {
               if (busy) return;
+              // Mirror of `onSave`: the sibling's stale failure must not
+              // survive this attempt.
+              setApiKey.reset();
               clearApiKey.mutate(
                 {
                   providerId: props.providerId,
