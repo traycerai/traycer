@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { app } from "electron";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -9,10 +10,12 @@ import {
   hasUnappliedPendingLoginItemRevision,
   hostManagesHostLoginItem,
   readHostLoginItemStatus,
+  readParkedRegistrationTakeover,
   type HostLoginItemStatus,
+  type ParkedRegistrationTakeover,
   type RegisterHostLoginItemResult,
 } from "../app/host-login-item";
-import { resolveBundledCliPath } from "../cli/cli-discovery";
+import { readCliManifest, resolveBundledCliPath } from "../cli/cli-discovery";
 import {
   runBundledTraycerCliJson,
   streamBundledTraycerCliJson,
@@ -35,7 +38,10 @@ import {
 import {
   readUpdateAttemptRecord,
   commitAttemptMutationWithCapability,
+  deriveAttemptLiveness,
   isTerminalRetentionExpired,
+  probeAttemptHolder,
+  RECOMMENDED_ATTEMPT_STALENESS_MS,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRecord,
   type UpdateMutationCapability,
@@ -101,6 +107,7 @@ import {
   type HostControllerIntent,
   type HostControllerStatus,
   type LocalAttemptFacts,
+  type LocalAttemptLiveness,
   type InstallVersionOk,
   type LifecycleAdmissionBlock,
   type MutationKind,
@@ -135,8 +142,8 @@ import {
 // Deliberately shared by `host service install` too, not a tighter
 // per-command bound: that command's legitimately SILENT windows stack -
 // a 30s cli-lock wait, a 32s cooperative host stop (SHUTDOWN_FORCE_EXIT_MS
-// + margin), and on win32 an install/replace sequence whose schtasks/
-// taskkill subprocess timeouts alone sum past 100s with no NDJSON between
+// + margin), and on win32 an install/replace sequence whose schtasks and
+// PowerShell scan-and-kill subprocess timeouts alone sum past 100s with no NDJSON between
 // them - so any bound tight enough to feel responsive risks SIGKILLing a
 // slow-but-live registration mid-critical-section, the torn-record class
 // the A8 comment above exists to prevent. Slow detection of a rare wedge
@@ -157,6 +164,45 @@ const CLI_LOCK_BUSY_CODE = "E_CLI_LOCK_BUSY";
 const HOST_BUSY_CODE = "E_HOST_BUSY";
 const HOST_UPDATE_ATTEMPT_ACTIVE_CODE = "E_HOST_UPDATE_ATTEMPT_ACTIVE";
 const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
+
+/**
+ * How long `readLocalAttemptFacts` may reuse a holder verdict for an UNCHANGED
+ * lock file (D13: "the probe cache TTL is bounded").
+ *
+ * Bounded on BOTH sides, and both bounds matter:
+ *
+ *   - above the broadcaster's 750 ms live cadence, so a status read during an
+ *     update does not spawn a liveness probe per tick (`tasklist` on Windows);
+ *   - well under the renderer's 5 s proof window, so a cached POSITIVE cannot
+ *     outlive the proof it feeds — a stale `live` served from here would extend
+ *     the gate the proof deadline exists to bound.
+ *
+ * Only a crashed holder can be served stale at all: the cache is fingerprinted
+ * on the holder's identity and dropped outright when the lock file is gone, so
+ * a normal release (executor finishes, unlinks) is observed on the next read
+ * however warm the entry is.
+ */
+const LOCAL_ATTEMPT_HOLDER_CACHE_TTL_MS = 2_000;
+
+/** The published shape, built in one place so its three call sites cannot drift. */
+function localAttemptFacts(
+  record: HostUpdateAttemptRecord,
+  liveness: LocalAttemptLiveness,
+  livenessObservedAtMs: number | null,
+): LocalAttemptFacts {
+  return {
+    attemptId: record.attemptId,
+    generation: record.generation,
+    sequence: record.sequence,
+    targetVersion: record.targetVersion,
+    phase: record.phase,
+    continuation: record.continuation,
+    updatedAt: record.updatedAt,
+    error: record.error,
+    liveness,
+    livenessObservedAtMs,
+  };
+}
 
 class HostReadinessError extends Error {
   constructor(message: string) {
@@ -719,6 +765,9 @@ type LockedMacActivationStep =
    * restart itself through the CLI (`host restart`, cooperative claim →
    * commit → kickstart); the supervisor it relaunches re-resolves the install
    * record on spawn, which is the activation this cycle set out to perform.
+   * With NO host running and a park SMAppService can never resolve, the
+   * CLI-owned LaunchAgent takes the registration over instead
+   * (`takeOverParkedRegistrationIfDown`).
    */
   | {
       readonly phase: "parked";
@@ -979,16 +1028,24 @@ export class HostController {
    * has no observation at all — so a mid-flight update renders as a blank
    * "state unknown" and the user cannot tell it from an idle machine.
    *
-   * Facts only. This method deliberately does NOT decide whether the attempt is
-   * live, stale, or progressing: that judgement belongs to the renderer's
-   * existing qualified-stale projector, and a second copy of it here would
-   * drift from the one the live path uses.
+   * Facts only, plus ONE probed observation. This method deliberately does NOT
+   * decide whether the attempt is stale or progressing: that judgement belongs
+   * to the renderer's existing qualified-stale projector, and a second copy of
+   * it here would drift from the one the live path uses. `liveness` is the one
+   * thing the projector cannot derive from the record — a file saying
+   * `restarting` proves an executor once wrote that, never that one is still
+   * carrying it — so it is gathered here, where the lock is, and gathered as
+   * EVIDENCE (D13).
    *
    * An unreadable or absent record both answer `null`, and the field's contract
    * says `null` means "cannot say" rather than "nothing running" — the caller
    * must not turn a failed read into a claim of idleness.
    */
   private async readLocalAttemptFacts(): Promise<LocalAttemptFacts | null> {
+    // ONE clock for the whole read: the retention bound, the probe and the
+    // published `livenessObservedAtMs` must describe the same instant, or the
+    // renderer ages a proof against a deadline computed from a different one.
+    const nowMs = Date.now();
     const read = await readUpdateAttemptRecord(this.layout.rootDir);
     if (read.kind !== "valid") return null;
     const record = read.value;
@@ -1001,16 +1058,73 @@ export class HostController {
     // same as absent) rather than resurfacing a week-old failure as the
     // freshest available fact. The record file itself is left for the next
     // contender's prune; a facts read must not grow a write path.
-    if (isTerminalRetentionExpired(record, Date.now())) return null;
-    return {
-      attemptId: record.attemptId,
-      generation: record.generation,
-      sequence: record.sequence,
-      targetVersion: record.targetVersion,
-      phase: record.phase,
-      continuation: record.continuation,
-      updatedAt: record.updatedAt,
-    };
+    if (isTerminalRetentionExpired(record, nowMs)) return null;
+
+    // Parked and terminal records are not probed at all. `deriveAttemptLiveness`
+    // resolves both without consulting a holder — a park is DEFINED by the
+    // absence of one — so a probe cannot change the answer, and neither maps to
+    // `live` under any evidence. Skipping it keeps the steady state (no
+    // attempt, or a terminal one) at zero probes per poll.
+    if (record.execution !== "active") {
+      return localAttemptFacts(record, "unknown", null);
+    }
+
+    const holder = await probeAttemptHolder({
+      hostHomeDir: this.layout.rootDir,
+      nowMs,
+      cacheTtlMs: LOCAL_ATTEMPT_HOLDER_CACHE_TTL_MS,
+    });
+
+    // ---- Join the record to the lock -------------------------------------
+    //
+    // The record and the lock are two files read at two different instants,
+    // and the window between them is exactly when a finishing executor is
+    // busiest: it writes its terminal record and THEN releases the lock, and a
+    // continuing one advances the record while holding it. Pair the pre-probe
+    // record with the post-probe lock state and the evidence describes two
+    // different worlds.
+    //
+    // This is the host observer's own rule, re-implemented rather than
+    // imported (`traycer-host` is not reachable from this package): re-read,
+    // and require the record to have held STILL across the probe. Ordering is
+    // by identity (`attemptId + generation + sequence`), never by timestamp — a
+    // reader must not be able to win, or lose, a race on a clock.
+    const confirmed = await readUpdateAttemptRecord(this.layout.rootDir);
+    if (confirmed.kind !== "valid") return null;
+    const fresh = confirmed.value;
+    if (
+      fresh.attemptId !== record.attemptId ||
+      fresh.generation !== record.generation ||
+      fresh.sequence !== record.sequence
+    ) {
+      // It moved. The re-read is the newer record, but the holder evidence was
+      // gathered against the older one, so this pairing establishes nothing:
+      // publish the FRESHER facts with an explicitly unknown liveness rather
+      // than pairing mismatched evidence or looping. The next poll is
+      // milliseconds away, and `unknown` can never hold the lifecycle gate.
+      if (isTerminalRetentionExpired(fresh, nowMs)) return null;
+      return localAttemptFacts(fresh, "unknown", nowMs);
+    }
+
+    const derived = deriveAttemptLiveness({
+      current: read,
+      holder,
+      nowMs,
+      stalenessMs: RECOMMENDED_ATTEMPT_STALENESS_MS,
+    });
+    // `live` is minted from the PROBE, never from the derivation's `active`
+    // arm. That arm is also reached for a recent — or future-dated — record
+    // whose holder is dead or absent, which is a grace period that keeps a
+    // young attempt from reading as interrupted, not proof that anything is
+    // running. Promoting it here would put an indeterminate bar and a
+    // lifecycle gate behind a record nobody is carrying.
+    const liveness: LocalAttemptLiveness =
+      holder.kind === "holder-live"
+        ? "live"
+        : derived.kind === "interrupted"
+          ? "interrupted"
+          : "unknown";
+    return localAttemptFacts(record, liveness, nowMs);
   }
 
   async getStatus(): Promise<HostControllerStatus> {
@@ -1522,8 +1636,11 @@ export class HostController {
   // definitively failed to register the LaunchAgent (as opposed to
   // `requires-approval`, which means it IS registered and only needs the
   // user's own toggle) - the CLI's raw-LaunchAgent takeover can recover from
-  // exactly these. Single source of truth for the three call sites below so
-  // a future `HostLoginItemStatus` member can't drift between them.
+  // exactly these. Single source of truth for every post-cycle call site
+  // below, so a future `HostLoginItemStatus` member can't drift between them.
+  // The PARKED path uses the narrower `readParkedRegistrationTakeover`
+  // instead (no bootout happened, so `not-registered` is not admitted); a new
+  // member has to be placed in both, and that predicate's doc says how.
   private isCliTakeoverRecoverableStatus(
     status: RegisterHostLoginItemResult,
   ): status is "not-registered" | "not-found" | "not-supported" {
@@ -1536,7 +1653,11 @@ export class HostController {
 
   // Last-rung recovery for a macOS register cycle whose SMAppService calls
   // failed (`not-found` / `not-registered` / `not-supported`) AFTER the
-  // cycle's own bootout already tore down the loaded agent. Field RCA
+  // cycle's own bootout already tore down the loaded agent - and, since the
+  // 2026-09-06 incident, for a cycle that PARKED on a status SMAppService can
+  // never resolve while no host runs (`takeOverParkedRegistrationIfDown`;
+  // there nothing was booted out, and the CLI stops a still-loaded agent
+  // cooperatively before retiring it). Field RCA
   // (2026-07-28): SMAppService can answer `not-found` for a byte-correct
   // in-bundle plist for the remainder of the app process's life (the BTM
   // record's identity keyed to a previous build), so re-running the same
@@ -1988,8 +2109,12 @@ export class HostController {
    * started through the same CLI cycle (its relaunch half kickstarts the
    * registered agent, which needs no live pid); `requires-approval` fails
    * with the System Settings guidance, since nothing but the user can
-   * re-enable it; anything else fails immediately naming the parked
-   * registration, not with a two-minute timeout that names the wrong cause.
+   * re-enable it; a park SMAppService can never resolve (`not-found` /
+   * `not-supported` with nothing registered under the legacy label either)
+   * is finished by the CLI-owned LaunchAgent, exactly as a register cycle
+   * that FAILED with that status is; anything else fails immediately naming
+   * the parked registration, not with a two-minute timeout that names the
+   * wrong cause.
    */
   private async activateAroundParkedRegistration(
     step: Extract<LockedMacActivationStep, { phase: "parked" }>,
@@ -2011,6 +2136,11 @@ export class HostController {
         return this.failedAfterServiceCycle(approvalRequiredMessage());
       }
       if (loginItemStatus !== "enabled") {
+        const takeover = await this.takeOverParkedRegistrationIfDown(
+          step.prePid,
+          step.expectedRuntimeVersion,
+        );
+        if (takeover !== null) return takeover;
         log.warn(
           "[host-controller] login-item registration parked with no running host to restart",
           { loginItemStatus },
@@ -2055,6 +2185,151 @@ export class HostController {
         : ["host", "restart", "--if-idle", "--defer-if-parked"],
       step.prePid,
     );
+  }
+
+  /**
+   * The parked-cycle takeover verdict shared by every consumer of `parked`:
+   * `null` unless NO host is running and `readParkedRegistrationTakeover`
+   * says the CLI-owned LaunchAgent may finish the registration.
+   *
+   * `prePid === null` alone is not "no host": it is a structural read of
+   * `pid.json`, absent for a host in its first seconds after a `KeepAlive`
+   * respawn or one whose metadata tore. The verdict's own launchd probe
+   * supplies the positive half (no live process under either label), and it
+   * is read HERE, at the decision, not from the snapshot captured before the
+   * register cycle queued.
+   */
+  private async parkedTakeoverVerdict(
+    prePid: number | null,
+  ): Promise<Extract<ParkedRegistrationTakeover, { kind: "takeover" }> | null> {
+    if (prePid !== null) return null;
+    const verdict = await readParkedRegistrationTakeover();
+    if (verdict.kind !== "takeover") {
+      log.info(
+        "[host-controller] parked login-item registration is not one the CLI-owned LaunchAgent may finish",
+        { reason: verdict.reason },
+      );
+      return null;
+    }
+    return verdict;
+  }
+
+  /**
+   * The takeover arm of a parked register cycle, shared by every consumer of
+   * `parked` that finds NO host running: `null` when the park is not one the
+   * CLI-owned LaunchAgent may finish, otherwise the takeover's outcome.
+   *
+   * A park attempted nothing, so the machine is exactly as the caller found
+   * it: bytes committed, no host, and - when `parkedTakeoverVerdict` admits it
+   * - no registration SMAppService can ever manage from this process and no
+   * live process under either label. Nothing on the machine will start this
+   * host. This is the state `host uninstall` followed by a reinstall leaves
+   * an ad-hoc-signed build in (2026-09-06: every boot retry parked here,
+   * failed "no host is running to restart", and waited fifty minutes for a
+   * person to run `host service install`). The recovery is the one a
+   * register cycle that FAILED with this status already uses: `host service
+   * install --takeover`, which with nothing loaded is a plain install of the
+   * CLI-owned LaunchAgent. Unlike that path, nothing was booted out first,
+   * so a still-loaded (idle) desktop agent is stopped cooperatively and
+   * retired by the CLI - a larger action than a plain install, and the right
+   * one for an agent SMAppService can no longer see.
+   *
+   * Down-host only, by design. With a host RUNNING under the CLI label the
+   * callers' cooperative `host restart` is the right route: it makes the
+   * shutdown claim and a busy host refuses it, whereas the takeover's install
+   * boots that label out with no claim at all. A running host with NO
+   * registration anywhere (a hand-run `host start`) is not this method's
+   * case either: the restart fails to relaunch, the next boot retry finds the
+   * host down, and lands here.
+   *
+   * `force` is deliberately not threaded in: `host service install` has no
+   * force and the takeover is cooperative by construction. So a `busy`
+   * refusal (a host appeared between the verdict and the CLI's own probe) is
+   * reported `deferred`, not `busy`: the busy outcome advertises a Force
+   * affordance, and Force would re-run this same forceless command against
+   * the same host - a loop with a live button on it. The next boot retry
+   * re-derives the verdict from live evidence instead.
+   */
+  private async takeOverParkedRegistrationIfDown(
+    prePid: number | null,
+    expectedRuntimeVersion: string | null,
+  ): Promise<MutationOutcome<{ readonly activated: boolean }> | null> {
+    const takeover = await this.parkedTakeoverVerdict(prePid);
+    if (takeover === null) return null;
+    log.warn(
+      "[host-controller] login-item registration parked with no running host and no registration SMAppService can manage - finishing it through the CLI-owned LaunchAgent",
+      { loginItemStatus: takeover.status },
+    );
+    const recovery = await this.recoverRegistrationViaCliTakeover({
+      adoptionArgs: [],
+      failedStatus: takeover.status,
+      prePid: null,
+      expectedRuntimeVersion,
+    });
+    if (recovery.recovered) {
+      return { kind: "ok", value: { activated: true } };
+    }
+    return recovery.outcome.kind === "busy"
+      ? { kind: "deferred", message: recovery.outcome.message }
+      : recovery.outcome;
+  }
+
+  /**
+   * The F3 continuation's takeover, as a thunk the executor runs OUTSIDE its
+   * actuator span (the takeover child takes the cli-lock itself, so running
+   * it inline would block the parent on its own child). One body for the two
+   * states that need it - a register cycle that failed with a recoverable
+   * status, and a park with no host that SMAppService can never resolve - so
+   * the adoption minting and its failure reporting cannot drift between them.
+   */
+  private mintedTakeoverContinuation(
+    capability: UpdateMutationCapability,
+    args: {
+      readonly failedStatus: HostLoginItemStatus;
+      readonly prePid: number | null;
+      readonly expectedRuntimeVersion: string | null;
+    },
+  ): () => Promise<DesktopActivationCycleOutcome> {
+    return async (): Promise<DesktopActivationCycleOutcome> => {
+      const recovery = await withMintedAdoption(
+        capability,
+        this.layout,
+        (adoptionArgs) =>
+          this.recoverRegistrationViaCliTakeover({
+            failedStatus: args.failedStatus,
+            prePid: args.prePid,
+            expectedRuntimeVersion: args.expectedRuntimeVersion,
+            adoptionArgs,
+          }),
+      ).catch((err: unknown) => {
+        const cause = err instanceof Error ? err.message : String(err);
+        log.warn("[host-controller] takeover adoption could not be minted", {
+          cause,
+        });
+        return { mintFailure: cause };
+      });
+      if ("mintFailure" in recovery) {
+        // Carry the REAL cause. This used to return the generic lock-busy
+        // message, which `terminalize` then wrote to disk as the failure's
+        // `cause` - so a local proof-write I/O error was permanently recorded
+        // as lock contention, which is not merely vague but actively wrong
+        // for whoever reads that diagnostic later.
+        //
+        // Same invariant as the takeover-diagnostics ruling earlier in this
+        // ticket: classification may normalize the failure CATEGORY, but it
+        // must never replace caller-only discriminating evidence.
+        return {
+          kind: "failed",
+          message: `adoption proof could not be minted: ${recovery.mintFailure}`,
+        };
+      }
+      return recovery.recovered
+        ? { kind: "activated" }
+        : {
+            kind: "deferred",
+            message: describeTakeoverRefusal(recovery.outcome),
+          };
+    };
   }
 
   private async runLockedMacActivationCycleOnce(
@@ -3721,15 +3996,28 @@ export class HostController {
           if (registration.status === "parked") {
             // A park attempted NOTHING, so the login item is exactly what it
             // was before this call. This method's promise is "registered",
-            // and only an item that already reads `enabled` can keep it - a
-            // `requires-approval` or unreadable item is the user's (or
-            // `traycer host doctor`'s) to fix, and restarting the running
-            // host would cost it its connections without registering a
-            // thing. The status is read HERE, not taken from the snapshot the
-            // guard refused on: the guard also parks on the LEGACY label and
-            // the manifest, so the primary item can be enabled under a park.
+            // and two states can keep it: an item that already reads
+            // `enabled`, and - with nothing running - an item SMAppService can
+            // never manage, where the CLI-owned LaunchAgent is the only
+            // registration this machine can have and installing it is what a
+            // person would do next. A `requires-approval` or unreadable item
+            // is the user's (or `traycer host doctor`'s) to fix, and
+            // restarting the running host would cost it its connections
+            // without registering a thing. The status is read HERE, not taken
+            // from the snapshot the guard refused on: the guard also parks on
+            // the LEGACY label and the manifest, so the primary item can be
+            // enabled under a park.
             const loginItemStatus = readHostLoginItemStatus();
             if (loginItemStatus !== "enabled") {
+              const takeover = await this.takeOverParkedRegistrationIfDown(
+                registration.prePid,
+                registration.expectedRuntimeVersion,
+              );
+              if (takeover !== null) {
+                return takeover.kind === "ok"
+                  ? { kind: "ok", value: { registered: true } }
+                  : takeover;
+              }
               return {
                 kind: "failed",
                 message:
@@ -3849,8 +4137,18 @@ export class HostController {
           }
           return { kind: "ok", value: { registered: false } };
         }
+        // Streamed, not run: on Windows `host service uninstall` stops the
+        // host through the bounded scan-then-kill loop, whose worst case is
+        // several 30 s scans and kill scripts plus `schtasks /End` before
+        // the confirming scan and `schtasks /Delete`
+        // (`WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS` in the protocol's
+        // lifecycle constants). The run path's flat 45 s budget could SIGKILL
+        // the CLI after a kill pass and before `/Delete`, leaving the host
+        // half-stopped with its task still registered. The streaming path's
+        // idle timeout is what `host restart` already relies on for the same
+        // loop.
         try {
-          await this.runBundled<unknown>(["host", "service", "uninstall"]);
+          await this.streamBundled<unknown>(["host", "service", "uninstall"]);
         } catch (err) {
           return this.classifyMutationSubprocessError(err, "retry-with-force");
         }
@@ -4023,6 +4321,17 @@ export class HostController {
       {
         layout: this.layout,
         substrate: owner.substrate,
+        // Read at the decision rather than captured earlier: the CLI install
+        // manifest is on disk and can move under a long-lived controller.
+        // `null` when no CLI is installed beside this host, which the fence
+        // ADMITS by documented asymmetry - this signal detects an old
+        // *installed* CLI and is structurally silent about one invoked from
+        // elsewhere on `PATH`, so refusing on absence would only refuse
+        // machines that have no CLI at all.
+        readCompatibilityIdentities: async () => ({
+          installedCliVersion: (await readCliManifest())?.version ?? null,
+          desktopVersion: app.getVersion(),
+        }),
         contender: {
           hostHomeDir: this.layout.rootDir,
           lockPath: this.lockPath,
@@ -4090,9 +4399,31 @@ export class HostController {
           if (step.phase === "registered") return { kind: "activated" };
           if (step.phase === "parked") {
             // The executor segment holds the actuator lock and the parked
-            // fallback spawns the CLI, so it cannot run inline. Report it as
-            // deferred: the record stays where it is and the next
-            // continuation (or an explicit Restart) performs the activation.
+            // fallback spawns the CLI, so it cannot run inline. A park with NO
+            // host running that SMAppService can never resolve is finished
+            // outside the lock by the same takeover a failed register uses
+            // (the down-host rule of `takeOverParkedRegistrationIfDown`);
+            // every other park is reported deferred: the record stays where
+            // it is and the next continuation (or an explicit Restart)
+            // performs the activation.
+            const takeover = await this.parkedTakeoverVerdict(step.prePid);
+            if (takeover !== null) {
+              log.warn(
+                "[host-controller] login-item registration parked with no running host and no registration SMAppService can manage - finishing the continuation through the CLI-owned LaunchAgent",
+                { loginItemStatus: takeover.status },
+              );
+              return {
+                kind: "needs-takeover",
+                recoverOutsideLock: this.mintedTakeoverContinuation(
+                  capability,
+                  {
+                    failedStatus: takeover.status,
+                    prePid: null,
+                    expectedRuntimeVersion: step.expectedRuntimeVersion,
+                  },
+                ),
+              };
+            }
             return {
               kind: "deferred",
               message:
@@ -4107,51 +4438,14 @@ export class HostController {
             if (this.isCliTakeoverRecoverableStatus(step.status)) {
               return {
                 kind: "needs-takeover",
-                recoverOutsideLock:
-                  async (): Promise<DesktopActivationCycleOutcome> => {
-                    const recovery = await withMintedAdoption(
-                      capability,
-                      this.layout,
-                      (adoptionArgs) =>
-                        this.recoverRegistrationViaCliTakeover({
-                          failedStatus: step.status,
-                          prePid: step.prePid,
-                          expectedRuntimeVersion: step.expectedRuntimeVersion,
-                          adoptionArgs,
-                        }),
-                    ).catch((err: unknown) => {
-                      const cause =
-                        err instanceof Error ? err.message : String(err);
-                      log.warn(
-                        "[host-controller] takeover adoption could not be minted",
-                        { cause },
-                      );
-                      return { mintFailure: cause };
-                    });
-                    if ("mintFailure" in recovery) {
-                      // Carry the REAL cause. This used to return the generic
-                      // lock-busy message, which `terminalize` then wrote to disk
-                      // as the failure's `cause` - so a local proof-write I/O
-                      // error was permanently recorded as lock contention, which
-                      // is not merely vague but actively wrong for whoever reads
-                      // that diagnostic later.
-                      //
-                      // Same invariant as the takeover-diagnostics ruling earlier
-                      // in this ticket: classification may normalize the failure
-                      // CATEGORY, but it must never replace caller-only
-                      // discriminating evidence.
-                      return {
-                        kind: "failed",
-                        message: `adoption proof could not be minted: ${recovery.mintFailure}`,
-                      };
-                    }
-                    return recovery.recovered
-                      ? { kind: "activated" }
-                      : {
-                          kind: "deferred",
-                          message: describeTakeoverRefusal(recovery.outcome),
-                        };
+                recoverOutsideLock: this.mintedTakeoverContinuation(
+                  capability,
+                  {
+                    failedStatus: step.status,
+                    prePid: step.prePid,
+                    expectedRuntimeVersion: step.expectedRuntimeVersion,
                   },
+                ),
               };
             }
             // Carries the login-item status rather than a message. Keep the
@@ -4582,7 +4876,13 @@ export class HostController {
         }
         let raw: unknown;
         try {
-          raw = await this.runBundled<unknown>(
+          // Streamed for the same reason as `deregisterService`: `host
+          // uninstall --all` deregisters the service and then stops the host,
+          // and on Windows both steps run the bounded scan-then-kill loop,
+          // whose worst case is well past the run path's flat 45 s budget.
+          // The bare form leaves the service and a running host alone (the
+          // CLI gates both on `--all`) and merely shares the wrapper.
+          raw = await this.streamBundled<unknown>(
             all ? ["host", "uninstall", "--all"] : ["host", "uninstall"],
           );
         } catch (err) {
@@ -4644,7 +4944,13 @@ export class HostController {
         }
         let raw: unknown;
         try {
-          raw = await this.runBundled<unknown>(["host", "uninstall", "--all"]);
+          // Streamed: see `deregisterService` and `uninstallHost`. This is
+          // the third Desktop route that stops a host through the CLI.
+          raw = await this.streamBundled<unknown>([
+            "host",
+            "uninstall",
+            "--all",
+          ]);
         } catch (err) {
           return this.classifyMutationSubprocessError(err, "retry-with-force");
         }

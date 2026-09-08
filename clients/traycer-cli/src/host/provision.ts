@@ -2,6 +2,7 @@ import type { UpdateMutationCapabilityAdoption } from "@traycer-clients/shared/h
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   discardStagedHostInstallSource,
+  NO_INSTALL_PHASE_HOOKS,
   stageHostInstallSource,
   type InstallSourceArg,
   type StagedHostInstallSource,
@@ -55,8 +56,8 @@ import { assertHostNotBusy } from "./busy-check";
 //
 // Source resolution and idempotency policy differ per caller, so both are
 // injected: `resolveInstallSource` is only invoked on the install branch,
-// and `satisfaction` (presence / exact / implicit-registry-minimum, finding
-// D) controls the fast no-op.
+// and `satisfaction` (presence / exact / own-build-minimum /
+// implicit-registry-minimum, finding D + Q7) controls the fast no-op.
 
 export type HostProvisionAction =
   | "noop"
@@ -108,13 +109,34 @@ export interface HostProvisionResult {
 }
 
 // The installed-version predicate for a provisioning run (RCA finding D).
-// Local files and an explicit `--release` request demand an exact match;
-// the build-stamped registry default accepts an installed version NEWER
-// than the target (a host updated out-of-band must not be downgraded back
-// to the stamped build), yank-checked against the manifest and fail-open.
+// An explicit `--release` request demands an exact match; the build-stamped
+// registry default accepts an installed version NEWER than the target (a host
+// updated out-of-band must not be downgraded back to the stamped build),
+// yank-checked against the manifest and fail-open; an own build (the packaged
+// archive, or an explicit `--from`) demands the exact stamp EXCEPT in that
+// same newer direction, for the same reason - see `own-build-minimum`.
 export type HostSatisfactionPolicy =
   | { readonly kind: "presence" }
   | { readonly kind: "exact"; readonly version: string }
+  /**
+   * This build's own host archive: converge to `version`, but never BACKWARDS
+   * over a comparably newer install (Q7).
+   *
+   * It was `exact`, and equality could not express the one case that matters:
+   * a user whose host had been updated out of band past the app's bundle had
+   * it silently replaced by the older bundled build on the next convergence -
+   * and, because a convergence is requested whenever the local host is down or
+   * has not been dialed, that revert repeated after every outage and every
+   * launch with a remote serving. The registry arm already states the rule
+   * ("a host updated out-of-band must not be downgraded"); this applies it to
+   * the source the desktop actually uses.
+   *
+   * Deliberately NOT the registry arm's predicate. That one also accepts a
+   * comparator-EQUAL different build string (`2.0.0+bar` installed for
+   * `2.0.0+foo`), and an own build promises the opposite: a rebuilt host of
+   * the same release is replaced. Only the strictly-greater direction moves.
+   */
+  | { readonly kind: "own-build-minimum"; readonly version: string }
   | { readonly kind: "implicit-registry-minimum"; readonly version: string };
 
 export interface ProvisionHostOptions {
@@ -123,14 +145,20 @@ export interface ProvisionHostOptions {
   readonly resolveInstallSource: () => Promise<InstallSourceArg>;
   // The idempotency predicate. `exact`/`presence` behave like the old
   // `targetVersion` concrete/`null`; the bundled-host callers pass this
-  // build's `config.version` as `exact` so a rebuilt (same-channel) host is
-  // detected and replaced even without a semver bump. The registry default
-  // uses `implicit-registry-minimum` so a newer non-yanked install is kept.
+  // build's `config.version` as `own-build-minimum`, so a rebuilt
+  // (same-channel) host is still detected and replaced without a semver bump,
+  // while a comparably NEWER install is kept rather than reverted (Q7). The
+  // registry default uses `implicit-registry-minimum` so a newer non-yanked
+  // install is kept there too.
   readonly satisfaction: HostSatisfactionPolicy;
   // Recorded as the install version for a local-file install (the
-  // bundled-host callers pass `config.version` so the recorded version
-  // matches the exact satisfaction policy and the next launch is a no-op
+  // bundled-host callers pass `config.version` so the recorded version is the
+  // one their satisfaction policy asks for, and the next launch is a no-op
   // until the build changes). `null` keeps the installer's derived default.
+  //
+  // It is only ever WRITTEN on the install branch, which is why a kept newer
+  // install survives with its own record: nothing restamps a host this run
+  // decided not to replace.
   readonly recordVersionOverride: string | null;
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
@@ -346,6 +374,16 @@ async function provisionUnderLock(
         }
         // Bytes present + at target with host-owned registration: there is
         // nothing to cycle, so no teardown and no busy check are needed.
+        //
+        // This is the SECOND of two independent guards on that outcome - the
+        // first is `isSatisfied`'s own host-owned arm on the fast path above -
+        // and it deliberately re-derives the predicate instead of calling
+        // `isSatisfied`, because by here the service state is no longer the
+        // question. The consequence for anyone editing either one: the pin
+        // that covers this (`provision.test.ts`, "keeps a newer install when
+        // the host is NOT running") stays GREEN under a single-conjunct
+        // change to either guard, since the other still returns `noop`. A
+        // green suite is not evidence that this branch still fires.
         if (
           !opts.force &&
           state.installed &&
@@ -414,6 +452,28 @@ async function provisionUnderLock(
               versionSatisfied: reinstallVersionSatisfied,
             },
           );
+          // INFO, not debug, and BEFORE the swap: this is the one line that
+          // says a host the user did not ask about is being replaced by a
+          // DIFFERENT version. Q7 spent an afternoon of log archaeology
+          // establishing after the fact that a background convergence had done
+          // exactly this; the install branch's own completion line reports the
+          // outcome, and by then the previous bytes are gone.
+          //
+          // Versions and the source kind only - no install id, no generation,
+          // no path. A first install and a same-version reinstall (a rebuilt
+          // stamp, or `--force`) are not replacements of anything a reader
+          // would be surprised by, and stay quiet.
+          if (state.installed && state.version !== preStaged.version) {
+            opts.runtime.logger.info(
+              "Host provisioning replacing a different installed version",
+              {
+                environment: opts.runtime.environment,
+                installedVersion: state.version,
+                targetVersion: preStaged.version,
+                sourceKind: preStaged.source.kind,
+              },
+            );
+          }
           stagedConsumed = true;
           return {
             kind: "result",
@@ -544,6 +604,8 @@ async function prepareInstallStage(
     recordVersionOverride: opts.recordVersionOverride,
     verifyMutationCapability: () =>
       requireCliUpdateMutationCapability(capability, contenderOptions),
+    // Provisioning advances no attempt record; see `hooks` at the commit.
+    beforeExtract: async () => {},
   });
 }
 
@@ -577,12 +639,20 @@ async function commitInstall(
         // denied the cooperative shutdown claim and `--force` aborted
         // anyway.
         force: opts.force,
+        onWillStopHost: null,
+        // `host ensure` provisions bytes; it drives no attempt record, so
+        // it observes neither swap barrier.
+        hooks: NO_INSTALL_PHASE_HOOKS,
       })
     : null;
   const lifecycle =
     handle !== null
       ? handle.lifecycle
-      : createBytesOnlyInstallLifecycle(controller, label);
+      : createBytesOnlyInstallLifecycle(
+          controller,
+          label,
+          NO_INSTALL_PHASE_HOOKS,
+        );
   opts.runtime.logger.debug("Host provisioning install lifecycle prepared", {
     environment: opts.runtime.environment,
     lifecycleEnabled: handle !== null,
@@ -600,6 +670,7 @@ async function commitInstall(
       staged,
       onProgress: progress,
       lifecycle,
+      onWillSwap: null,
     },
   );
   const post = await readProvisionState(controller, label, opts.runtime);
@@ -887,12 +958,7 @@ async function attestedGenerationFromCurrentRecord(
 ): Promise<string | null> {
   const record = await readHostInstallRecord(environment);
   if (record === null) return null;
-  return encodeInstallGeneration({
-    installId: record.installId,
-    installedAt: record.installedAt,
-    archiveSha256: record.archiveSha256,
-    version: record.version,
-  });
+  return encodeInstallGeneration(record);
 }
 
 async function readProvisionState(
@@ -944,13 +1010,26 @@ async function readProvisionState(
   };
 }
 
-// The installed-version predicate (RCA finding D). "latest"/`--from`/the
-// packaged archive carry synthetic local versions and use `presence`; an
-// explicit `--release` or the bundled build use `exact`; the registry
-// default uses `implicit-registry-minimum`, which accepts an installed
-// version NEWER than the target (an out-of-band host update must not be
-// downgraded) unless the manifest has explicitly yanked it - an absent
-// entry or a failed/expired lookup deliberately fails open.
+// The installed-version predicate (RCA finding D, narrowed by Q7). Four
+// policies, one per shape of request:
+//
+//   - `latest` carries no version to compare against, so it is `presence`;
+//   - an explicit `--release <semver>` is `exact` - a pin is a pin;
+//   - the build-stamped registry default is `implicit-registry-minimum`,
+//     which accepts an installed version NEWER than the target (an
+//     out-of-band host update must not be downgraded) unless the manifest has
+//     explicitly yanked it - an absent entry or a failed/expired lookup
+//     deliberately fails open;
+//   - this build's OWN archive - packaged, or the `--from` the Windows
+//     desktop passes for it - is `own-build-minimum`: `exact` in every
+//     direction except that same newer one.
+//
+// The sentence this replaces said `--from` and the packaged archive carried
+// synthetic local versions and used `presence`. They have not since
+// `ensureHost` took over from auto-bootstrap, which stamps `config.version`
+// on both and asked for `exact` against it - the very policy Q7 narrowed. It
+// was wrong before this change and is corrected with it rather than left
+// inherited: it heads the function whose branches it claims to describe.
 async function versionSatisfied(
   state: ProvisionState,
   satisfaction: HostSatisfactionPolicy,
@@ -962,13 +1041,40 @@ async function versionSatisfied(
     return state.version === satisfaction.version;
   }
   if (state.version === null) return false;
+  if (satisfaction.kind === "own-build-minimum") {
+    // The requested stamp itself, decided BEFORE the comparator so a rebuilt
+    // same-release host (another build string the comparator ranks equal) does
+    // not slip through as satisfied - that case must still be replaced.
+    if (state.version === satisfaction.version) return true;
+    const ownComparison = compareHostVersions(
+      state.version,
+      satisfaction.version,
+    );
+    // Unordered stamps (`staging.<epoch>.<sha>`, a dev build) cannot be shown
+    // to be newer, so they converge exactly as they did under `exact`. Only a
+    // version this comparator positively ranks ABOVE the bundle is kept.
+    if (!ownComparison.comparable) return false;
+    if (ownComparison.ordering !== "greater") return false;
+    return !(await yankLookup.isVersionYanked(state.version));
+  }
   const comparison = compareHostVersions(state.version, satisfaction.version);
   // `comparable: false` = a malformed version on either side; never let an
   // install record we can't reason about look current.
   if (!comparison.comparable) return false;
   if (comparison.ordering === "less") return false;
-  if (comparison.ordering === "equal") return true;
-  // A newer install is normally accepted; only an explicit yank rejects it.
+  // The exact requested string is satisfied outright. Another build of the
+  // same release (`2.0.0+bar` installed, `2.0.0+foo` asked for) is a
+  // DIFFERENT artifact the comparator merely ranks equal: it is accepted the
+  // way a newer install is, unless the registry has withdrawn it - the yank
+  // check a comparator-equal shortcut used to skip.
+  if (
+    comparison.ordering === "equal" &&
+    state.version === satisfaction.version
+  ) {
+    return true;
+  }
+  // A newer install, or another build of the requested release, is normally
+  // accepted; only an explicit yank rejects it.
   return !(await yankLookup.isVersionYanked(state.version));
 }
 

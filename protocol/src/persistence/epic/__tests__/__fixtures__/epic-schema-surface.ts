@@ -3737,6 +3737,29 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
+                                "agentMessageReceipt": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "receiverAgentId": {
+                                          "type": "string"
+                                        },
+                                        "messageId": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "receiverAgentId",
+                                        "messageId"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "managedCommand": {
                                   "default": null,
                                   "anyOf": [
@@ -12094,6 +12117,30 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
+                                "agentMessageReceipt": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "receiverAgentId": {
+                                          "type": "string"
+                                        },
+                                        "messageId": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "receiverAgentId",
+                                        "messageId"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "managedCommand": {
                                   "default": null,
                                   "anyOf": [
@@ -12474,6 +12521,7 @@ export const epicSchemaSurfaceBaseline = {
                                 "taskTodoItems",
                                 "error",
                                 "agentMessageSend",
+                                "agentMessageReceipt",
                                 "managedCommand",
                                 "progress",
                                 "backgroundOutput",

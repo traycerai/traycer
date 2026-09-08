@@ -10,6 +10,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../installer", () => ({
+  // The two swap barriers this command observes: none. Inlined rather than
+  // re-exported from the real module so this factory keeps the installer out
+  // of the module graph entirely, which is what it exists for.
+  NO_INSTALL_PHASE_HOOKS: {
+    beforeSwapCommit: async () => {},
+    afterSwap: async () => {},
+  },
   installHost: mocks.installHostMock,
 }));
 

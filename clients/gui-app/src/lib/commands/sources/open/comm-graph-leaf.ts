@@ -19,15 +19,17 @@ import type { CommandContext, CommandItem } from "@/lib/commands/types";
 export function commGraphOpenerItem(ctx: CommandContext): CommandItem {
   return openerActionLeaf({
     id: "open:comm-graph",
-    label: "Communication graph",
+    label: "Agent office",
     keywords: [
-      "communication",
       "graph",
+      "communication",
       "comms",
       "agents",
       "messages",
       "a2a",
       "timeline",
+      "office",
+      "team",
     ],
     run: () => {
       const epicId = ctx.activeEpicId;

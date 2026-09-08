@@ -1,4 +1,4 @@
-import { NetworkIcon } from "lucide-react";
+import { Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
  */
 export function CommGraphTileIcon(props: { readonly className: string }) {
   return (
-    <NetworkIcon
+    <Building2
       className={cn("shrink-0 text-muted-foreground", props.className)}
     />
   );

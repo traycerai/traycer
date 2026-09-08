@@ -8,7 +8,24 @@ import {
 } from "@/components/ui/dialog";
 
 export interface HostBusyForceDeferDialogProps {
+  /**
+   * What Force does here, exposed as `data-purpose` on the dialog: a page
+   * can mount one of each (the Overview's force-restart and force-update
+   * dialogs), and a pin on the shared test id alone cannot tell them apart.
+   */
+  readonly purpose: "restart" | "update";
   readonly open: boolean;
+  /**
+   * The dialog's heading, and REQUIRED rather than defaulted.
+   *
+   * This used to hard-code "Host is busy", which was true of the two
+   * confirmations it was written for and false of the third. The bound
+   * activation offer opens on a host that has PARKED waiting for a restart,
+   * whose own `message` may well be counting zero blocking sessions — heading
+   * that with "Host is busy" contradicts the sentence directly underneath it.
+   * A default would have preserved that: every call site states its own.
+   */
+  readonly title: string;
   readonly message: string;
   readonly isForcing: boolean;
   readonly forceLabel: string;
@@ -43,10 +60,11 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
         showCloseButton={false}
         className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
         data-testid="host-busy-force-defer-dialog"
+        data-purpose={props.purpose}
       >
         <div className="flex flex-col gap-1.5 p-5">
           <DialogTitle className="text-ui font-semibold leading-snug">
-            Host is busy
+            {props.title}
           </DialogTitle>
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
             {props.message}

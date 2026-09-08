@@ -57,6 +57,11 @@ import { CommGraphAgentDetailSurface } from "@/components/epic-canvas/comm-graph
 import { CommGraphThreadPanel } from "@/components/epic-canvas/comm-graph/comm-graph-thread-panel";
 import { OFFICE_ENVELOPE_TINTS } from "@/components/epic-canvas/comm-graph/office/office-envelope-tints";
 import { OfficeAgentHover } from "@/components/epic-canvas/comm-graph/office/office-agent-hover";
+import {
+  followOfficeHover,
+  hitRegionFor,
+  type OfficeHoverAnchor,
+} from "@/components/epic-canvas/comm-graph/office/office-hover-follow";
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
 import {
@@ -174,8 +179,8 @@ type OfficeSelectedDetail =
 
 /**
  * The hovered character and where its card should sit, in container-relative
- * screen pixels. Recomputed on pointer move rather than per frame: the camera
- * does not move under a stationary pointer, and a drag clears the hover.
+ * screen pixels. Set on pointer move, and moved by the frame loop only while
+ * the character under the pointer is itself moving.
  */
 interface OfficeHoverTarget {
   readonly agentId: string;
@@ -183,47 +188,13 @@ interface OfficeHoverTarget {
   readonly rect: OfficeRect;
 }
 
-/**
- * What the open hover card was measured against, so the frame loop can tell
- * when that measurement has stopped being true without a pointer event.
- *
- * The card's screen rect is computed on a pointermove and never again, but the
- * thing it points at keeps moving: the character walks off to lunch, or an
- * auto-pan slides the whole floor under a stationary cursor. Either leaves the
- * trigger anchored over empty floor. Both are a change in exactly these five
- * numbers, which is what makes them the thing to remember.
- */
-interface HoverAnchor {
-  readonly agentId: string;
-  /** The hit region's box in sprite space, as it was when the pointer landed. */
-  readonly rect: OfficeRect;
-  readonly cameraX: number;
-  readonly cameraY: number;
-  readonly zoom: number;
-}
-
-function sameRect(a: OfficeRect, b: OfficeRect): boolean {
+function sameRect(a: OfficeRect, b: OfficeRect | null): boolean {
   return (
-    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
-  );
-}
-
-/** Whether the hovered box is still exactly where the card was measured. */
-function hoverAnchorHolds(
-  anchor: HoverAnchor,
-  regions: ReadonlyArray<OfficeHitRegion>,
-  camera: OfficeCamera,
-): boolean {
-  if (
-    camera.x !== anchor.cameraX ||
-    camera.y !== anchor.cameraY ||
-    camera.zoom !== anchor.zoom
-  ) {
-    return false;
-  }
-  return regions.some(
-    (region) =>
-      region.agentId === anchor.agentId && sameRect(region.rect, anchor.rect),
+    b !== null &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.width === b.width &&
+    a.height === b.height
   );
 }
 
@@ -573,26 +544,6 @@ function spriteBoundsFor(
   }
   if (left === Number.POSITIVE_INFINITY) return null;
   return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
-function hitRegionFor(
-  regions: ReadonlyArray<OfficeHitRegion>,
-  point: OfficePoint,
-): OfficeHitRegion | null {
-  // Last match wins: `hitRegions` follows the frame's own draw order, so the
-  // character painted on top of another is the one the pointer is over.
-  let found: OfficeHitRegion | null = null;
-  for (const region of regions) {
-    if (
-      point.x >= region.rect.x &&
-      point.x <= region.rect.x + region.rect.width &&
-      point.y >= region.rect.y &&
-      point.y <= region.rect.y + region.rect.height
-    ) {
-      found = region;
-    }
-  }
-  return found;
 }
 
 /**
@@ -1338,6 +1289,27 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+/** The moment a detached floor is showing; nothing while live. */
+function OfficeCursorChip(props: {
+  readonly cursorMs: number | null;
+  readonly playing: boolean;
+}) {
+  if (props.cursorMs === null) return null;
+  return (
+    <div
+      data-testid="comm-graph-office-cursor-chip"
+      // Read-only: it must not take the pan or the click a person aims at the
+      // floor underneath it.
+      className="pointer-events-none absolute top-2 left-2 z-10 rounded-md border border-border bg-popover px-1.5 py-0.5 text-ui-xs text-popover-foreground tabular-nums shadow-xs"
+    >
+      <span className="text-muted-foreground">
+        {props.playing ? "Replaying " : "Paused at "}
+      </span>
+      {new Date(props.cursorMs).toLocaleTimeString()}
+    </div>
+  );
+}
+
 export type CommGraphOfficeCanvasProps = CommGraphCanvasProps;
 
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
@@ -1382,7 +1354,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     floor: { width: 0, height: 0 },
     viewport: { width: 0, height: 0 },
   });
-  const hoverAnchorRef = useRef<HoverAnchor | null>(null);
+  // The open hover's subject and the pointer's last position; `null` while no
+  // card is open. The frame loop re-resolves it against every frame.
+  const hoverAnchorRef = useRef<OfficeHoverAnchor | null>(null);
+  /** The box the card was last placed at, so a frame that moved nothing is free. */
+  const hoverRectRef = useRef<OfficeRect | null>(null);
   // A pan asked for outside the frame loop. Handlers and the Find adapter have
   // no frame clock, so they name the destination and the loop starts it.
   const dragRef = useRef<DragState | null>(null);
@@ -1870,21 +1846,28 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       applyAutoFit(frame.size, viewport);
       requestPlaybackPan(frame.focus, viewport);
       advanceCamera(now, viewport);
-      // The hover card's rect was measured on the last pointermove, and what
-      // it points at can move without the pointer moving at all: the cursor
-      // scrubs to a time before that agent existed, the agent walks off to
-      // the cafeteria, or an auto-pan slides the floor under the cursor.
-      // Holding the card open would leave it anchored to empty floor. Checked
-      // AFTER the camera has moved for this frame, so a pan is caught on the
-      // frame it happens rather than the one after.
+      // What the hover card points at can move without the pointer moving at
+      // all: the agent walks off to the cafeteria, an auto-pan slides the
+      // floor under the cursor, or the cursor scrubs to a time before that
+      // agent existed. So the pointer's last position is hit-tested against
+      // THIS frame: while it still lands on the hovered agent the card follows
+      // the character, and once it does not the card closes rather than being
+      // left anchored to empty floor. Checked AFTER the camera has moved for
+      // this frame, so a pan is caught on the frame it happens rather than
+      // the one after.
       const anchor = hoverAnchorRef.current;
-      if (
-        anchor !== null &&
-        !hoverAnchorHolds(anchor, frame.hitRegions, camera)
-      ) {
-        hoverAnchorRef.current = null;
-        runtime.setHoveredAgentId(null);
-        setHoverCard(null);
+      if (anchor !== null) {
+        const rect = followOfficeHover(anchor, frame.hitRegions, camera);
+        if (rect === null) {
+          hoverAnchorRef.current = null;
+          hoverRectRef.current = null;
+          runtime.setHoveredAgentId(null);
+          setHoverCard(null);
+        } else if (!sameRect(rect, hoverRectRef.current)) {
+          // React state, so only a box that actually moved is worth a render.
+          hoverRectRef.current = rect;
+          setHoverCard({ agentId: anchor.agentId, rect });
+        }
       }
 
       // Repainted only when the floor's version, the theme or its size moves;
@@ -1970,18 +1953,28 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     };
   }, [applyCanvasSize, readScene, resolvedTheme, runtime]);
 
-  const toSpritePoint = useCallback(
+  /** A client position in container screen pixels. */
+  const toScreenPoint = useCallback(
     (clientX: number, clientY: number): OfficePoint | null => {
       const container = containerRef.current;
       if (container === null) return null;
       const rect = container.getBoundingClientRect();
+      return { x: clientX - rect.left, y: clientY - rect.top };
+    },
+    [],
+  );
+
+  const toSpritePoint = useCallback(
+    (clientX: number, clientY: number): OfficePoint | null => {
+      const screen = toScreenPoint(clientX, clientY);
+      if (screen === null) return null;
       const camera = runtime.getCamera();
       return {
-        x: (clientX - rect.left - camera.x) / camera.zoom,
-        y: (clientY - rect.top - camera.y) / camera.zoom,
+        x: (screen.x - camera.x) / camera.zoom,
+        y: (screen.y - camera.y) / camera.zoom,
       };
     },
-    [runtime],
+    [runtime, toScreenPoint],
   );
 
   // Shared by the canvas and the hover trigger that sits over a character: a
@@ -2033,42 +2026,61 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       const region =
         point === null ? null : hitRegionFor(runtime.getHitRegions(), point);
       const camera = runtime.getCamera();
+      const screen = toScreenPoint(event.clientX, event.clientY);
       // Mirrored for the DRAW, which needs it to keep an away agent's name tag
       // while the pointer is on it; the card itself is React state.
       runtime.setHoveredAgentId(region === null ? null : region.agentId);
-      hoverAnchorRef.current =
+      const rect =
         region === null
           ? null
           : {
-              agentId: region.agentId,
-              rect: region.rect,
-              cameraX: camera.x,
-              cameraY: camera.y,
-              zoom: camera.zoom,
+              x: region.rect.x * camera.zoom + camera.x,
+              y: region.rect.y * camera.zoom + camera.y,
+              width: region.rect.width * camera.zoom,
+              height: region.rect.height * camera.zoom,
             };
-      setHoverCard(
-        region === null
+      hoverAnchorRef.current =
+        region === null || screen === null
           ? null
-          : {
-              agentId: region.agentId,
-              rect: {
-                x: region.rect.x * camera.zoom + camera.x,
-                y: region.rect.y * camera.zoom + camera.y,
-                width: region.rect.width * camera.zoom,
-                height: region.rect.height * camera.zoom,
-              },
-            },
+          : { agentId: region.agentId, screenX: screen.x, screenY: screen.y };
+      hoverRectRef.current = rect;
+      setHoverCard(
+        region === null || rect === null
+          ? null
+          : { agentId: region.agentId, rect },
       );
       // An envelope is clickable too, so it earns the same cursor even where
       // it is flying over open floor with no desk under it.
       event.currentTarget.style.cursor =
         region === null && !overEnvelope ? "default" : "pointer";
     },
-    [readScene, runtime, toSpritePoint],
+    [readScene, runtime, toScreenPoint, toSpritePoint],
+  );
+
+  // On the CONTAINER, because the hover trigger is laid over the character and
+  // takes the pointer from the canvas while it is there. A move inside the
+  // trigger never reaches the canvas handler, but the frame loop still needs
+  // the pointer's true position to decide whether a walking character is
+  // still under it - so the anchor is kept current from whichever element
+  // has the pointer.
+  const trackHoverPointer = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const anchor = hoverAnchorRef.current;
+      if (anchor === null) return;
+      const screen = toScreenPoint(event.clientX, event.clientY);
+      if (screen === null) return;
+      hoverAnchorRef.current = {
+        agentId: anchor.agentId,
+        screenX: screen.x,
+        screenY: screen.y,
+      };
+    },
+    [toScreenPoint],
   );
 
   const clearHover = useCallback(() => {
     hoverAnchorRef.current = null;
+    hoverRectRef.current = null;
     runtime.setHoveredAgentId(null);
     setHoverCard(null);
   }, [runtime]);
@@ -2263,6 +2275,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         ref={containerRef}
         className="relative h-full min-h-0 w-full min-w-0 flex-1 overflow-hidden"
         data-testid="comm-graph-office-canvas"
+        onPointerMove={trackHoverPointer}
       >
         <canvas
           ref={canvasRef}
@@ -2284,6 +2297,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           aria-label="Office view of the communication graph"
         />
         {modeToggle}
+        {/*
+          A detached cursor has to be VISIBLE on the floor. Scrubbing back
+          changes little here - the same people sit at the same desks, only
+          their screens go dark and later arrivals vanish - so without a sign
+          the past reads as a live floor that stopped moving. The chip names
+          the moment being shown; the transport bar below owns moving it.
+        */}
+        <OfficeCursorChip cursorMs={cursorMs} playing={playing} />
         {hoverCard === null || hoveredAgent === null ? null : (
           <OfficeAgentHover
             epicId={epicId}

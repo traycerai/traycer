@@ -132,31 +132,14 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
         onSeekToFraction={seekToFraction}
       />
 
-      <Button
-        type="button"
-        size="xs"
-        variant="ghost"
-        aria-pressed={transport.following}
-        data-testid="comm-graph-transport-follow-live"
-        data-following={transport.following ? "true" : "false"}
-        onClick={transport.followLive}
-        className={cn(
-          "shrink-0",
-          transport.following
-            ? "bg-primary/5 text-primary"
-            : "text-muted-foreground",
-        )}
-      >
-        <LivePulse
-          size="xs"
-          tone={transport.following ? "active" : "idle"}
-          ariaLabel={
-            transport.following ? "Following live" : "Detached from live"
-          }
-          className={undefined}
-        />
-        {transport.following ? "Live" : "Follow live"}
-      </Button>
+      {/*
+        WITH NOTHING CAPTURED THERE IS NO LIVE BADGE either: "Live" next to an
+        empty track reads as a feed that is stuck, when the truth is that there
+        has been nothing to feed. The track itself says so.
+      */}
+      {events.length === 0 ? null : (
+        <CommGraphFollowLiveButton transport={transport} />
+      )}
     </div>
   );
 }
@@ -236,37 +219,27 @@ function CommGraphTransportTrack(props: {
     [events, transport],
   );
 
+  // After the hooks, so the two renderings share one hook order.
+  if (!hasEvents)
+    return <CommGraphEmptyTrack following={transport.following} />;
+
   return (
-    /*
-      WITH NOTHING CAPTURED THERE IS NO SLIDER, not a slider that reports
-      nonsense. An empty epic has no positions to be at, so declaring
-      `min=0 max=0 valuenow=-1` would put a focusable control in the tab order
-      that announces a value outside its own range and moves nowhere when
-      driven. The empty track is inert scenery instead, matching the play
-      button, which is already disabled.
-    */
     <div
       ref={trackRef}
-      role={hasEvents ? "slider" : undefined}
-      tabIndex={hasEvents ? 0 : undefined}
-      aria-label={hasEvents ? "Event timeline" : undefined}
-      aria-disabled={hasEvents ? undefined : true}
-      aria-valuemin={hasEvents ? 0 : undefined}
-      aria-valuemax={hasEvents ? events.length - 1 : undefined}
-      aria-valuenow={hasEvents ? transport.cursorIndex : undefined}
-      aria-valuetext={hasEvents ? trackValueText(transport) : undefined}
+      role="slider"
+      tabIndex={0}
+      aria-label="Event timeline"
+      aria-valuemin={0}
+      aria-valuemax={events.length - 1}
+      aria-valuenow={transport.cursorIndex}
+      aria-valuetext={trackValueText(transport)}
       data-testid="comm-graph-transport-track"
       data-following={transport.following ? "true" : "false"}
-      data-empty={hasEvents ? "false" : "true"}
-      className={cn(
-        "relative h-6 min-w-0 flex-1 rounded-sm bg-muted/40",
-        hasEvents
-          ? "cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          : "cursor-default opacity-60",
-      )}
-      onPointerDown={hasEvents ? handlePointerDown : undefined}
-      onPointerMove={hasEvents ? handlePointerMove : undefined}
-      onKeyDown={hasEvents ? handleKeyDown : undefined}
+      data-empty="false"
+      className="relative h-6 min-w-0 flex-1 cursor-pointer rounded-sm bg-muted/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onKeyDown={handleKeyDown}
     >
       {/* Elapsed fill: everything the graph is currently showing. */}
       <div
@@ -297,15 +270,94 @@ function CommGraphTransportTrack(props: {
           />
         </TooltipWrapper>
       ))}
-      {!hasEvents ? null : (
-        <div
-          aria-hidden
-          data-testid="comm-graph-transport-playhead"
-          className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-primary"
-          style={{ left: `${playhead * 100}%` }}
-        />
-      )}
+      <div
+        aria-hidden
+        data-testid="comm-graph-transport-playhead"
+        className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-primary"
+        style={{ left: `${playhead * 100}%` }}
+      />
     </div>
+  );
+}
+
+/**
+ * WITH NOTHING CAPTURED THERE IS NO SLIDER, not a slider that reports
+ * nonsense. An empty epic has no positions to be at, so declaring
+ * `min=0 max=0 valuenow=-1` would put a focusable control in the tab order
+ * that announces a value outside its own range and moves nowhere when driven.
+ *
+ * The empty track SAYS it is empty instead. A blank bar beside a disabled play
+ * button reads as a control that is broken; a word in its place reads as a log
+ * that has nothing in it yet - which is the only thing that is true. Short and
+ * literal: created rows are events too, so this is not "no messages".
+ */
+function CommGraphEmptyTrack(props: { readonly following: boolean }) {
+  return (
+    <div
+      aria-disabled
+      data-testid="comm-graph-transport-track"
+      data-following={props.following ? "true" : "false"}
+      data-empty="true"
+      className="relative flex h-6 min-w-0 flex-1 cursor-default items-center justify-center rounded-sm bg-muted/40"
+    >
+      <span
+        data-testid="comm-graph-transport-empty"
+        className="text-ui-xs text-muted-foreground"
+      >
+        No events yet
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The Live badge. A TOGGLE, not a one-way door: pressed while detached it
+ * re-attaches and remembers where you were; pressed again while live it takes
+ * you back there. With nothing to go back to it is a plain "Live".
+ */
+function CommGraphFollowLiveButton(props: {
+  readonly transport: CommGraphTransport;
+}) {
+  const { transport } = props;
+  const canReturn = transport.following && transport.returnCursor !== null;
+  const button = (
+    <Button
+      type="button"
+      size="xs"
+      variant="ghost"
+      aria-pressed={transport.following}
+      data-testid="comm-graph-transport-follow-live"
+      data-following={transport.following ? "true" : "false"}
+      data-can-return={canReturn ? "true" : "false"}
+      onClick={canReturn ? transport.returnToReplay : transport.followLive}
+      className={cn(
+        "shrink-0",
+        transport.following
+          ? "bg-primary/5 text-primary"
+          : "text-muted-foreground",
+      )}
+    >
+      <LivePulse
+        size="xs"
+        tone={transport.following ? "active" : "idle"}
+        ariaLabel={
+          transport.following ? "Following live" : "Detached from live"
+        }
+        className={undefined}
+      />
+      {transport.following ? "Live" : "Follow live"}
+    </Button>
+  );
+  if (!canReturn) return button;
+  return (
+    <TooltipWrapper
+      label="Back to replay position"
+      side="top"
+      sideOffset={4}
+      align="center"
+    >
+      {button}
+    </TooltipWrapper>
   );
 }
 

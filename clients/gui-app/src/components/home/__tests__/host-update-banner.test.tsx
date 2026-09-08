@@ -367,6 +367,9 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     fireEvent.click(button);
 
     const dialog = await screen.findByTestId("host-busy-force-defer-dialog");
+    // Shared with the restart flow's busy verdict; the purpose attribute is
+    // the one thing that distinguishes the two on a page rendering both.
+    expect(dialog.dataset.purpose).toBe("update");
     expect(dialog.textContent).toContain(
       "Another Traycer process is applying an update.",
     );

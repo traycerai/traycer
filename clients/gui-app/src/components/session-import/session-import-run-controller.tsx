@@ -8,10 +8,7 @@ import {
   type SessionImportRunProgressPayload,
   type SessionImportRunStartedPayload,
 } from "@traycer-clients/shared/host-transport/session-import-run-client";
-import {
-  useStreamHostId,
-  useWsStreamClient,
-} from "@/lib/host/stream-runtime-context";
+import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { hostQueryKeys, sessionImportQueryKeys } from "@/lib/query-keys";
 import {
   progressEntryFrom,
@@ -23,6 +20,7 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import {
   getSessionImportStartHandle,
   setSessionImportStartHandle,
+  type SessionImportActiveRun,
   type SessionImportRunRequest,
   type SessionImportRunTarget,
 } from "@/components/session-import/session-import-run-handle";
@@ -68,12 +66,13 @@ function newChatPermissionModeFor(hostId: string): PermissionMode {
  */
 export function SessionImportRunController(): null {
   const queryClient = useQueryClient();
-  const ambientStreamClient = useWsStreamClient();
+  const ambientBinding = useStreamRuntimeBinding();
+  const ambientStreamClient = ambientBinding?.wsStreamClient ?? null;
   // The host the mount-time probe asks. Its name has to come off the same
   // binding as the client - a host swap between the two reads would invalidate
   // one machine's queries for a run that happened on another. See
   // `StreamRuntimeBinding.hostId`.
-  const ambientHostId = useStreamHostId();
+  const ambientHostId = ambientBinding?.hostId ?? null;
   const runsRef = useRef<Map<string, HostRun>>(new Map());
   // The stream client this window has already asked "is a run going?". One
   // question per binding: a probe that came back empty must not be asked
@@ -94,8 +93,8 @@ export function SessionImportRunController(): null {
     runsRef.current.delete(hostId);
     run.client.close();
     // Returns the transport reference this run took at subscribe. A scoped
-    // transport closes here if nothing else is reading it; the ambient one
-    // has no lease to return.
+    // transport closes here if nothing else is reading it. Ambient runs also
+    // retain their transport across a change of the window's host.
     run.release?.();
     noteClientClosed();
   }, []);
@@ -206,6 +205,55 @@ export function SessionImportRunController(): null {
     [closeRun, openRun, runCallbacks],
   );
 
+  const attach = useCallback(
+    (target: SessionImportRunTarget, run: SessionImportActiveRun): void => {
+      const hostId = target.hostId;
+      const existing = runsRef.current.get(hostId);
+      if (existing !== undefined) {
+        if (!existing.waitingProbe) return;
+        // This status-confirmed attach must own the answer. An ambient probe
+        // can find the run already finished and otherwise leave the wizard
+        // waiting on its stale active status forever.
+        closeRun(hostId);
+      }
+      // The status query already named a real run. Keep that identity even
+      // if the connection fails before the stream's first frame arrives.
+      useSessionImportRunStore.getState().applyStarted(hostId, {
+        runId: run.runId,
+        total: run.total,
+        attached: true,
+      });
+      const callbacks = runCallbacks(hostId);
+      let attached = false;
+      openRun({
+        target,
+        selections: [],
+        waitingProbe: false,
+        callbacks: {
+          ...callbacks,
+          onStarted: (payload) => {
+            attached = payload.attached;
+            if (attached) {
+              callbacks.onStarted(payload);
+              return;
+            }
+            // The run finished between the status reply and the attach.
+            // Recheck before offering selections; the empty run is no summary.
+            closeRun(hostId);
+            void queryClient.invalidateQueries({
+              queryKey: sessionImportQueryKeys.status(hostId),
+            });
+            useSessionImportRunStore.getState().reset(hostId);
+          },
+          onComplete: (payload) => {
+            if (attached) callbacks.onComplete(payload);
+          },
+        },
+      });
+    },
+    [closeRun, openRun, queryClient, runCallbacks],
+  );
+
   // Subscribing with no selections is the host's "attach to whatever is
   // running" form: a run in flight replays from the start, and an idle host
   // answers with an empty run instead. The store is touched only in the first
@@ -218,7 +266,7 @@ export function SessionImportRunController(): null {
   // new run id supersede it. A probe that finds nothing leaves the store as
   // it was.
   useEffect(() => {
-    if (ambientStreamClient === null || ambientHostId === null) return;
+    if (ambientBinding === null || ambientHostId === null) return;
     if (runsRef.current.has(ambientHostId)) return;
     if (probedStreamClientRef.current === ambientStreamClient) return;
     probedStreamClientRef.current = ambientStreamClient;
@@ -227,10 +275,8 @@ export function SessionImportRunController(): null {
     const callbacks = runCallbacks(hostId);
     let attached = false;
     const probe = openRun({
-      // The ambient binding never closes under its readers, so there is
-      // nothing to pin: `retain: null` says exactly that.
       target: {
-        binding: { wsStreamClient: ambientStreamClient, hostId, retain: null },
+        binding: ambientBinding,
         hostId,
       },
       selections: [],
@@ -274,6 +320,7 @@ export function SessionImportRunController(): null {
       }
     };
   }, [
+    ambientBinding,
     ambientHostId,
     ambientStreamClient,
     clientGeneration,
@@ -283,13 +330,13 @@ export function SessionImportRunController(): null {
   ]);
 
   useEffect(() => {
-    setSessionImportStartHandle({ start });
+    setSessionImportStartHandle({ start, attach });
     return () => {
       if (getSessionImportStartHandle()?.start === start) {
         setSessionImportStartHandle(null);
       }
     };
-  }, [start]);
+  }, [start, attach]);
 
   useEffect(
     () => () => {
@@ -303,7 +350,7 @@ export function SessionImportRunController(): null {
 
 interface HostRun {
   readonly client: SessionImportRunClient;
-  /** Returns the transport lease this run took; `null` for the ambient one. */
+  /** Returns the transport lease this run took, when the binding provides one. */
   readonly release: (() => void) | null;
   /**
    * True while this client is the mount-time probe still waiting for the

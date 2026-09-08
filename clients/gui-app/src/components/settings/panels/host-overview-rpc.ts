@@ -1,18 +1,21 @@
 import {
   keepPreviousData,
   useQueryClient,
+  type QueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   HostTransportFailureError,
   type HostRpcError,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostDoctorResponse,
   HostGetInstallationInfoResponse,
   HostServiceDeregisterResponse,
   HostServiceRegisterResponse,
+  HostUpdateBoundDispatchExpectedIdentity,
   HostUpdateInstallResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
@@ -23,7 +26,10 @@ import { keepPreviousDataForSameHost } from "@/hooks/host/keep-previous-data-sam
 import { hostMaintenanceMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
-import { useHostServiceWriteLatchStore } from "@/components/settings/panels/host-service-write-latch-store";
+import {
+  isLiveOverviewIncarnation,
+  useHostServiceWriteLatchStore,
+} from "@/components/settings/panels/host-service-write-latch-store";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -180,17 +186,41 @@ function scopedSessionMembershipSignature(hostId: string): string {
  * the difference matters on this page: "no install record" is a legitimate,
  * describable state (someone is running the host from a checkout), not an
  * error, and rendering it as one would put a red box on every dev machine.
+ *
+ * Polled (table-owned cadence, 10s), not merely stale-timed, because the
+ * Overview now DERIVES from it: the install record against the running
+ * version is what says "installed, restart to finish", and the staged record
+ * beside a busy host is what says "staged, waiting for work". Both change
+ * under a mounted page through actors this client never sees - a detached CLI
+ * run, the desktop's launch converge - and a 60s staleTime with no interval
+ * observed neither until the page was remounted. `staleTime` still exceeds
+ * the interval so a healthy poll never reads as stale.
+ *
+ * Keyed by the RUNNING version the caller has observed. The facts derived
+ * from this read are comparisons against that version, and a version change
+ * is exactly the moment the install record moved under the page (the host
+ * restarted onto new bytes): a payload fetched under the old version is not
+ * a stale answer to the same question, it is an answer to a different one,
+ * and TanStack would otherwise keep serving it - "installed X, running Y,
+ * restart to finish" for a host that just finished. A new key has no data
+ * until the fresh read answers, which the derivation reads as "not observed".
+ * Disabled until a running version is known for the same reason.
  */
 export function useHostInstallationInfoQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
+  readonly runningVersion: string | null;
 }) {
   return useHostQuery<HostRpcRegistry, "host.getInstallationInfo">({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [input.runningVersion],
     client: input.client,
     method: "host.getInstallationInfo",
     params: EMPTY_PARAMS,
-    options: { enabled: input.enabled, staleTime: 60_000 },
+    options: {
+      enabled: input.enabled && input.runningVersion !== null,
+      staleTime: 60_000,
+      poll: true,
+    },
   });
 }
 
@@ -362,10 +392,15 @@ export function useHostUpdateCheckQuery(input: {
       enabled: input.enabled,
       // Long, deliberately. This is the one read on the page that costs a
       // process on the host, and what it returns — which versions the registry
-      // publishes — changes on a release cadence, not a browsing one. The one
-      // exception — re-asking while the answer is `cli-unavailable`, so a
-      // reinstalled CLI revives the retired region — is table-owned condition
-      // polling (`host-method-policy-table.ts`), not an option here.
+      // publishes — changes on a release cadence, not a browsing one. The two
+      // exceptions are not options here. Re-asking while the answer is
+      // `cli-unavailable`, so a reinstalled CLI revives the retired region,
+      // is table-owned condition polling (`host-method-policy-table.ts`).
+      // Re-asking while the Overview shows a CLI-floor remedy, so a repaired
+      // CLI reveals Update now without a click, is the Overview's own
+      // invalidation (`useHostOverviewUpdates`): which floored row the
+      // remedy names depends on the installed version, which only that
+      // hook knows.
       staleTime: 5 * 60_000,
       refetchOnWindowFocus: false,
       // Keeps the PREVIOUS filter's list on screen while the new one loads.
@@ -541,7 +576,23 @@ export function useHostServiceDeregister(
         // it - that is the state the latch exists for.
         if (response.outcome !== "accepted") {
           latchStore.releaseDeregisterAccepted(context.hostId);
+          return;
         }
+        // THE DISPATCH SLOT'S DEREGISTER CLEAR (D8) - the second of the two
+        // the status stream cannot express, beside the panel's UNSEEN TTL, and
+        // the fourth of the slot's four in total. The host service is going
+        // away, and an update dispatch is a claim about a host that will be
+        // there to park. Keeping the slot would mean a re-register of the same
+        // `hostId` — the same string, a freshly installed service — inherits an
+        // activation offer made about the service that was removed, and opens
+        // a dialog for it on the first matching frame.
+        //
+        // Cleared on the ACCEPTED answer rather than beside the arm above,
+        // even though the latch itself is armed pessimistically at dispatch:
+        // over-locking controls for a bounded moment is a safe default, but
+        // discarding ownership is not reversible, and a refused deregister
+        // leaves a host whose dispatch is still perfectly good.
+        latchStore.clearUpdateDispatch(context.hostId);
       },
       onError: (error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;
@@ -574,6 +625,12 @@ export function useHostServiceDeregister(
  */
 export function useHostUpdateInstall(
   client: HostClient<HostRpcRegistry> | null,
+  /**
+   * The dispatching `HostOverviewPanel` mount's token (D8). Captured in
+   * `onMutate` and compared at settle, so ownership is written only while the
+   * mount that asked is still on screen — see {@link settleUpdateDispatch}.
+   */
+  incarnation: string,
   // The @1.1 response type, which is what this client's registry negotiates
   // and therefore what callers actually receive. Annotating the @1.0 type here
   // used to compile only by accident: `attemptId` is an EXTRA property, and an
@@ -586,13 +643,13 @@ export function useHostUpdateInstall(
   HostUpdateInstallResponseV11,
   HostRpcError,
   { readonly version: string; readonly force: boolean },
-  HostOverviewMutationContext
+  HostUpdateDispatchContext
 > {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "host.update.install",
-    HostOverviewMutationContext,
+    HostUpdateDispatchContext,
     { readonly version: string; readonly force: boolean }
   >({
     client,
@@ -606,15 +663,7 @@ export function useHostUpdateInstall(
       // Same dispatch-arm / settle-release inversion as the service writes:
       // `accepted` settles before `updateProgress` exists, and that gap must
       // stay locked even if the settle is lost to a host-keyed unmount.
-      onMutate: () => {
-        const hostId = client?.getActiveHostId() ?? null;
-        if (hostId !== null) {
-          useHostServiceWriteLatchStore
-            .getState()
-            .armUpdateInstallAccepted(hostId);
-        }
-        return { hostId };
-      },
+      onMutate: () => armUpdateDispatchMutation(client, incarnation),
       // HOOK-level, not in the caller's per-`mutate` callbacks.
       //
       // The swap is detached and outlives this response, so
@@ -629,11 +678,10 @@ export function useHostUpdateInstall(
       // Uses the ARM-TIME host id, so the refresh lands on the host that is
       // actually updating rather than whichever one the picker has reached.
       onSuccess: (response, _variables, context) => {
-        if (context.hostId === null) return;
-        // AN UNRESOLVED DISPATCH IS ITS OWN ANSWER, and it is handled before
-        // the refusal test below rather than falling into it.
+        // AN UNRESOLVED DISPATCH IS ITS OWN ANSWER, and it is classified apart
+        // from the refusals below rather than folded into them.
         //
-        // Both branches release the latch, so this arm could be left to the
+        // Both release the latch, so this arm could be left to the
         // `!== accepted && !== already-updating` test and would behave
         // correctly today. It is written out anyway because that test's comment
         // says "no swap was dispatched" — which is the one thing
@@ -650,45 +698,402 @@ export function useHostUpdateInstall(
         // it to this call — and observation through `updateOperation` is the
         // negotiated route to that fact, so the read that would reveal it has
         // to be re-armed rather than skipped.
-        if (response.outcome === "dispatch-indeterminate") {
-          useHostServiceWriteLatchStore
-            .getState()
-            .releaseUpdateInstallAccepted(context.hostId);
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
-          });
-          return;
-        }
-        if (
-          response.outcome !== "accepted" &&
-          response.outcome !== "already-updating"
-        ) {
-          // A refusal: no swap was dispatched, nothing to guard.
-          useHostServiceWriteLatchStore
-            .getState()
-            .releaseUpdateInstallAccepted(context.hostId);
-          return;
-        }
+        //
         // `already-updating` keeps the latch exactly as `accepted` does:
         // SOMEONE'S swap is running — another window's, a direct CLI
         // caller's — inside the same blind gap before the CLI writes
         // `updateProgress`, which is the precise window the latch covers.
-        // Releasing here would re-enable restart and the service verbs
-        // against that active swap. The refresh below is how the progress
-        // row appears once the CLI reports it, and the panel's release
-        // effect (or the bounded timer) unwinds the latch from there.
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
-        });
+        // Releasing there would re-enable restart and the service verbs
+        // against that active swap.
+        settleUpdateDispatch(
+          queryClient,
+          context,
+          classifyInstallOutcome(response),
+        );
       },
-      onError: (_error, _variables, context) => {
+      onError: (error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;
+        // A transport DROP is this dispatch's probable-success shape, exactly
+        // as it is register's and deregister's — and the strongest instance of
+        // it: the swap is DETACHED and outlives the request by design, and the
+        // process that would have answered is the one being replaced.
+        // Releasing re-enables Restart and the service verbs over a swap that
+        // is already running. The bounded 60s timer backstops the case where
+        // nothing was dispatched at all. Only an error that definitively
+        // PRECEDED execution refutes the dispatch.
+        //
+        // NOT the same call as `dispatch-indeterminate`, which also cannot
+        // attribute its dispatch and DOES release (O3): there the socket is
+        // healthy and the release is paired with a `host.status` refresh, so
+        // observation corrects the page within one poll. Here the socket is
+        // down — the reason register's arm invalidates with
+        // `refetchType: "none"` — and no observation is coming.
+        if (error instanceof HostTransportFailureError) return;
         useHostServiceWriteLatchStore
           .getState()
           .releaseUpdateInstallAccepted(context.hostId);
       },
     },
   });
+}
+
+/**
+ * `host.update.activate {attemptId, force}` — restart into bytes an attempt
+ * has already placed.
+ *
+ * A distinct METHOD rather than an intent field on `host.update.install`, and
+ * that is the whole authorization story: a host too old to know it lacks it, so
+ * the transport refuses the dispatch outright and the GUI keeps its legacy
+ * routes instead of projecting this request onto a shape that would silently
+ * become a plain install. Nothing here consults the release catalog — an
+ * activation places no bytes, so there is no version to verify and no CLI floor
+ * to clear.
+ */
+export function useHostUpdateActivate(
+  client: HostClient<HostRpcRegistry> | null,
+  incarnation: string,
+): UseMutationResult<
+  ActivateDispatchResponse,
+  HostRpcError,
+  BoundDispatchVariables,
+  HostUpdateDispatchContext
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "host.update.activate",
+    HostUpdateDispatchContext,
+    BoundDispatchVariables
+  >({
+    client,
+    method: "host.update.activate",
+    mapVariables: (variables) => ({
+      attemptId: variables.attemptId,
+      force: variables.force,
+      ...expectedIdentityPayload(variables.expected),
+    }),
+    options: boundDispatchOptions(client, queryClient, incarnation),
+  });
+}
+
+/**
+ * `host.update.continue {attemptId, force}` — carry on with whatever this
+ * attempt was already authorized to do.
+ *
+ * Also catalog-free, for a different reason than activate's: the bytes this
+ * resumes were authorized when the attempt was created, and a downgrade park
+ * re-downloads the SAME version it was created for. Re-deriving a target from
+ * the catalog here would be a second opinion about a decision the record
+ * already owns — and one a stale UI could get wrong.
+ */
+export function useHostUpdateContinue(
+  client: HostClient<HostRpcRegistry> | null,
+  incarnation: string,
+): UseMutationResult<
+  ContinueDispatchResponse,
+  HostRpcError,
+  BoundDispatchVariables,
+  HostUpdateDispatchContext
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "host.update.continue",
+    HostUpdateDispatchContext,
+    BoundDispatchVariables
+  >({
+    client,
+    method: "host.update.continue",
+    mapVariables: (variables) => ({
+      attemptId: variables.attemptId,
+      force: variables.force,
+      ...expectedIdentityPayload(variables.expected),
+    }),
+    options: boundDispatchOptions(client, queryClient, incarnation),
+  });
+}
+
+/**
+ * Both bound methods answer the same union, so the two mutations share one set
+ * of settle callbacks — and, deliberately, ONE mutation key with the install.
+ *
+ * The shared key is what makes "an update dispatch is in flight for this host"
+ * a single question whatever the intent behind it. Three keys would let the
+ * page grey its controls for an install and leave them live for an activation,
+ * which is the same dispatch race with a different verb on it.
+ */
+function boundDispatchOptions(
+  client: HostClient<HostRpcRegistry> | null,
+  queryClient: QueryClient,
+  incarnation: string,
+): {
+  readonly mutationKey: readonly string[];
+  readonly onMutate: () => HostUpdateDispatchContext;
+  readonly onSuccess: (
+    response: BoundDispatchResponse,
+    variables: unknown,
+    context: HostUpdateDispatchContext,
+  ) => void;
+  readonly onError: (
+    error: unknown,
+    variables: unknown,
+    context: HostUpdateDispatchContext | undefined,
+  ) => void;
+} {
+  return {
+    mutationKey: hostMaintenanceMutationKeys.updateInstall(),
+    onMutate: () => armUpdateDispatchMutation(client, incarnation),
+    onSuccess: (response, _variables, context) => {
+      settleUpdateDispatch(
+        queryClient,
+        context,
+        classifyBoundDispatchOutcome(response),
+      );
+    },
+    onError: (error, _variables, context) => {
+      if (context === undefined || context.hostId === null) return;
+      // A transport DROP is this dispatch's probable-success shape, exactly
+      // as it is register's and deregister's — and the strongest instance of
+      // it: the swap is DETACHED and outlives the request by design, and the
+      // process that would have answered is the one being replaced.
+      // Releasing re-enables Restart and the service verbs over a swap that
+      // is already running. The bounded 60s timer backstops the case where
+      // nothing was dispatched at all. Only an error that definitively
+      // PRECEDED execution refutes the dispatch.
+      //
+      // NOT the same call as `dispatch-indeterminate`, which also cannot
+      // attribute its dispatch and DOES release (O3): there the socket is
+      // healthy and the release is paired with a `host.status` refresh, so
+      // observation corrects the page within one poll. Here the socket is
+      // down — the reason register's arm invalidates with
+      // `refetchType: "none"` — and no observation is coming.
+      if (error instanceof HostTransportFailureError) return;
+      useHostServiceWriteLatchStore
+        .getState()
+        .releaseUpdateInstallAccepted(context.hostId);
+    },
+  };
+}
+
+/** The request both bound methods take, as the page's callers express it. */
+export interface BoundDispatchVariables {
+  readonly attemptId: string;
+  readonly force: boolean;
+  /**
+   * The attempt position the caller observed, or `null` when it observed none.
+   *
+   * `null` becomes an ABSENT key, never `{generation: 0}` or a placeholder:
+   * the wire field is optional precisely so that absence can mean "this caller
+   * did not say", and a synthesised value would tell the host that a position
+   * was observed when none was.
+   */
+  readonly expected: HostUpdateBoundDispatchExpectedIdentity | null;
+}
+
+/**
+ * The request's optional `expected`, spread into a payload.
+ *
+ * A helper rather than two inline ternaries because both bound methods must
+ * make the same choice, and the choice is the one thing about this field that
+ * is easy to get wrong: an omitted key and a present-but-empty one are
+ * different requests to the host.
+ */
+function expectedIdentityPayload(
+  expected: HostUpdateBoundDispatchExpectedIdentity | null,
+): { readonly expected?: HostUpdateBoundDispatchExpectedIdentity } {
+  return expected === null ? {} : { expected };
+}
+
+/**
+ * Named through the registry rather than imported from the protocol's schema
+ * module: both bound methods have exactly one minor, so what this client
+ * negotiates IS the 1.0 shape and there is no version to state explicitly (the
+ * install's annotation exists precisely because it has three).
+ *
+ * ONE PER METHOD, even though the two are identical today. The protocol gives
+ * `host.update.activate` and `host.update.continue` the same
+ * `hostUpdateBoundDispatchResponseSchema` object, deliberately — they differ in
+ * the authority the caller exercises, not in what comes back — so these two
+ * aliases resolve to the same type and nothing narrows. What they buy is that a
+ * continuation's result is no longer described by a type derived from the OTHER
+ * method: the identity is what made that invisible, and it is not a promise the
+ * protocol makes for all time.
+ */
+export type ActivateDispatchResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "host.update.activate"
+>;
+export type ContinueDispatchResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "host.update.continue"
+>;
+
+/**
+ * What EITHER bound dispatch answers — the shared settle path's type, as
+ * distinct from the two per-method aliases the hooks use.
+ *
+ * It resolves through ONE of the methods, which is a compromise and not the
+ * shape this wants: a union naming both is what it should say, and the linter
+ * will not have one (see {@link BoundDispatchResponsesAgree} immediately
+ * below). So the name carries the intent, the alias carries a representative,
+ * and the assertion carries the guarantee. The one thing this must not be read
+ * as is "the shared path handles activations": it receives both, and the
+ * assertion is what makes that safe.
+ */
+export type BoundDispatchResponse = ActivateDispatchResponse;
+
+/**
+ * The claim `BoundDispatchResponse` rests on, CHECKED rather than assumed.
+ *
+ * It would read better as `ActivateDispatchResponse | ContinueDispatchResponse`
+ * — that was the first attempt — but `typescript(no-duplicate-type-constituents)`
+ * rejects the union as an error under `--deny-warnings` and its autofix
+ * collapses it, correctly: the two constituents ARE the same type today. So the
+ * agreement is asserted instead. If the protocol ever gives the two methods
+ * different response schemas, this stops compiling and every shared site below
+ * has to say which one it means — which is the whole point, and is exactly what
+ * naming one method for both silently would not do.
+ */
+type AssertTrue<T extends true> = T;
+export type BoundDispatchResponsesAgree = [
+  AssertTrue<
+    ContinueDispatchResponse extends ActivateDispatchResponse ? true : false
+  >,
+  AssertTrue<
+    ActivateDispatchResponse extends ContinueDispatchResponse ? true : false
+  >,
+];
+
+/**
+ * What every update dispatch's settle needs, whatever its method.
+ *
+ * `hostId` is captured at ARM time for the reason this module's header states.
+ * `incarnation` is captured for a narrower one: the settle can outlive the
+ * mount, on purpose, and one of the things it does must not.
+ */
+export interface HostUpdateDispatchContext {
+  readonly hostId: string | null;
+  readonly incarnation: string;
+}
+
+function armUpdateDispatchMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  incarnation: string,
+): HostUpdateDispatchContext {
+  const hostId = client?.getActiveHostId() ?? null;
+  if (hostId !== null) {
+    useHostServiceWriteLatchStore.getState().armUpdateInstallAccepted(hostId);
+  }
+  return { hostId, incarnation };
+}
+
+/**
+ * The three things a dispatch's answer decides, reduced to one vocabulary so
+ * the install and the two bound methods cannot drift on them.
+ *
+ * `attemptId` rides on `accepted` alone. `already-updating` names an attempt
+ * too — someone else's, by definition — and claiming ownership of it would put
+ * this page's activation dialog in front of a person for a dispatch they did
+ * not make.
+ */
+type UpdateDispatchSettlement =
+  | { readonly kind: "accepted"; readonly attemptId: string | null }
+  | { readonly kind: "already-updating" }
+  | { readonly kind: "indeterminate" }
+  | { readonly kind: "refused" };
+
+function classifyInstallOutcome(
+  response: HostUpdateInstallResponseV11,
+): UpdateDispatchSettlement {
+  if (response.outcome === "accepted") {
+    return { kind: "accepted", attemptId: response.attemptId };
+  }
+  if (response.outcome === "already-updating")
+    return { kind: "already-updating" };
+  if (response.outcome === "dispatch-indeterminate") {
+    return { kind: "indeterminate" };
+  }
+  return { kind: "refused" };
+}
+
+function classifyBoundDispatchOutcome(
+  response: BoundDispatchResponse,
+): UpdateDispatchSettlement {
+  if (response.outcome === "accepted") {
+    // Non-nullable on this schema, unlike the install's: these methods are new
+    // at 1.0, so there is no peer that predates attempt ids to accommodate.
+    return { kind: "accepted", attemptId: response.attemptId };
+  }
+  if (response.outcome === "already-updating")
+    return { kind: "already-updating" };
+  if (response.outcome === "dispatch-indeterminate") {
+    return { kind: "indeterminate" };
+  }
+  // `cli-failed`: the host tried and the CLI it spawned refused. Nothing was
+  // dispatched, so this is a refusal — the reason reaches the user through the
+  // caller's own settle, which is where the page's copy lives.
+  return { kind: "refused" };
+}
+
+/**
+ * The latch, the invalidations and the ownership write, in the one order they
+ * are allowed to happen in.
+ *
+ * ⚠ THE OWNERSHIP WRITE IS INCARNATION-GATED AND NOTHING ELSE IS. This settle
+ * deliberately runs after the panel unmounts — that is how a swap the user
+ * navigated away from still settles its latch and still invalidates the reads
+ * that would otherwise show a stale version — and both of those must keep
+ * happening for a retired mount. The slot must not: its only consumer is a
+ * one-shot dialog that a mount opens, so writing it for a mount that is gone
+ * would leave a stale grant for the NEXT mount to act on, opening a modal
+ * nobody asked for.
+ */
+function settleUpdateDispatch(
+  queryClient: QueryClient,
+  context: HostUpdateDispatchContext,
+  settlement: UpdateDispatchSettlement,
+): void {
+  const hostId = context.hostId;
+  if (hostId === null) return;
+  const latchStore = useHostServiceWriteLatchStore.getState();
+  if (settlement.kind === "refused") {
+    // No swap was dispatched, nothing to guard — and nothing to refresh
+    // either: a refusal changes neither the coarse marker nor the records.
+    latchStore.releaseUpdateInstallAccepted(hostId);
+    return;
+  }
+  if (settlement.kind === "indeterminate") {
+    latchStore.releaseUpdateInstallAccepted(hostId);
+    invalidateUpdateReads(queryClient, hostId);
+    return;
+  }
+  if (
+    settlement.kind === "accepted" &&
+    settlement.attemptId !== null &&
+    isLiveOverviewIncarnation(context.incarnation)
+  ) {
+    latchStore.armUpdateDispatch(hostId, {
+      attemptId: settlement.attemptId,
+      incarnation: context.incarnation,
+    });
+  }
+  invalidateUpdateReads(queryClient, hostId);
+}
+
+/**
+ * The two reads an accepted install changes: `host.status` for the coarse
+ * marker the detached updater publishes, and `host.getInstallationInfo` for
+ * the records it leaves behind when it PARKS instead - a stage kept because
+ * the host was busy, or an install committed under a host that refused to
+ * restart. The second used to wait for its own poll; a Settings click that
+ * parks within a second then showed nothing for up to ten.
+ */
+function invalidateUpdateReads(queryClient: QueryClient, hostId: string): void {
+  for (const method of ["host.status", "host.getInstallationInfo"] as const) {
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, method),
+    });
+  }
 }
 
 /** Narrowing helper so callers read the managed arm without re-checking. */

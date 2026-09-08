@@ -57,6 +57,7 @@ import {
 } from "../host-available";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import type { CommandContext } from "../../runner/runner";
+import { HOST_CLIENT_FLOOR_REASON_PREFIX } from "@traycer-clients/shared/host-version/client-floor-reason";
 
 const AVAILABLE_ASSET: HostPlatformAsset = {
   available: true,
@@ -127,6 +128,101 @@ describe("buildHostAvailableListing", () => {
     expect(
       listing.manifest.versions[1].platforms["darwin-arm64"]?.available,
     ).toBe(true);
+  });
+
+  it("authors the floor reason with the shared literal prefix", () => {
+    const listing = buildHostAvailableListing({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-06-22T01:00:00.000Z",
+        latest: "1.2.0",
+        versions: [
+          {
+            ...createEntry("1.2.0"),
+            requiredCliVersion: "10.0.0",
+            minimumEpoch: null,
+          },
+        ],
+      },
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+      cliVersion: "9.9.9",
+    });
+    const reason =
+      listing.manifest.versions[0].platforms["darwin-arm64"]?.unavailableReason;
+    expect(reason?.startsWith(HOST_CLIENT_FLOOR_REASON_PREFIX)).toBe(true);
+    expect(HOST_CLIENT_FLOOR_REASON_PREFIX).toBe("Needs Traycer CLI ");
+  });
+
+  it("keeps a malformed required CLI floor unavailable without the repair prefix", () => {
+    const requiredCliVersion = "1.3.0; npm install -g @traycerai/cli@latest";
+    const listing = buildHostAvailableListing({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-06-22T01:00:00.000Z",
+        latest: "1.2.0",
+        versions: [
+          {
+            ...createEntry("1.2.0"),
+            requiredCliVersion,
+            minimumEpoch: null,
+          },
+        ],
+      },
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+      cliVersion: "1.2.0",
+    });
+    const asset = listing.manifest.versions[0].platforms["darwin-arm64"];
+    const reason = asset?.unavailableReason;
+    // Restoring the shared repair prefix for an unreadable floor would make
+    // the GUI offer an impossible upgrade command; these exact unreadable
+    // reason pins must turn RED under that concrete ablation.
+    // Treating floor-unreadable as a non-refusal reddens the unavailable pin.
+    expect(asset?.available).toBe(false);
+    expect(reason).toBe(
+      `host registry: version '1.2.0' declares requiredCliVersion ${JSON.stringify(requiredCliVersion)}, which is not a version this CLI can compare against. The manifest is wrong; do not work around it by installing a different version.`,
+    );
+    expect(reason?.startsWith(HOST_CLIENT_FLOOR_REASON_PREFIX)).toBe(false);
+  });
+
+  it("bounds an unreadable required CLI floor before rendering it into the reason", () => {
+    // The reason travels inside `host available`'s one unsplittable JSON
+    // line (see the pipe-buffer note above) and onto every GUI surface;
+    // registry text that failed to parse as a version is the one input
+    // with no bound of its own. Falsification: render the raw value and the
+    // length assertion below reddens.
+    const requiredCliVersion = `1.3.0\u0007${"x".repeat(500)}`;
+    const listing = buildHostAvailableListing({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-06-22T01:00:00.000Z",
+        latest: "1.2.0",
+        versions: [
+          {
+            ...createEntry("1.2.0"),
+            requiredCliVersion,
+            minimumEpoch: null,
+          },
+        ],
+      },
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+      cliVersion: "1.2.0",
+    });
+    const reason =
+      listing.manifest.versions[0].platforms["darwin-arm64"]?.unavailableReason;
+    expect(reason).toContain('declares requiredCliVersion "1.3.0?xxx');
+    expect(reason).toContain("... (506 characters)");
+    expect(reason).not.toContain("x".repeat(100));
+    expect(reason).not.toContain("\u0007");
+    expect(reason?.startsWith(HOST_CLIENT_FLOOR_REASON_PREFIX)).toBe(false);
   });
 
   it("hides prerelease host versions by default", () => {
