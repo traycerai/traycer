@@ -31,8 +31,6 @@ import {
   chatRunSettingsSchema,
   chatRunSettingsSchemaPreReasonix,
   chatSchema,
-  chatSchemaV18,
-  messageSchemaV18,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
@@ -40,7 +38,7 @@ import {
   interviewDeliveryProjectionSchema,
   userMessagePayloadSchema,
   userMessagePayloadSchemaPreAnnotation,
-  userMessageSchemaV18,
+  userMessageSchema,
   userMessageSchemaPreInReplyTo,
   userMessageSchemaPreReasonix,
   userMessageSchemaV16,
@@ -116,7 +114,6 @@ import {
   chatTranscriptDerivedSchema,
   chatTranscriptWindowSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -734,10 +731,8 @@ export const chatAccessSchema = z.object({
 });
 export type ChatAccess = z.infer<typeof chatAccessSchema>;
 
-// Historical snapshot field set. The live snapshot grows from this base;
-// additions must not flow backwards into chat.subscribe 1.7.
-const chatSnapshotSchemaV17 = z.object({
-  chat: chatSchemaV18,
+export const chatSnapshotSchema = z.object({
+  chat: chatSchema,
   access: chatAccessSchema,
   queue: chatQueueStateSchema,
   // Authoritative in-progress state (see `chatRunStatusSchema`). The GUI's
@@ -812,9 +807,6 @@ const chatSnapshotSchemaV17 = z.object({
   // missing value as either "always active" or "never active" - both would
   // be wrong for the whole session against an older host.
   turnInProgress: z.boolean().optional(),
-});
-export const chatSnapshotSchema = chatSnapshotSchemaV17.extend({
-  chat: chatSchema,
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -1031,8 +1023,6 @@ function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
   });
 }
 
-// Common frame membership through chat.subscribe 1.8. Add newer frame kinds
-// to the current list rather than changing this shared historical factory.
 // Order-preserving factory for the common (non-blockDelta) shared frames. The
 // three sender-bearing frames (`messageAccepted`/`queueChanged`/`eventAppended`)
 // are parameterized so the released `chat.subscribe@1.0–1.3` lines can bind the
@@ -1176,9 +1166,9 @@ function buildChatSubscribeCommonServerFrameSchemas<
   ];
 }
 
-const chatSubscribeCommonServerFrameSchemasV18 =
+const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchemaV18,
+    message: userMessageSchema,
     queue: chatQueueStateSchema,
     event: chatEventSchema,
     action: chatActionSchema,
@@ -1221,14 +1211,9 @@ const chatSubscribeSharedServerFrameSchemasV12 = [
   blockDeltaServerFrameSchema(runtimeEventSchemaV12PreInReplyTo),
 ];
 
-// The 1.8 common frames are unchanged in 1.9. New frame kinds belong in
-// the current list below; both versions reuse the existing validators.
-const chatSubscribeSharedServerFrameSchemasV18 = [
-  ...chatSubscribeCommonServerFrameSchemasV18,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
-];
 const chatSubscribeSharedServerFrameSchemas = [
-  ...chatSubscribeSharedServerFrameSchemasV18,
+  ...chatSubscribeCommonServerFrameSchemas,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
 
 // Frozen live-shape shared frames for `chat.subscribe@1.3` (workflow-bearing
@@ -2586,18 +2571,7 @@ export const chatSubscribeV17 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 7 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("snapshot"),
-      ...textFrameFields,
-      ...chatReferenceFields,
-      snapshot: chatSnapshotSchemaV17,
-    }),
-    chatSubscribeTurnStateChangedServerFrameSchema,
-    chatSubscribeManagedCommandsChangedServerFrameSchema,
-    chatSubscribeHeldUpdatesChangedServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemasV18,
-  ]),
+  serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
 
@@ -2655,15 +2629,6 @@ export const chatSubscribeFullSnapshotSchemaVersion =
 // that is not about the transcript) is deliberate and is what keeps the
 // renderer's reducers identical across the two modes.
 
-const chatTranscriptWindowSchemaV18 = z.object({
-  fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(z.string()).optional(),
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaV18),
-  events: z.array(chatEventSchema),
-  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
-});
-
 /**
  * The bounded snapshot.
  *
@@ -2680,10 +2645,9 @@ const chatTranscriptWindowSchemaV18 = z.object({
  * lines, and making it required here would fork the one reducer that reads it
  * for no gain.
  */
-// 1.8's envelope is fixed; 1.9 replaces only the transcript's message schema.
-const chatWindowedSnapshotSchemaV18 = z.object({
+export const chatWindowedSnapshotSchema = z.object({
   /** The chat record WITHOUT `messages` / `events` — see `chatRecordSchema`. */
-  chat: chatSchemaV18.omit({ messages: true, events: true }),
+  chat: chatRecordSchema,
   access: chatAccessSchema,
   queue: chatQueueStateSchema,
   runStatus: chatRunStatusSchema,
@@ -2741,13 +2705,9 @@ const chatWindowedSnapshotSchemaV18 = z.object({
    * The hydrated tail. Always present, because the tail is where a live turn
    * happens and the client must paint it without a round trip.
    */
-  tail: chatTranscriptWindowSchemaV18,
+  tail: chatTranscriptWindowSchema,
   /** Whole-transcript folds a windowed client cannot compute for itself. */
   derived: chatTranscriptDerivedSchema,
-});
-export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV18.extend({
-  chat: chatRecordSchema,
-  tail: chatTranscriptWindowSchema,
 });
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
 
@@ -2831,21 +2791,6 @@ const chatSubscribeRangeServerFrameSchema = z.object({
   range: chatRangeResponseSchema,
 });
 
-const chatRangeResponseSchemaV18 = z.object({
-  // Reuse this unchanged scalar validator, not the live response's field set.
-  requestId: chatRangeResponseSchema.shape.requestId,
-  epoch: z.number().int().nonnegative(),
-  fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(z.string()),
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaV18),
-  events: z.array(chatEventSchema),
-  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
-  reachedStart: z.boolean(),
-  reachedEnd: z.boolean(),
-  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
-});
-
 export const chatSubscribeWindowedServerFrameSchema = z.discriminatedUnion(
   "kind",
   [
@@ -2920,35 +2865,6 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
 export const chatSubscribeV18 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 8 } as const,
-  openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("snapshot"),
-      ...textFrameFields,
-      ...chatReferenceFields,
-      snapshot: chatWindowedSnapshotSchemaV18,
-    }),
-    z.object({
-      kind: z.literal("range"),
-      ...textFrameFields,
-      ...chatReferenceFields,
-      range: chatRangeResponseSchemaV18,
-    }),
-    chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
-    chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
-    chatSubscribeManagedCommandsChangedServerFrameSchema,
-    chatSubscribeHeldUpdatesChangedServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemasV18,
-  ]),
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
-});
-
-/** 1.9 adds recorded placement to notification blocks in tails and ranges. */
-export const chatSubscribeV19 = defineStreamRpcContract({
-  method: "chat.subscribe",
-  schemaVersion: { major: 1, minor: 9 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

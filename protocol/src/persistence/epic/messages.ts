@@ -2,7 +2,6 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
-  contentBlockSchemaV18,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
   contentBlockSchemaPreSettlement,
@@ -201,9 +200,7 @@ const userMessageSenderKindRefine = (
   });
 };
 
-// Fixed field set for chat.subscribe 1.7/1.8. Extend the live export below
-// when adding message fields, leaving the historical definition unchanged.
-export const userMessageSchemaV18 = z
+export const userMessageSchema = z
   .object({
     role: z.literal("user"),
     messageId: z.string(),
@@ -213,9 +210,6 @@ export const userMessageSchemaV18 = z
     sessionAnchor: chatSessionAnchorSchema.nullable(),
   })
   .superRefine(userMessageSenderKindRefine);
-// There is no user-message delta in 1.9. Alias the frozen schema until a
-// newer contract needs its own extension (including the sender-kind check).
-export const userMessageSchema = userMessageSchemaV18;
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
 /**
@@ -293,9 +287,7 @@ export const imageResolutionEntrySchema = z.discriminatedUnion("state", [
 ]);
 export type ImageResolutionEntry = z.infer<typeof imageResolutionEntrySchema>;
 
-// Historical message fields; newer blocks are selected only by the live
-// extension below. Unchanged nested leaves follow the existing freeze pattern.
-export const assistantMessageSchemaV18 = z.object({
+export const assistantMessageSchema = z.object({
   role: z.literal("assistant"),
   /**
    * Stable, unique id for this assistant row, minted once at creation and never
@@ -308,7 +300,7 @@ export const assistantMessageSchemaV18 = z.object({
    */
   messageId: z.string().min(1),
   sender: agentSenderSchema,
-  blocks: z.array(contentBlockSchemaV18),
+  blocks: z.array(contentBlockSchema),
   /**
    * Wall-clock the turn began (ms). Set once at turn-start and never
    * overwritten; distinct from `timestamp` which the host rewrites on every
@@ -360,9 +352,6 @@ export const assistantMessageSchemaV18 = z.object({
    * consent chips (see `imageResolutionEntrySchema`).
    */
   imageResolutions: z.array(imageResolutionEntrySchema).default([]),
-});
-export const assistantMessageSchema = assistantMessageSchemaV18.extend({
-  blocks: z.array(contentBlockSchema),
 });
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
@@ -564,9 +553,4 @@ export const assistantMessageSchemaPreSettlement = z.object({
 export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
   userMessageSchemaV16,
   assistantMessageSchemaPreSettlement,
-]);
-
-export const messageSchemaV18 = z.discriminatedUnion("role", [
-  userMessageSchemaV18,
-  assistantMessageSchemaV18,
 ]);

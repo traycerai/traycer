@@ -269,7 +269,6 @@ function activityGroupChildSearchUnits(
   args: ActivityGroupChildSearchUnitsArgs,
 ): ReadonlyArray<ChatFindUnit> {
   const { segment, groupId, groupChain, tileInstanceId } = args;
-  if (segment.kind === "autonomous_resume") return [];
   if (segment.kind === "reasoning" && args.headerlessReasoning) return [];
   if (segment.kind === "subagent") {
     const renderId = segment.id;
@@ -496,8 +495,6 @@ function activityGroupChildHeaderSearchText(
   segment: ActivityGroupModel["segments"][number],
 ): ReadonlyArray<string> {
   switch (segment.kind) {
-    case "autonomous_resume":
-      return [];
     case "tool":
       return toolSegmentSearchText(segment);
     case "command":
