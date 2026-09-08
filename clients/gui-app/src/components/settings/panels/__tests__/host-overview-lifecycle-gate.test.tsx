@@ -259,6 +259,7 @@ function statusWith(
       operation === null
         ? null
         : { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
     ...extra,
   };
 }

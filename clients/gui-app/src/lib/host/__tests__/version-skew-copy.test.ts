@@ -4,6 +4,7 @@ import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-clie
 import {
   describeVersionSkew,
   hostAppVersionFromDirectoryEntry,
+  hostIsBehindClient,
 } from "@/lib/host/version-skew-copy";
 
 const HOST_UPGRADE = {
@@ -107,5 +108,63 @@ describe("hostAppVersionFromDirectoryEntry", () => {
     };
 
     expect(hostAppVersionFromDirectoryEntry(entry)).toBe("1.4.1");
+  });
+});
+
+/**
+ * `hostIsBehindClient` exists separately from `describeVersionSkew` because
+ * that function's job is to produce copy for a failure ALREADY attributed to
+ * a skew - its fallback branch warns and defaults to host-update copy for
+ * versions it cannot compare, which is the right behavior for a caller that
+ * has already decided something is wrong, and the wrong one for a caller that
+ * is merely wondering whether an update would help. A surface with no
+ * handshake verdict (the chat tile's stalled-load pane) must get a plain
+ * `false` on unparsable or missing versions, never a warning and an update
+ * offer aimed at a host that may be perfectly current.
+ */
+describe("hostIsBehindClient", () => {
+  it("is true when the host version is older than the client", () => {
+    expect(
+      hostIsBehindClient({
+        hostAppVersion: "1.2.0",
+        clientAppVersion: "1.3.0",
+      }),
+    ).toBe(true);
+  });
+
+  it("is false when the host version is newer than the client", () => {
+    expect(
+      hostIsBehindClient({
+        hostAppVersion: "1.4.0",
+        clientAppVersion: "1.3.0",
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when the versions are equal", () => {
+    expect(
+      hostIsBehindClient({
+        hostAppVersion: "1.3.0",
+        clientAppVersion: "1.3.0",
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when either version is null", () => {
+    expect(
+      hostIsBehindClient({ hostAppVersion: null, clientAppVersion: "1.3.0" }),
+    ).toBe(false);
+    expect(
+      hostIsBehindClient({ hostAppVersion: "1.2.0", clientAppVersion: null }),
+    ).toBe(false);
+  });
+
+  it("is false when a version string is unparseable", () => {
+    expect(
+      hostIsBehindClient({
+        hostAppVersion: "not-a-version",
+        clientAppVersion: "1.3.0",
+      }),
+    ).toBe(false);
   });
 });

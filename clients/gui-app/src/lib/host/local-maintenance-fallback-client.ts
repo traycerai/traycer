@@ -18,7 +18,7 @@ import {
   type HostUpdateCheckRequestV11,
   type HostUpdateCheckResponseV11,
   type HostUpdateInstallRequest,
-  type HostUpdateInstallResponseV11,
+  type HostUpdateInstallResponseV13,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { appLogger } from "@/lib/logger";
@@ -126,12 +126,22 @@ function isFallbackMethod(
  *        of a version already on disk - bounded, and the toast is telling
  *        the user to restart, not to reinstall.
  *  - `failed` / `stage-fingerprint-mismatch` / `installed-not-converged` →
- *    `cli-failed`, the host's own taxonomy for "the CLI tried and couldn't".
- *    The wire arm carries no message, so the lane's message goes to the log.
+ *    `cli-failed`, the host's own taxonomy for "the CLI tried and couldn't",
+ *    carrying the lane's message as the arm's open `reason`.
+ *
+ *    That pass-through is not cosmetic. The bundled CLI enforces the chat
+ *    store-format floor itself, so on this lane a downgrade refusal arrives
+ *    HERE, as a sentence - and the typed `storeFloor` the RPC lane would send
+ *    with it cannot be reconstructed, because these hosts publish no
+ *    `host.status.storeFormats` either. The sentence is therefore the only
+ *    evidence that exists, and dropping it to the log left the page saying
+ *    the CLI "couldn't complete the request" for a refusal it could explain.
+ *    "Install anyway" stays unreachable on this lane by construction: that
+ *    offer is built from the typed refusal, and nothing here has one.
  */
 export function mapInstallVersionOutcome(
   outcome: MutationOutcome<InstallVersionOk>,
-): HostUpdateInstallResponseV11 {
+): HostUpdateInstallResponseV13 {
   switch (outcome.kind) {
     case "ok":
       // `attemptId: null`, and structurally so rather than by omission: this
@@ -180,8 +190,35 @@ export function mapInstallVersionOutcome(
         kind: outcome.kind,
         message: outcome.message,
       });
-      return { outcome: "cli-failed" };
+      return {
+        outcome: "cli-failed",
+        reason: installFailureReason(outcome.message),
+        storeFloor: null,
+      };
   }
+}
+
+/**
+ * Longest lane message carried as a `reason`. The field is rendered into the
+ * Overview's failure line, and a CLI that ends up printing a stack trace into
+ * its message must not become a wall of text on a settings page.
+ */
+const MAX_INSTALL_REASON_CHARS = 300;
+
+/**
+ * The lane's message as the wire's `reason`: one line, bounded, or `null`.
+ *
+ * `null` rather than an empty string because the schema requires a non-empty
+ * reason - "the CLI said nothing" is the absence of a reason, and saying so
+ * structurally is what keeps a blank parenthetical off the page. Whitespace is
+ * collapsed for the same reason the display side needs one line: this text is
+ * a multi-line CLI diagnostic often enough to plan for it.
+ */
+function installFailureReason(message: string): string | null {
+  const collapsed = message.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return null;
+  if (collapsed.length <= MAX_INSTALL_REASON_CHARS) return collapsed;
+  return `${collapsed.slice(0, MAX_INSTALL_REASON_CHARS - 1)}…`;
 }
 
 /**
@@ -239,7 +276,7 @@ export interface MaintenanceFallbackServeMap {
   ) => Promise<HostUpdateCheckResponseV11>;
   readonly "host.update.install": (
     params: HostUpdateInstallRequest,
-  ) => Promise<HostUpdateInstallResponseV11>;
+  ) => Promise<HostUpdateInstallResponseV13>;
   readonly "host.doctor": () => Promise<HostDoctorResponse>;
   readonly "host.getInstallationInfo": () => Promise<HostGetInstallationInfoResponse>;
 }
@@ -348,7 +385,7 @@ function serveFallbackRequest<Method extends keyof HostRpcRegistry & string>(
   const request: unknown = params;
   const answer = ((): Promise<
     | HostUpdateCheckResponseV11
-    | HostUpdateInstallResponseV11
+    | HostUpdateInstallResponseV13
     | HostDoctorResponse
     | HostGetInstallationInfoResponse
   > => {
