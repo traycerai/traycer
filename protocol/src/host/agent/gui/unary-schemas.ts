@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   guiHarnessIdSchema,
+  guiHarnessIdSchemaCatalogV10,
   guiHarnessIdSchemaV10,
   guiHarnessIdSchemaV20,
   guiHarnessIdSchemaV30,
@@ -426,12 +427,72 @@ export type ListGuiAgentModelsRequest = z.infer<
   typeof listGuiAgentModelsRequestSchema
 >;
 
+/**
+ * `agent.gui.listModels@2.0` request - adds `profileId` (D09/D17/D21/D25): the
+ * managed profile whose model catalog is being asked for. `null` addresses the
+ * default account, which is the only thing `@1.0` could ever mean.
+ *
+ * A MAJOR, not an additive minor, for the reason
+ * `providersListModelProvidersRequestSchemaV20` records in
+ * `provider-schemas.ts`: the framework downgrades a same-major minor mismatch
+ * by re-parsing the newer request through the older minor's own
+ * (non-`.strict()`) schema, which silently STRIPS an unrecognized key. Only a
+ * cross-major bridge can REJECT a non-null `profileId`, and rewriting one to
+ * the default account is precisely the bug D21 exists to remove.
+ *
+ * Hand-copied rather than `.extend()`-built off the `@1.0` name so that
+ * constant stays byte-identical for every released consumer.
+ */
+export const listGuiAgentModelsRequestSchemaV20 = z.object({
+  harnessId: guiHarnessIdSchema,
+  workingDirectory: z.string().nullable(),
+  profileId: z.string().nullable(),
+});
+export type ListGuiAgentModelsRequestV20 = z.infer<
+  typeof listGuiAgentModelsRequestSchemaV20
+>;
+
 export const listGuiAgentModelsResponseSchema = z.object({
   harnessId: guiHarnessIdSchema,
   models: z.array(guiAgentModelOptionSchema),
 });
 export type ListGuiAgentModelsResponse = z.infer<
   typeof listGuiAgentModelsResponseSchema
+>;
+
+/**
+ * Frozen `agent.gui.listModels@1.0` response (W3 fix pass, P2) - a hand copy
+ * of the shape as `host-v1.3.0-rc.3` shipped it, using
+ * `guiHarnessIdSchemaCatalogV10` so a future harness admitted to the live
+ * `guiHarnessIdSchema` cannot widen this already-released line. `@1.0` now
+ * binds this constant instead of the live response above; `@2.0` still binds
+ * live, so the next harness addition fails `frozen-catalog-lines.test.ts`
+ * here first instead of only the tag-based compat gate.
+ */
+export const guiAgentModelOptionSchemaV10 = z.object({
+  harnessId: guiHarnessIdSchemaCatalogV10,
+  slug: z.string(),
+  label: z.string(),
+  description: z.string().nullable(),
+  contextWindow: z.number().nullable(),
+  maxOutputTokens: z.number().nullable(),
+  defaultReasoningEffort: z.string().nullable(),
+  supportedReasoningEfforts: z.array(agentReasoningEffortOptionSchema),
+  defaultServiceTier: z.string().nullable().default(null),
+  supportedServiceTiers: z.array(agentServiceTierOptionSchema).default([]),
+  deprecationNotice: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()),
+});
+export type GuiAgentModelOptionV10 = z.infer<
+  typeof guiAgentModelOptionSchemaV10
+>;
+
+export const listGuiAgentModelsResponseSchemaV10 = z.object({
+  harnessId: guiHarnessIdSchemaCatalogV10,
+  models: z.array(guiAgentModelOptionSchemaV10),
+});
+export type ListGuiAgentModelsResponseV10 = z.infer<
+  typeof listGuiAgentModelsResponseSchemaV10
 >;
 
 export const listGuiAgentCommandsRequestSchema = z.object({
@@ -443,12 +504,52 @@ export type ListGuiAgentCommandsRequest = z.infer<
   typeof listGuiAgentCommandsRequestSchema
 >;
 
+/**
+ * `agent.gui.listCommands@2.0` request - adds `profileId`, same MAJOR-not-minor
+ * reasoning as {@link listGuiAgentModelsRequestSchemaV20}. The command palette
+ * lists the SELECTED profile's skills (D17: skill roots hang off the profile
+ * home), so `null` here means the default account and nothing else.
+ */
+export const listGuiAgentCommandsRequestSchemaV20 = z.object({
+  harnessId: guiHarnessIdSchema,
+  workingDirectory: z.string().nullable(),
+  workingDirectories: z.array(z.string()).default([]),
+  profileId: z.string().nullable(),
+});
+export type ListGuiAgentCommandsRequestV20 = z.infer<
+  typeof listGuiAgentCommandsRequestSchemaV20
+>;
+
 export const listGuiAgentCommandsResponseSchema = z.object({
   harnessId: guiHarnessIdSchema,
   commands: z.array(guiAgentCommandOptionSchema),
 });
 export type ListGuiAgentCommandsResponse = z.infer<
   typeof listGuiAgentCommandsResponseSchema
+>;
+
+/**
+ * Frozen `agent.gui.listCommands@1.0` response (W3 fix pass, P2) - same
+ * reasoning and discipline as {@link listGuiAgentModelsResponseSchemaV10}.
+ */
+export const guiAgentCommandOptionSchemaV10 = z.object({
+  harnessId: guiHarnessIdSchemaCatalogV10,
+  name: z.string(),
+  description: z.string(),
+  argumentHint: z.string().nullable(),
+  kind: agentCommandKindSchema,
+  metadata: z.record(z.string(), z.unknown()),
+});
+export type GuiAgentCommandOptionV10 = z.infer<
+  typeof guiAgentCommandOptionSchemaV10
+>;
+
+export const listGuiAgentCommandsResponseSchemaV10 = z.object({
+  harnessId: guiHarnessIdSchemaCatalogV10,
+  commands: z.array(guiAgentCommandOptionSchemaV10),
+});
+export type ListGuiAgentCommandsResponseV10 = z.infer<
+  typeof listGuiAgentCommandsResponseSchemaV10
 >;
 
 export const getGuiAgentPlanRequestSchema = z.object({

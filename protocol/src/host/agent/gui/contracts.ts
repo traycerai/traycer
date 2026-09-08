@@ -7,9 +7,13 @@ import {
   getGuiAgentPlanRequestSchema,
   getGuiAgentPlanResponseSchema,
   listGuiAgentCommandsRequestSchema,
+  listGuiAgentCommandsRequestSchemaV20,
   listGuiAgentCommandsResponseSchema,
+  listGuiAgentCommandsResponseSchemaV10,
   listGuiAgentModelsRequestSchema,
+  listGuiAgentModelsRequestSchemaV20,
   listGuiAgentModelsResponseSchema,
+  listGuiAgentModelsResponseSchemaV10,
   listGuiHarnessesRequestSchema,
   listGuiHarnessesResponseSchema,
   listGuiHarnessesResponseSchemaV10,
@@ -28,6 +32,8 @@ import {
   guiHarnessOptionSchemaV50,
   guiHarnessOptionSchemaV60,
   guiHarnessOptionSchemaV71,
+  guiAgentModelOptionSchemaV10,
+  guiAgentCommandOptionSchemaV10,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   chatSubscribeV10,
@@ -800,18 +806,156 @@ export const agentGuiListHarnessesDowngradeV7ToV1 = defineDowngradePath<
   }),
 });
 
+/**
+ * Binds the frozen `listGuiAgentModelsResponseSchemaV10` (W3 fix pass, P2)
+ * rather than the live response - see that schema's doc comment.
+ */
 export const agentGuiListModelsV10 = defineRpcContract({
   method: "agent.gui.listModels",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listGuiAgentModelsRequestSchema,
-  responseSchema: listGuiAgentModelsResponseSchema,
+  responseSchema: listGuiAgentModelsResponseSchemaV10,
 });
 
+/**
+ * Binds the frozen `listGuiAgentCommandsResponseSchemaV10` (W3 fix pass, P2);
+ * same reasoning as `agentGuiListModelsV10` above.
+ */
 export const agentGuiListCommandsV10 = defineRpcContract({
   method: "agent.gui.listCommands",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listGuiAgentCommandsRequestSchema,
+  responseSchema: listGuiAgentCommandsResponseSchemaV10,
+});
+
+/**
+ * D09/D17/D25 (W3-T6): `profileId` on the request, so the composer's model
+ * catalog answers for the profile the picker has selected instead of always
+ * for the default account. The response is untouched and reused as-is.
+ */
+export const agentGuiListModelsV20 = defineRpcContract({
+  method: "agent.gui.listModels",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: listGuiAgentModelsRequestSchemaV20,
+  responseSchema: listGuiAgentModelsResponseSchema,
+});
+
+/** D09/D17/D25 (W3-T6): fills `profileId: null` - a client that predates
+ *  profiles only ever meant the default account, matching
+ *  `agentGuiListModelsV20`'s request contract above. */
+export const agentGuiListModelsUpgradeV10ToV20 = defineUpgradePath<
+  typeof agentGuiListModelsV10,
+  typeof agentGuiListModelsV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  // Reparse (not cast) through the live response: the frozen `@1.0` line
+  // below is a byte-for-byte hand copy today, but this is what makes a
+  // future harness id land as a real type error here instead of a silent
+  // cast (W3 fix pass, P2).
+  upgradeResponse: (response) =>
+    listGuiAgentModelsResponseSchema.parse(response),
+});
+
+/**
+ * FAILS CLOSED on a non-null `profileId` rather than rewriting it to the
+ * default account: serving the default account's models under a managed
+ * profile's name is the exact defect this line exists to remove (D21). Same
+ * shape as `providersListModelProvidersDowngradeV20ToV10`.
+ */
+export const agentGuiListModelsDowngradeV20ToV10 = defineDowngradePath<
+  typeof agentGuiListModelsV20,
+  typeof agentGuiListModelsV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    if (profileId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in agent.gui.listModels@1.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  // Reparses through the frozen `@1.0` response (W3 fix pass, P2), dropping
+  // any model whose `harnessId` postdates the freeze - same discipline as
+  // `agentGuiListHarnessesDowngradeV7ToV1` above.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiAgentModelsResponseSchemaV10.parse({
+      harnessId: response.harnessId,
+      models: response.models.filter(
+        (model) => guiAgentModelOptionSchemaV10.safeParse(model).success,
+      ),
+    }),
+  }),
+});
+
+/** D09/D17/D25 (W3-T6): `profileId` on the request, so the command palette
+ *  lists the selected profile's skills. Same reasoning as
+ *  `agentGuiListModelsV20`. */
+export const agentGuiListCommandsV20 = defineRpcContract({
+  method: "agent.gui.listCommands",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: listGuiAgentCommandsRequestSchemaV20,
   responseSchema: listGuiAgentCommandsResponseSchema,
+});
+
+/** D09/D17/D25 (W3-T6): fills `profileId: null`, same reasoning as
+ *  `agentGuiListModelsUpgradeV10ToV20` above. */
+export const agentGuiListCommandsUpgradeV10ToV20 = defineUpgradePath<
+  typeof agentGuiListCommandsV10,
+  typeof agentGuiListCommandsV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  // Reparse (not cast) through the live response; see
+  // `agentGuiListModelsUpgradeV10ToV20` above (W3 fix pass, P2).
+  upgradeResponse: (response) =>
+    listGuiAgentCommandsResponseSchema.parse(response),
+});
+
+/** Fails closed on a non-null `profileId`; see
+ *  `agentGuiListModelsDowngradeV20ToV10`. */
+export const agentGuiListCommandsDowngradeV20ToV10 = defineDowngradePath<
+  typeof agentGuiListCommandsV20,
+  typeof agentGuiListCommandsV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    if (profileId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in agent.gui.listCommands@1.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  // Reparses through the frozen `@1.0` response (W3 fix pass, P2); see
+  // `agentGuiListModelsDowngradeV20ToV10` above.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiAgentCommandsResponseSchemaV10.parse({
+      harnessId: response.harnessId,
+      commands: response.commands.filter(
+        (command) => guiAgentCommandOptionSchemaV10.safeParse(command).success,
+      ),
+    }),
+  }),
 });
 
 export const agentGuiGetPlanV10 = defineRpcContract({

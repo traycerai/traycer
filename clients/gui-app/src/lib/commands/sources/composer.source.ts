@@ -23,9 +23,11 @@ import {
   type ModelOption,
 } from "@/components/home/data/landing-options";
 import {
+  DEFAULT_ACCOUNT_HARNESS_PROFILES,
   useGuiHarnessCatalogForClient,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
 import { useHostBinding } from "@/lib/host";
 import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
@@ -298,10 +300,25 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
   // fill; on a cold remote host it is at least the focused composer's selected
   // harness, which its own picker's standalone query warms on mount, growing
   // as the user browses providers in that picker.
+  // The focused composer's OWN harness reads its OWN profile's slot (D09/D25):
+  // listing the default account's models for a composer running on a managed
+  // profile is not merely a narrower list - `selectModel` commits back onto
+  // that same profile, so the row picked has to have come from it. Every other
+  // harness stays on the default account, which is the account a palette
+  // provider SWITCH commits to. With no focused composer there is no selection
+  // and nothing to dispatch into, so the whole map is the default account.
+  const profileByHarnessId = useMemo<ReadonlyMap<GuiHarnessId, string | null>>(
+    () =>
+      entry === null
+        ? DEFAULT_ACCOUNT_HARNESS_PROFILES
+        : new Map([[entry.selection.harnessId, entry.selection.profileId]]),
+    [entry],
+  );
   return useGuiHarnessCatalogForClient(
     entry === null ? defaultClient : entry.hostClient,
     null,
     { enabled: true, subscribed: true, modelsFetch: "cached-only" },
+    profileByHarnessId,
   );
 }
 

@@ -23,6 +23,7 @@ import type {
   FocusedComposerKind,
 } from "@/lib/commands/types";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HarnessModelSelection } from "@/components/home/data/landing-options";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 
@@ -107,6 +108,8 @@ interface FakeCatalogHostClient {
 const focusedComposerCatalogMock = vi.hoisted(() => ({
   defaultClient: { getActiveHostId: () => "default-host" },
   clientCalls: [] as Array<{ getActiveHostId: () => string | null } | null>,
+  /** The per-harness profile map each catalog call was given (D09/D25). */
+  profileMapCalls: [] as Array<ReadonlyMap<string, string | null>>,
 }));
 
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
@@ -131,6 +134,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  // `useFocusedComposerCatalog` (composer.source.ts) passes this through as
+  // its profile map for every harness on the default account - a stable
+  // empty map, exactly like the real export.
+  DEFAULT_ACCOUNT_HARNESS_PROFILES: new Map(),
   useGuiHarnessCatalog: () => ({
     harnesses: catalogMock.harnesses,
     harnessesLoading: false,
@@ -142,8 +149,14 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // default host's) - regardless of which client was passed, this returns
   // the same fixture catalog `useGuiHarnessCatalog` above does, since none of
   // this file's cases need per-host catalog content, only per-host routing.
-  useGuiHarnessCatalogForClient: (client: FakeCatalogHostClient | null) => {
+  useGuiHarnessCatalogForClient: (
+    client: FakeCatalogHostClient | null,
+    _workingDirectory: string | null,
+    _activity: unknown,
+    profileIdByHarnessId: ReadonlyMap<string, string | null>,
+  ) => {
     focusedComposerCatalogMock.clientCalls.push(client);
+    focusedComposerCatalogMock.profileMapCalls.push(profileIdByHarnessId);
     return {
       harnesses: catalogMock.harnesses,
       harnessesLoading: false,
@@ -278,6 +291,17 @@ function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
 // per-host routing below construct their own distinct clients.
 const TEST_HOST_CLIENT = buildTestHostClient("test-host");
 
+/**
+ * The default account, which is what almost every case here registers: the
+ * palette's subpages list a composer's own profile only when it has one, and
+ * the case that exercises that is the profile-scoped one below.
+ */
+const DEFAULT_ACCOUNT_SELECTION: HarnessModelSelection = {
+  harnessId: "codex",
+  modelSlug: "",
+  profileId: null,
+};
+
 function resetCanvasStore(): void {
   useEpicCanvasStore.setState({
     tabsById: {},
@@ -295,6 +319,7 @@ describe("composerSource", () => {
   beforeEach(() => {
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
+    focusedComposerCatalogMock.profileMapCalls.length = 0;
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -306,6 +331,7 @@ describe("composerSource", () => {
     cleanup();
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
+    focusedComposerCatalogMock.profileMapCalls.length = 0;
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -323,6 +349,7 @@ describe("composerSource", () => {
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     const ids = captureItems(null, "landing").map((i) => i.id);
     expect(ids).toContain("composer:switch-provider");
@@ -338,6 +365,7 @@ describe("composerSource", () => {
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     const item = captureItems(null, "landing").find(
       (row) => row.id === "composer:stash-prompt",
@@ -355,6 +383,7 @@ describe("composerSource", () => {
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     const ids = captureItems(null, "landing").map((i) => i.id);
     expect(ids).not.toContain("composer:open-model-picker");
@@ -365,6 +394,7 @@ describe("composerSource", () => {
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     registerActiveModelPicker({
       toggle: () => undefined,
@@ -382,6 +412,7 @@ describe("composerSource", () => {
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     registerActiveModelPicker({
       toggle: () => undefined,
@@ -414,6 +445,7 @@ describe("composerSource", () => {
       "chat-tile",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     const ids = captureItems("epic-1", "chat-tile").map((i) => i.id);
     expect(ids).toContain("composer:switch-provider");
@@ -432,6 +464,7 @@ describe("composerSource", () => {
       "chat-tile",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     const items = captureItems("epic-1", "chat-tile");
     const item = items.find((candidate) => {
@@ -463,6 +496,7 @@ describe("composerSource", () => {
       "chat-tile",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     const ids = captureItems(null, "chat-tile").map((i) => i.id);
     expect(ids).not.toContain("composer:new-chat:replace");
@@ -473,6 +507,7 @@ describe("composerSource", () => {
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     const items = captureItems(null, "landing");
     const provider = items.find((i) => i.id === "composer:switch-provider");
@@ -490,6 +525,7 @@ describe("composerSource", () => {
           picks.push({ harnessId, modelSlug }),
       }),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
 
     const items = captureItems(null, "landing");
@@ -523,6 +559,7 @@ describe("composerSource", () => {
         switchHarness: (harnessId) => switches.push(harnessId),
       }),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
 
     const items = captureItems(null, "landing");
@@ -554,7 +591,12 @@ describe("composerSource", () => {
 
   it("the provider and model subpages resolve the FOCUSED composer's host client, not the default host's", () => {
     const hostClientB = buildTestHostClient("host-b");
-    registerFocusedComposerControls("landing", stubControls({}), hostClientB);
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      hostClientB,
+      DEFAULT_ACCOUNT_SELECTION,
+    );
 
     const items = captureItems(null, "landing");
     const providerSubpage = items.find(
@@ -575,6 +617,32 @@ describe("composerSource", () => {
 
     renderSubpageItems(modelSubpage, "landing");
     expect(focusedComposerCatalogMock.clientCalls.at(-1)).toBe(hostClientB);
+  });
+
+  // D09/D25: the subpages list the catalog of the account the composer is
+  // actually running on, and `selectModel` commits back onto that same
+  // profile - so a model picked here has to have come from it. Listing the
+  // default account's models for a profiled composer was a data-loss shape,
+  // not merely a narrower list.
+  it("scopes the composer subpages to the focused composer's own profile, and leaves every other harness on the default account", () => {
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+      { harnessId: "codex", modelSlug: "gpt-5", profileId: "work-uuid" },
+    );
+
+    const modelSubpage = captureItems(null, "landing").find(
+      (i) => i.id === "composer:switch-model",
+    )?.subpage;
+    if (modelSubpage === null || modelSubpage === undefined) {
+      throw new Error("expected a model subpage");
+    }
+    renderSubpageItems(modelSubpage, "landing");
+
+    const profileMap = focusedComposerCatalogMock.profileMapCalls.at(-1);
+    expect(profileMap?.get("codex")).toBe("work-uuid");
+    expect(profileMap?.has("claude")).toBe(false);
   });
 
   it("demotes a signed-out provider to the end of both subpages and badges it, but never removes it - the ambient verdict is not the send gate's verdict", () => {
@@ -614,6 +682,7 @@ describe("composerSource", () => {
         "landing",
         stubControls({}),
         TEST_HOST_CLIENT,
+        DEFAULT_ACCOUNT_SELECTION,
       );
       const items = captureItems(null, "landing");
       const providerSubpage = items.find(
@@ -699,6 +768,7 @@ describe("composerSource", () => {
         "landing",
         stubControls({}),
         TEST_HOST_CLIENT,
+        DEFAULT_ACCOUNT_SELECTION,
       );
       const items = captureItems(null, "landing");
       const providerSubpage = items.find(
@@ -723,6 +793,7 @@ describe("composerSource", () => {
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     const items = captureItems(null, "landing");
     const providerSubpage = items.find(
@@ -758,7 +829,12 @@ describe("composerSource", () => {
   });
 
   it("a focused composer whose host client hasn't resolved yet is passed through as null, never the default host's", () => {
-    registerFocusedComposerControls("landing", stubControls({}), null);
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      null,
+      DEFAULT_ACCOUNT_SELECTION,
+    );
 
     const items = captureItems(null, "landing");
     const modelSubpage = items.find(

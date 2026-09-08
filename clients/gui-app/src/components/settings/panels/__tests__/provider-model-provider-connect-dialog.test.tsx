@@ -177,12 +177,17 @@ function renderDialog(args: {
   readonly entry: ModelProviderEntry;
   readonly capabilities: ProviderModelProvidersCapabilities;
   readonly onDone: () => void;
+  /** The switcher's selection. Every case but the profile-forwarding one
+   *  below runs on the default account; asserting only `null` would also pass
+   *  if the dialog dropped the field entirely. */
+  readonly profileId: string | null;
 }) {
   return render(
     <ProviderModelProviderConnectDialog
       open
       onOpenChange={() => {}}
       providerId="opencode"
+      profileId={args.profileId}
       providerLabel="OpenCode"
       entry={args.entry}
       capabilities={args.capabilities}
@@ -331,7 +336,12 @@ describe("connectChoicesFor", () => {
 describe("connect with an API key", () => {
   it("sends the pasted secret as `key`, with prompts as a keyed record", () => {
     const onDone = vi.fn();
-    renderDialog({ entry: entry({}), capabilities: FULL_CAPS, onDone });
+    renderDialog({
+      entry: entry({}),
+      capabilities: FULL_CAPS,
+      onDone,
+      profileId: null,
+    });
     fireEvent.change(screen.getByLabelText("API key"), {
       target: { value: " sk-secret " },
     });
@@ -340,6 +350,7 @@ describe("connect with an API key", () => {
     expect(mocks.authCalls).toHaveLength(1);
     expect(mocks.authCalls[0]?.variables).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "connect",
         modelProviderId: "anthropic",
@@ -360,6 +371,7 @@ describe("connect with an API key", () => {
       entry: entry({}),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     const submit = screen.getByRole("button", { name: "Connect" });
     expect(submit.hasAttribute("disabled")).toBe(true);
@@ -373,7 +385,12 @@ describe("connect with an API key", () => {
 
   it("surfaces the host's invalid_input detail on the form", () => {
     const onDone = vi.fn();
-    renderDialog({ entry: entry({}), capabilities: FULL_CAPS, onDone });
+    renderDialog({
+      entry: entry({}),
+      capabilities: FULL_CAPS,
+      onDone,
+      profileId: null,
+    });
     fireEvent.change(screen.getByLabelText("API key"), {
       target: { value: "k" },
     });
@@ -394,7 +411,12 @@ describe("connect with an API key", () => {
 
   it("closes on done", () => {
     const onDone = vi.fn();
-    renderDialog({ entry: entry({}), capabilities: FULL_CAPS, onDone });
+    renderDialog({
+      entry: entry({}),
+      capabilities: FULL_CAPS,
+      onDone,
+      profileId: null,
+    });
     fireEvent.change(screen.getByLabelText("API key"), {
       target: { value: "k" },
     });
@@ -432,6 +454,7 @@ describe("connect with an API key", () => {
       }),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     // `deploymentType` is not a prompt of this method, so nothing can satisfy
     // the condition and the field it guards stays off screen.
@@ -470,6 +493,7 @@ describe("connect with an API key", () => {
       }),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     expect(screen.queryByLabelText("Instance URL")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Enterprise" }));
@@ -482,6 +506,7 @@ describe("connect with an API key", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(mocks.authCalls[0]?.variables).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "connect",
         modelProviderId: "anthropic",
@@ -512,6 +537,7 @@ describe("credential precedence", () => {
       }),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     // The variable's NAME went with `credentialKey`; the client cannot know it
     // without one, and guessing would be worse than the general statement.
@@ -527,6 +553,7 @@ describe("credential precedence", () => {
       entry: entry({ connected: true, source: "config" }),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     expect(
       screen.getByText(/OpenCode's own config file already provides/),
@@ -538,6 +565,7 @@ describe("credential precedence", () => {
       entry: entry({ connected: true, source: "api" }),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     // "takes precedence" is the phrase every notice shares, so its absence is
     // the assertion that NO notice rendered - not that one particular wording
@@ -554,6 +582,7 @@ describe("method picker", () => {
       entry: entry({}),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     expect(screen.queryByText("Sign-in method")).toBeNull();
     cleanup();
@@ -572,6 +601,7 @@ describe("method picker", () => {
       }),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     expect(screen.getByText("Sign-in method")).toBeTruthy();
     expect(screen.getByText("SuperGrok Subscription")).toBeTruthy();
@@ -594,6 +624,7 @@ describe("method picker", () => {
       }),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(
       screen.getByRole("button", { name: "Manually enter API Key" }),
@@ -604,6 +635,7 @@ describe("method picker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(mocks.authCalls[0]?.variables).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "connect",
         modelProviderId: "xai",
@@ -621,11 +653,13 @@ describe("OAuth code flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
     expect(start.variables).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "startOauth",
         modelProviderId: "github-copilot",
@@ -654,6 +688,7 @@ describe("OAuth code flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(mocks.authCalls[1]?.variables).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "submitCode",
         modelProviderId: "github-copilot",
@@ -684,6 +719,7 @@ describe("OAuth code flow", () => {
         open
         onOpenChange={() => {}}
         providerId="opencode"
+        profileId={null}
         providerLabel="OpenCode"
         entry={OAUTH_ONLY}
         capabilities={FULL_CAPS}
@@ -722,6 +758,7 @@ describe("OAuth code flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
@@ -755,6 +792,7 @@ describe("OAuth code flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
@@ -786,6 +824,7 @@ describe("OAuth code flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
@@ -825,6 +864,7 @@ describe("OAuth auto flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     settle(mocks.authCalls[0], {
@@ -855,7 +895,12 @@ describe("OAuth auto flow", () => {
     // shape, and the one that used to reopen the sign-in tab every tick.
     vi.useFakeTimers();
     const onDone = vi.fn();
-    renderDialog({ entry: OAUTH_ONLY, capabilities: FULL_CAPS, onDone });
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone,
+      profileId: null,
+    });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
     const pendingArm: ModelProviderAuthResult = {
@@ -882,6 +927,7 @@ describe("OAuth auto flow", () => {
     const poll = mocks.awaitCalls[0];
     expect(poll.variables).toEqual({
       providerId: "opencode",
+      profileId: null,
       modelProviderId: "github-copilot",
       attemptId: "attempt-1",
     });
@@ -923,6 +969,7 @@ describe("OAuth auto flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     settle(mocks.authCalls[0], {
@@ -960,6 +1007,7 @@ describe("OAuth auto flow", () => {
         entry: OAUTH_ONLY,
         capabilities: FULL_CAPS,
         onDone: vi.fn(),
+        profileId: null,
       });
       fireEvent.click(screen.getByRole("button", { name: "Continue" }));
       settle(mocks.authCalls[0], {
@@ -998,6 +1046,7 @@ describe("OAuth auto flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     settle(mocks.authCalls[0], {
@@ -1028,6 +1077,7 @@ describe("OAuth auto flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
@@ -1045,6 +1095,7 @@ describe("OAuth auto flow", () => {
     const cancel = mocks.cancelCalls[0];
     expect(cancel.variables).toEqual({
       providerId: "opencode",
+      profileId: null,
       modelProviderId: "github-copilot",
       attemptId: "attempt-1",
     });
@@ -1060,13 +1111,63 @@ describe("OAuth auto flow", () => {
     expect(mocks.awaitCalls).toHaveLength(0);
   });
 
+  // D25: the poll and the cancel both address the attempt the START opened,
+  // and an attempt is per `(provider, profile)`. Every other case here runs
+  // on the default account, so `null` alone would also pass if the field were
+  // dropped - this is the case that proves it is FORWARDED.
+  it("carries a non-null profile onto the poll and the cancel, not just onto the start", () => {
+    vi.useFakeTimers();
+    const onDone = vi.fn();
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone,
+      profileId: "profile-a",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const start = mocks.authCalls[0];
+    expect(start.variables).toMatchObject({ profileId: "profile-a" });
+    settle(start, {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/auth",
+      method: "auto",
+      instructions: null,
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(1_600);
+    });
+    expect(mocks.awaitCalls[0]?.variables).toEqual({
+      providerId: "opencode",
+      profileId: "profile-a",
+      modelProviderId: "github-copilot",
+      attemptId: "attempt-1",
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    });
+    expect(mocks.cancelCalls[0]?.variables).toEqual({
+      providerId: "opencode",
+      profileId: "profile-a",
+      modelProviderId: "github-copilot",
+      attemptId: "attempt-1",
+    });
+  });
+
   it("does NOT report a confirmed cancel as a successful connect", () => {
     // The host answers a real teardown with `{cancelled: true, result: done}`,
     // where `done` describes the CANCEL. Treating it as a credential result
     // would close the dialog claiming the provider had connected.
     vi.useFakeTimers();
     const onDone = vi.fn();
-    renderDialog({ entry: OAUTH_ONLY, capabilities: FULL_CAPS, onDone });
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone,
+      profileId: null,
+    });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
     settle(start, {
@@ -1091,6 +1192,7 @@ describe("OAuth auto flow", () => {
       entry: OAUTH_ONLY,
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
+      profileId: null,
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
@@ -1120,7 +1222,12 @@ describe("OAuth auto flow", () => {
     // cancel, and `result` says the credential was actually written.
     vi.useFakeTimers();
     const onDone = vi.fn();
-    renderDialog({ entry: OAUTH_ONLY, capabilities: FULL_CAPS, onDone });
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone,
+      profileId: null,
+    });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
     settle(start, {

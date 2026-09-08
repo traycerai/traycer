@@ -1876,6 +1876,20 @@ export const modelProviderEntrySchema =
 export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
 
 /**
+ * The fixed `ModelProviderEntry.id` Traycer's own endpoint projection declares
+ * in a profile's OpenCode config (D08).
+ *
+ * It travels on this wire as an ordinary entry id, and BOTH ends key behavior
+ * on it: the host writes the block under it, the GUI's Model Providers tab
+ * recognizes it to badge the row "Traycer" and suppress the affordances that
+ * would be re-projected away. A literal match on each side of the repo
+ * boundary fails silently when one side renames it - the row simply stops
+ * being recognized - so the id is declared once, here, beside the entry schema
+ * that carries it.
+ */
+export const TRAYCER_ENDPOINT_MODEL_PROVIDER_ID = "traycer-endpoint";
+
+/**
  * Failure vocabulary for this surface. Deliberately its OWN enums rather than
  * `providerNativeErrorCodeSchema`.
 

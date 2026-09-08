@@ -77,7 +77,10 @@ import { ProfileSwitcher } from "./profile-switcher";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
 import { CopySettingsPage } from "./copy-settings-page";
 import { useCopySettingsSupported } from "@/hooks/providers/use-copy-settings-supported";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
+import {
+  profileCommitId,
+  profileWireId,
+} from "@/components/providers/provider-profile-model";
 import {
   resolveSelectedProfileId,
   useProvidersProfileSelectionStore,
@@ -98,6 +101,7 @@ import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
+import { ProviderTabPlaceholder } from "./provider-tab-placeholder";
 import {
   providerTabInputs,
   providerTabLabel,
@@ -1335,7 +1339,7 @@ function ProviderDetail({
           onSetProfileEnabled={(profileId, enabled) =>
             setProfileEnabled.mutate({
               providerId,
-              profileId: profileId ?? "ambient",
+              profileId: profileWireId(profileId),
               enabled,
             })
           }
@@ -1511,7 +1515,7 @@ function ProviderDetail({
           onSetProfileEnabled={(profileId, enabled) =>
             setProfileEnabled.mutate({
               providerId,
-              profileId: profileId ?? "ambient",
+              profileId: profileWireId(profileId),
               enabled,
             })
           }
@@ -1700,7 +1704,18 @@ function ProviderTabBody({
       }
       return (
         <ProviderModelProvidersTab
+          // W3-T5: the tab holds per-profile `useState` (connect target,
+          // disconnect target, row error, search, method filter, an open
+          // custom form) that must not survive a profile switch - remounting
+          // is one line instead of five reset effects. `null` is not a valid
+          // React key on its own (React treats it as "no key"), so the
+          // Default account takes the wire sentinel through the one
+          // derivation that owns it (`profileWireId`) rather than an inline
+          // literal fallback, which is what `no-restricted-syntax` bans on a
+          // key.
+          key={profileWireId(profileId)}
           providerId={state.providerId}
+          profileId={profileId}
           providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
           capabilities={modelProviders}
           // The catalog needs a managed server, so a pack that is still
@@ -1728,19 +1743,4 @@ function ProviderTabBody({
         />
       );
   }
-}
-
-function ProviderTabPlaceholder({
-  title,
-  description,
-}: {
-  readonly title: string;
-  readonly description: string;
-}): ReactNode {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border/60 p-4">
-      <div className="text-ui-sm font-medium text-foreground">{title}</div>
-      <p className="text-ui-xs text-muted-foreground">{description}</p>
-    </div>
-  );
 }

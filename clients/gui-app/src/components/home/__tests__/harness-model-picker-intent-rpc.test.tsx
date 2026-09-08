@@ -69,9 +69,18 @@ interface QueryActivity {
   readonly subscribed: boolean;
 }
 
+// Mutable so the D21 unsupported-profile test below can seed a profile for
+// the harness it selects - every other test in this file leaves it empty,
+// which is the "no profiles anywhere" fixture the rest of the suite assumes.
+const providersListMock = vi.hoisted(() => ({
+  providers: [] as ProviderCliState[],
+}));
+
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: (activity: QueryActivity) => ({
-    data: activity.enabled ? { providers: [] } : undefined,
+    data: activity.enabled
+      ? { providers: providersListMock.providers }
+      : undefined,
     isPending: false,
     isError: false,
     isFetching: false,
@@ -80,7 +89,9 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     _client: string | null,
     activity: QueryActivity,
   ) => ({
-    data: activity.enabled ? { providers: [] } : undefined,
+    data: activity.enabled
+      ? { providers: providersListMock.providers }
+      : undefined,
     isPending: false,
     isError: false,
     isFetching: false,
@@ -254,12 +265,21 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   GuiHarnessId,
   ListGuiAgentCommandsResponse,
   ListGuiAgentModelsResponse,
   ListGuiHarnessesResponse,
 } from "@traycer/protocol/host/index";
+import type {
+  ProviderCliState,
+  ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
+import { providerProfileFixture } from "@/testing/provider-profile-fixture";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -320,8 +340,14 @@ function modelsResponseFor(
 }
 
 interface RpcCallLog {
-  readonly listModels: Array<{ readonly harnessId: GuiHarnessId }>;
-  readonly listCommands: Array<{ readonly harnessId: GuiHarnessId }>;
+  readonly listModels: Array<{
+    readonly harnessId: GuiHarnessId;
+    readonly profileId: string | null;
+  }>;
+  readonly listCommands: Array<{
+    readonly harnessId: GuiHarnessId;
+    readonly profileId: string | null;
+  }>;
 }
 
 interface PickerRpcFixture {
@@ -357,11 +383,17 @@ function createPickerRpcFixture(
       handlers: {
         "agent.gui.listHarnesses": () => ({ harnesses: [...harnesses] }),
         "agent.gui.listModels": (params) => {
-          calls.listModels.push({ harnessId: params.harnessId });
+          calls.listModels.push({
+            harnessId: params.harnessId,
+            profileId: params.profileId,
+          });
           return modelsResponseFor(params.harnessId);
         },
         "agent.gui.listCommands": (params) => {
-          calls.listCommands.push({ harnessId: params.harnessId });
+          calls.listCommands.push({
+            harnessId: params.harnessId,
+            profileId: params.profileId,
+          });
           return {
             harnessId: params.harnessId,
             commands: [],
@@ -392,6 +424,87 @@ function countFor(
 
 function defaultSelection(harnessId: GuiHarnessId): HarnessModelSelection {
   return { harnessId, modelSlug: "", profileId: null };
+}
+
+function profiledSelection(
+  harnessId: GuiHarnessId,
+  profileId: string,
+): HarnessModelSelection {
+  return { harnessId, modelSlug: "", profileId };
+}
+
+/**
+ * A `providers.list` row carrying one managed profile, so the picker's
+ * `catalogProfileIdByHarnessId` derivation (which only ever names a harness
+ * present in this list) actually resolves `profileId` for it - without this,
+ * a committed profile selection has no provider row to validate against and
+ * the picker treats the harness as the default account regardless.
+ */
+function providerWithProfile(
+  providerId: ProviderId,
+  profileId: string,
+): ProviderCliState {
+  return {
+    providerId,
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    // `resolveActiveProfileForHarness` short-circuits to `null` under TWO
+    // profiles (fewer than that leaves no "which one" to resolve), so the
+    // ambient row must be present alongside the managed one or the selected
+    // `profileId` below is silently dropped back to the default account
+    // regardless of what the composer committed.
+    profiles: [
+      providerProfileFixture({
+        profileId: "ambient",
+        kind: "ambient",
+        authType: "oauth",
+        label: "Terminal account",
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      }),
+      providerProfileFixture({
+        profileId,
+        kind: "managed",
+        authType: "oauth",
+        label: "Work",
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      }),
+    ],
+  };
 }
 
 function renderPickerWithFixture(
@@ -478,6 +591,8 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     vi.useRealTimers();
     hostBindingMock.current = null;
     cleanup();
+    resetNegotiatedManifests();
+    providersListMock.providers = [];
     useKeybindingStore.getState().resetAll();
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
@@ -719,5 +834,65 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
 
     expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
     expect(countFor(fixture.calls.listCommands, "opencode")).toBe(0);
+  });
+
+  // W3-T6/D21: `agent.gui.listModels`/`listCommands` carry `profileId` on the
+  // wire - `null` for the default account, the committed profile otherwise.
+  it("sends the composer's selected profile on agent.gui.listModels, and null for the default account", async () => {
+    // BOTH catalog methods, because the gate requires both: the two carry
+    // `profileId` from the same change, but "they move together" is a fact
+    // about the registry as it landed, not one the gate is entitled to assume.
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "agent.gui.listModels": { major: 2, minor: 0 },
+      "agent.gui.listCommands": { major: 2, minor: 0 },
+    });
+
+    const defaultFixture = createPickerRpcFixture([
+      harnessEntry("codex", true),
+    ]);
+    renderPickerWithFixture(defaultFixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+    expect(defaultFixture.calls.listModels.at(-1)?.profileId).toBeNull();
+    cleanup();
+
+    providersListMock.providers = [providerWithProfile("codex", "work-uuid")];
+    const profileFixture = createPickerRpcFixture([
+      harnessEntry("codex", true),
+    ]);
+    renderPickerWithFixture(
+      profileFixture,
+      profiledSelection("codex", "work-uuid"),
+    );
+    await waitFor(() => {
+      expect(
+        profileFixture.calls.listModels.some(
+          (call) => call.profileId === "work-uuid",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  // D21: a host that never negotiated `agent.gui.listModels@2.0` cannot
+  // answer for a profile at all - with a managed profile selected the picker
+  // must refuse the call rather than silently serve the default account's
+  // rows under that profile's name (the defect this gate exists to prevent).
+  it("issues zero listModels requests and shows the unsupported message when the selected profile's host predates profile scoping", async () => {
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "agent.gui.listModels": { major: 1, minor: 0 },
+      "agent.gui.listCommands": { major: 1, minor: 0 },
+    });
+    providersListMock.providers = [providerWithProfile("codex", "work-uuid")];
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)]);
+    renderPickerWithFixture(fixture, profiledSelection("codex", "work-uuid"));
+
+    // The profile strip badge appends the profile's name ("Select model,
+    // Work"), unlike the plain unavailable-harness case elsewhere in this
+    // file - match the prefix rather than the exact accessible name.
+    await screen.findByRole("button", { name: /^Select model/ });
+    await openPickerByTriggerName(/^Select model/);
+
+    await screen.findByText(/too old to list a profile's models/);
+    expect(countFor(fixture.calls.listModels, "codex")).toBe(0);
+    expect(countFor(fixture.calls.listCommands, "codex")).toBe(0);
   });
 });

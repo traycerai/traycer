@@ -17,6 +17,8 @@ import { useProvidersModelProvidersList } from "@/hooks/providers/use-providers-
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { useHostBinding } from "@/lib/host/runtime";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useHostMethodMajorAtLeast } from "@/hooks/host/use-host-supports-method";
+import { ProviderTabPlaceholder } from "./provider-tab-placeholder";
 import {
   modelProviderAuthErrorMessage,
   modelProviderListErrorMessage,
@@ -32,6 +34,7 @@ import {
   useModelProviderPendingAuthStore,
 } from "@/stores/settings/model-provider-pending-auth-store";
 import {
+  isTraycerEndpointModelProvider,
   sortModelProviderEntries,
   sourceBadgeHint,
   sourceBadgeLabel,
@@ -277,6 +280,7 @@ function attemptForTarget(args: {
   readonly entries: Readonly<Record<string, ModelProviderPendingAuthEntry>>;
   readonly hostId: string | null;
   readonly providerId: ProviderId;
+  readonly profileId: string | null;
   readonly target: ModelProviderEntry | null;
 }): ModelProviderPendingAuthEntry | null {
   const { hostId, target } = args;
@@ -284,6 +288,7 @@ function attemptForTarget(args: {
   return getModelProviderPendingAuth(args.entries, {
     hostId,
     providerId: args.providerId,
+    profileId: args.profileId,
     modelProviderId: target.id,
   });
 }
@@ -364,6 +369,7 @@ function useConfigWriteOwner(): ConfigWriteOwner {
  */
 function useCustomProviderForm(
   providerId: ProviderId,
+  profileId: string | null,
   configWrite: ConfigWriteOwner,
 ): {
   /** The open form, or null. `initial` is what separates edit from declare. */
@@ -405,6 +411,7 @@ function useCustomProviderForm(
       auth.mutate(
         {
           providerId,
+          profileId,
           action: {
             // One shape, two verbs - the wire's own split. `updateCustom` is
             // only reachable for a row the host flagged `configDeclaredCustom`,
@@ -447,7 +454,7 @@ function useCustomProviderForm(
         },
       );
     },
-    [auth, configWrite, providerId],
+    [auth, configWrite, providerId, profileId],
   );
 
   const submit = useCallback(
@@ -479,6 +486,44 @@ function useCustomProviderForm(
   };
 }
 
+/**
+ * The first major that carries `profileId` on `providers.listModelProviders`
+ * / `providers.modelProviderAuth` (D25/D21, W3-T5 - see
+ * `providersListModelProvidersRequestSchemaV20`'s comment in
+ * `provider-schemas.ts` for why this landed as a major rather than the
+ * `@1.1` additive minor originally planned).
+ */
+const PROFILE_SCOPED_MODEL_PROVIDERS_MAJOR = 2;
+
+interface ModelProvidersProfileScope {
+  /** A profile is selected and the host is KNOWN to predate `profileId` on
+   *  this surface: no RPC may go out unscoped, because that would show and
+   *  mutate the DEFAULT ACCOUNT's catalog while the switcher says otherwise. */
+  readonly unsupportedForProfile: boolean;
+  /** Whether a request may be sent at all. Fails closed while the verdict is
+   *  unknown, so the body renders its ordinary pending state rather than
+   *  either the wrong account's rows or a false accusation. */
+  readonly profileScopeResolved: boolean;
+}
+
+/**
+ * The tab's two profile-scoping verdicts, from the selection and the host's
+ * negotiated major (`null` = no handshake recorded). Three input states, two
+ * outputs - kept together so a caller cannot read one and forget the other.
+ */
+function modelProvidersProfileScope(
+  profileId: string | null,
+  scopingSupported: boolean | null,
+): ModelProvidersProfileScope {
+  if (profileId === null) {
+    return { unsupportedForProfile: false, profileScopeResolved: true };
+  }
+  return {
+    unsupportedForProfile: scopingSupported === false,
+    profileScopeResolved: scopingSupported === true,
+  };
+}
+
 export function ProviderModelProvidersTab(props: {
   readonly providerId: ProviderId;
   readonly providerLabel: string;
@@ -489,8 +534,11 @@ export function ProviderModelProvidersTab(props: {
    * and the row it would need is the one its caller is already rendering.
    */
   readonly packPreparing: ProviderPackPreparing | null;
+  /** The switcher's current selection (D25). `null` is the default account. */
+  readonly profileId: string | null;
 }): ReactNode {
-  const { providerId, providerLabel, capabilities, packPreparing } = props;
+  const { providerId, providerLabel, capabilities, packPreparing, profileId } =
+    props;
   // Subscribed for the re-render; the id itself comes off the BOUND client,
   // because Settings can target a non-active host - the same rule
   // `useProviderNativeScope` follows, and for the same reason: an attempt filed
@@ -499,6 +547,19 @@ export function ProviderModelProvidersTab(props: {
   const activeHostId = useAddressableHostId();
   const binding = useHostBinding();
   const hostId = binding?.hostClient.getActiveHostId() ?? activeHostId;
+
+  // Three states, not two. `null` is "no handshake with this host has been
+  // recorded yet" - nothing is known either way - and collapsing it into
+  // "absent" made the tab accuse a perfectly current host of being out of
+  // date for the window before its manifest landed. Hiding an affordance
+  // under `null` is safe; ASSERTING a host is out of date under it is not.
+  const profileScopingSupported = useHostMethodMajorAtLeast(
+    hostId,
+    "providers.listModelProviders",
+    PROFILE_SCOPED_MODEL_PROVIDERS_MAJOR,
+  );
+  const { unsupportedForProfile, profileScopeResolved } =
+    modelProvidersProfileScope(profileId, profileScopingSupported);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [methodFilter, setMethodFilter] = useState<ModelProviderMethodFilter>(
@@ -511,11 +572,12 @@ export function ProviderModelProvidersTab(props: {
 
   const listQuery = useProvidersModelProvidersList({
     providerId,
-    enabled: true,
+    profileId,
+    enabled: profileScopeResolved,
   });
   const auth = useProvidersModelProviderAuth();
   const configWrite = useConfigWriteOwner();
-  const customForm = useCustomProviderForm(providerId, configWrite);
+  const customForm = useCustomProviderForm(providerId, profileId, configWrite);
   const pendingAuthEntries = useModelProviderPendingAuthStore((s) => s.entries);
 
   const result: ModelProvidersListResult | undefined = listQuery.data?.result;
@@ -539,6 +601,7 @@ export function ProviderModelProvidersTab(props: {
   const autoAdoptAttempt = findModelProviderPendingAuth(pendingAuthEntries, {
     providerId,
     hostId,
+    profileId,
   });
 
   useResumedConnectTarget({
@@ -557,6 +620,7 @@ export function ProviderModelProvidersTab(props: {
     entries: pendingAuthEntries,
     hostId,
     providerId,
+    profileId,
     target: connectTarget,
   });
 
@@ -575,6 +639,7 @@ export function ProviderModelProvidersTab(props: {
     auth.mutate(
       {
         providerId,
+        profileId,
         action: { action: "disconnect", modelProviderId: target.id },
       },
       {
@@ -588,7 +653,7 @@ export function ProviderModelProvidersTab(props: {
         },
       },
     );
-  }, [auth, configWrite, disconnectTarget, providerId]);
+  }, [auth, configWrite, disconnectTarget, providerId, profileId]);
 
   const canDisconnect = capabilities.actions.includes("disconnect");
   const connectable = isConnectable(capabilities);
@@ -612,6 +677,19 @@ export function ProviderModelProvidersTab(props: {
     disconnectingId: disconnectPending ? disconnectTarget.id : null,
     configWritingId: configWrite.activeModelProviderId,
   });
+
+  // Every hook above has already run (the query stayed `enabled: false`, so
+  // it issued no RPC) - this only decides what renders. A profile selected
+  // against a host that predates `profileId` on this surface must not fall
+  // back to the unscoped, default-account call; it must say so instead.
+  if (unsupportedForProfile) {
+    return (
+      <ProviderTabPlaceholder
+        title="Model providers"
+        description="This host needs an update before it can show this profile's model providers."
+      />
+    );
+  }
 
   return (
     <div
@@ -711,6 +789,7 @@ export function ProviderModelProvidersTab(props: {
             if (!open) setConnectTargetId(null);
           }}
           providerId={providerId}
+          profileId={profileId}
           providerLabel={providerLabel}
           entry={connectTarget}
           capabilities={capabilities}
@@ -1035,13 +1114,15 @@ function ModelProviderListShell(props: {
  * the user's broken values back and report a failure they never had a chance to
  * fix. That row gets Edit alone, opened on exactly what is wrong.
  */
+interface CustomRowActions {
+  readonly values: CustomProviderValues;
+  readonly reenable: boolean;
+}
+
 function customRowActions(
   entry: ModelProviderEntry,
   canUpdateCustom: boolean,
-): {
-  readonly values: CustomProviderValues;
-  readonly reenable: boolean;
-} | null {
+): CustomRowActions | null {
   if (!canUpdateCustom) return null;
   const values = customProviderValuesOf(entry);
   if (values === null) return null;
@@ -1071,6 +1152,67 @@ function RefreshingNotice(props: { readonly refreshing: boolean }): ReactNode {
   );
 }
 
+interface ModelProviderRowAffordances {
+  readonly custom: CustomRowActions | null;
+  readonly configBusy: boolean;
+  readonly showDisconnect: boolean;
+  readonly showConnect: boolean;
+}
+
+/**
+ * Which action buttons one row offers, and whether they are closed by an
+ * in-flight config write. Pure, and separate from the row's markup so the
+ * REASONS live together rather than one per JSX branch.
+ */
+function modelProviderRowAffordances(input: {
+  readonly entry: ModelProviderEntry;
+  readonly canDisconnect: boolean;
+  readonly connectable: boolean;
+  readonly canUpdateCustom: boolean;
+  readonly configWriteInFlight: boolean;
+  readonly busy: boolean;
+}): ModelProviderRowAffordances {
+  const { entry } = input;
+  // Traycer wrote this block and re-projects it before every spawn (D08), so
+  // an Edit or a Disconnect here is an action whose result is silently
+  // reverted on the next run. The badge hint carries the whole story and
+  // points at the Account tab, which is where the block is actually edited;
+  // offering buttons that lie is worse than offering none.
+  const traycerManaged = isTraycerEndpointModelProvider(entry.id);
+  const custom = traycerManaged
+    ? null
+    : customRowActions(entry, input.canUpdateCustom);
+  // The affordance is gated on `canDisconnect` ALONE. `hasStoredCredential`
+  // answers a different question ("does Traycer hold a credential for this?")
+  // and a later host may answer the two differently - reading either one for
+  // the other is how a button appears that the host will refuse.
+  const showDisconnect =
+    !traycerManaged && input.canDisconnect && entry.canDisconnect;
+  return {
+    custom,
+    // Every config-writing entry point closes while ANY of them is in flight,
+    // not just the acting row's. They all rewrite one file, and a completion
+    // that lands after the user started something else would apply its result
+    // to state that has moved on.
+    configBusy: input.busy || input.configWriteInFlight,
+    showDisconnect,
+    // Upstream's own rule, and the reason this is not `!entry.connected`: a
+    // connected row the host will NOT let us disconnect (an env-sourced one)
+    // must still offer a way in, or it is a dead end that neither explains
+    // itself nor lets the user put a credential in place for when the
+    // variable is gone. Everywhere else, connected means Disconnect and
+    // nothing beside it - which is what "the same buttons under the same
+    // conditions" asks for. A declared custom row that is off re-enables from
+    // its own values; asking it to Connect would demand a key for a provider
+    // whose credential is not the thing that was turned off.
+    showConnect:
+      !traycerManaged &&
+      input.connectable &&
+      !showDisconnect &&
+      custom?.reenable !== true,
+  };
+}
+
 function ModelProviderRow(props: {
   readonly entry: ModelProviderEntry;
   readonly providerLabel: string;
@@ -1086,28 +1228,8 @@ function ModelProviderRow(props: {
   readonly onReenableCustom: (values: CustomProviderValues) => void;
 }): ReactNode {
   const { entry } = props;
-  const custom = customRowActions(entry, props.canUpdateCustom);
-  // Every config-writing entry point closes while ANY of them is in flight, not
-  // just the acting row's. They all rewrite one file, and a completion that
-  // lands after the user started something else would apply its result to state
-  // that has moved on.
-  const configBusy = props.busy || props.configWriteInFlight;
-  // The affordance is gated on `canDisconnect` ALONE. `hasStoredCredential`
-  // answers a different question ("does Traycer hold a credential for this?")
-  // and a later host may answer the two differently - reading either one for
-  // the other is how a button appears that the host will refuse.
-  const showDisconnect = props.canDisconnect && entry.canDisconnect;
-  // Upstream's own rule, and the reason this is not `!entry.connected`: a
-  // connected row the host will NOT let us disconnect (an env-sourced one) must
-  // still offer a way in, or it is a dead end that neither explains itself nor
-  // lets the user put a credential in place for when the variable is gone.
-  // Everywhere else, connected means Disconnect and nothing beside it - which
-  // is what "the same buttons under the same conditions" asks for.
-  // A declared custom row that is off re-enables from its own values; asking it
-  // to Connect would demand a key for a provider whose credential is not the
-  // thing that was turned off.
-  const showConnect =
-    props.connectable && !showDisconnect && custom?.reenable !== true;
+  const { custom, configBusy, showDisconnect, showConnect } =
+    modelProviderRowAffordances(props);
   return (
     <li className="w-full">
       <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 py-1.5">
@@ -1137,6 +1259,7 @@ function ModelProviderRow(props: {
           {entry.source !== null ? (
             <TooltipWrapper
               label={sourceBadgeHint(
+                entry.id,
                 entry.source,
                 props.providerLabel,
                 entry.configDeclaredCustom,
@@ -1149,7 +1272,11 @@ function ModelProviderRow(props: {
                 variant="outline"
                 className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal text-muted-foreground"
               >
-                {sourceBadgeLabel(entry.source, entry.configDeclaredCustom)}
+                {sourceBadgeLabel(
+                  entry.id,
+                  entry.source,
+                  entry.configDeclaredCustom,
+                )}
               </Badge>
             </TooltipWrapper>
           ) : null}

@@ -11,6 +11,7 @@
  */
 import { useEffect, useRef } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HarnessModelSelection } from "@/components/home/data/landing-options";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   registerFocusedComposerControls,
@@ -19,17 +20,19 @@ import {
 import type { FocusedComposerKind } from "@/lib/commands/types";
 
 /**
- * `hostClient` is the composer's target host (see
- * `FocusedComposerEntry.hostClient`). Unlike the setters it is NOT parked in
- * the ref: the palette reads it to decide WHICH host's catalog to list, so a
- * change must re-register (and notify subscribers), not just be picked up on
- * the next dispatch. Client identity only changes on real host events
- * (directory resolution, auth), so the re-registration churn is negligible.
+ * `hostClient` and `selection` are the composer's target host and committed
+ * destination (see `FocusedComposerEntry`). Unlike the setters they are NOT
+ * parked in the ref: the palette reads them to decide WHICH host's and WHICH
+ * account's catalog to list, so a change must re-register (and notify
+ * subscribers), not just be picked up on the next dispatch. Both change only
+ * on real events - host directory resolution, or a committed provider/model
+ * pick - so the re-registration churn is negligible.
  */
 export function useRegisterFocusedComposerControls(
   kind: FocusedComposerKind | null,
   controls: ComposerControls,
   hostClient: HostClient<HostRpcRegistry> | null,
+  selection: HarnessModelSelection,
 ): void {
   const controlsRef = useRef<ComposerControls>(controls);
 
@@ -59,7 +62,8 @@ export function useRegisterFocusedComposerControls(
         },
       },
       hostClient,
+      selection,
     );
     return dispose;
-  }, [hostClient, kind]);
+  }, [hostClient, kind, selection]);
 }

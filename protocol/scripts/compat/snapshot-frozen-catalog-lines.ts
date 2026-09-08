@@ -34,6 +34,10 @@ import {
   listGuiHarnessesResponseSchemaV70,
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchema,
+  listGuiAgentModelsResponseSchema,
+  listGuiAgentModelsResponseSchemaV10,
+  listGuiAgentCommandsResponseSchema,
+  listGuiAgentCommandsResponseSchemaV10,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
   getChatRunSettingsResponseSchema,
@@ -204,6 +208,16 @@ const FIXTURES = {
   // schema, `@2.0` dumps LIVE so the next growth attempt fails here first.
   "providers.nativeMutate@1.0": dump(providersNativeMutateResponseSchemaV10),
   "providers.nativeMutate@2.0": dump(providersNativeMutateResponseSchema),
+  // New (W3 fix pass, P2): `agent.gui.listModels`/`listCommands` are on
+  // `RELEASED_FLOOR_METHOD_NAMES`, and their `@2.0` line (W3-T6) opened over
+  // the SAME live response instance as `@1.0` with neither dumped here - the
+  // same gap that let W2-T12b widen `providers.nativeMutate` unseen. `@1.0`
+  // dumps the hand-frozen response, `@2.0` dumps LIVE so the next harness
+  // addition fails here first.
+  "agent.gui.listModels@1.0": dump(listGuiAgentModelsResponseSchemaV10),
+  "agent.gui.listModels@2.0": dump(listGuiAgentModelsResponseSchema),
+  "agent.gui.listCommands@1.0": dump(listGuiAgentCommandsResponseSchemaV10),
+  "agent.gui.listCommands@2.0": dump(listGuiAgentCommandsResponseSchema),
 };
 
 const HEADER =

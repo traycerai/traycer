@@ -299,6 +299,7 @@ export function LandingComposer(props: LandingComposerProps) {
     pickerStore,
     hostClient,
     harnessId,
+    profileId,
     mentionRoots,
     currentEpicId: null,
     // Mirror the chat editor's activity (see `isActive` below): skip the eager

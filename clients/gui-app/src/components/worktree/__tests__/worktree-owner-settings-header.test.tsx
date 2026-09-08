@@ -57,6 +57,7 @@ const scopedReads = vi.hoisted(() => ({
   warmupCalls: [] as Array<{
     readonly client: unknown;
     readonly harnessId: string | null;
+    readonly profileId: string | null;
     readonly enabled: boolean;
   }>,
 }));
@@ -93,6 +94,11 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   },
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  // The header's own `profileIdByHarnessId` fallback for a `null` subject
+  // (see `worktree-owner-settings-header.tsx`) - a stable empty map, exactly
+  // like the real export, so that branch does not throw "not defined" in a
+  // wholesale mock of this module.
+  DEFAULT_ACCOUNT_HARNESS_PROFILES: new Map(),
   // Client-scoped like the real hook: a `null` client is a disabled read and
   // yields an EMPTY catalog (never another host's entries), which is what
   // drives the raw-slug fallback the unresolvable-host test asserts.
@@ -112,11 +118,13 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessModelsWarmup: (
     client: unknown,
     harnessId: string | null,
+    profileId: string | null,
     activity: { readonly enabled: boolean; readonly subscribed: boolean },
   ) => {
     scopedReads.warmupCalls.push({
       client,
       harnessId,
+      profileId,
       enabled: activity.enabled,
     });
   },

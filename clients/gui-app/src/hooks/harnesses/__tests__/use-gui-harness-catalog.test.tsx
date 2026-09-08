@@ -19,6 +19,10 @@ import {
   type MockMethodHandler,
 } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   GuiHarnessId,
   ListGuiHarnessesResponse,
@@ -46,8 +50,10 @@ import {
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
+  DEFAULT_ACCOUNT_HARNESS_PROFILES,
   HARNESS_CATALOG_REFRESH_AFTER_MS,
   harnessCatalogEntryNeedsRefresh,
+  harnessCatalogProfileScope,
   useGuiHarnessCatalog,
   useGuiHarnessCatalogForClient,
   useGuiHarnessCommandsQuery,
@@ -56,6 +62,8 @@ import {
   useGuiHarnessModelsQuery,
   useGuiHarnessModelsQueryForClient,
   useGuiHarnessModelsWarmup,
+  useHarnessCatalogProfileScope,
+  useHarnessCatalogProfileScopingSupport,
   useRefreshHarnessCatalog,
   useRefreshHarnessCatalogForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -85,6 +93,18 @@ function setEffectiveHostId(hostId: string | null): void {
     selectionRevision: 1,
   });
 }
+
+/** The one target every default-account case in this file reads. */
+const MODELS_TARGET = {
+  harnessId: "opencode",
+  workingDirectory: null,
+  profileId: null,
+} as const;
+const COMMANDS_TARGET = {
+  harnessId: "opencode",
+  workingDirectories: [],
+  profileId: null,
+} as const;
 
 const UNAVAILABLE_INITIAL_MS = 30 * 1000;
 const UNAVAILABLE_SECOND_MS = 60 * 1000;
@@ -466,7 +486,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
 
     renderHook(
       () =>
-        useGuiHarnessModelsQuery("opencode", null, {
+        useGuiHarnessModelsQuery(MODELS_TARGET, {
           enabled: true,
           subscribed: true,
         }),
@@ -493,7 +513,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
 
     const hook = renderHook(
       () =>
-        useGuiHarnessModelsQuery("opencode", null, {
+        useGuiHarnessModelsQuery(MODELS_TARGET, {
           enabled: true,
           subscribed: true,
         }),
@@ -539,7 +559,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
 
     const { result } = renderHook(
       () =>
-        useGuiHarnessModelsQuery("opencode", null, {
+        useGuiHarnessModelsQuery(MODELS_TARGET, {
           enabled: true,
           subscribed: true,
         }),
@@ -586,11 +606,15 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
 
     renderHook(
       () =>
-        useGuiHarnessCatalog(null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "all-harnesses",
-        }),
+        useGuiHarnessCatalog(
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
 
@@ -614,11 +638,15 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
 
     const hook = renderHook(
       () =>
-        useGuiHarnessCatalog(null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "all-harnesses",
-        }),
+        useGuiHarnessCatalog(
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -662,11 +690,15 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
 
     renderHook(
       () =>
-        useGuiHarnessCatalog(null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "all-harnesses",
-        }),
+        useGuiHarnessCatalog(
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
 
@@ -709,11 +741,15 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
     // The prefetch/owner warms the host-keyed cache once.
     const owner = renderHook(
       () =>
-        useGuiHarnessCatalog(null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "all-harnesses",
-        }),
+        useGuiHarnessCatalog(
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -727,11 +763,15 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
     // no live publisher and issues zero requests, yet gets friendly labels.
     const reader = renderHook(
       () =>
-        useGuiHarnessCatalog(null, {
-          enabled: false,
-          subscribed: true,
-          modelsFetch: "cached-only",
-        }),
+        useGuiHarnessCatalog(
+          null,
+          {
+            enabled: false,
+            subscribed: true,
+            modelsFetch: "cached-only",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -752,11 +792,15 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
     });
     const owner = renderHook(
       () =>
-        useGuiHarnessCatalog(null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "all-harnesses",
-        }),
+        useGuiHarnessCatalog(
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -766,11 +810,15 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
 
     const hidden = renderHook(
       () =>
-        useGuiHarnessCatalog(null, {
-          enabled: false,
-          subscribed: false,
-          modelsFetch: "cached-only",
-        }),
+        useGuiHarnessCatalog(
+          null,
+          {
+            enabled: false,
+            subscribed: false,
+            modelsFetch: "cached-only",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -940,11 +988,11 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           enabled: true,
           subscribed: true,
         });
-        useGuiHarnessModelsQueryForClient(clientA, "opencode", null, {
+        useGuiHarnessModelsQueryForClient(clientA, MODELS_TARGET, {
           enabled: true,
           subscribed: true,
         });
-        useGuiHarnessCommandsQuery(clientA, "opencode", [], {
+        useGuiHarnessCommandsQuery(clientA, COMMANDS_TARGET, {
           enabled: true,
           subscribed: true,
         });
@@ -957,11 +1005,11 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           enabled: true,
           subscribed: true,
         });
-        useGuiHarnessModelsQueryForClient(clientB, "opencode", null, {
+        useGuiHarnessModelsQueryForClient(clientB, MODELS_TARGET, {
           enabled: true,
           subscribed: true,
         });
-        useGuiHarnessCommandsQuery(clientB, "opencode", [], {
+        useGuiHarnessCommandsQuery(clientB, COMMANDS_TARGET, {
           enabled: true,
           subscribed: true,
         });
@@ -1077,11 +1125,11 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           enabled: true,
           subscribed: true,
         });
-        useGuiHarnessModelsQueryForClient(clientB, "opencode", null, {
+        useGuiHarnessModelsQueryForClient(clientB, MODELS_TARGET, {
           enabled: true,
           subscribed: true,
         });
-        useGuiHarnessCommandsQuery(clientB, "opencode", [], {
+        useGuiHarnessCommandsQuery(clientB, COMMANDS_TARGET, {
           enabled: true,
           subscribed: true,
         });
@@ -1152,6 +1200,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     >(entry.hostId, "agent.gui.listModels", {
       harnessId: "opencode",
       workingDirectory: null,
+      profileId: null,
     });
     queryClient.setQueryData(queryKey, modelsResponse(1));
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
@@ -1237,11 +1286,15 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     );
     renderHook(
       () =>
-        useGuiHarnessCatalog(null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "all-harnesses",
-        }),
+        useGuiHarnessCatalog(
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: Wrapper },
     );
     const refresh = renderHook(() => useRefreshHarnessCatalog(), {
@@ -1341,11 +1394,16 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
 
     const { result } = renderHook(
       () =>
-        useGuiHarnessCatalogForClient(null, null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "all-harnesses",
-        }),
+        useGuiHarnessCatalogForClient(
+          null,
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: Wrapper },
     );
 
@@ -1435,6 +1493,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
   afterEach(() => {
     hostBindingMock.current = null;
     useSelectionAuthorityStore.getState().reset();
+    resetNegotiatedManifests();
     cleanup();
   });
 
@@ -1443,6 +1502,13 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     readonly client: HostClient<HostRpcRegistry>;
     /** Harness ids of every `agent.gui.listModels` request, in arrival order. */
     readonly modelCalls: GuiHarnessId[];
+    /** The full `(harnessId, profileId)` pair of every `listModels` request,
+     *  in arrival order - what the cold-cache/profile-slot coverage below
+     *  reads instead of `modelCalls` alone. */
+    readonly modelCallParams: Array<{
+      readonly harnessId: GuiHarnessId;
+      readonly profileId: string | null;
+    }>;
   }
 
   function createScopedFixture(
@@ -1453,6 +1519,10 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
   ): ScopedFixture {
     const queryClient = createAppQueryClient();
     const modelCalls: GuiHarnessId[] = [];
+    const modelCallParams: Array<{
+      readonly harnessId: GuiHarnessId;
+      readonly profileId: string | null;
+    }> = [];
     let requestCounter = 0;
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -1469,6 +1539,10 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
           "agent.gui.listHarnesses": () => ({ harnesses: harnesses(ids) }),
           "agent.gui.listModels": (params) => {
             modelCalls.push(params.harnessId);
+            modelCallParams.push({
+              harnessId: params.harnessId,
+              profileId: params.profileId,
+            });
             return listModelsHandler === null
               ? modelsResponse(1)
               : listModelsHandler();
@@ -1480,23 +1554,44 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
     const client = spine.createRequester(mockLocalHostEntry);
+    // A CURRENT host by default. The profile-scoping gate reads the negotiated
+    // manifest, and a fixture that recorded none would leave every
+    // profile-bearing case below in the "no handshake yet" state - which sends
+    // nothing, so the assertions would pass for the wrong reason. The
+    // degradation cases below re-record a `@1.0` manifest on purpose.
+    recordProfileScopedCatalogManifest(2);
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
         {props.children}
       </QueryClientProvider>
     );
-    return { Wrapper, client, modelCalls };
+    return { Wrapper, client, modelCalls, modelCallParams };
+  }
+
+  /** A stable empty list so the commands query's params identity is stable. */
+  const EMPTY_COMMAND_DIRECTORIES: ReadonlyArray<string> = [];
+
+  function recordProfileScopedCatalogManifest(major: number): void {
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "agent.gui.listModels": { major, minor: 0 },
+      "agent.gui.listCommands": { major, minor: 0 },
+    });
   }
 
   it("issues ZERO listModels on a cold cache, and reports entries as not loading rather than eternally pending", async () => {
     const fixture = createScopedFixture(["opencode", "claude"], null);
     const { result } = renderHook(
       () =>
-        useGuiHarnessCatalogForClient(fixture.client, null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "cached-only",
-        }),
+        useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "cached-only",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => {
@@ -1520,11 +1615,16 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     const fixture = createScopedFixture(["opencode", "claude"], null);
     renderHook(
       () =>
-        useGuiHarnessCatalogForClient(fixture.client, null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "all-harnesses",
-        }),
+        useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => {
@@ -1532,21 +1632,275 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     });
   });
 
+  // W3-T6/D25: `profileIdByHarnessId` is one profile PER HARNESS, not one for
+  // the whole catalog - a harness absent from the map is on its default
+  // account. Each harness's fan-out request must carry its own entry's
+  // profile, and a harness pinned to a managed profile must never fall back
+  // to the default account's cache slot (`profileId` is part of the cache
+  // key, so a distinct profile is necessarily a distinct request).
+  it("scopes each harness's model fan-out to its own profile - a profile's slot is never the default account's", async () => {
+    const fixture = createScopedFixture(["opencode", "claude"], null);
+    const profileIdByHarnessId = new Map<GuiHarnessId, string | null>([
+      ["opencode", "work-uuid"],
+      ["claude", null],
+    ]);
+    renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          { enabled: true, subscribed: true, modelsFetch: "all-harnesses" },
+          profileIdByHarnessId,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(fixture.modelCallParams).toHaveLength(2);
+    });
+    expect(
+      [...fixture.modelCallParams].sort((a, b) =>
+        a.harnessId.localeCompare(b.harnessId),
+      ),
+    ).toEqual([
+      { harnessId: "claude", profileId: null },
+      { harnessId: "opencode", profileId: "work-uuid" },
+    ]);
+
+    // Same client, same harness - but now browsed on the DEFAULT account.
+    // If the profile's slot were reused for the default account (or vice
+    // versa), this second mount would issue no new request at all.
+    renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          { enabled: true, subscribed: true, modelsFetch: "all-harnesses" },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(fixture.modelCallParams).toContainEqual({
+        harnessId: "opencode",
+        profileId: null,
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // W3-T6/D21 - the profile-scoping choke point itself. Before this, the two
+  // exported halves of the degradation mechanism had no direct coverage at
+  // all: the only exercise was indirect, through the picker suite.
+  // ---------------------------------------------------------------------
+
+  it("harnessCatalogProfileScope: the default account is ready on every host, and a profile id is never substituted", () => {
+    // The default account is answerable on every released line, so it does not
+    // wait on - or fail from - a version verdict.
+    expect(harnessCatalogProfileScope(null, null)).toEqual({
+      profileId: null,
+      status: "ready",
+    });
+    expect(harnessCatalogProfileScope(null, false)).toEqual({
+      profileId: null,
+      status: "ready",
+    });
+    // The substitution D21 exists to prevent: in BOTH non-ready states the
+    // profile id survives, so a disabled observer reads that profile's own
+    // (empty) cache slot rather than the default account's prefetched one.
+    expect(harnessCatalogProfileScope("work-uuid", null)).toEqual({
+      profileId: "work-uuid",
+      status: "pending",
+    });
+    expect(harnessCatalogProfileScope("work-uuid", false)).toEqual({
+      profileId: "work-uuid",
+      status: "unsupported",
+    });
+    expect(harnessCatalogProfileScope("work-uuid", true)).toEqual({
+      profileId: "work-uuid",
+      status: "ready",
+    });
+  });
+
+  it("useHarnessCatalogProfileScopingSupport: null for an unrecorded host, false at @1.0, true only when BOTH catalog methods are at @2.0", () => {
+    const support = (): boolean | null =>
+      renderHook(() =>
+        useHarnessCatalogProfileScopingSupport(mockLocalHostEntry.hostId),
+      ).result.current;
+
+    // No handshake recorded: not known either way, so no surface may accuse
+    // this host of being out of date.
+    expect(support()).toBeNull();
+    expect(
+      renderHook(() => useHarnessCatalogProfileScopingSupport(null)).result
+        .current,
+    ).toBeNull();
+
+    recordProfileScopedCatalogManifest(1);
+    expect(support()).toBe(false);
+
+    recordProfileScopedCatalogManifest(2);
+    expect(support()).toBe(true);
+
+    // The half `listCommands` used to get for free: a host that upgraded one
+    // catalog method and not the other cannot answer for a profile, and the
+    // gate must read both rather than let one stand in for the other.
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "agent.gui.listModels": { major: 2, minor: 0 },
+      "agent.gui.listCommands": { major: 1, minor: 0 },
+    });
+    expect(support()).toBe(false);
+  });
+
+  it("useHarnessCatalogProfileScope holds pending - not unsupported - while no handshake with the host is recorded", () => {
+    const { result } = renderHook(() =>
+      useHarnessCatalogProfileScope(mockLocalHostEntry.hostId, "work-uuid"),
+    );
+    expect(result.current).toEqual({
+      profileId: "work-uuid",
+      status: "pending",
+    });
+  });
+
+  it("a host below @2.0 with a managed profile selected issues ZERO listModels and marks the entry unsupported", async () => {
+    const fixture = createScopedFixture(["opencode"], null);
+    recordProfileScopedCatalogManifest(1);
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          { enabled: true, subscribed: true, modelsFetch: "all-harnesses" },
+          new Map<GuiHarnessId, string | null>([["opencode", "work-uuid"]]),
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.harnesses).toHaveLength(1);
+    });
+    // The fan-out dispatches in an effect right after the harness list lands;
+    // give it that beat so this asserts absence where absence would show.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fixture.modelCallParams).toEqual([]);
+    expect(result.current.harnesses[0].modelsProfileUnsupported).toBe(true);
+    expect(result.current.harnesses[0].models).toEqual([]);
+    // Not "loading": nothing is coming, and a spinner would promise that it is.
+    expect(result.current.harnesses[0].modelsLoading).toBe(false);
+    // And not routed through the failed-fetch channel, which renders with a
+    // report-issue affordance beside it.
+    expect(result.current.harnesses[0].modelsError).toBeNull();
+  });
+
+  it("the same host below @2.0 still serves the DEFAULT ACCOUNT - degradation is per profile, not per host", async () => {
+    const fixture = createScopedFixture(["opencode"], null);
+    recordProfileScopedCatalogManifest(1);
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          { enabled: true, subscribed: true, modelsFetch: "all-harnesses" },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(fixture.modelCallParams).toEqual([
+        { harnessId: "opencode", profileId: null },
+      ]);
+    });
+    expect(result.current.harnesses[0].modelsProfileUnsupported).toBe(false);
+  });
+
+  it("mixed fan-out on a host below @2.0: the default-account harness fetches, the profile-bearing one does not", async () => {
+    const fixture = createScopedFixture(["opencode", "claude"], null);
+    recordProfileScopedCatalogManifest(1);
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          { enabled: true, subscribed: true, modelsFetch: "all-harnesses" },
+          new Map<GuiHarnessId, string | null>([
+            ["opencode", "work-uuid"],
+            ["claude", null],
+          ]),
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(fixture.modelCallParams).toEqual([
+        { harnessId: "claude", profileId: null },
+      ]);
+    });
+    const opencode = result.current.harnesses.find(
+      (harness) => harness.id === "opencode",
+    );
+    const claude = result.current.harnesses.find(
+      (harness) => harness.id === "claude",
+    );
+    expect(opencode?.modelsProfileUnsupported).toBe(true);
+    expect(claude?.modelsProfileUnsupported).toBe(false);
+    // The entry indexing must follow the SCOPED subset, not the raw harness
+    // list - an off-by-one here would hand claude's models to opencode.
+    await waitFor(() => {
+      expect(claude?.models.length ?? 0).toBeGreaterThan(0);
+    });
+    expect(opencode?.models).toEqual([]);
+  });
+
+  it("useGuiHarnessModelsQueryForClient and useGuiHarnessCommandsQuery both hold their request on a host below @2.0", async () => {
+    const fixture = createScopedFixture(["opencode"], null);
+    recordProfileScopedCatalogManifest(1);
+    renderHook(
+      () => ({
+        models: useGuiHarnessModelsQueryForClient(
+          fixture.client,
+          {
+            harnessId: "opencode",
+            workingDirectory: null,
+            profileId: "work-uuid",
+          },
+          { enabled: true, subscribed: true },
+        ),
+        commands: useGuiHarnessCommandsQuery(
+          fixture.client,
+          {
+            harnessId: "opencode",
+            workingDirectories: EMPTY_COMMAND_DIRECTORIES,
+            profileId: "work-uuid",
+          },
+          { enabled: true, subscribed: true },
+        ),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fixture.modelCallParams).toEqual([]);
+  });
+
   it("surfaces models a targeted per-harness query fetched into the shared slot, leaving every other harness unfetched", async () => {
     const fixture = createScopedFixture(["opencode", "claude"], null);
     const { result } = renderHook(
       () => ({
-        catalog: useGuiHarnessCatalogForClient(fixture.client, null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "cached-only",
-        }),
+        catalog: useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "cached-only",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
         // The picker's composition: its own standalone query for the harness
         // it is actually about (selected/browsed), same cache slot.
         selected: useGuiHarnessModelsQueryForClient(
           fixture.client,
-          "opencode",
-          null,
+          MODELS_TARGET,
           { enabled: true, subscribed: true },
         ),
       }),
@@ -1581,15 +1935,19 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     });
     const { result } = renderHook(
       () => ({
-        catalog: useGuiHarnessCatalogForClient(fixture.client, null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "cached-only",
-        }),
+        catalog: useGuiHarnessCatalogForClient(
+          fixture.client,
+          null,
+          {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "cached-only",
+          },
+          DEFAULT_ACCOUNT_HARNESS_PROFILES,
+        ),
         selected: useGuiHarnessModelsQueryForClient(
           fixture.client,
-          "opencode",
-          null,
+          MODELS_TARGET,
           { enabled: true, subscribed: true },
         ),
       }),
@@ -1622,7 +1980,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     const fixture = createScopedFixture(["opencode", "claude"], null);
     const noSubject = renderHook(
       () =>
-        useGuiHarnessModelsWarmup(fixture.client, null, {
+        useGuiHarnessModelsWarmup(fixture.client, null, null, {
           enabled: true,
           subscribed: true,
         }),
@@ -1636,7 +1994,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
 
     const warm = renderHook(
       () =>
-        useGuiHarnessModelsWarmup(fixture.client, "claude", {
+        useGuiHarnessModelsWarmup(fixture.client, "claude", null, {
           enabled: true,
           subscribed: true,
         }),
@@ -1649,7 +2007,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     // Cache-only contract: a warm slot is never re-pulled by a remount.
     renderHook(
       () =>
-        useGuiHarnessModelsWarmup(fixture.client, "claude", {
+        useGuiHarnessModelsWarmup(fixture.client, "claude", null, {
           enabled: true,
           subscribed: true,
         }),

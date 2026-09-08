@@ -25,6 +25,9 @@ function isCustomProviderWrite(action: ModelProviderAuthAction): boolean {
 
 export interface ModelProviderAuthVariables {
   readonly providerId: ProviderId;
+  /** D25/D21 (W3-T5): which profile's upstream credential this call
+   *  addresses. `null` is the default account. */
+  readonly profileId: string | null;
   readonly action: ModelProviderAuthAction;
 }
 
@@ -61,6 +64,7 @@ export function useProvidersModelProviderAuth(): UseMutationResult<
     method: "providers.modelProviderAuth",
     mapVariables: (variables) => ({
       providerId: variables.providerId,
+      profileId: variables.profileId,
       action: variables.action,
     }),
     options: {
@@ -88,6 +92,7 @@ export function useProvidersModelProviderAuth(): UseMutationResult<
             queryClient,
             hostId: context.hostId,
             providerId: variables.providerId,
+            profileId: variables.profileId,
           });
         }
       },

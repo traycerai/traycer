@@ -20,12 +20,15 @@ const MODEL_PROVIDERS_LIST_STALE_MS = 60_000;
 
 export function useProvidersModelProvidersList(args: {
   readonly providerId: ProviderId;
+  /** D25/D21 (W3-T5): which profile's catalog to read. `null` is the default
+   *  account. */
+  readonly profileId: string | null;
   readonly enabled: boolean;
 }): UseQueryResult<ProvidersListModelProvidersResponse, HostRpcError> {
   const client = useHostClient();
   const params = useMemo(
-    () => ({ providerId: args.providerId }),
-    [args.providerId],
+    () => ({ providerId: args.providerId, profileId: args.profileId }),
+    [args.providerId, args.profileId],
   );
   return useHostQuery<HostRpcRegistry, "providers.listModelProviders">({
     cacheKeyIdentity: undefined,

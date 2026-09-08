@@ -324,6 +324,12 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               customRowOpen={customRowOpen}
               onCloseCustomRow={onCloseCustomRow}
               onOpenProviderSettings={onOpenProviderSettings}
+              // The picker already owns "move this provider to another
+              // profile"; the unsupported state's way out is that same
+              // commit aimed at the default account, not a new path.
+              onUseDefaultAccount={() => {
+                onProfileChange(resolvedActiveProviderId, null);
+              }}
               terminalLoginSurface={terminalLoginSurface}
               runTargetHostId={runTargetHostId}
               onClosePicker={onClosePicker}

@@ -164,6 +164,9 @@ import {
 import {
   agentGuiGetPlanV10,
   agentGuiListCommandsV10,
+  agentGuiListCommandsV20,
+  agentGuiListCommandsUpgradeV10ToV20,
+  agentGuiListCommandsDowngradeV20ToV10,
   agentGuiListHarnessesDowngradeV2ToV1,
   agentGuiListHarnessesDowngradeV3ToV1,
   agentGuiListHarnessesDowngradeV3ToV2,
@@ -212,6 +215,9 @@ import {
   agentGuiListHarnessesV71,
   agentGuiListHarnessesV80,
   agentGuiListModelsV10,
+  agentGuiListModelsV20,
+  agentGuiListModelsUpgradeV10ToV20,
+  agentGuiListModelsDowngradeV20ToV10,
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
@@ -801,8 +807,10 @@ import {
   providersListResponseSchemaV80,
   isProfileEnabled,
   providersListModelProvidersRequestSchema,
+  providersListModelProvidersRequestSchemaV20,
   providersListModelProvidersResponseSchema,
   providersModelProviderAuthRequestSchema,
+  providersModelProviderAuthRequestSchemaV20,
   providersModelProviderAuthResponseSchema,
   providersAwaitModelProviderAuthRequestSchema,
   providersAwaitModelProviderAuthResponseSchema,
@@ -3802,12 +3810,115 @@ export const providersListModelProvidersV10 = defineRpcContract({
   responseSchema: providersListModelProvidersResponseSchema,
 });
 
+/**
+ * D25/D21 (W3-T5): `profileId` on the request. See
+ * `providersListModelProvidersRequestSchemaV20`'s comment for why this is a
+ * MAJOR rather than the `@1.1` additive minor the ticket text names - the
+ * response is untouched and reused as-is.
+ */
+export const providersListModelProvidersV20 = defineRpcContract({
+  method: "providers.listModelProviders",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersListModelProvidersRequestSchemaV20,
+  responseSchema: providersListModelProvidersResponseSchema,
+});
+
+/** D25/D21 (W3-T5): fills `profileId: null` - an old client only ever meant
+ *  the default account, matching `providersListModelProvidersV20`'s request
+ *  contract above. */
+export const providersListModelProvidersUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersListModelProvidersV10,
+  typeof providersListModelProvidersV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * FAILS CLOSED on a non-null `profileId` (`DOWNGRADE_UNSUPPORTED`) rather
+ * than rewriting it to the default account - the exact bug D21 sets out to
+ * remove (same shape as `providersMcpAuthDowngradeV20ToV10`).
+ */
+export const providersListModelProvidersDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersListModelProvidersV20,
+  typeof providersListModelProvidersV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    if (profileId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in providers.listModelProviders@1.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
+});
+
 /** Connect / start-OAuth / submit-code / disconnect for one upstream provider. */
 export const providersModelProviderAuthV10 = defineRpcContract({
   method: "providers.modelProviderAuth",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersModelProviderAuthRequestSchema,
   responseSchema: providersModelProviderAuthResponseSchema,
+});
+
+/** D25/D21 (W3-T5): `profileId` on the request, same reasoning as
+ *  `providersListModelProvidersV20` above. */
+export const providersModelProviderAuthV20 = defineRpcContract({
+  method: "providers.modelProviderAuth",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersModelProviderAuthRequestSchemaV20,
+  responseSchema: providersModelProviderAuthResponseSchema,
+});
+
+/** D25/D21 (W3-T5): fills `profileId: null`, same reasoning as
+ *  `providersListModelProvidersUpgradeV10ToV20` above. */
+export const providersModelProviderAuthUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersModelProviderAuthV10,
+  typeof providersModelProviderAuthV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
+});
+
+/** FAILS CLOSED on a non-null `profileId` (`DOWNGRADE_UNSUPPORTED`) rather
+ *  than rewriting it to the default account (D21) - this is a
+ *  credential-write path, so silently rewriting the target account is the
+ *  exact defect this refactor exists to remove. Same shape as
+ *  `providersListModelProvidersDowngradeV20ToV10` above. */
+export const providersModelProviderAuthDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersModelProviderAuthV20,
+  typeof providersModelProviderAuthV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    if (profileId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "A managed profile has no representation in providers.modelProviderAuth@1.0",
+        },
+      };
+    }
+    return { ok: true, value: rest };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
 /** Bounded status poll for an in-flight OAuth attempt. Never a long poll. */
@@ -5935,6 +6046,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListModelsV20,
+          upgradeFromPreviousVersion: agentGuiListModelsUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentGuiListModelsDowngradeV20ToV10 },
+    },
   },
   "agent.gui.listCommands": {
     1: {
@@ -5946,6 +6067,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListCommandsV20,
+          upgradeFromPreviousVersion: agentGuiListCommandsUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentGuiListCommandsDowngradeV20ToV10 },
     },
   },
   "agent.gui.getPlan": {
@@ -9293,6 +9424,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListModelProvidersV20,
+          upgradeFromPreviousVersion:
+            providersListModelProvidersUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListModelProvidersDowngradeV20ToV10,
+      },
+    },
   },
   "providers.modelProviderAuth": {
     degrade: { kind: "unsupported" },
@@ -9305,6 +9449,18 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersModelProviderAuthV20,
+          upgradeFromPreviousVersion: providersModelProviderAuthUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersModelProviderAuthDowngradeV20ToV10,
+      },
     },
   },
   "providers.awaitModelProviderAuth": {

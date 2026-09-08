@@ -14,6 +14,8 @@ export interface UseComposerPickerItemsParams {
   readonly pickerStore: ComposerPickerStore;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly harnessId: GuiHarnessId;
+  /** The composer's selected profile; `null` is the default account. */
+  readonly profileId: string | null;
   readonly mentionRoots: ReadonlyArray<string>;
   readonly currentEpicId: string | null;
   // Whether this composer is the active/focused one. Gates the eager
@@ -45,6 +47,7 @@ export function useComposerPickerItems(
     pickerStore: params.pickerStore,
     hostClient: params.hostClient,
     harnessId: params.harnessId,
+    profileId: params.profileId,
     workingDirectories: params.mentionRoots,
     localCommands: params.localSlashCommands,
   });
@@ -63,6 +66,7 @@ function useKnownSlashCommandNames(params: UseComposerPickerItemsParams): void {
   const { data: commands, isLoading } = useSlashCommands("", {
     hostClient: params.hostClient,
     harnessId: params.harnessId,
+    profileId: params.profileId,
     workingDirectories: params.mentionRoots,
     enabled: params.isActive,
     localCommands: params.localSlashCommands,

@@ -18,6 +18,8 @@ export interface UseSlashItemsParams {
   readonly pickerStore: ComposerPickerStore;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly harnessId: GuiHarnessId;
+  /** The composer's selected profile; `null` is the default account. */
+  readonly profileId: string | null;
   readonly workingDirectories: ReadonlyArray<string>;
   /** See `UseSlashCommandsParams.localCommands`. */
   readonly localCommands: ReadonlyArray<SlashCommand>;
@@ -54,6 +56,7 @@ export function useSlashItems(params: UseSlashItemsParams): void {
     pickerStore,
     hostClient,
     harnessId,
+    profileId,
     workingDirectories,
     localCommands,
   } = params;
@@ -70,6 +73,7 @@ export function useSlashItems(params: UseSlashItemsParams): void {
   } = useSlashCommands(query, {
     hostClient,
     harnessId,
+    profileId,
     workingDirectories,
     enabled: active,
     localCommands,

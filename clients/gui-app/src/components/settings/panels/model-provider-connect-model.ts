@@ -1,9 +1,10 @@
-import type {
-  ModelProviderAuthMethod,
-  ModelProviderEntry,
-  ModelProviderPrompt,
-  ModelProviderSource,
-  ProviderModelProvidersCapabilities,
+import {
+  TRAYCER_ENDPOINT_MODEL_PROVIDER_ID,
+  type ModelProviderAuthMethod,
+  type ModelProviderEntry,
+  type ModelProviderPrompt,
+  type ModelProviderSource,
+  type ProviderModelProvidersCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
 
 /**
@@ -32,6 +33,20 @@ export function sortModelProviderEntries(
 }
 
 /**
+ * Whether this row is the block Traycer's own endpoint projection wrote (D08).
+ *
+ * The host has no other way to tell "the user declared this custom provider"
+ * apart from "Traycer projected this profile's endpoint config as one" - both
+ * write through the same `writeCustomProviderBlock` mechanism and both report
+ * `configDeclaredCustom` - so the id is the one fact this tab can key on
+ * without a new wire field. The id itself is the protocol's
+ * ({@link TRAYCER_ENDPOINT_MODEL_PROVIDER_ID}), not a literal re-spelled here.
+ */
+export function isTraycerEndpointModelProvider(id: string): boolean {
+  return id === TRAYCER_ENDPOINT_MODEL_PROVIDER_ID;
+}
+
+/**
  * Where the credential in effect comes from, as a badge - in the upstream app's
  * own vocabulary, so a row reads the same in both places.
  *
@@ -47,11 +62,17 @@ export function sortModelProviderEntries(
  * (`@ai-sdk/openai-compatible` plus a non-empty model map) rather than merely
  * credentialed there. Same source, two very different rows: one the user owns
  * end to end, one that just happens to be keyed from a file.
+ *
+ * `id` (W3-T5) singles out the `traycer-endpoint` row: it is `config` +
+ * `configDeclaredCustom` on the wire like any user-declared custom provider,
+ * but Traycer wrote the block, not the user (D08).
  */
 export function sourceBadgeLabel(
+  id: string,
   source: ModelProviderSource,
   configDeclaredCustom: boolean,
 ): string {
+  if (isTraycerEndpointModelProvider(id)) return "Traycer";
   switch (source) {
     case "api":
       return "API key";
@@ -65,10 +86,22 @@ export function sourceBadgeLabel(
 }
 
 export function sourceBadgeHint(
+  id: string,
   source: ModelProviderSource,
   providerLabel: string,
   configDeclaredCustom: boolean,
 ): string {
+  if (isTraycerEndpointModelProvider(id)) {
+    // D08: "Projection is idempotent and re-run before every spawn" - so an
+    // edit made to this block directly is overwritten the next time this
+    // profile spawns, not preserved. Naming Traycer as the owner here is what
+    // keeps that fact from reading as a stale surprise later.
+    // "this account's", not "this profile's": D08 gives the DEFAULT ACCOUNT an
+    // endpoint section too, so this row renders under it as well - and D26
+    // bars calling the default account a profile. Editing happens on the
+    // Account tab, which is why this row offers no Edit/Disconnect of its own.
+    return `Traycer manages this connection for this account's ${providerLabel} configuration and re-applies it before every run - edits made directly to this block will not stick. Change it on the Account tab.`;
+  }
   switch (source) {
     case "api":
       return `This key is stored in ${providerLabel}'s own credential store, shared with its CLI, and can be removed from here.`;

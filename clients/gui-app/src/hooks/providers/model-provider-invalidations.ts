@@ -34,6 +34,10 @@ export async function invalidateAfterModelProviderMutation(args: {
   readonly queryClient: QueryClient;
   readonly hostId: string | null;
   readonly providerId: ProviderId;
+  /** W3-T5: which profile's catalog changed - the rate-limit cache is
+   *  per-profile, so it is retired for THAT profile, never always the default
+   *  account's. */
+  readonly profileId: string | null;
 }): Promise<void> {
   if (args.hostId === null) return;
   const listScope = {
@@ -49,7 +53,7 @@ export async function invalidateAfterModelProviderMutation(args: {
       {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "opencode",
-        profileId: null,
+        profileId: args.profileId,
       },
     ),
     exact: true,

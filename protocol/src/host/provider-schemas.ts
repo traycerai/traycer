@@ -3155,12 +3155,44 @@ export type ProvidersNativeMutateResponseV10 = z.infer<
  * `providers.listModelProviders@1.0` request. `providerId` is the Traycer
  * provider whose settings tab is open - the `opencode` module today, and the
  * host gates the capability to it.
+ *
+ * The head line lives under the `V20` name below - the reverse of
+ * `providersMcpAuthRequestSchema` above - so that this released constant
+ * stays byte-identical.
  */
 export const providersListModelProvidersRequestSchema = z.object({
   providerId: providerIdSchema,
 });
 export type ProvidersListModelProvidersRequest = z.infer<
   typeof providersListModelProvidersRequestSchema
+>;
+
+/**
+ * `providers.listModelProviders@2.0` request - adds `profileId` (D25/D21:
+ * Model Providers tab scoped to the selected profile). `null` addresses the
+ * default account, unchanged from `@1.0`'s only behavior.
+ *
+ * A MAJOR, not the `@1.1` additive minor the ticket text names: the framework
+ * downgrades a same-major minor mismatch by re-parsing the newer request
+ * through the OLDER minor's own (non-`.strict()`) request schema
+ * (`ws-rpc-client.ts`'s `prepareRequestPayload`), which silently STRIPS an
+ * unrecognized key rather than rejecting it - there is no per-minor downgrade
+ * hook to override that. Only a cross-major bridge
+ * (`downgradePathsFromLatest`) can run custom rejection logic, which is
+ * exactly why `providers.mcpAuth`/`nativeMutate`/`host.usage.summary` all
+ * went to a new MAJOR for this identical "never silently rewrite a non-null
+ * profileId to ambient" requirement (D21). Hand-copied rather than
+ * `.extend()`-built off the live `@1.0` name so the `@1.0` constant above
+ * stays byte-identical and every existing `@1.0` consumer (including the
+ * pre-existing `provider-model-providers-compat.test.ts` assertions) is
+ * unaffected.
+ */
+export const providersListModelProvidersRequestSchemaV20 = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string().nullable(),
+});
+export type ProvidersListModelProvidersRequestV20 = z.infer<
+  typeof providersListModelProvidersRequestSchemaV20
 >;
 
 /** `providers.listModelProviders@1.0` response. */
@@ -3171,13 +3203,32 @@ export type ProvidersListModelProvidersResponse = z.infer<
   typeof providersListModelProvidersResponseSchema
 >;
 
-/** `providers.modelProviderAuth@1.0` request - the full auth action set. */
+/**
+ * `providers.modelProviderAuth@1.0` request - the full auth action set. The
+ * head line lives under the `V20` name below - the reverse of
+ * `providersMcpAuthRequestSchema` above - so that this released constant
+ * stays byte-identical.
+ */
 export const providersModelProviderAuthRequestSchema = z.object({
   providerId: providerIdSchema,
   action: modelProviderAuthActionSchema,
 });
 export type ProvidersModelProviderAuthRequest = z.infer<
   typeof providersModelProviderAuthRequestSchema
+>;
+
+/**
+ * `providers.modelProviderAuth@2.0` request - adds `profileId`, same
+ * MAJOR-not-minor reasoning as `providersListModelProvidersRequestSchemaV20`
+ * above (D21).
+ */
+export const providersModelProviderAuthRequestSchemaV20 = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string().nullable(),
+  action: modelProviderAuthActionSchema,
+});
+export type ProvidersModelProviderAuthRequestV20 = z.infer<
+  typeof providersModelProviderAuthRequestSchemaV20
 >;
 
 /** `providers.modelProviderAuth@1.0` response. */

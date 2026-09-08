@@ -22,10 +22,19 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
  *
  * No secret is ever stored here. `authorizationUrl` and `instructions` are what
  * the provider itself put on screen.
+ *
+ * W3-T5: `profileId` joins the key. The host now keys an attempt by
+ * `(providerId, profileId, serverKey, modelProviderId)` (W3-T2) - a managed
+ * profile leases its own server, so the SAME upstream provider can hold
+ * independent live attempts under two different profiles on one host. Without
+ * `profileId` here, starting a sign-in for profile B would overwrite profile
+ * A's record even though the host itself tracks them separately, and A's
+ * panel would resume against an `attemptId` naming B's attempt.
  */
 export type ModelProviderPendingAuthKey = {
   readonly hostId: string;
   readonly providerId: ProviderId;
+  readonly profileId: string | null;
   readonly modelProviderId: string;
 };
 
@@ -40,7 +49,12 @@ export type ModelProviderPendingAuthEntry = {
 };
 
 function keyString(key: ModelProviderPendingAuthKey): string {
-  return [key.hostId, key.providerId, key.modelProviderId].join("\0");
+  return [
+    key.hostId,
+    key.providerId,
+    key.modelProviderId,
+    key.profileId ?? "",
+  ].join("\0");
 }
 
 interface ModelProviderPendingAuthStore {
@@ -113,7 +127,11 @@ export function modelProviderPendingAuthKeyString(
  */
 export function findModelProviderPendingAuth(
   entries: Readonly<Record<string, ModelProviderPendingAuthEntry>>,
-  args: { readonly providerId: ProviderId; readonly hostId: string | null },
+  args: {
+    readonly providerId: ProviderId;
+    readonly hostId: string | null;
+    readonly profileId: string | null;
+  },
 ): ModelProviderPendingAuthEntry | null {
   const hostId = args.hostId;
   if (hostId === null) return null;
@@ -121,6 +139,7 @@ export function findModelProviderPendingAuth(
   for (const entry of Object.values(entries)) {
     if (entry.key.hostId !== hostId) continue;
     if (entry.key.providerId !== args.providerId) continue;
+    if (entry.key.profileId !== args.profileId) continue;
     if (newest === null || entry.startedAt > newest.startedAt) newest = entry;
   }
   return newest;

@@ -6,11 +6,21 @@ import {
   tuiHarnessIdSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
+  agentGuiListCommandsDowngradeV20ToV10,
+  agentGuiListCommandsUpgradeV10ToV20,
+  agentGuiListCommandsV10,
+  agentGuiListCommandsV20,
+  agentGuiListModelsDowngradeV20ToV10,
+  agentGuiListModelsUpgradeV10ToV20,
+  agentGuiListModelsV10,
+  agentGuiListModelsV20,
   agentSelectionGuideResponseSchema,
   createAgentRequestSchema,
   hostRpcRegistry,
   getGuiAgentPlanRequestSchema,
   getGuiAgentPlanResponseSchema,
+  listGuiAgentCommandsRequestSchemaV20,
+  listGuiAgentModelsRequestSchemaV20,
   listHarnessModelsRequestSchemaV10,
   listHarnessModelsRequestSchemaV20,
   listHarnessModelsResponseSchema,
@@ -446,5 +456,198 @@ describe("agent host schemas", () => {
     expect(
       hostRpcRegistry["agent.list"][1].versions[0].contract.schemaVersion,
     ).toEqual({ major: 1, minor: 0 });
+  });
+});
+
+/**
+ * `agent.gui.listModels` / `agent.gui.listCommands` grow `profileId` (D09/D17/
+ * D21/D25, W3-T6). Registered as a MAJOR (`@2.0`), not an additive minor -
+ * same reasoning as `providersListModelProvidersRequestSchemaV20`
+ * (`provider-schemas.ts`): a same-major minor mismatch is bridged by
+ * re-parsing through the older minor's own non-`.strict()` schema, which
+ * silently STRIPS an unrecognized key instead of rejecting it. Only a
+ * cross-major bridge can fail closed on a non-null `profileId`.
+ */
+describe("agent.gui.listModels@2.0 profileId (D09/D17/D21/D25)", () => {
+  it("the @2.0 request round-trips a non-null and a null profileId", () => {
+    expect(
+      listGuiAgentModelsRequestSchemaV20.parse({
+        harnessId: "codex",
+        workingDirectory: "/repo",
+        profileId: "p1",
+      }).profileId,
+    ).toBe("p1");
+    expect(
+      listGuiAgentModelsRequestSchemaV20.parse({
+        harnessId: "codex",
+        workingDirectory: "/repo",
+        profileId: null,
+      }).profileId,
+    ).toBeNull();
+  });
+
+  it("the @1.0 -> @2.0 upgrade fills profileId: null for an old client", () => {
+    expect(
+      agentGuiListModelsUpgradeV10ToV20.upgradeRequest({
+        harnessId: "codex",
+        workingDirectory: "/repo",
+      }),
+    ).toEqual({
+      harnessId: "codex",
+      workingDirectory: "/repo",
+      profileId: null,
+    });
+  });
+
+  it("the @2.0 -> @1.0 downgrade strips a null profileId and rejects a non-null one", () => {
+    const accepted = agentGuiListModelsDowngradeV20ToV10.downgradeRequest({
+      harnessId: "codex",
+      workingDirectory: "/repo",
+      profileId: null,
+    });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.value).not.toHaveProperty("profileId");
+    expect(accepted.value).toEqual({
+      harnessId: "codex",
+      workingDirectory: "/repo",
+    });
+
+    const refused = agentGuiListModelsDowngradeV20ToV10.downgradeRequest({
+      harnessId: "codex",
+      workingDirectory: "/repo",
+      profileId: "p1",
+    });
+    expect(refused).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "DOWNGRADE_UNSUPPORTED" }),
+    });
+  });
+
+  it("registers major 2 as latest with the major-1 line untouched", () => {
+    expect(
+      hostRpcRegistry["agent.gui.listModels"][1].versions[0].contract,
+    ).toBe(agentGuiListModelsV10);
+    expect(
+      hostRpcRegistry["agent.gui.listModels"][2].versions[0].contract,
+    ).toBe(agentGuiListModelsV20);
+    expect(
+      hostRpcRegistry["agent.gui.listModels"][2].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.gui.listModels"][2].downgradePathsFromLatest[1],
+    ).toBe(agentGuiListModelsDowngradeV20ToV10);
+  });
+
+  it("rejects a non-null profileId downgrade through the real registry path", () => {
+    expect(
+      downgradeRequestAcrossMajors(
+        hostRpcRegistry["agent.gui.listModels"],
+        2,
+        1,
+        {
+          harnessId: "codex",
+          workingDirectory: "/repo",
+          profileId: "p1",
+        },
+      ),
+    ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
+  });
+});
+
+describe("agent.gui.listCommands@2.0 profileId (D09/D17/D21/D25)", () => {
+  it("the @2.0 request round-trips a non-null and a null profileId", () => {
+    expect(
+      listGuiAgentCommandsRequestSchemaV20.parse({
+        harnessId: "codex",
+        workingDirectory: "/repo",
+        workingDirectories: ["/repo"],
+        profileId: "p1",
+      }).profileId,
+    ).toBe("p1");
+    expect(
+      listGuiAgentCommandsRequestSchemaV20.parse({
+        harnessId: "codex",
+        workingDirectory: "/repo",
+        workingDirectories: ["/repo"],
+        profileId: null,
+      }).profileId,
+    ).toBeNull();
+  });
+
+  it("the @1.0 -> @2.0 upgrade fills profileId: null for an old client", () => {
+    expect(
+      agentGuiListCommandsUpgradeV10ToV20.upgradeRequest({
+        harnessId: "codex",
+        workingDirectory: "/repo",
+        workingDirectories: ["/repo"],
+      }),
+    ).toEqual({
+      harnessId: "codex",
+      workingDirectory: "/repo",
+      workingDirectories: ["/repo"],
+      profileId: null,
+    });
+  });
+
+  it("the @2.0 -> @1.0 downgrade strips a null profileId and rejects a non-null one", () => {
+    const accepted = agentGuiListCommandsDowngradeV20ToV10.downgradeRequest({
+      harnessId: "codex",
+      workingDirectory: "/repo",
+      workingDirectories: ["/repo"],
+      profileId: null,
+    });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.value).not.toHaveProperty("profileId");
+    expect(accepted.value).toEqual({
+      harnessId: "codex",
+      workingDirectory: "/repo",
+      workingDirectories: ["/repo"],
+    });
+
+    const refused = agentGuiListCommandsDowngradeV20ToV10.downgradeRequest({
+      harnessId: "codex",
+      workingDirectory: "/repo",
+      workingDirectories: ["/repo"],
+      profileId: "p1",
+    });
+    expect(refused).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "DOWNGRADE_UNSUPPORTED" }),
+    });
+  });
+
+  it("registers major 2 as latest with the major-1 line untouched", () => {
+    expect(
+      hostRpcRegistry["agent.gui.listCommands"][1].versions[0].contract,
+    ).toBe(agentGuiListCommandsV10);
+    expect(
+      hostRpcRegistry["agent.gui.listCommands"][2].versions[0].contract,
+    ).toBe(agentGuiListCommandsV20);
+    expect(
+      hostRpcRegistry["agent.gui.listCommands"][2].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.gui.listCommands"][2].downgradePathsFromLatest[1],
+    ).toBe(agentGuiListCommandsDowngradeV20ToV10);
+  });
+
+  it("rejects a non-null profileId downgrade through the real registry path", () => {
+    expect(
+      downgradeRequestAcrossMajors(
+        hostRpcRegistry["agent.gui.listCommands"],
+        2,
+        1,
+        {
+          harnessId: "codex",
+          workingDirectory: "/repo",
+          workingDirectories: ["/repo"],
+          profileId: "p1",
+        },
+      ),
+    ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
   });
 });

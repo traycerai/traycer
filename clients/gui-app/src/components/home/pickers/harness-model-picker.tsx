@@ -1,4 +1,7 @@
 import { useStore } from "zustand";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ListGuiAgentModelsResponse } from "@traycer/protocol/host/index";
 
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -21,6 +24,7 @@ import {
 } from "@/stores/composer/commit-selection";
 import {
   harnessCatalogEntryNeedsRefresh,
+  useHarnessCatalogProfileScope,
   useGuiHarnessCatalogForClient,
   useGuiHarnessCommandsQuery,
   useGuiHarnessModelsQueryForClient,
@@ -354,6 +358,48 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         : profilesByHarnessIdFromProviderStates(providersQuery.data.providers),
     [providersQuery.data],
   );
+  // Which profile each harness's catalog is read for (D09/D25, W3-T6).
+  // Derived here - before the catalog itself - because the catalog's model
+  // slots are keyed on it, and `resolvedActiveProviderId` below is derived
+  // FROM the catalog: reading the browsed provider back out to decide which
+  // slot to read would be a cycle. This is the per-harness generalization of
+  // `activePanelProfileId`, so the browsed panel's own query and the catalog
+  // entry it renders address the same cache slot.
+  const catalogProfileIdByHarnessId = useMemo(() => {
+    // The COMMITTED destination first, and unconditionally. Its profile is
+    // `selection.profileId` and nothing else: `resolveActiveProfileForHarness`
+    // answers "which strip tab is highlighted", a UI question whose `< 2
+    // profiles` short-circuit returns `null` - and this map is a cache key and
+    // an RPC parameter, where `null` names the DEFAULT ACCOUNT. Routing the
+    // selection through it substituted one account for another, and did so
+    // most reliably before `providers.list` had landed, when the map it is
+    // built from is still empty.
+    const map = new Map<GuiHarnessId, string | null>([
+      [selection.harnessId, selection.profileId],
+    ]);
+    profilesByHarnessId.forEach((profiles, harnessId) => {
+      if (harnessId === selection.harnessId) return;
+      map.set(
+        harnessId,
+        resolveActiveProfileForHarness(profiles, activeProfileId, null),
+      );
+    });
+    return map;
+  }, [
+    activeProfileId,
+    profilesByHarnessId,
+    selection.harnessId,
+    selection.profileId,
+  ]);
+  // Which profile the RUN TARGET can be asked about at all (D21). A host that
+  // predates `agent.gui.listModels@2.0` cannot answer for a profile, and the
+  // client must not reach the same place by substituting the default account.
+  // `null` here is "no handshake recorded yet", which the panel renders as
+  // pending - never as an accusation that the host is out of date.
+  const selectedProfileScope = useHarnessCatalogProfileScope(
+    resolveRunTargetHostId(runTargetClient, runTargetHostId),
+    selection.profileId,
+  );
   // The create-profile gate's capability data must come from the SAME host
   // the add-profile flow will target - `ProviderProfileAddFlowHost` resolves
   // its client from this exact prop via `useHostClientForHostId`. Every caller
@@ -390,10 +436,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
           ),
     [harnessesQuery.data, tuiOnly],
   );
-  const selectedHarness = harnesses.find(
-    (harness) => harness.id === selection.harnessId,
-  );
-  const selectedHarnessAvailable = selectedHarness?.available === true;
+  const selectedHarness =
+    harnesses.find((harness) => harness.id === selection.harnessId) ?? null;
+  const selectedHarnessAvailable = harnessAvailable(selectedHarness);
   // Shared gate for every intent-edge refetch below (models AND the commands
   // prewarm): mirrors `selectedModelsQuery`'s own `enabled`. TanStack's
   // imperative `.refetch()` ignores `enabled` - it runs the queryFn
@@ -401,12 +446,25 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // hit a disabled provider's `listModels`/`listCommands`) for a harness the
   // user disabled or that isn't available. `harness-runtime.ts`'s
   // `prewarmCatalog` re-checks provider enablement for the same reason.
+  // D21: also gated on the profile scope, or an unsupported (or not yet
+  // known) profile's `.refetch()` below still bypasses its own disabled query
+  // - `.refetch()` ignores `enabled`, exactly the quirk this gate exists to
+  // contain, so leaving the profile check out of it defeats the version gate
+  // the moment the popover opens.
   const selectedHarnessRefetchGate =
-    activityEnabled && selectedHarnessAvailable;
+    activityEnabled &&
+    selectedHarnessAvailable &&
+    selectedProfileScope.status === "ready";
   const selectedModelsQuery = useGuiHarnessModelsQueryForClient(
     runTargetClient,
-    selection.harnessId,
-    null,
+    {
+      harnessId: selection.harnessId,
+      workingDirectory: null,
+      // The COMMITTED destination's profile, not the browsed one: this list is
+      // what the composer resolves its slug against, so it must be the catalog
+      // the send will actually run on.
+      profileId: selection.profileId,
+    },
     {
       enabled: selectedHarnessRefetchGate,
       subscribed: activityEnabled,
@@ -435,8 +493,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // the one worth prewarming.
   const selectedCommandsQuery = useGuiHarnessCommandsQuery(
     runTargetClient,
-    selection.harnessId,
-    EMPTY_COMMANDS_WORKING_DIRECTORIES,
+    {
+      harnessId: selection.harnessId,
+      workingDirectories: EMPTY_COMMANDS_WORKING_DIRECTORIES,
+      profileId: selection.profileId,
+    },
     {
       enabled: false,
       subscribed: false,
@@ -503,7 +564,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     }
     runSelectedHarnessIntentRefetch();
   }, [runSelectedHarnessIntentRefetch, selection.harnessId]);
-  const catalogActive = activityEnabled && visibleOpen;
+  const { catalogActive, catalogProfilesPending } = catalogProfileGate(
+    activityEnabled,
+    visibleOpen,
+    providersQuery.data !== undefined,
+  );
   // `"cached-only"`: the open popover renders every rail entry's models from
   // whatever the run-target host's cache slots hold (the prefetcher's app-load
   // fill on the default host; nothing, at first, on a cold remote one). The
@@ -511,11 +576,16 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // for the committed selection, `activeProviderModelsQuery` below for the
   // browsed rail entry - so opening the picker on a cold host spawns at most
   // the one provider the user is looking at, never the whole rail.
-  const catalog = useGuiHarnessCatalogForClient(runTargetClient, null, {
-    enabled: catalogActive,
-    subscribed: catalogActive,
-    modelsFetch: "cached-only",
-  });
+  const catalog = useGuiHarnessCatalogForClient(
+    runTargetClient,
+    null,
+    {
+      enabled: catalogActive,
+      subscribed: catalogActive,
+      modelsFetch: "cached-only",
+    },
+    catalogProfileIdByHarnessId,
+  );
   // In terminal mode the rail/rows only offer TUI-capable harnesses; GUI-only
   // providers (e.g. `traycer`) are filtered out of the catalog up front so every
   // derived structure (active provider, rows, rail) inherits the restriction.
@@ -536,13 +606,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const handleRefreshCatalog = useCallback(async () => {
     await refreshCatalog();
   }, [refreshCatalog]);
-  const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
-  // "Pending" has to mean a fetch is actually coming. A disabled query with no
-  // cached data reports `isPending` forever, so reading it raw would leave an
-  // inactive surface spinning in place of its provider icon for a fetch it is
-  // deliberately not making.
-  const modelsPending =
-    selectedHarnessRefetchGate && selectedModelsQuery.isPending;
+  const { models: selectedModels, pending: modelsPending } = selectedModelsView(
+    selectedModelsQuery,
+    selectedHarnessRefetchGate,
+  );
   const harnessesPending = harnessesQueryPending(
     activityEnabled,
     runTargetClient,
@@ -602,7 +669,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   const activeProvider = useBrowsedProviderCatalogEntry({
     runTargetClient,
+    runTargetHostId,
     browsedProviderId: resolvedActiveProviderId,
+    browsedProfileId:
+      catalogProfileIdByHarnessId.get(resolvedActiveProviderId) ?? null,
     catalogHarnesses,
     catalogActive,
   });
@@ -611,23 +681,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // belongs to this harness, else the committed selection's profile if it
   // belongs to this harness, else the harness's first selectable profile.
   // `null` (and no strip) under 2 profiles.
-  const activePanelProfileId = useMemo(
-    () =>
-      resolveActiveProfileForHarness(
-        profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
-        activeProfileId,
-        selection.harnessId === resolvedActiveProviderId
-          ? selection.profileId
-          : null,
-      ),
-    [
-      activeProfileId,
-      profilesByHarnessId,
-      resolvedActiveProviderId,
-      selection.harnessId,
-      selection.profileId,
-    ],
-  );
+  const activePanelProfileId =
+    catalogProfileIdByHarnessId.get(resolvedActiveProviderId) ?? null;
   function openProviderSettings(): void {
     // Settings has its own host scope. The picker may be following the
     // app-wide default (`runTargetHostId === null`), so hand Settings the
@@ -989,6 +1044,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activationController,
   );
 
+  const catalogHarnessesLoading =
+    catalog.harnessesLoading || catalogProfilesPending;
   const selectedHarnessLabel = selectedHarness?.label ?? selection.harnessId;
   const tooltipLabel = (
     <HarnessModelPickerTooltip
@@ -1056,7 +1113,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         degradedHarnessIds={degradedHarnessIds}
         preparingByHarnessId={preparingByHarnessId}
         onRetryPack={handleRetryPack}
-        catalogHarnessesLoading={catalog.harnessesLoading}
+        catalogHarnessesLoading={catalogHarnessesLoading}
         onEntryChange={handleRailEntryChange}
         onProfileChange={handleProfileChange}
         onRefreshCatalog={handleRefreshCatalog}
@@ -1204,7 +1261,14 @@ function modelPickerSelectionSummary(
  */
 function useBrowsedProviderCatalogEntry(input: {
   readonly runTargetClient: HostClient<HostRpcRegistry> | null;
+  /** Fallback host id while `runTargetClient` is still unresolved - a `null`
+   *  host is "not known yet", never "too old". */
+  readonly runTargetHostId: string | null;
   readonly browsedProviderId: ProviderId;
+  /** The profile whose catalog this panel is browsing; `null` is the default
+   *  account. Must match the id the catalog fan-out used for this harness, or
+   *  the panel renders one slot while filling another. */
+  readonly browsedProfileId: string | null;
   readonly catalogHarnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
   readonly catalogActive: boolean;
 }): GuiHarnessCatalogEntry | null {
@@ -1212,21 +1276,115 @@ function useBrowsedProviderCatalogEntry(input: {
     input.catalogHarnesses.find(
       (harness) => harness.id === input.browsedProviderId,
     ) ?? null;
-  const fetchGate = input.catalogActive && entry?.available === true;
+  // Same choke point the catalog fan-out and the query hook read, asked here
+  // for the RENDER: the query below already refuses to fetch an unanswerable
+  // profile, but this panel is the one surface that has to say why.
+  const scope = useHarnessCatalogProfileScope(
+    resolveRunTargetHostId(input.runTargetClient, input.runTargetHostId),
+    input.browsedProfileId,
+  );
+  const fetchGate =
+    input.catalogActive &&
+    entry?.available === true &&
+    scope.status === "ready";
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     input.runTargetClient,
-    input.browsedProviderId,
-    null,
+    {
+      harnessId: input.browsedProviderId,
+      workingDirectory: null,
+      profileId: scope.profileId,
+    },
     {
       enabled: fetchGate,
       subscribed: input.catalogActive,
     },
   );
-  const modelsLoading = fetchGate && modelsQuery.isPending;
+  const modelsLoading =
+    (fetchGate && modelsQuery.isPending) || scope.status === "pending";
+  const unsupported = scope.status === "unsupported";
   return useMemo(
-    () => (entry === null ? null : { ...entry, modelsLoading }),
-    [entry, modelsLoading],
+    () =>
+      entry === null
+        ? null
+        : {
+            ...entry,
+            modelsLoading,
+            // A host that cannot scope by profile must never show the default
+            // account's rows under this profile's name. `modelsProfileUnsupported`
+            // routes it to the panel's own branch rather than through the
+            // failed-fetch channel, which carries a report-issue affordance a
+            // deployment fact does not deserve.
+            ...(unsupported
+              ? { models: [], modelsProfileUnsupported: true }
+              : {}),
+          },
+    [entry, modelsLoading, unsupported],
   );
+}
+
+/**
+ * The concrete host a picker's catalog/provider reads address: the client's
+ * own host once it resolves, else the id the surface was handed. A `null`
+ * answer is "not known yet" - never "the default host", and never a verdict
+ * anything may accuse a host with.
+ */
+function resolveRunTargetHostId(
+  runTargetClient: HostClient<HostRpcRegistry> | null,
+  runTargetHostId: string | null,
+): string | null {
+  return runTargetClient?.getActiveHostId() ?? runTargetHostId;
+}
+
+/**
+ * The committed selection's model rows and whether a fetch for them is
+ * actually coming.
+ *
+ * "Pending" has to mean exactly that: a disabled query with no cached data
+ * reports `isPending` forever, so reading it raw would leave an inactive
+ * surface spinning in place of its provider icon for a fetch it is
+ * deliberately not making.
+ */
+function selectedModelsView(
+  query: UseQueryResult<ListGuiAgentModelsResponse, HostRpcError>,
+  refetchGate: boolean,
+): {
+  readonly models: ReadonlyArray<ModelOption>;
+  readonly pending: boolean;
+} {
+  return {
+    models: query.data?.models ?? EMPTY_MODELS,
+    pending: refetchGate && query.isPending,
+  };
+}
+
+/** `undefined`/`null` is "not in the list", which is not available. */
+function harnessAvailable(harness: HarnessOption | null): boolean {
+  return harness !== null && harness.available;
+}
+
+/**
+ * Whether the popover's catalog may READ profile-keyed cache slots, and
+ * whether it is holding for the fact that decides them.
+ *
+ * Which profile each rail entry browses comes from `providers.list`, so a
+ * profile-keyed catalog cannot be resolved before that lands - and the
+ * default-account slot the app-load prefetcher filled is NOT a safe stand-in
+ * (D21). Hold rather than substitute; `catalogProfilesPending` is what keeps
+ * that hold reading as "loading" instead of "no models available".
+ */
+function catalogProfileGate(
+  activityEnabled: boolean,
+  visibleOpen: boolean,
+  profilesResolved: boolean,
+): {
+  readonly catalogActive: boolean;
+  readonly catalogProfilesPending: boolean;
+} {
+  const open = activityEnabled && visibleOpen;
+  return {
+    catalogActive: open && profilesResolved,
+    catalogProfilesPending: open && !profilesResolved,
+  };
 }
 
 // Restrict to harnesses whose adapter advertises a TUI surface. Runtime

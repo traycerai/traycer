@@ -91,6 +91,9 @@ export function ProviderModelProviderConnectDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly providerId: ProviderId;
+  /** The switcher's current selection (D25, W3-T5). `null` is the default
+   *  account. */
+  readonly profileId: string | null;
   readonly providerLabel: string;
   readonly entry: ModelProviderEntry;
   readonly capabilities: ProviderModelProvidersCapabilities;
@@ -105,6 +108,7 @@ export function ProviderModelProviderConnectDialog(props: {
 }): ReactNode {
   const {
     providerId,
+    profileId,
     providerLabel,
     entry,
     capabilities,
@@ -158,8 +162,8 @@ export function ProviderModelProviderConnectDialog(props: {
     () =>
       hostId === null
         ? null
-        : { hostId, providerId, modelProviderId: entry.id },
-    [hostId, providerId, entry.id],
+        : { hostId, providerId, profileId, modelProviderId: entry.id },
+    [hostId, providerId, profileId, entry.id],
   );
 
   // Switching sign-in method rebuilds the form: the prompts belong to the
@@ -386,7 +390,7 @@ export function ProviderModelProviderConnectDialog(props: {
     function tick(): void {
       if (cancelled) return;
       awaitMutate(
-        { providerId, modelProviderId: entry.id, attemptId },
+        { providerId, profileId, modelProviderId: entry.id, attemptId },
         {
           onSuccess: (data) => {
             if (cancelled) return;
@@ -409,6 +413,7 @@ export function ProviderModelProviderConnectDialog(props: {
     awaitMutate,
     entry.id,
     pollAttemptId,
+    profileId,
     providerId,
     shouldPoll,
   ]);
@@ -435,6 +440,7 @@ export function ProviderModelProviderConnectDialog(props: {
       auth.mutate(
         {
           providerId,
+          profileId,
           action: {
             action: "startOauth",
             modelProviderId: entry.id,
@@ -453,6 +459,7 @@ export function ProviderModelProviderConnectDialog(props: {
     auth.mutate(
       {
         providerId,
+        profileId,
         action: {
           action: "connect",
           modelProviderId: entry.id,
@@ -470,6 +477,7 @@ export function ProviderModelProviderConnectDialog(props: {
     auth,
     choice,
     entry,
+    profileId,
     providerId,
     secret,
   ]);
@@ -485,6 +493,7 @@ export function ProviderModelProviderConnectDialog(props: {
     auth.mutate(
       {
         providerId,
+        profileId,
         action: {
           action: "submitCode",
           modelProviderId: entry.id,
@@ -494,7 +503,7 @@ export function ProviderModelProviderConnectDialog(props: {
       },
       { onSuccess: (data) => applyResult(data.result, false) },
     );
-  }, [applyResult, attempt, auth, code, entry.id, providerId]);
+  }, [applyResult, attempt, auth, code, entry.id, profileId, providerId]);
 
   /**
    * "Stop waiting". Best-effort and LOCAL - upstream exposes no OAuth-cancel
@@ -511,7 +520,7 @@ export function ProviderModelProviderConnectDialog(props: {
     const attemptId = attempt.attemptId;
     setCancelError(null);
     cancelAuth.mutate(
-      { providerId, modelProviderId: entry.id, attemptId },
+      { providerId, profileId, modelProviderId: entry.id, attemptId },
       {
         onSuccess: (data) => {
           if (data.cancelled) {
@@ -534,7 +543,15 @@ export function ProviderModelProviderConnectDialog(props: {
         },
       },
     );
-  }, [applyResult, attempt, cancelAuth, entry.id, forgetAttempt, providerId]);
+  }, [
+    applyResult,
+    attempt,
+    cancelAuth,
+    entry.id,
+    forgetAttempt,
+    profileId,
+    providerId,
+  ]);
 
   // Three mutually exclusive bodies, resolved as statements rather than nested
   // ternaries inside the JSX: the surface a live attempt owns is not a variant

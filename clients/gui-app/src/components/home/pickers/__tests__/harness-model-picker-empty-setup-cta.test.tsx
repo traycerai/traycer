@@ -61,6 +61,7 @@ function harnessEntry(
     models: [],
     modelsLoading: false,
     modelsError: null,
+    modelsProfileUnsupported: false,
     ...overrides,
   };
 }
@@ -152,6 +153,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: null,
         runTargetHostId: null,
         onClosePicker: () => undefined,
@@ -204,6 +206,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: null,
         runTargetHostId: null,
         onClosePicker: () => undefined,
@@ -233,6 +236,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: null,
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: null,
         runTargetHostId: null,
         onClosePicker: () => undefined,
@@ -264,6 +268,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: null,
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         // A landing surface IS available here, to prove the button's absence
         // comes from `canStartTerminal: false` (the host never declared the
         // capability), not merely from having nowhere to open a terminal.
@@ -317,6 +322,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
@@ -365,6 +371,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: { kind: "landing", resolveLandingPageId },
         runTargetHostId: null,
         onClosePicker,
@@ -408,6 +415,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("reasonix", ["setup"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: null,
         runTargetHostId: null,
         onClosePicker: () => undefined,
@@ -440,6 +448,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("copilot", ["login"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
@@ -480,6 +489,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: terminalLoginCapableState("copilot", ["login"]),
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
@@ -519,6 +529,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         },
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
@@ -555,6 +566,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         activeProviderState: null,
         rowsCount: 0,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
         terminalLoginSurface: {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",

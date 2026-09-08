@@ -9,6 +9,19 @@ import {
   subscribeFocusedComposerControls,
 } from "@/lib/commands/composer-controls-registry";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HarnessModelSelection } from "@/components/home/data/landing-options";
+
+/**
+ * The entry's `selection` is not what any case here is about, so every
+ * registration uses one default-account selection - a real shape, not a
+ * placeholder, so a later field on `HarnessModelSelection` fails to compile
+ * here rather than being cast past.
+ */
+const DEFAULT_ACCOUNT_SELECTION: HarnessModelSelection = {
+  harnessId: "codex",
+  modelSlug: "",
+  profileId: null,
+};
 
 function noopControls() {
   return {
@@ -60,7 +73,12 @@ describe("focused composer controls registry", () => {
 
   it("registers an entry and exposes it via getter", () => {
     const controls = noopControls();
-    const dispose = registerFocusedComposerControls("landing", controls, null);
+    const dispose = registerFocusedComposerControls(
+      "landing",
+      controls,
+      null,
+      DEFAULT_ACCOUNT_SELECTION,
+    );
     const entry = getFocusedComposerControls();
     expect(entry?.kind).toBe("landing");
     expect(entry?.controls).toBe(controls);
@@ -71,11 +89,17 @@ describe("focused composer controls registry", () => {
   it("the latest registration wins; disposing the winner clears the slot", () => {
     const first = noopControls();
     const second = noopControls();
-    registerFocusedComposerControls("landing", first, null);
+    registerFocusedComposerControls(
+      "landing",
+      first,
+      null,
+      DEFAULT_ACCOUNT_SELECTION,
+    );
     const disposeSecond = registerFocusedComposerControls(
       "chat-tile",
       second,
       null,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     expect(getFocusedComposerControls()?.controls).toBe(second);
     disposeSecond();
@@ -89,8 +113,14 @@ describe("focused composer controls registry", () => {
       "landing",
       first,
       null,
+      DEFAULT_ACCOUNT_SELECTION,
     );
-    registerFocusedComposerControls("chat-tile", second, null);
+    registerFocusedComposerControls(
+      "chat-tile",
+      second,
+      null,
+      DEFAULT_ACCOUNT_SELECTION,
+    );
     disposeFirst();
     expect(getFocusedComposerControls()?.controls).toBe(second);
   });
@@ -104,6 +134,7 @@ describe("focused composer controls registry", () => {
       "landing",
       noopControls(),
       null,
+      DEFAULT_ACCOUNT_SELECTION,
     );
     expect(calls).toBe(1);
     disposeRegister();
@@ -115,10 +146,20 @@ describe("focused composer controls registry", () => {
     const clientA = buildTestHostClient("host-a");
     const clientB = buildTestHostClient("host-b");
 
-    registerFocusedComposerControls("landing", noopControls(), clientA);
+    registerFocusedComposerControls(
+      "landing",
+      noopControls(),
+      clientA,
+      DEFAULT_ACCOUNT_SELECTION,
+    );
     expect(getFocusedComposerControls()?.hostClient).toBe(clientA);
 
-    registerFocusedComposerControls("landing", noopControls(), clientB);
+    registerFocusedComposerControls(
+      "landing",
+      noopControls(),
+      clientB,
+      DEFAULT_ACCOUNT_SELECTION,
+    );
     expect(getFocusedComposerControls()?.hostClient).toBe(clientB);
   });
 });

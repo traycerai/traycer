@@ -21,6 +21,10 @@ import {
   listGuiHarnessesResponseSchemaV70,
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchema,
+  listGuiAgentModelsResponseSchema,
+  listGuiAgentModelsResponseSchemaV10,
+  listGuiAgentCommandsResponseSchema,
+  listGuiAgentCommandsResponseSchemaV10,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   providersListRequestSchema,
@@ -163,6 +167,16 @@ const LIVE_FROZEN_EXPORTS = {
   // schema; `@2.0` names LIVE so the next attempt fails here first.
   "providers.nativeMutate@1.0": providersNativeMutateResponseSchemaV10,
   "providers.nativeMutate@2.0": providersNativeMutateResponseSchema,
+  // New (W3 fix pass, P2): `agent.gui.listModels`/`listCommands` are on
+  // `RELEASED_FLOOR_METHOD_NAMES` and their `@2.0` line (W3-T6) opened over
+  // the SAME live response instance as `@1.0`, with neither pinned here -
+  // the exact gap that let W2-T12b widen `providers.nativeMutate` unseen.
+  // `@1.0` now names the hand-frozen response; `@2.0` names LIVE so the next
+  // harness addition fails here first instead of only the tag-based gate.
+  "agent.gui.listModels@1.0": listGuiAgentModelsResponseSchemaV10,
+  "agent.gui.listModels@2.0": listGuiAgentModelsResponseSchema,
+  "agent.gui.listCommands@1.0": listGuiAgentCommandsResponseSchemaV10,
+  "agent.gui.listCommands@2.0": listGuiAgentCommandsResponseSchema,
 } as const;
 
 describe("frozen catalog line snapshots", () => {

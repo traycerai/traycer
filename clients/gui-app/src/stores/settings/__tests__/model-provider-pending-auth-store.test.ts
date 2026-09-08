@@ -15,6 +15,7 @@ function attempt(overrides: AttemptOverrides): ModelProviderPendingAuthEntry {
     key: {
       hostId: "host-a",
       providerId: "opencode",
+      profileId: null,
       modelProviderId: "anthropic",
       ...keyOverrides,
     },
@@ -48,12 +49,14 @@ describe("model provider pending-auth store", () => {
       findModelProviderPendingAuth(entries, {
         providerId: "opencode",
         hostId: "host-a",
+        profileId: null,
       })?.attemptId,
     ).toBe("a-1");
     expect(
       findModelProviderPendingAuth(entries, {
         providerId: "opencode",
         hostId: "host-b",
+        profileId: null,
       })?.attemptId,
     ).toBe("b-1");
   });
@@ -74,7 +77,7 @@ describe("model provider pending-auth store", () => {
     );
     const resumed = findModelProviderPendingAuth(
       useModelProviderPendingAuthStore.getState().entries,
-      { providerId: "opencode", hostId: "host-a" },
+      { providerId: "opencode", hostId: "host-a", profileId: null },
     );
     expect(resumed?.attemptId).toBe("newer");
     expect(resumed?.key.modelProviderId).toBe("openai");
@@ -86,7 +89,7 @@ describe("model provider pending-auth store", () => {
     expect(
       findModelProviderPendingAuth(
         useModelProviderPendingAuthStore.getState().entries,
-        { providerId: "opencode", hostId: "host-a" },
+        { providerId: "opencode", hostId: "host-a", profileId: null },
       ),
     ).toBeNull();
   });
@@ -97,7 +100,7 @@ describe("model provider pending-auth store", () => {
     expect(
       findModelProviderPendingAuth(
         useModelProviderPendingAuthStore.getState().entries,
-        { providerId: "opencode", hostId: null },
+        { providerId: "opencode", hostId: null, profileId: null },
       ),
     ).toBeNull();
   });
@@ -115,6 +118,7 @@ describe("model provider pending-auth store", () => {
       {
         hostId: "host-a",
         providerId: "opencode",
+        profileId: null,
         modelProviderId: "anthropic",
       },
       "a",
@@ -122,6 +126,7 @@ describe("model provider pending-auth store", () => {
     const stillThere = store.get({
       hostId: "host-a",
       providerId: "opencode",
+      profileId: null,
       modelProviderId: "anthropic",
     });
     expect(stillThere?.attemptId).toBe("b");
@@ -130,6 +135,7 @@ describe("model provider pending-auth store", () => {
       {
         hostId: "host-a",
         providerId: "opencode",
+        profileId: null,
         modelProviderId: "anthropic",
       },
       "b",
@@ -138,8 +144,66 @@ describe("model provider pending-auth store", () => {
       store.get({
         hostId: "host-a",
         providerId: "opencode",
+        profileId: null,
         modelProviderId: "anthropic",
       }),
     ).toBeNull();
+  });
+
+  // W3-T5: the host keys an attempt by (providerId, profileId, serverKey,
+  // modelProviderId) - a managed profile leases its own server, so the same
+  // upstream provider can hold independent live attempts under two different
+  // profiles at once. The client key must carry `profileId` too, or a switch
+  // would resume the wrong attempt under the right-looking key.
+  it("keeps two profiles' attempts for one modelProviderId apart, and removes only the matching one", () => {
+    const store = useModelProviderPendingAuthStore.getState();
+    store.upsert(attempt({ key: { profileId: null }, attemptId: "default-1" }));
+    store.upsert(
+      attempt({ key: { profileId: "profile-a" }, attemptId: "profile-a-1" }),
+    );
+
+    const entries = useModelProviderPendingAuthStore.getState().entries;
+    expect(Object.keys(entries)).toHaveLength(2);
+    expect(
+      findModelProviderPendingAuth(entries, {
+        providerId: "opencode",
+        hostId: "host-a",
+        profileId: null,
+      })?.attemptId,
+    ).toBe("default-1");
+    expect(
+      findModelProviderPendingAuth(entries, {
+        providerId: "opencode",
+        hostId: "host-a",
+        profileId: "profile-a",
+      })?.attemptId,
+    ).toBe("profile-a-1");
+
+    // Removing the default account's attempt must not touch profile-a's.
+    store.remove(
+      {
+        hostId: "host-a",
+        providerId: "opencode",
+        profileId: null,
+        modelProviderId: "anthropic",
+      },
+      "default-1",
+    );
+    expect(
+      store.get({
+        hostId: "host-a",
+        providerId: "opencode",
+        profileId: null,
+        modelProviderId: "anthropic",
+      }),
+    ).toBeNull();
+    expect(
+      store.get({
+        hostId: "host-a",
+        providerId: "opencode",
+        profileId: "profile-a",
+        modelProviderId: "anthropic",
+      })?.attemptId,
+    ).toBe("profile-a-1");
   });
 });

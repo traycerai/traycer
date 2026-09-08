@@ -28,18 +28,23 @@ function harnessEntry(
     models: [],
     modelsLoading: false,
     modelsError: null,
+    modelsProfileUnsupported: false,
     ...overrides,
   };
 }
 
 function renderRowsState(
-  props: Omit<Parameters<typeof ModelRowsState>[0], "onOpenProviderSettings">,
+  props: Omit<
+    Parameters<typeof ModelRowsState>[0],
+    "onOpenProviderSettings" | "onUseDefaultAccount"
+  >,
 ): void {
   render(
     <TooltipProvider>
       {ModelRowsState({
         ...props,
         onOpenProviderSettings: () => undefined,
+        onUseDefaultAccount: () => undefined,
       })}
     </TooltipProvider>,
   );

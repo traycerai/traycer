@@ -53,6 +53,7 @@ function claudeHarnessEntry(): GuiHarnessCatalogEntry {
     ],
     modelsLoading: false,
     modelsError: null,
+    modelsProfileUnsupported: false,
   };
 }
 

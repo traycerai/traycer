@@ -1,6 +1,4 @@
 import type { QueryKey } from "@tanstack/react-query";
-import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 
 /**
@@ -11,17 +9,12 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
  * carrier with a `native` query and therefore need a semantic suffix to stay
  * out of the classic catalog's cache slot. These four methods are dedicated
  * RPCs, so the ordinary `["host", hostId, method, params]` shape already
- * separates them and there is nothing to disambiguate.
+ * separates them and there is nothing to disambiguate - which is also why
+ * only SCOPES live here: a single catalog's key is `useHostQuery`'s own
+ * `params` object (`providerId` + `profileId`), and a second builder naming
+ * it would be a second spelling nothing consults.
  */
 export const modelProvidersQueryKeys = {
-  /** One provider's upstream catalog. */
-  list: (hostId: string | null, providerId: ProviderId): QueryKey =>
-    hostQueryKeys.method<HostRpcRegistry, "providers.listModelProviders">(
-      hostId,
-      "providers.listModelProviders",
-      { providerId },
-    ),
-
   /** Every cached catalog on a host, whatever provider. */
   listScope: (hostId: string | null): QueryKey =>
     hostQueryKeys.methodScope(hostId, "providers.listModelProviders"),

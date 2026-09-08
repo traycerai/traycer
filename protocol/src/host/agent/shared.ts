@@ -301,6 +301,51 @@ export const guiHarnessIdSchemaV70 = harnessIdSchema.extract([
 ]);
 export type GuiHarnessIdV70 = z.infer<typeof guiHarnessIdSchemaV70>;
 
+/**
+ * Frozen harness id set as `agent.gui.listModels@1.0` / `listCommands@1.0`
+ * shipped it (`host-v1.3.0-rc.3`), taken now (W3 fix pass, P2) because both
+ * methods' `@2.0` line opened over the SAME live response schema as `@1.0` -
+ * with no frozen copy underneath, a future harness admitted to
+ * `guiHarnessIdSchema` would silently widen both already-released lines at
+ * once, and nothing local would catch it (`assertSchemaCompatibility` sees
+ * identical response instances; only the tag-based compat gate would notice).
+ *
+ * A THIRD independent axis, not an alias of an existing frozen set, even
+ * though all three coincide today: `guiHarnessIdSchemaV70` pins
+ * `agent.gui.listHarnesses`'s RPC major/minor, `guiHarnessIdSchemaPreReasonix`
+ * pins `chat.subscribe`'s minor, and this one pins
+ * `agent.gui.listModels`/`listCommands`'s RPC major. A harness admitted to
+ * one line but not frozen off the others would silently break whichever
+ * schema borrowed the wrong copy. Do NOT add new harnesses here - extend the
+ * latest `guiHarnessIdSchema` and open a new major with a fill/reject bridge
+ * instead (D21).
+ */
+export const guiHarnessIdSchemaCatalogV10 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+export type GuiHarnessIdCatalogV10 = z.infer<
+  typeof guiHarnessIdSchemaCatalogV10
+>;
+
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
   "codex",

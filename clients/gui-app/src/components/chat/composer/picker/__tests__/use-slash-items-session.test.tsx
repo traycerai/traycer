@@ -73,6 +73,7 @@ function renderItems(store: ComposerPickerStore) {
       pickerStore: store,
       hostClient: null,
       harnessId: "claude",
+      profileId: null,
       workingDirectories: [],
       localCommands: [],
     }),

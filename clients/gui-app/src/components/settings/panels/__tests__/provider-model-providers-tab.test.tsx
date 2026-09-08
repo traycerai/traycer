@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type {
   ModelProviderAuthResult,
   ModelProviderEntry,
@@ -28,6 +29,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sortModelProviderEntries } from "@/components/settings/panels/model-provider-connect-model";
 import { ProviderModelProvidersTab } from "@/components/settings/panels/provider-model-providers-tab";
+import { profileWireId } from "@/components/providers/provider-profile-model";
 import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provider-pending-auth-store";
 
 const hostMocks = vi.hoisted(() => ({
@@ -41,6 +43,19 @@ const hostMocks = vi.hoisted(() => ({
   awaitMutate: vi.fn(),
   cancelMutate: vi.fn(),
   openLink: vi.fn(),
+  // W3-T5: the negotiated `providers.listModelProviders` major the tab gates
+  // profile scoping on. `{ major: 2, minor: 0 }` by default so every
+  // pre-existing test (none of which cares about the gate) keeps exercising
+  // the tab's real body; the gate test below overrides it to `{ major: 1 }`.
+  listModelProvidersSchemaVersion: { major: 2, minor: 0 } as {
+    readonly major: number;
+    readonly minor: number;
+  } | null,
+  listQueryArgs: [] as ReadonlyArray<{
+    readonly providerId: string;
+    readonly profileId: string | null;
+    readonly enabled: boolean;
+  }>,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -60,18 +75,45 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-providers-list-query", () => ({
-  useProvidersModelProvidersList: () => ({
-    data:
-      hostMocks.listResult === null
-        ? undefined
-        : { result: hostMocks.listResult },
-    isPending: hostMocks.listPending,
-    isFetching: hostMocks.listFetching,
-    isError: hostMocks.listError !== null,
-    error:
-      hostMocks.listError === null ? null : { message: hostMocks.listError },
-    refetch: hostMocks.refetch,
-  }),
+  useProvidersModelProvidersList: (args: {
+    readonly providerId: string;
+    readonly profileId: string | null;
+    readonly enabled: boolean;
+  }) => {
+    hostMocks.listQueryArgs = [...hostMocks.listQueryArgs, args];
+    return {
+      data:
+        hostMocks.listResult === null
+          ? undefined
+          : { result: hostMocks.listResult },
+      isPending: hostMocks.listPending,
+      isFetching: hostMocks.listFetching,
+      isError: hostMocks.listError !== null,
+      error:
+        hostMocks.listError === null ? null : { message: hostMocks.listError },
+      refetch: hostMocks.refetch,
+    };
+  },
+}));
+
+// `importOriginal` rather than a bare factory: this module exports several
+// host-capability readers, and replacing it wholesale makes any of them "not a
+// function" the moment something in this render tree imports one - the trap
+// the picker suite already hit. Only the version predicate is faked, and it is
+// derived from the same fixture field so its THREE states stay reachable:
+// `null` (no handshake yet) must not read as "the host is too old".
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
+  useHostMethodMajorAtLeast: (
+    _hostId: string | null,
+    _method: string,
+    major: number,
+  ): boolean | null => {
+    const version = hostMocks.listModelProvidersSchemaVersion;
+    return version === null ? null : version.major >= major;
+  },
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-provider-auth-mutation", () => ({
@@ -127,11 +169,13 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
 function renderTab(args: {
   readonly result: ModelProvidersListResult | null;
   readonly capabilities: ProviderModelProvidersCapabilities;
+  readonly profileId?: string | null;
 }) {
   hostMocks.listResult = args.result;
   return render(
     <ProviderModelProvidersTab
       providerId="opencode"
+      profileId={args.profileId ?? null}
       providerLabel="OpenCode"
       capabilities={args.capabilities}
       packPreparing={null}
@@ -145,6 +189,8 @@ beforeEach(() => {
   hostMocks.listFetching = false;
   hostMocks.listError = null;
   hostMocks.authIsPending = false;
+  hostMocks.listModelProvidersSchemaVersion = { major: 2, minor: 0 };
+  hostMocks.listQueryArgs = [];
   hostMocks.refetch.mockReset();
   hostMocks.authMutate.mockReset();
   hostMocks.awaitMutate.mockReset();
@@ -264,6 +310,7 @@ describe("ProviderModelProvidersTab list states", () => {
         providerId="opencode"
         providerLabel="OpenCode"
         capabilities={FULL_CAPS}
+        profileId={null}
         packPreparing={{
           kind: "downloading",
           percent: 42,
@@ -663,6 +710,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(hostMocks.authMutate).toHaveBeenCalledTimes(1);
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: { action: "disconnect", modelProviderId: "openai" },
     });
   });
@@ -719,6 +767,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "createCustom",
         modelProviderId: "my-gateway",
@@ -809,6 +858,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "updateCustom",
         modelProviderId: "my-gateway",
@@ -1040,6 +1090,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     );
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "updateCustom",
         modelProviderId: "my-gateway",
@@ -1531,6 +1582,7 @@ describe("ProviderModelProvidersTab resume", () => {
       key: {
         hostId: "host-1",
         providerId: "opencode",
+        profileId: null,
         modelProviderId: args.modelProviderId,
       },
       attemptId: args.attemptId,
@@ -1688,5 +1740,176 @@ describe("ProviderModelProvidersTab layout", () => {
     // Inside, so it scrolls with the content rather than pinning above it.
     expect(list.contains(add)).toBe(true);
     expect(list.firstElementChild?.contains(add)).toBe(true);
+  });
+});
+
+// D25/D21, W3-T5: the tab scopes to the switcher's selected profile.
+describe("ProviderModelProvidersTab profiles (W3-T5)", () => {
+  it("issues the list query with the selected profileId", () => {
+    renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: FULL_CAPS,
+      profileId: "profile-a",
+    });
+    expect(hostMocks.listQueryArgs.at(-1)).toMatchObject({
+      providerId: "opencode",
+      profileId: "profile-a",
+    });
+  });
+
+  it("issues a second query, rather than reusing the first's params, on a profile switch", () => {
+    const { rerender } = renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: FULL_CAPS,
+      profileId: "profile-a",
+    });
+    expect(hostMocks.listQueryArgs.at(-1)?.profileId).toBe("profile-a");
+    rerender(
+      <ProviderModelProvidersTab
+        providerId="opencode"
+        profileId="profile-b"
+        providerLabel="OpenCode"
+        capabilities={FULL_CAPS}
+        packPreparing={null}
+      />,
+    );
+    expect(hostMocks.listQueryArgs.at(-1)?.profileId).toBe("profile-b");
+  });
+
+  it("carries the selected profile on a connect mutation", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({ methods: [{ type: "api", label: "API key", prompts: [] }] }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+      profileId: "profile-a",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect Anthropic" }));
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toMatchObject({
+      providerId: "opencode",
+      profileId: "profile-a",
+    });
+  });
+
+  it("discards an open custom form on a profile switch (parent remounts by key)", () => {
+    // `providers-settings-panel.tsx` keys the tab by `profileWireId(profileId)`
+    // (D25) precisely so this state does not leak across a switch - proven
+    // here the same way the parent triggers it: changing the `key`.
+    function Wrapper({
+      profileId,
+    }: {
+      readonly profileId: string | null;
+    }): ReactNode {
+      return (
+        <ProviderModelProvidersTab
+          key={profileWireId(profileId)}
+          providerId="opencode"
+          profileId={profileId}
+          providerLabel="OpenCode"
+          capabilities={{ actions: ["connect", "createCustom"] }}
+          packPreparing={null}
+        />
+      );
+    }
+    hostMocks.listResult = { ok: true, providers: [entry({})] };
+    const { rerender } = render(<Wrapper profileId={null} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add custom provider" }),
+    );
+    expect(screen.getByLabelText("Display name")).toBeTruthy();
+
+    rerender(<Wrapper profileId="profile-a" />);
+    expect(screen.queryByLabelText("Display name")).toBeNull();
+  });
+
+  it("renders the unsupported state and issues no RPC when a profile is selected but the host predates profileId on this surface", () => {
+    hostMocks.listModelProvidersSchemaVersion = { major: 1, minor: 0 };
+    renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: FULL_CAPS,
+      profileId: "profile-a",
+    });
+    expect(
+      screen.getByText(/needs an update before it can show this profile/),
+    ).toBeTruthy();
+    expect(screen.queryByText("Anthropic")).toBeNull();
+    // The query stayed disabled - no RPC went out unscoped.
+    expect(hostMocks.listQueryArgs.at(-1)).toMatchObject({ enabled: false });
+  });
+
+  it("still serves the default account on a host that predates profileId, since ambient never needed it", () => {
+    hostMocks.listModelProvidersSchemaVersion = { major: 1, minor: 0 };
+    renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: FULL_CAPS,
+      profileId: null,
+    });
+    expect(screen.getByText("Anthropic")).toBeTruthy();
+    expect(hostMocks.listQueryArgs.at(-1)).toMatchObject({ enabled: true });
+  });
+
+  // The third state. `null` is "no handshake with this host has been recorded
+  // yet", which the tab held identical to "absent" - so a perfectly current
+  // host was told it needed an update for the window before its manifest
+  // landed. Hiding an affordance under `null` is safe; asserting a host is out
+  // of date under it is not.
+  it("holds its pending state - never the needs-an-update card - while the host's manifest is unknown", () => {
+    hostMocks.listModelProvidersSchemaVersion = null;
+    renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: FULL_CAPS,
+      profileId: "profile-a",
+    });
+    expect(
+      screen.queryByText(/needs an update before it can show this profile/),
+    ).toBeNull();
+    // Still fails closed: nothing goes out unscoped while the verdict is
+    // unknown, so the body renders the ordinary loading state instead.
+    expect(hostMocks.listQueryArgs.at(-1)).toMatchObject({ enabled: false });
+  });
+
+  // D08: Traycer wrote this block and re-projects it before every spawn, so an
+  // Edit or a Disconnect here is an action whose result is silently reverted.
+  it("offers no Edit, Disconnect or Connect on the row Traycer projects", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "traycer-endpoint",
+            name: "Traycer endpoint",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
+            custom: {
+              baseUrl: "https://example.invalid",
+              models: [{ id: "m", name: "M" }],
+              headers: [],
+              env: [],
+            },
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+      profileId: null,
+    });
+    expect(screen.getByText("traycer-endpoint")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Edit Traycer endpoint" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Disconnect Traycer endpoint" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect Traycer endpoint" }),
+    ).toBeNull();
   });
 });

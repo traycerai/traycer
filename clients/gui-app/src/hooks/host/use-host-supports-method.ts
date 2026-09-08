@@ -72,3 +72,33 @@ export function useHostMethodSchemaVersion(
     return getNegotiatedHostMethodVersion(hostId, method);
   });
 }
+
+/**
+ * Whether `hostId` negotiated `method` at a schema major of at least `major`,
+ * WITHOUT collapsing "not yet known" into "no" - the three-state contract
+ * {@link useHostMethodSupport} documents, applied to a VERSION rather than to
+ * mere presence.
+ *
+ * - `null` - no handshake with this host has completed yet (or no host).
+ * - `false` - the host handshook, and the version it advertised for `method`
+ *   is older than `major` (or it does not advertise the method at all).
+ * - `true` - the host advertised `major` or newer.
+ *
+ * The distinction is load-bearing for anything that TELLS THE USER a host is
+ * out of date: `null` is a fact not yet in evidence, so a surface holds its
+ * pending state under it and only accuses a host on a recorded `false`. Owns
+ * the comparison so a second surface asking the same question cannot spell it
+ * differently.
+ */
+export function useHostMethodMajorAtLeast(
+  hostId: string | null,
+  method: string,
+  major: number,
+): boolean | null {
+  return useSyncExternalStore(subscribeNegotiatedManifests, () => {
+    if (hostId === null) return null;
+    if (getNegotiatedHostMethods(hostId) === null) return null;
+    const version = getNegotiatedHostMethodVersion(hostId, method);
+    return version !== null && version.major >= major;
+  });
+}

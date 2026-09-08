@@ -189,6 +189,7 @@ import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
 import {
+  DEFAULT_ACCOUNT_HARNESS_PROFILES,
   useGuiHarnessCatalogForClient,
   type GuiHarnessCatalogEntry,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -1465,6 +1466,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     tabHostCatalogClient,
     null,
     { enabled: false, subscribed: surfaceVisible, modelsFetch: "cached-only" },
+    // Labels only, and never a fetch (`enabled: false`): this reads the
+    // default-account slots the app-load fill warms. A model that exists only
+    // under a managed profile's endpoint falls back to its raw slug here, the
+    // same honest degradation this lookup already applies to any model the
+    // catalog does not carry.
+    DEFAULT_ACCOUNT_HARNESS_PROFILES,
   );
   const displayCatalog = tabModelCatalog.harnesses;
   const modelLabels = useMemo<ReadonlyMap<string, string>>(
@@ -1958,6 +1965,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   } = useSlashCommands("", {
     hostClient: tabHostClient,
     harnessId: currentComposerSettings.harnessId,
+    profileId: currentComposerSettings.profileId,
     // `resolvedComposerMentionRoots`, not the raw roots, for the same reason the
     // context-usage chip above uses it: on a folder-fallback chat the two differ,
     // and the raw set opens a SECOND, narrower cache entry - losing the dedupe
@@ -2814,6 +2822,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       <ContextUsageChipForChat
         handle={handle}
         harnessId={currentComposerSettings.harnessId}
+        profileId={currentComposerSettings.profileId}
         workingDirectories={resolvedComposerMentionRoots}
         commandsEnabled={activationQueries.discoverCompactSlashCommands}
         onCompact={canSendNextStep ? compactConversation : null}
@@ -2824,6 +2833,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       compactConversation,
       resolvedComposerMentionRoots,
       currentComposerSettings.harnessId,
+      currentComposerSettings.profileId,
       handle,
       activationQueries.discoverCompactSlashCommands,
     ],
@@ -3231,6 +3241,8 @@ interface ChatSessionMessagesSurfaceProps {
 function ContextUsageChipForChat(props: {
   readonly handle: ChatSessionStoreHandle;
   readonly harnessId: GuiHarnessId;
+  /** The composer's selected profile; `null` is the default account. */
+  readonly profileId: string | null;
   readonly workingDirectories: ReadonlyArray<string>;
   readonly commandsEnabled: boolean;
   readonly onCompact: ((commandName: string) => void) | null;
@@ -3247,6 +3259,7 @@ function ContextUsageChipForChat(props: {
   const { data: commands } = useSlashCommands("", {
     hostClient: client,
     harnessId: props.harnessId,
+    profileId: props.profileId,
     workingDirectories: props.workingDirectories,
     enabled: props.commandsEnabled,
     localCommands: NO_LOCAL_SLASH_COMMANDS,

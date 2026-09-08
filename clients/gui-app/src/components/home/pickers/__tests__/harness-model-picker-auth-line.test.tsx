@@ -139,6 +139,7 @@ function harnessOption(
     models: [],
     modelsLoading: false,
     modelsError,
+    modelsProfileUnsupported: false,
   };
 }
 

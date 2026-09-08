@@ -21,6 +21,22 @@ export function profileCommitId(profile: ProviderProfile): string | null {
 }
 
 /**
+ * The inverse of {@link profileCommitId}: a commit id rendered as the WIRE
+ * profile id, where the ambient (Default account) row keys itself by the
+ * `"ambient"` sentinel rather than by `null`.
+ *
+ * Two callers need a non-null string for a commit id and were each spelling
+ * the sentinel themselves: the focus store, whose one-shot deep-link intents
+ * travel in wire vocabulary, and the settings panel's per-profile React key -
+ * `null` is not a valid key on its own (React reads it as "no key"), so the
+ * Default account needs a real identity or its tab stops remounting on a
+ * switch. One derivation so a rename cannot land in one of them only.
+ */
+export function profileWireId(profileId: string | null): string {
+  return profileId ?? "ambient";
+}
+
+/**
  * D26 vocabulary: the ONE user-facing name for a profile row. The ambient
  * row's wire label is the host's internal `"Terminal account"` string, which
  * is barred from user-facing copy - every surface renders "Default account"

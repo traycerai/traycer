@@ -13,6 +13,13 @@ export interface AwaitModelProviderAuthVariables {
   readonly providerId: ProviderId;
   readonly modelProviderId: string;
   readonly attemptId: string;
+  /**
+   * W3-T5: client-side only - `providers.awaitModelProviderAuth` stays at
+   * `@1.0` (the attempt id already addresses a profile-scoped registry entry
+   * host-side), but a `done` poll still has to invalidate THAT profile's
+   * caches, never always the default account's.
+   */
+  readonly profileId: string | null;
 }
 
 interface AwaitModelProviderAuthContext {
@@ -65,6 +72,7 @@ export function useProvidersAwaitModelProviderAuth(): UseMutationResult<
           queryClient,
           hostId: context.hostId,
           providerId: variables.providerId,
+          profileId: variables.profileId,
         });
       },
     },

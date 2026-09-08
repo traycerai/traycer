@@ -167,7 +167,13 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) => hostId ?? "default",
+  // D21: the picker now calls `runTargetClient.getActiveHostId()` directly
+  // (to resolve the version gate's host), so this sentinel needs that one
+  // method rather than being a bare string - every other read of this value
+  // in this file only ever forwards it opaquely to an already-mocked hook.
+  useHostClientForHostId: (hostId: string | null) => ({
+    getActiveHostId: () => hostId ?? "default",
+  }),
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -254,6 +260,15 @@ vi.mock("react-virtuoso", async () => {
 });
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  // D21/W3-T6: the picker calls this unconditionally on every render - a
+  // wholesale mock of this module without it throws "not a function". None
+  // of this file's fixtures exercise the version gate itself, so every
+  // profile here must render as SUPPORTED.
+  useHarnessCatalogProfileScopingSupport: () => true,
+  useHarnessCatalogProfileScope: (
+    _hostId: string | null,
+    profileId: string | null,
+  ) => ({ profileId, status: "ready" as const }),
   harnessCatalogEntryNeedsRefresh: () => true,
   useGuiHarnessesQueryForClient: () => ({
     data: {

@@ -1,4 +1,7 @@
-import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  DEFAULT_ACCOUNT_HARNESS_PROFILES,
+  useGuiHarnessCatalog,
+} from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useHostCompatibility } from "@/lib/host";
 
 /**
@@ -17,10 +20,18 @@ import { useHostCompatibility } from "@/lib/host";
 export function HarnessCatalogPrefetcher() {
   const compatibility = useHostCompatibility();
   const active = compatibility.status === "compatible";
-  useGuiHarnessCatalog(null, {
-    enabled: active,
-    subscribed: active,
-    modelsFetch: "all-harnesses",
-  });
+  useGuiHarnessCatalog(
+    null,
+    {
+      enabled: active,
+      subscribed: active,
+      modelsFetch: "all-harnesses",
+    },
+    // The app-load fill runs before any profile is selected, and it is the one
+    // fan-out allowed to spawn every provider: it warms the default account
+    // and nothing else. A profile's slot is filled by the surface that browses
+    // it (the picker's own per-harness query).
+    DEFAULT_ACCOUNT_HARNESS_PROFILES,
+  );
   return null;
 }

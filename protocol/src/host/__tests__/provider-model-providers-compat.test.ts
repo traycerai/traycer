@@ -424,7 +424,7 @@ describe("the four Model Providers methods are optional capabilities", () => {
   ] as const;
 
   it.each(METHODS)(
-    "%s is registered at 1.0, degrades unsupported, and stays off the released floor",
+    "%s keeps its 1.0 line, degrades unsupported, and stays off the released floor",
     (method) => {
       // A brand-new method NAME is handshake-fatal against a released peer
       // unless it rides the optional-capability channel. `unsupported` is what
@@ -440,6 +440,26 @@ describe("the four Model Providers methods are optional capabilities", () => {
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
     },
   );
+
+  it("listModelProviders/modelProviderAuth carry a major 2 (W3-T5's profileId); await*/cancel* do not", () => {
+    expect(hostRpcRegistry["providers.listModelProviders"][2]).toBeDefined();
+    expect(
+      hostRpcRegistry["providers.listModelProviders"][2].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+    expect(hostRpcRegistry["providers.modelProviderAuth"][2]).toBeDefined();
+    expect(
+      hostRpcRegistry["providers.modelProviderAuth"][2].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+
+    expect(2 in hostRpcRegistry["providers.awaitModelProviderAuth"]).toBe(
+      false,
+    );
+    expect(2 in hostRpcRegistry["providers.cancelModelProviderAuth"]).toBe(
+      false,
+    );
+  });
 });
 
 describe("prompts DSL wire schema", () => {

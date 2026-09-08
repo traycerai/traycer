@@ -16854,6 +16854,658 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
         "result"
       ],
       "additionalProperties": false
+    },
+    "agent.gui.listModels@1.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnessId": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "opencode",
+            "traycer",
+            "cursor",
+            "grok",
+            "qwen",
+            "kiro",
+            "droid",
+            "kimi",
+            "copilot",
+            "kilocode",
+            "openrouter",
+            "amp",
+            "devin",
+            "pi",
+            "hermes",
+            "omp",
+            "huggingface",
+            "reasonix"
+          ]
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "harnessId": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi",
+                  "hermes",
+                  "omp",
+                  "huggingface",
+                  "reasonix"
+                ]
+              },
+              "slug": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "contextWindow": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "maxOutputTokens": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "defaultReasoningEffort": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "supportedReasoningEfforts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "description"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "defaultServiceTier": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "supportedServiceTiers": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "description"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "deprecationNotice": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "harnessId",
+              "slug",
+              "label",
+              "description",
+              "contextWindow",
+              "maxOutputTokens",
+              "defaultReasoningEffort",
+              "supportedReasoningEfforts",
+              "defaultServiceTier",
+              "supportedServiceTiers",
+              "metadata"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnessId",
+        "models"
+      ],
+      "additionalProperties": false
+    },
+    "agent.gui.listModels@2.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnessId": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "opencode",
+            "traycer",
+            "cursor",
+            "grok",
+            "qwen",
+            "kiro",
+            "droid",
+            "kimi",
+            "copilot",
+            "kilocode",
+            "openrouter",
+            "amp",
+            "devin",
+            "pi",
+            "hermes",
+            "omp",
+            "huggingface",
+            "reasonix"
+          ]
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "harnessId": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi",
+                  "hermes",
+                  "omp",
+                  "huggingface",
+                  "reasonix"
+                ]
+              },
+              "slug": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "contextWindow": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "maxOutputTokens": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "defaultReasoningEffort": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "supportedReasoningEfforts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "description"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "defaultServiceTier": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "supportedServiceTiers": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "description"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "deprecationNotice": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "harnessId",
+              "slug",
+              "label",
+              "description",
+              "contextWindow",
+              "maxOutputTokens",
+              "defaultReasoningEffort",
+              "supportedReasoningEfforts",
+              "defaultServiceTier",
+              "supportedServiceTiers",
+              "metadata"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnessId",
+        "models"
+      ],
+      "additionalProperties": false
+    },
+    "agent.gui.listCommands@1.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnessId": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "opencode",
+            "traycer",
+            "cursor",
+            "grok",
+            "qwen",
+            "kiro",
+            "droid",
+            "kimi",
+            "copilot",
+            "kilocode",
+            "openrouter",
+            "amp",
+            "devin",
+            "pi",
+            "hermes",
+            "omp",
+            "huggingface",
+            "reasonix"
+          ]
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "harnessId": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi",
+                  "hermes",
+                  "omp",
+                  "huggingface",
+                  "reasonix"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "argumentHint": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "slash-command",
+                  "skill"
+                ]
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "harnessId",
+              "name",
+              "description",
+              "argumentHint",
+              "kind",
+              "metadata"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnessId",
+        "commands"
+      ],
+      "additionalProperties": false
+    },
+    "agent.gui.listCommands@2.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnessId": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "opencode",
+            "traycer",
+            "cursor",
+            "grok",
+            "qwen",
+            "kiro",
+            "droid",
+            "kimi",
+            "copilot",
+            "kilocode",
+            "openrouter",
+            "amp",
+            "devin",
+            "pi",
+            "hermes",
+            "omp",
+            "huggingface",
+            "reasonix"
+          ]
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "harnessId": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi",
+                  "hermes",
+                  "omp",
+                  "huggingface",
+                  "reasonix"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "argumentHint": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "slash-command",
+                  "skill"
+                ]
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "harnessId",
+              "name",
+              "description",
+              "argumentHint",
+              "kind",
+              "metadata"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnessId",
+        "commands"
+      ],
+      "additionalProperties": false
     }
   }
 } as const;

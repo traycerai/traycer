@@ -4,6 +4,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { DEFAULT_ACCOUNT_DISPLAY_LABEL } from "@/components/providers/provider-profile-model";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { ProviderSetupManualCommand } from "@/components/home/pickers/harness-model-picker-auth-line";
 import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-setup-terminal-action";
@@ -64,12 +65,135 @@ interface ModelRowsStateProps {
   readonly activeProviderState: ProviderCliState | null;
   readonly rowsCount: number;
   readonly onOpenProviderSettings: () => void;
+  /** Moves this provider's browsed selection back to the default account -
+   *  the one action that resolves `modelsProfileUnsupported` from here. */
+  readonly onUseDefaultAccount: () => void;
   /** Where a provider's setup terminal lands - see the type's doc. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   /** The picker's run-target host, which that terminal is minted on. */
   readonly runTargetHostId: string | null;
   /** Closes the picker without opening anything else. */
   readonly onClosePicker: () => void;
+}
+
+/**
+ * The host negotiated a catalog line too old to answer for this profile
+ * (D21/D26). States the fact and carries the action that resolves it - and
+ * deliberately no report-issue affordance: a deployment's negotiated version
+ * is not a defect anyone can file.
+ */
+function ProfileUnsupportedState({
+  onUseDefaultAccount,
+}: {
+  readonly onUseDefaultAccount: () => void;
+}): ReactNode {
+  return (
+    <PickerStateRow
+      icon={undefined}
+      label={`This host is too old to list a profile's models. Update it, or switch to the ${DEFAULT_ACCOUNT_DISPLAY_LABEL}.`}
+      action={
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onUseDefaultAccount}
+        >
+          {`Use ${DEFAULT_ACCOUNT_DISPLAY_LABEL}`}
+        </Button>
+      }
+    />
+  );
+}
+
+/**
+ * The state the BROWSED provider itself dictates, or `null` when it has none
+ * and the catalog-level states below it apply. Split out of
+ * {@link ModelRowsState} so each function answers one question; the ORDER of
+ * these arms is load-bearing and is documented on each.
+ */
+function browsedProviderState(input: {
+  readonly activeProvider: GuiHarnessCatalogEntry;
+  readonly activeProviderState: ProviderCliState | null;
+  readonly onOpenProviderSettings: () => void;
+  readonly onUseDefaultAccount: () => void;
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  readonly runTargetHostId: string | null;
+  readonly onClosePicker: () => void;
+}): ReactNode | null {
+  const { activeProvider } = input;
+  // A provider that can't list models (unavailable / missing API key / load
+  // error) surfaces its own state or CTA even while a query is present - the
+  // query is moot if the provider has nothing to search.
+  if (!activeProvider.available) {
+    return unavailableProviderState(
+      activeProvider,
+      input.onOpenProviderSettings,
+    );
+  }
+
+  if (activeProvider.modelsLoading) {
+    return (
+      <PickerStateRow
+        icon={<MutedAgentSpinner />}
+        label="Loading models"
+        action={undefined}
+      />
+    );
+  }
+
+  // Checked BEFORE `modelsError`: a negotiated host version is a fact about
+  // the deployment, not a failed fetch. The generic branch below attaches a
+  // "Couldn't load models" report-issue icon, which invites a bug report for
+  // something no bug caused - and offers no way out.
+  if (activeProvider.modelsProfileUnsupported) {
+    return (
+      <ProfileUnsupportedState
+        onUseDefaultAccount={input.onUseDefaultAccount}
+      />
+    );
+  }
+
+  if (activeProvider.modelsError === null) return null;
+  // A signed-out verdict for a provider whose sign-in runs in a terminal
+  // gets the action that fixes it, in the space the model rows would occupy
+  // - the host's "signed out, reconnect" sentence is true but names no
+  // action, and the report-issue icon beside it invites a bug report for a
+  // missing key.
+  const setup = providerSetupCta(activeProvider, input.activeProviderState);
+  if (setup !== null) {
+    return (
+      <ProviderSetupCta
+        providerId={setup.providerId}
+        label={activeProvider.label}
+        setup={setup.setup}
+        terminalLoginSurface={input.terminalLoginSurface}
+        runTargetHostId={input.runTargetHostId}
+        onClosePicker={input.onClosePicker}
+      />
+    );
+  }
+  // Surface the host's specific reason for API-key providers and packaged SDK
+  // failures instead of a generic catch-all. Fall back when the message is
+  // empty.
+  const reason = activeProvider.modelsError.message.trim();
+  return (
+    <PickerStateRow
+      label={reason.length > 0 ? reason : "Couldn't load models"}
+      icon={undefined}
+      action={
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't load models",
+            message: "Models for the selected provider could not be loaded.",
+            code: null,
+            source: "Model picker",
+          })}
+          presentation="icon"
+          className={undefined}
+        />
+      }
+    />
+  );
 }
 
 export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
@@ -82,6 +206,7 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
     activeProviderState,
     rowsCount,
     onOpenProviderSettings,
+    onUseDefaultAccount,
     terminalLoginSurface,
     runTargetHostId,
     onClosePicker,
@@ -128,64 +253,20 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
     );
   }
 
-  // A provider that can't list models (unavailable / missing API key / load
-  // error) surfaces its own state or CTA even while a query is present - the
-  // query is moot if the provider has nothing to search.
-  if (activeProvider?.available === false) {
-    return unavailableProviderState(activeProvider, onOpenProviderSettings);
-  }
-
-  if (activeProvider?.modelsLoading === true) {
-    return (
-      <PickerStateRow
-        icon={<MutedAgentSpinner />}
-        label="Loading models"
-        action={undefined}
-      />
-    );
-  }
-
-  if (activeProvider !== null && activeProvider.modelsError !== null) {
-    // A signed-out verdict for a provider whose sign-in runs in a terminal
-    // gets the action that fixes it, in the space the model rows would occupy
-    // - the host's "signed out, reconnect" sentence is true but names no
-    // action, and the report-issue icon beside it invites a bug report for a
-    // missing key.
-    const setup = providerSetupCta(activeProvider, activeProviderState);
-    if (setup !== null) {
-      return (
-        <ProviderSetupCta
-          providerId={setup.providerId}
-          label={activeProvider.label}
-          setup={setup.setup}
-          terminalLoginSurface={terminalLoginSurface}
-          runTargetHostId={runTargetHostId}
-          onClosePicker={onClosePicker}
-        />
-      );
-    }
-    // Surface the host's specific reason for API-key providers and packaged SDK
-    // failures instead of a generic catch-all. Fall back when the message is
-    // empty.
-    const reason = activeProvider.modelsError.message.trim();
-    return (
-      <PickerStateRow
-        label={reason.length > 0 ? reason : "Couldn't load models"}
-        icon={undefined}
-        action={
-          <ReportIssueAction
-            context={createReportIssueContext({
-              title: "Couldn't load models",
-              message: "Models for the selected provider could not be loaded.",
-              code: null,
-              source: "Model picker",
-            })}
-            presentation="icon"
-            className={undefined}
-          />
-        }
-      />
-    );
+  // Everything the BROWSED provider itself decides - unavailable, loading,
+  // profile-unsupported, load error - lives in one place so this function
+  // stays a list of catalog-level states rather than both at once.
+  if (activeProvider !== null) {
+    const providerState = browsedProviderState({
+      activeProvider,
+      activeProviderState,
+      onOpenProviderSettings,
+      onUseDefaultAccount,
+      terminalLoginSurface,
+      runTargetHostId,
+      onClosePicker,
+    });
+    if (providerState !== null) return providerState;
   }
 
   if (rowsCount === 0) {

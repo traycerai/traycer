@@ -45,6 +45,12 @@ export interface ChatMessageEditing {
   readonly pending: boolean;
   readonly canSubmit: boolean;
   readonly slashProviderId: GuiHarnessId;
+  /**
+   * The profile the edited message will be RE-SENT on (the chat's own), so the
+   * inline editor's slash catalog is that profile's, not the default
+   * account's. `null` is the default account.
+   */
+  readonly slashProfileId: string | null;
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;

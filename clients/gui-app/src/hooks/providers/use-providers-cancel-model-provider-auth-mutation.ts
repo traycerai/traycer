@@ -13,6 +13,9 @@ export interface CancelModelProviderAuthVariables {
   readonly providerId: ProviderId;
   readonly modelProviderId: string;
   readonly attemptId: string;
+  /** W3-T5: client-side only, same reasoning as
+   *  `AwaitModelProviderAuthVariables.profileId`. */
+  readonly profileId: string | null;
 }
 
 interface CancelModelProviderAuthContext {
@@ -68,6 +71,7 @@ export function useProvidersCancelModelProviderAuth(): UseMutationResult<
           queryClient,
           hostId: context.hostId,
           providerId: variables.providerId,
+          profileId: variables.profileId,
         });
       },
       // No `onError` toast. The only consumer renders this failure inline, in

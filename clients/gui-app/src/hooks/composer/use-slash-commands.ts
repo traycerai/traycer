@@ -4,7 +4,10 @@ import type {
   GuiAgentCommandOption,
   GuiHarnessId,
 } from "@traycer/protocol/host/index";
-import { useGuiHarnessCommandsQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  useGuiHarnessCommandsQuery,
+  useHarnessCatalogProfileScope,
+} from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { HostRpcRegistry } from "@/lib/host";
 import { rankSlashCommands } from "@/lib/composer/slash-command-ranking";
 import type {
@@ -19,11 +22,26 @@ export interface UseSlashCommandsResult {
   isFetching: boolean;
   error: Error | null;
   refetch: () => Promise<unknown>;
+  /**
+   * A managed profile is selected and this composer's host negotiated a
+   * `agent.gui.listCommands` line too old to answer for one (D17/D21). No
+   * request went out and `data` carries the surface's LOCAL commands only.
+   *
+   * Deliberately not surfaced through `error`: that channel renders as a
+   * failed fetch with a retry, and a retry cannot make a host newer.
+   */
+  profileUnsupported: boolean;
 }
 
 export interface UseSlashCommandsParams {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly harnessId: GuiHarnessId;
+  /**
+   * The composer's selected profile (D17/D25, W3-T6). A managed profile's
+   * skills live under that profile's home, so the palette must ask for the
+   * profile the send will actually run on; `null` is the default account.
+   */
+  readonly profileId: string | null;
   readonly workingDirectories: ReadonlyArray<string>;
   readonly enabled: boolean;
   /**
@@ -49,12 +67,25 @@ export function useSlashCommands(
   query: string,
   params: UseSlashCommandsParams,
 ): UseSlashCommandsResult {
+  // The version gate lives inside `useGuiHarnessCommandsQuery`, so the request
+  // is already held; what this hook owns is the REPORTING. A disabled query
+  // with no cached data reports `isPending` forever, so passing it through raw
+  // would leave every slash surface spinning for a fetch that will never
+  // start - the same trap the picker's `modelsPending` documents.
+  const scope = useHarnessCatalogProfileScope(
+    params.hostClient?.getActiveHostId() ?? null,
+    params.profileId,
+  );
   const commandsQuery = useGuiHarnessCommandsQuery(
     params.hostClient,
-    params.harnessId,
-    params.workingDirectories,
+    {
+      harnessId: params.harnessId,
+      workingDirectories: params.workingDirectories,
+      profileId: scope.profileId,
+    },
     { enabled: params.enabled, subscribed: params.enabled },
   );
+  const fetching = params.enabled && scope.status === "ready";
   const trimmed = query.trim();
   const localCommands = params.localCommands;
   const allCommands = useMemo<ReadonlyArray<SlashCommand>>(() => {
@@ -77,10 +108,15 @@ export function useSlashCommands(
 
   return {
     data,
-    isLoading: params.enabled && commandsQuery.isPending,
-    isFetching: params.enabled && commandsQuery.isFetching,
+    // A pending handshake IS a fetch coming: the verdict lands with the
+    // manifest and the query starts on that render.
+    isLoading:
+      params.enabled &&
+      (scope.status === "pending" || (fetching && commandsQuery.isPending)),
+    isFetching: fetching && commandsQuery.isFetching,
     error: commandsQuery.error,
     refetch: commandsQuery.refetch,
+    profileUnsupported: scope.status === "unsupported",
   };
 }
 

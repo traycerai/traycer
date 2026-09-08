@@ -56,6 +56,7 @@ const harnessQueryCalls: Array<{
 const modelQueryCalls: Array<{
   readonly harnessId: string;
   readonly workingDirectory: string | null;
+  readonly profileId: string | null;
   readonly enabled: boolean;
   readonly subscribed: boolean;
 }> = [];
@@ -73,6 +74,11 @@ const registeredComposerKinds: Array<FocusedComposerKind | null> = [];
 // re-registers (a new call, not a mutation of the old one) when it changes.
 const registeredComposerHostClients: Array<HostClient<HostRpcRegistry> | null> =
   [];
+// The controls and the committed selection each registration carried. The
+// palette dispatches through the first and scopes its catalog by the second,
+// so both are part of what this hook publishes.
+const registeredComposerControls: Array<ComposerControls> = [];
+const registeredComposerSelections: Array<HarnessModelSelection> = [];
 
 // `data` is returned regardless of `enabled`, because that is what TanStack
 // does: `enabled:false` stops FETCHING, it does not evict the cache, and a
@@ -95,14 +101,18 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   },
   useGuiHarnessModelsQueryForClient: (
     client: HostClient<HostRpcRegistry> | null,
-    harnessId: string,
-    workingDirectory: string | null,
+    target: {
+      harnessId: string;
+      workingDirectory: string | null;
+      profileId: string | null;
+    },
     activity: { enabled: boolean; subscribed: boolean },
   ) => {
     modelClientCalls.push(client);
     modelQueryCalls.push({
-      harnessId,
-      workingDirectory,
+      harnessId: target.harnessId,
+      workingDirectory: target.workingDirectory,
+      profileId: target.profileId,
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
@@ -113,11 +123,14 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
   useRegisterFocusedComposerControls: (
     kind: FocusedComposerKind | null,
-    _controls: ComposerControls,
+    controls: ComposerControls,
     hostClient: HostClient<HostRpcRegistry> | null,
+    selection: HarnessModelSelection,
   ) => {
     registeredComposerKinds.push(kind);
     registeredComposerHostClients.push(hostClient);
+    registeredComposerControls.push(controls);
+    registeredComposerSelections.push(selection);
   },
 }));
 
@@ -138,7 +151,10 @@ import { SurfaceActivityProvider } from "@/components/home/composer/surface-acti
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { importedChatSettingsSeed } from "@/lib/composer/chat-run-settings";
-import type { ProviderId } from "@/components/home/data/landing-options";
+import type {
+  HarnessModelSelection,
+  ProviderId,
+} from "@/components/home/data/landing-options";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -212,6 +228,14 @@ function runSettings(harnessId: ProviderId, model: string): ChatRunSettings {
   };
 }
 
+function runSettingsForProfile(
+  harnessId: ProviderId,
+  model: string,
+  profileId: string,
+): ChatRunSettings {
+  return { ...runSettings(harnessId, model), profileId };
+}
+
 function modelOption(harnessId: string, slug: string) {
   return {
     harnessId,
@@ -249,6 +273,8 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     modelClientCalls.length = 0;
     registeredComposerKinds.length = 0;
     registeredComposerHostClients.length = 0;
+    registeredComposerControls.length = 0;
+    registeredComposerSelections.length = 0;
     // Reset the sticky tier default so a tier-normalization test can't leak its
     // preference into a later test's seeded values.
     useSettingsStore.setState({ defaultServiceTier: "" });
@@ -1546,6 +1572,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(modelQueryCalls.at(-1)).toEqual({
       harnessId: "codex",
       workingDirectory: null,
+      profileId: null,
       enabled: false,
       subscribed: false,
     });
@@ -1690,5 +1717,56 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     // A genuine re-registration - a SECOND recorded call, not the first call's
     // argument silently mutating in place.
     expect(registeredComposerHostClients).toEqual([hostAClient, hostBClient]);
+  });
+
+  // D09/D25: the palette has no rail of its own, so it reads the composer's
+  // committed destination off the registration - and a model PICK on that
+  // same harness must land back on the same profile. Committing `null` moved
+  // the composer off its managed profile as a side effect of choosing a
+  // model, which is a data-loss shape rather than a narrower list.
+  it("publishes the composer's profile to the palette, and a same-harness model pick stays on it", async () => {
+    seedDefault("codex");
+    harnessesData.value = { harnesses: [{ id: "codex", available: true }] };
+    modelsData.value = {
+      models: [modelOption("codex", "m-1"), modelOption("codex", "m-2")],
+    };
+
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        "landing",
+        fallbackSeedSource(
+          runSettingsForProfile("codex", "m-1", "work-uuid"),
+          DEFAULT_TEST_HOST_CLIENT,
+        ),
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() => {
+      expect(result.current.getState().selection.profileId).toBe("work-uuid");
+    });
+
+    expect(registeredComposerSelections.at(-1)).toEqual({
+      harnessId: "codex",
+      modelSlug: "m-1",
+      profileId: "work-uuid",
+    });
+
+    act(() => {
+      registeredComposerControls.at(-1)?.selectModel("codex", "m-2");
+    });
+    expect(result.current.getState().selection).toEqual({
+      harnessId: "codex",
+      modelSlug: "m-2",
+      profileId: "work-uuid",
+    });
+
+    // A provider SWITCH is a different question: the palette knows nothing
+    // about the destination provider's profiles, so it lands on the default
+    // account - which is also the account its rows came from.
+    act(() => {
+      registeredComposerControls.at(-1)?.selectModel("claude", "m-1");
+    });
+    expect(result.current.getState().selection.profileId).toBeNull();
   });
 });

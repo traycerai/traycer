@@ -18,6 +18,7 @@ const listModelsKey = queryKeys.hostMethod<
 >(HOST_ID, "agent.gui.listModels", {
   harnessId: "claude",
   workingDirectory: null,
+  profileId: null,
 });
 
 const listCommandsKey = queryKeys.hostMethod<
@@ -27,6 +28,7 @@ const listCommandsKey = queryKeys.hostMethod<
   harnessId: "claude",
   workingDirectory: null,
   workingDirectories: [],
+  profileId: null,
 });
 
 /**

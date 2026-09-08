@@ -1244,6 +1244,7 @@ function editingUserActions(content: JsonContent): ChatMessageUserActions {
       pending: false,
       canSubmit: false,
       slashProviderId: "claude",
+      slashProfileId: null,
       mentionRoots: [],
       fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",

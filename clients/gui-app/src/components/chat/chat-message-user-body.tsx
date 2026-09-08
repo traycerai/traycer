@@ -675,6 +675,7 @@ function InlineUserMessageEditor({
     pickerStore,
     hostClient,
     harnessId: editing.slashProviderId,
+    profileId: editing.slashProfileId,
     mentionRoots: resolvedMentionRoots,
     currentEpicId: editing.currentEpicId,
     // The inline editor mounts only while a message is being edited - active.

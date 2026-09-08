@@ -217,14 +217,24 @@ export function useComposerToolbarStore(
   // (availability rerouting included); `modelsHarnessId` rides along so a
   // stale response can never resolve a slug for the wrong harness.
   const harnessId = useStore(store, (s) => s.selection.harnessId);
+  const profileId = useStore(store, (s) => s.selection.profileId);
   const harnessesQuery = useGuiHarnessesQueryForClient(hostClient, {
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     hostClient,
-    harnessId,
-    null,
+    {
+      harnessId,
+      workingDirectory: null,
+      // D09: model memory is per `(harness, profile)`, so the catalog this
+      // composer resolves its slug against must be the selected profile's.
+      // The D21 version gate lives inside the hook, so a managed profile
+      // against a host that cannot answer for one issues nothing and leaves
+      // the catalog unloaded (the slug is then HELD rather than resolved
+      // away); the picker on this same composer is the surface that says why.
+      profileId,
+    },
     {
       enabled: activityEnabled,
       subscribed: activityEnabled,
@@ -263,13 +273,12 @@ export function useComposerToolbarStore(
       setReasoning: actions.setReasoning,
       setServiceTier: actions.setServiceTier,
       setPermission: actions.setPermission,
-      // The command palette has no rail/profile context of its own - default
-      // the independent profile choice to ambient while restoring the
-      // provider's last-used model/effort/tier. No profile data is in scope
-      // here to seed a D09 `defaultModel` either, so this path keeps today's
-      // "" no-carry behavior when the ambient (harness, profile) pair has
-      // never been used; the picker's own commits (which do have profile
-      // data) seed it.
+      // The palette has no rail of its own, so a provider SWITCH lands on the
+      // default account: it is a move to another provider, whose profiles
+      // this surface knows nothing about. No profile data is in scope to seed
+      // a D09 `defaultModel` either, so that path keeps today's "" no-carry
+      // behavior when the (harness, default account) pair has never been
+      // used; the picker's own commits (which do have profile data) seed it.
       switchHarness: (harnessId: ProviderId) =>
         commitSelection({
           store,
@@ -278,23 +287,39 @@ export function useComposerToolbarStore(
           profileId: null,
           defaultModel: null,
         }),
-      selectModel: (harnessId: ProviderId, modelSlug: string) =>
+      // A model PICK on the composer's OWN harness stays on the composer's
+      // profile (D09/D25). Committing `null` here moved the composer off its
+      // managed profile onto the default account as a side effect of choosing
+      // a model - and the palette lists that profile's catalog, so the row
+      // the user picked came from the account this now keeps.
+      selectModel: (harnessId: ProviderId, modelSlug: string) => {
+        const current = store.getState().selection;
         commitSelection({
           store,
           harnessId,
           modelSlug,
-          profileId: null,
+          profileId: harnessId === current.harnessId ? current.profileId : null,
           defaultModel: null,
-        }),
+        });
+      },
     };
   }, [store]);
   // The palette's composer subpages list the catalog of the SAME host this
   // store reads it through, so what they offer is what `switchHarness` /
   // `selectModel` can commit against.
+  // The palette reads `harnessId` / `profileId` off this to scope its
+  // subpages; `modelSlug` rides along because the entry names a real
+  // selection, not a two-field stand-in for one.
+  const modelSlug = useStore(store, (s) => s.selection.modelSlug);
+  const registeredSelection = useMemo<HarnessModelSelection>(
+    () => ({ harnessId, modelSlug, profileId }),
+    [harnessId, modelSlug, profileId],
+  );
   useRegisterFocusedComposerControls(
     activityEnabled ? registerAs : null,
     registeredControls,
     hostClient,
+    registeredSelection,
   );
 
   return store;

@@ -196,6 +196,7 @@ const queryMock = vi.hoisted(() => ({
     models: [] as Array<{
       readonly harnessId: string;
       readonly workingDirectory: string | null;
+      readonly profileId: string | null;
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
@@ -207,6 +208,7 @@ const queryMock = vi.hoisted(() => ({
     commands: [] as Array<{
       readonly harnessId: string;
       readonly workingDirectories: ReadonlyArray<string>;
+      readonly profileId: string | null;
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
@@ -492,170 +494,210 @@ function catalogHarnessesForRender(): CatalogHarness[] {
   }));
 }
 
-vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  // The real hook resolves the app-wide default host's client via
-  // `useHostBinding()`; this suite renders the picker without a
-  // `<HostRuntimeProvider>`, so a real call would just resolve to `null`
-  // anyway (`useHostBinding` tolerates a missing provider) - stub it
-  // directly rather than exercising that context machinery.
-  // The picker asks this at every intent edge before it refetches. This suite
-  // mocks the hook module wholesale, so its query stubs carry no
-  // `dataUpdatedAt` to judge freshness from - answer "due" so the edges under
-  // test here (which fire a no-op `refetch` below) still run. The real
-  // freshness policy, and the RPCs it gates, are covered against a mocked host
-  // transport in `harness-model-picker-intent-rpc.test.tsx`.
-  harnessCatalogEntryNeedsRefresh: () => true,
-  // The picker resolves its own client (`useHostClientForHostId`, mocked
-  // above to a sentinel keyed by `runTargetHostId`) and threads it into every
-  // `…ForClient` call below. This suite's fixtures are not per-host (see
-  // `queryMock`), so every `…ForClient` variant delegates to the SAME data -
-  // the `client` argument is only ever recorded, never used to branch, unless
-  // a test specifically layers `queryMock.harnessesByClient` (see below).
-  useGuiHarnessesQueryForClient: (
-    client: MockHostClient | null,
-    activity: QueryActivity,
-  ) => {
-    queryMock.calls.harnesses.push({
-      enabled: activity.enabled,
-      subscribed: activity.subscribed,
-    });
-    queryMock.calls.harnessClients.push(
-      client === null ? null : mockHostClientKey(client),
-    );
-    // A `null` client models an unresolved run-target host: `useHostQuery`
-    // disables the underlying query, so a real disabled query with no cached
-    // data reports `isPending: true`/`data: undefined` forever - never the
-    // default host's cached harness list. See the matching comment on
-    // `useProvidersListForClient` above for why this must not fall back.
-    if (client === null) {
-      return { data: undefined, isPending: true, isError: false, error: null };
-    }
-    const clientKey = mockHostClientKey(client);
-    const harnesses = queryMock.harnessesByClient.has(clientKey)
-      ? (queryMock.harnessesByClient.get(clientKey) ?? [])
-      : queryMock.harnesses;
-    return {
-      data: activity.enabled ? { harnesses } : undefined,
-      isPending: activity.enabled && queryMock.harnessesLoading,
-      isError: queryMock.harnessesError !== null,
-      error: queryMock.harnessesError,
-    };
-  },
-  useGuiHarnessModelsQueryForClient: (
-    client: MockHostClient | null,
-    harnessId: string,
-    workingDirectory: string | null,
-    activity: QueryActivity,
-  ) => {
-    queryMock.calls.models.push({
-      harnessId,
-      workingDirectory,
-      enabled: activity.enabled,
-      subscribed: activity.subscribed,
-    });
-    queryMock.calls.modelClients.push(
-      client === null ? null : mockHostClientKey(client),
-    );
-    // See `useGuiHarnessesQueryForClient` above: a `null` client is a
-    // permanently-disabled query, never a default-host fallback.
-    if (client === null) {
+vi.mock(
+  "@/hooks/harnesses/use-gui-harness-catalog",
+  async (importOriginal) => ({
+    // Spread the real module first: `harnessCatalogProfileScope` is a pure
+    // function the picker's helpers call directly (not a hook), and every
+    // export below overrides it explicitly - so keeping the real one here means
+    // an export added later fails closed as "still real" rather than "silently
+    // missing", the failure mode that broke this suite when the profile-scoping
+    // gate first shipped uncovered.
+    ...(await importOriginal<
+      typeof import("@/hooks/harnesses/use-gui-harness-catalog")
+    >()),
+    // The real hook resolves the app-wide default host's client via
+    // `useHostBinding()`; this suite renders the picker without a
+    // `<HostRuntimeProvider>`, so a real call would just resolve to `null`
+    // anyway (`useHostBinding` tolerates a missing provider) - stub it
+    // directly rather than exercising that context machinery.
+    // The picker asks this at every intent edge before it refetches. This suite
+    // mocks the hook module wholesale, so its query stubs carry no
+    // `dataUpdatedAt` to judge freshness from - answer "due" so the edges under
+    // test here (which fire a no-op `refetch` below) still run. The real
+    // freshness policy, and the RPCs it gates, are covered against a mocked host
+    // transport in `harness-model-picker-intent-rpc.test.tsx`.
+    harnessCatalogEntryNeedsRefresh: () => true,
+    // D21: none of this suite's fixtures exercise a host too old to answer for
+    // a profile - that version gate has its own coverage (real hooks against a
+    // mocked transport) in `use-gui-harness-catalog.test.tsx` and
+    // `harness-model-picker-intent-rpc.test.tsx`. Every profile fixture here
+    // must render as SUPPORTED or the many non-null `profileId` selections
+    // throughout this file would all fall into the pending/unsupported branch
+    // instead of exercising the rows they assert on.
+    useHarnessCatalogProfileScopingSupport: () => true,
+    useHarnessCatalogProfileScope: (
+      _hostId: string | null,
+      profileId: string | null,
+    ) => ({ profileId, status: "ready" }),
+    // The picker resolves its own client (`useHostClientForHostId`, mocked
+    // above to a sentinel keyed by `runTargetHostId`) and threads it into every
+    // `…ForClient` call below. This suite's fixtures are not per-host (see
+    // `queryMock`), so every `…ForClient` variant delegates to the SAME data -
+    // the `client` argument is only ever recorded, never used to branch, unless
+    // a test specifically layers `queryMock.harnessesByClient` (see below).
+    useGuiHarnessesQueryForClient: (
+      client: MockHostClient | null,
+      activity: QueryActivity,
+    ) => {
+      queryMock.calls.harnesses.push({
+        enabled: activity.enabled,
+        subscribed: activity.subscribed,
+      });
+      queryMock.calls.harnessClients.push(
+        client === null ? null : mockHostClientKey(client),
+      );
+      // A `null` client models an unresolved run-target host: `useHostQuery`
+      // disables the underlying query, so a real disabled query with no cached
+      // data reports `isPending: true`/`data: undefined` forever - never the
+      // default host's cached harness list. See the matching comment on
+      // `useProvidersListForClient` above for why this must not fall back.
+      if (client === null) {
+        return {
+          data: undefined,
+          isPending: true,
+          isError: false,
+          error: null,
+        };
+      }
+      const clientKey = mockHostClientKey(client);
+      const harnesses = queryMock.harnessesByClient.has(clientKey)
+        ? (queryMock.harnessesByClient.get(clientKey) ?? [])
+        : queryMock.harnesses;
       return {
-        data: undefined,
-        isPending: true,
+        data: activity.enabled ? { harnesses } : undefined,
+        isPending: activity.enabled && queryMock.harnessesLoading,
+        isError: queryMock.harnessesError !== null,
+        error: queryMock.harnessesError,
+      };
+    },
+    useGuiHarnessModelsQueryForClient: (
+      client: MockHostClient | null,
+      target: {
+        harnessId: string;
+        workingDirectory: string | null;
+        profileId: string | null;
+      },
+      activity: QueryActivity,
+    ) => {
+      const { harnessId, workingDirectory, profileId } = target;
+      queryMock.calls.models.push({
+        harnessId,
+        workingDirectory,
+        profileId,
+        enabled: activity.enabled,
+        subscribed: activity.subscribed,
+      });
+      queryMock.calls.modelClients.push(
+        client === null ? null : mockHostClientKey(client),
+      );
+      // See `useGuiHarnessesQueryForClient` above: a `null` client is a
+      // permanently-disabled query, never a default-host fallback.
+      if (client === null) {
+        return {
+          data: undefined,
+          isPending: true,
+          isError: false,
+          error: null,
+          refetch: () => Promise.resolve({ data: undefined }),
+        };
+      }
+      const clientKey = mockHostClientKey(client);
+      const modelsByHarness = queryMock.modelsByClient.has(clientKey)
+        ? (queryMock.modelsByClient.get(clientKey) ??
+          queryMock.selectedModelsByHarness)
+        : queryMock.selectedModelsByHarness;
+      return {
+        data: activity.enabled
+          ? {
+              harnessId,
+              models: modelsByHarness.get(harnessId) ?? [],
+            }
+          : undefined,
+        isPending: false,
         isError: false,
+        error: null,
+        // The picker's intent-edge effects call `.refetch()` on both queries
+        // whenever the popover opens or the selection changes (real RPC
+        // behavior now covered by `harness-model-picker-intent-rpc.test.tsx`
+        // against a mocked host transport). This suite mocks the hook
+        // wholesale, so `.refetch()` must stay a harmless no-op here rather
+        // than throw.
+        refetch: () => Promise.resolve({ data: undefined }),
+      };
+    },
+    useGuiHarnessCommandsQuery: (
+      _client: unknown,
+      target: {
+        harnessId: string;
+        workingDirectories: ReadonlyArray<string>;
+        profileId: string | null;
+      },
+      activity: QueryActivity,
+    ) => {
+      const { harnessId, workingDirectories, profileId } = target;
+      queryMock.calls.commands.push({
+        harnessId,
+        workingDirectories,
+        profileId,
+        enabled: activity.enabled,
+        subscribed: activity.subscribed,
+      });
+      return {
+        data: activity.enabled ? { harnessId, commands: [] } : undefined,
+        isPending: false,
         error: null,
         refetch: () => Promise.resolve({ data: undefined }),
       };
-    }
-    const clientKey = mockHostClientKey(client);
-    const modelsByHarness = queryMock.modelsByClient.has(clientKey)
-      ? (queryMock.modelsByClient.get(clientKey) ??
-        queryMock.selectedModelsByHarness)
-      : queryMock.selectedModelsByHarness;
-    return {
-      data: activity.enabled
-        ? {
-            harnessId,
-            models: modelsByHarness.get(harnessId) ?? [],
-          }
-        : undefined,
-      isPending: false,
-      isError: false,
-      error: null,
-      // The picker's intent-edge effects call `.refetch()` on both queries
-      // whenever the popover opens or the selection changes (real RPC
-      // behavior now covered by `harness-model-picker-intent-rpc.test.tsx`
-      // against a mocked host transport). This suite mocks the hook
-      // wholesale, so `.refetch()` must stay a harmless no-op here rather
-      // than throw.
-      refetch: () => Promise.resolve({ data: undefined }),
-    };
-  },
-  useGuiHarnessCommandsQuery: (
-    _client: unknown,
-    harnessId: string,
-    workingDirectories: ReadonlyArray<string>,
-    activity: QueryActivity,
-  ) => {
-    queryMock.calls.commands.push({
-      harnessId,
-      workingDirectories,
-      enabled: activity.enabled,
-      subscribed: activity.subscribed,
-    });
-    return {
-      data: activity.enabled ? { harnessId, commands: [] } : undefined,
-      isPending: false,
-      error: null,
-      refetch: () => Promise.resolve({ data: undefined }),
-    };
-  },
-  useGuiHarnessCatalogForClient: (
-    client: MockHostClient | null,
-    workingDirectory: string | null,
-    activity: QueryActivity,
-  ) => {
-    queryMock.calls.catalog.push({
-      workingDirectory,
-      enabled: activity.enabled,
-      subscribed: activity.subscribed,
-    });
-    queryMock.calls.catalogClients.push(
-      client === null ? null : mockHostClientKey(client),
-    );
-    // See `useGuiHarnessesQueryForClient` above: with a `null` client the
-    // underlying harnesses query is permanently disabled, so the REAL
-    // composed hook reports an empty catalog (never the default host's cached
-    // one) that is NOT loading - it gates `harnessesLoading` on the client,
-    // since a disabled query's `isPending` would otherwise read as loading
-    // forever - and no model queries ever fire since there are no available
-    // harness ids to fan out over.
-    if (client === null) {
+    },
+    useGuiHarnessCatalogForClient: (
+      client: MockHostClient | null,
+      workingDirectory: string | null,
+      activity: QueryActivity,
+    ) => {
+      queryMock.calls.catalog.push({
+        workingDirectory,
+        enabled: activity.enabled,
+        subscribed: activity.subscribed,
+      });
+      queryMock.calls.catalogClients.push(
+        client === null ? null : mockHostClientKey(client),
+      );
+      // See `useGuiHarnessesQueryForClient` above: with a `null` client the
+      // underlying harnesses query is permanently disabled, so the REAL
+      // composed hook reports an empty catalog (never the default host's cached
+      // one) that is NOT loading - it gates `harnessesLoading` on the client,
+      // since a disabled query's `isPending` would otherwise read as loading
+      // forever - and no model queries ever fire since there are no available
+      // harness ids to fan out over.
+      if (client === null) {
+        return {
+          harnesses: [],
+          harnessesLoading: false,
+          harnessesError: null,
+          modelsLoading: false,
+        };
+      }
+      const clientKey = mockHostClientKey(client);
+      const harnesses = queryMock.catalogHarnessesByClient.has(clientKey)
+        ? (queryMock.catalogHarnessesByClient.get(clientKey) ?? [])
+        : catalogHarnessesForRender();
       return {
-        harnesses: [],
-        harnessesLoading: false,
-        harnessesError: null,
-        modelsLoading: false,
+        harnesses: activity.enabled ? harnesses : [],
+        harnessesLoading: activity.enabled && queryMock.catalogHarnessesLoading,
+        harnessesError: activity.enabled ? queryMock.harnessesError : null,
+        modelsLoading: activity.enabled && queryMock.modelsLoading,
       };
-    }
-    const clientKey = mockHostClientKey(client);
-    const harnesses = queryMock.catalogHarnessesByClient.has(clientKey)
-      ? (queryMock.catalogHarnessesByClient.get(clientKey) ?? [])
-      : catalogHarnessesForRender();
-    return {
-      harnesses: activity.enabled ? harnesses : [],
-      harnessesLoading: activity.enabled && queryMock.catalogHarnessesLoading,
-      harnessesError: activity.enabled ? queryMock.harnessesError : null,
-      modelsLoading: activity.enabled && queryMock.modelsLoading,
-    };
-  },
-  useRefreshHarnessCatalogForClient: (client: MockHostClient | null) => () => {
-    queryMock.calls.refresh.push(
-      client === null ? null : mockHostClientKey(client),
-    );
-    return Promise.resolve();
-  },
-}));
+    },
+    useRefreshHarnessCatalogForClient:
+      (client: MockHostClient | null) => () => {
+        queryMock.calls.refresh.push(
+          client === null ? null : mockHostClientKey(client),
+        );
+        return Promise.resolve();
+      },
+  }),
+);
 
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
@@ -1643,6 +1685,7 @@ describe("<HarnessModelPicker />", () => {
     expect(queryMock.calls.models.at(-1)).toEqual({
       harnessId: "codex",
       workingDirectory: null,
+      profileId: null,
       enabled: false,
       subscribed: false,
     });

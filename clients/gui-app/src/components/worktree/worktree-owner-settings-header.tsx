@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import { Zap } from "lucide-react";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
@@ -16,12 +16,14 @@ import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-p
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
 import {
+  DEFAULT_ACCOUNT_HARNESS_PROFILES,
   useGuiHarnessCatalogForClient,
   useGuiHarnessModelsWarmup,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useChatById } from "@/lib/epic-selectors";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 
 interface SettingsSegment {
@@ -133,11 +135,27 @@ export function WorktreeOwnerSettingsHeader(props: {
   // tuple, so the only model list it may pull on a cold host is the subject
   // harness's own - an all-harness fan-out here would spawn every provider
   // server on the owner's host to render one line of text.
-  const catalog = useGuiHarnessCatalogForClient(hostClient, null, {
-    enabled: hasSubject,
-    subscribed: hasSubject,
-    modelsFetch: "cached-only",
-  });
+  const subjectProfileId = ownerProfileId(chatSettings, tuiAgent);
+  const subjectProfiles = useMemo<ReadonlyMap<GuiHarnessId, string | null>>(
+    () =>
+      subjectHarnessId === null
+        ? DEFAULT_ACCOUNT_HARNESS_PROFILES
+        : new Map([[subjectHarnessId, subjectProfileId]]),
+    [subjectHarnessId, subjectProfileId],
+  );
+  const catalog = useGuiHarnessCatalogForClient(
+    hostClient,
+    null,
+    {
+      enabled: hasSubject,
+      subscribed: hasSubject,
+      modelsFetch: "cached-only",
+    },
+    // One tuple is labeled here, and it belongs to the owner's profile - the
+    // catalog slot read for it has to be that profile's, or a model only its
+    // endpoint offers degrades to a raw slug.
+    subjectProfiles,
+  );
   // Gated on the subject's availability, not just `hasSubject`: the tuple is
   // persisted history, so it can name a harness the owner's host has since
   // disabled or lost - and an availability-blind warmup would hit that
@@ -148,7 +166,7 @@ export function WorktreeOwnerSettingsHeader(props: {
   const subjectAvailable =
     catalog.harnesses.find((harness) => harness.id === subjectHarnessId)
       ?.available === true;
-  useGuiHarnessModelsWarmup(hostClient, subjectHarnessId, {
+  useGuiHarnessModelsWarmup(hostClient, subjectHarnessId, subjectProfileId, {
     enabled: hasSubject && subjectAvailable,
     subscribed: hasSubject,
   });
@@ -237,6 +255,15 @@ function tuiHeaderFields(tuiAgent: TuiAgentProjection | null): TuiHeaderFields {
     tuiReasoningEffort: tuiAgent.reasoningEffort,
     tuiProfileId: tuiAgent.profileId,
   };
+}
+
+/** The profile this owner's tuple runs on; `null` is the default account. */
+function ownerProfileId(
+  chatSettings: ChatRunSettings | null,
+  tuiAgent: TuiAgentProjection | null,
+): string | null {
+  if (chatSettings !== null) return chatSettings.profileId;
+  return tuiAgent === null ? null : tuiAgent.profileId;
 }
 
 function ownerHarnessId(

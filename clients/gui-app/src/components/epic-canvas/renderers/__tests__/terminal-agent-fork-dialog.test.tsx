@@ -161,6 +161,15 @@ vi.mock(
 );
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  // D21/W3-T6: the picker calls this unconditionally on every render - a
+  // wholesale mock of this module without it throws "not a function". None
+  // of this file's fixtures exercise the version gate itself, so every
+  // profile here must render as SUPPORTED.
+  useHarnessCatalogProfileScopingSupport: () => true,
+  useHarnessCatalogProfileScope: (
+    _hostId: string | null,
+    profileId: string | null,
+  ) => ({ profileId, status: "ready" as const }),
   useGuiHarnessesQueryForClient: () => ({
     data: {
       harnesses: [

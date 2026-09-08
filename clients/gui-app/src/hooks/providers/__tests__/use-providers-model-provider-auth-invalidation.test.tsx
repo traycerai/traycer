@@ -93,6 +93,7 @@ describe("model provider auth invalidation", () => {
     });
     result.current.mutate({
       providerId: "opencode",
+      profileId: null,
       action: { action: "disconnect", modelProviderId: "huggingface" },
     });
 
@@ -124,7 +125,10 @@ describe("model provider auth invalidation", () => {
     const liveKey = queryKeys.hostMethod<
       HostRpcRegistry,
       "providers.listModelProviders"
-    >("host-1", "providers.listModelProviders", { providerId: "opencode" });
+    >("host-1", "providers.listModelProviders", {
+      providerId: "opencode",
+      profileId: null,
+    });
     client.setQueryData(liveKey, { result: { ok: true, providers: [] } });
 
     void client.invalidateQueries({
@@ -159,6 +163,7 @@ describe("model provider auth invalidation", () => {
     });
     result.current.mutate({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "createCustom",
         modelProviderId: "myprovider",
@@ -205,6 +210,7 @@ describe("model provider auth invalidation", () => {
     });
     result.current.mutate({
       providerId: "opencode",
+      profileId: null,
       action: { action: "disconnect", modelProviderId: "openai" },
     });
     await waitFor(() => {
@@ -245,6 +251,7 @@ describe("model provider auth invalidation", () => {
     });
     result.current.mutate({
       providerId: "opencode",
+      profileId: null,
       action: {
         action: "startOauth",
         modelProviderId: "openai",
@@ -282,6 +289,7 @@ describe("model provider auth invalidation", () => {
     });
     result.current.mutate({
       providerId: "opencode",
+      profileId: null,
       action: { action: "disconnect", modelProviderId: "huggingface" },
     });
 
@@ -319,6 +327,7 @@ describe("model provider auth invalidation", () => {
     });
     result.current.mutate({
       providerId: "claude-code",
+      profileId: null,
       action: { action: "disconnect", modelProviderId: "openai" },
     });
 

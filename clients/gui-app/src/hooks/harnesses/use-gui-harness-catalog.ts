@@ -22,6 +22,7 @@ import {
 } from "@/hooks/host/use-host-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import { useHostMethodMajorAtLeast } from "@/hooks/host/use-host-supports-method";
 
 // Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
 // the batched fan-out in `useGuiHarnessCatalog` and the standalone
@@ -165,6 +166,14 @@ export interface GuiHarnessCatalogEntry extends GuiHarnessOption {
   readonly models: ListGuiAgentModelsResponse["models"];
   readonly modelsLoading: boolean;
   readonly modelsError: HostRpcError | null;
+  /**
+   * A managed profile is selected for this harness and the host negotiated a
+   * catalog line too old to answer for one (D21). No request was issued and
+   * `models` is empty - deliberately NOT reported through `modelsError`, which
+   * renders as a failed fetch with a report-issue affordance beside it. A
+   * negotiated host version is a fact about the deployment, not a defect.
+   */
+  readonly modelsProfileUnsupported: boolean;
 }
 
 export interface GuiHarnessCatalog {
@@ -183,8 +192,129 @@ const EMPTY_GUI_MODEL_REQUESTS: ReadonlyArray<{
   readonly params: {
     readonly harnessId: GuiHarnessId;
     readonly workingDirectory: string | null;
+    readonly profileId: string | null;
   };
 }> = [];
+
+/**
+ * "Every harness on its default account" - the catalog's profile map when the
+ * surface has no profile selection of its own (the app-load fill, a label
+ * lookup). Shared constant so those call sites keep a stable identity across
+ * renders instead of each minting an empty `Map` per commit.
+ */
+export const DEFAULT_ACCOUNT_HARNESS_PROFILES: ReadonlyMap<
+  GuiHarnessId,
+  string | null
+> = new Map();
+
+/**
+ * The first `agent.gui.listModels` / `agent.gui.listCommands` major that
+ * carries `profileId` (D09/D17/D25, W3-T6).
+ */
+const PROFILE_SCOPED_HARNESS_CATALOG_MAJOR = 2;
+
+/**
+ * What a catalog or command request may do for one `(host, profile)` pair.
+ *
+ * - `"ready"` - send it. Either the default account is selected (every host
+ *   can answer that, on every line) or the host negotiated `@2.0` on BOTH
+ *   catalog methods.
+ * - `"pending"` - no handshake with that host has been recorded yet, so
+ *   nothing is known either way. Send nothing and render the surface's own
+ *   pending state; accusing a host of being out of date on evidence that has
+ *   not arrived is the one wrong answer here.
+ * - `"unsupported"` - the host handshook below `@2.0` and a managed profile
+ *   is selected. Send nothing and SAY so: D21's downgrade bridges reject a
+ *   non-null `profileId` outright rather than rewriting it, and the client
+ *   must not reach the same outcome by substituting the default account.
+ */
+export type HarnessCatalogProfileScopeStatus =
+  | "ready"
+  | "pending"
+  | "unsupported";
+
+/**
+ * The single verdict every catalog/command call site reads before issuing a
+ * request (D09/D17/D21/D25, W3-T6).
+ *
+ * `profileId` is ALWAYS the selection it was derived from - never substituted,
+ * not even in the two statuses that send nothing. That is deliberate: the id
+ * is also the query's cache key, so keeping the profile's own key under a
+ * disabled observer means the surface reads that profile's (empty) slot rather
+ * than the default account's - which the app-load prefetcher has usually
+ * filled, and which is exactly the list D21 exists to keep off screen.
+ */
+export interface HarnessCatalogProfileScope {
+  readonly profileId: string | null;
+  readonly status: HarnessCatalogProfileScopeStatus;
+}
+
+const DEFAULT_ACCOUNT_SCOPE: HarnessCatalogProfileScope = {
+  profileId: null,
+  status: "ready",
+};
+
+/**
+ * The scope decision itself, as a pure function of the selection and the
+ * host's negotiated verdict (`null` = no handshake recorded). Exported for the
+ * fan-out, which answers it once per harness; a surface with a single
+ * selection uses {@link useHarnessCatalogProfileScope}.
+ */
+export function harnessCatalogProfileScope(
+  profileId: string | null,
+  scopingSupported: boolean | null,
+): HarnessCatalogProfileScope {
+  if (profileId === null) return DEFAULT_ACCOUNT_SCOPE;
+  if (scopingSupported === null) return { profileId, status: "pending" };
+  return { profileId, status: scopingSupported ? "ready" : "unsupported" };
+}
+
+/**
+ * Whether `hostId` negotiated catalog methods that can answer for a managed
+ * profile - `null` while no handshake with it has been recorded.
+ *
+ * BOTH methods are read, not one standing in for the other. They gained
+ * `profileId` in the same change, but that is a fact about the registry as it
+ * landed rather than one the type system holds, and this single verdict gates
+ * `agent.gui.listCommands` as well as `agent.gui.listModels`.
+ */
+export function useHarnessCatalogProfileScopingSupport(
+  hostId: string | null,
+): boolean | null {
+  const models = useHostMethodMajorAtLeast(
+    hostId,
+    "agent.gui.listModels",
+    PROFILE_SCOPED_HARNESS_CATALOG_MAJOR,
+  );
+  const commands = useHostMethodMajorAtLeast(
+    hostId,
+    "agent.gui.listCommands",
+    PROFILE_SCOPED_HARNESS_CATALOG_MAJOR,
+  );
+  if (models === null || commands === null) return null;
+  return models && commands;
+}
+
+/**
+ * THE choke point: which profile id a catalog/command request carries for
+ * `(hostId, profileId)`, and whether it may be sent at all.
+ *
+ * Every surface that threads a `profileId` into `agent.gui.listModels` /
+ * `agent.gui.listCommands` resolves it here - the composer toolbar, the slash
+ * palette, the model picker, the worktree owner header, and the catalog
+ * fan-out itself - so "may this request go out, and with what" has one answer
+ * per `(host, harness)` instead of one per call site.
+ */
+export function useHarnessCatalogProfileScope(
+  hostId: string | null,
+  profileId: string | null,
+): HarnessCatalogProfileScope {
+  const scopingSupported = useHarnessCatalogProfileScopingSupport(hostId);
+  return useMemo(
+    () => harnessCatalogProfileScope(profileId, scopingSupported),
+    [profileId, scopingSupported],
+  );
+}
 
 /**
  * WHICH SURFACES MAY USE THE DEFAULT-HOST WRAPPERS BELOW.
@@ -262,29 +392,69 @@ export function useGuiHarnessesQueryForClient(
   });
 }
 
+/**
+ * Which catalog one `agent.gui.listModels` observer is about. One object
+ * rather than three positional arguments so `profileId` travels as a NAMED
+ * field beside the harness it qualifies - it is part of the cache key, and a
+ * positional `null` in the middle of a call is exactly the shape a surface
+ * with a profile switcher forgets to fill in.
+ */
+export interface GuiHarnessModelsTarget {
+  readonly harnessId: GuiHarnessId;
+  readonly workingDirectory: string | null;
+  /** `null` is the default account (D09/D25, W3-T6), never "unset". */
+  readonly profileId: string | null;
+}
+
+/** Same, for `agent.gui.listCommands` (D17, W3-T6). */
+export interface GuiHarnessCommandsTarget {
+  readonly harnessId: GuiHarnessId;
+  readonly workingDirectories: ReadonlyArray<string>;
+  readonly profileId: string | null;
+}
+
 export function useGuiHarnessModelsQuery(
-  harnessId: GuiHarnessId,
-  workingDirectory: string | null,
+  target: GuiHarnessModelsTarget,
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
   return useGuiHarnessModelsQueryForClient(
     useDefaultHostClient(),
-    harnessId,
-    workingDirectory,
+    target,
     activity,
   );
 }
 
-/** Client-scoped `agent.gui.listModels`; see `useGuiHarnessesQueryForClient`. */
+/**
+ * Client-scoped `agent.gui.listModels`; see `useGuiHarnessesQueryForClient`.
+ *
+ * `profileId` (D09/D25, W3-T6) selects WHICH account's catalog this is -
+ * `null` is the default account. It is part of the cache key, so a profile's
+ * models never share a slot with the default account's, and required rather
+ * than optional so a surface with a profile switcher cannot forget it and
+ * silently show the wrong list.
+ *
+ * The profile-scoping verdict is applied HERE rather than at each call site:
+ * a managed profile against a host that never negotiated `@2.0` holds
+ * `enabled` closed, whatever the caller passed. A surface that must SAY why
+ * asks {@link useHarnessCatalogProfileScope} for the same verdict; a surface
+ * that only reads a catalog needs to know nothing about it.
+ */
 export function useGuiHarnessModelsQueryForClient(
   client: HostClient<HostRpcRegistry> | null,
-  harnessId: GuiHarnessId,
-  workingDirectory: string | null,
+  target: GuiHarnessModelsTarget,
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
+  const { harnessId, workingDirectory, profileId } = target;
+  const scope = useHarnessCatalogProfileScope(
+    client?.getActiveHostId() ?? null,
+    profileId,
+  );
+  // Rebuilt from the FIELDS, not passed through: a caller writing the target
+  // inline mints a fresh object every render, and this identity is what the
+  // query's params memo hangs on.
   const params = useMemo(
-    () => ({ harnessId, workingDirectory }),
-    [harnessId, workingDirectory],
+    () => ({ harnessId, workingDirectory, profileId }),
+    [harnessId, workingDirectory, profileId],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listModels">({
     cacheKeyIdentity: undefined,
@@ -292,7 +462,7 @@ export function useGuiHarnessModelsQueryForClient(
     method: "agent.gui.listModels",
     params,
     options: {
-      enabled: activity.enabled,
+      enabled: activity.enabled && scope.status === "ready",
       subscribed: activity.subscribed,
       // Cache-only (see the module header). This observer's `enabled` tracks
       // surface activity, so a finite staleTime would refetch - and respawn a
@@ -333,23 +503,31 @@ export function useGuiHarnessModelsQueryForClient(
 export function useGuiHarnessModelsWarmup(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId | null,
+  profileId: string | null,
   activity: QueryActivityOptions,
 ): Array<UseQueryResult<ListGuiAgentModelsResponse, HostRpcError>> {
+  const scope = useHarnessCatalogProfileScope(
+    client?.getActiveHostId() ?? null,
+    profileId,
+  );
   const requests = useMemo(() => {
     if (harnessId === null) return EMPTY_GUI_MODEL_REQUESTS;
     return [
       {
         method: "agent.gui.listModels" as const,
-        params: { harnessId, workingDirectory: null },
+        params: { harnessId, workingDirectory: null, profileId },
       },
     ];
-  }, [harnessId]);
+  }, [harnessId, profileId]);
   return useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
     cacheKeyIdentity: undefined,
     requests,
     options: {
-      enabled: activity.enabled,
+      // Same choke point as the standalone query: a label surface warming an
+      // owner's tuple has no version knowledge of its own, and the worst
+      // outcome for it is a raw slug rather than a wrong model name.
+      enabled: activity.enabled && scope.status === "ready",
       subscribed: activity.subscribed,
       staleTime: Infinity,
       gcTime: Infinity,
@@ -357,15 +535,26 @@ export function useGuiHarnessModelsWarmup(
   });
 }
 
+/**
+ * Client-scoped `agent.gui.listCommands`. `profileId` (D17, W3-T6) decides
+ * whose skills the palette lists: a managed profile's skill roots hang off
+ * that profile's home, so `null` here means the default account and nothing
+ * else.
+ */
 export function useGuiHarnessCommandsQuery(
   client: HostClient<HostRpcRegistry> | null,
-  harnessId: GuiHarnessId,
-  workingDirectories: ReadonlyArray<string>,
+  target: GuiHarnessCommandsTarget,
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiAgentCommandsResponse, HostRpcError> {
+  const { harnessId, workingDirectories, profileId } = target;
+  const scope = useHarnessCatalogProfileScope(
+    client?.getActiveHostId() ?? null,
+    profileId,
+  );
   const params = useMemo(
-    () => guiHarnessCommandsQueryParams(harnessId, workingDirectories),
-    [harnessId, workingDirectories],
+    () =>
+      guiHarnessCommandsQueryParams(harnessId, workingDirectories, profileId),
+    [harnessId, workingDirectories, profileId],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listCommands">({
     cacheKeyIdentity: undefined,
@@ -373,7 +562,7 @@ export function useGuiHarnessCommandsQuery(
     method: "agent.gui.listCommands",
     params,
     options: {
-      enabled: activity.enabled,
+      enabled: activity.enabled && scope.status === "ready",
       subscribed: activity.subscribed,
       // Commands keep a finite staleTime, unlike models: this hook's only
       // steady consumer is the composer's slash popup, whose `enabled` flips
@@ -388,11 +577,13 @@ export function useGuiHarnessCommandsQuery(
 export function useGuiHarnessCatalog(
   workingDirectory: string | null,
   activity: CatalogQueryActivityOptions,
+  profileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>,
 ): GuiHarnessCatalog {
   return useGuiHarnessCatalogForClient(
     useDefaultHostClient(),
     workingDirectory,
     activity,
+    profileIdByHarnessId,
   );
 }
 
@@ -405,6 +596,7 @@ export function useGuiHarnessCatalogForClient(
   client: HostClient<HostRpcRegistry> | null,
   workingDirectory: string | null,
   activity: CatalogQueryActivityOptions,
+  profileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>,
 ): GuiHarnessCatalog {
   const harnessesQuery = useGuiHarnessesQueryForClient(client, activity);
   // Fetching is gated by `enabled` (inside the sub-query hooks); the projection
@@ -424,13 +616,54 @@ export function useGuiHarnessCatalogForClient(
     );
   }, [attached, harnessesQuery.data?.harnesses]);
 
+  // One profile per harness, not one for the catalog: this fan-out spans every
+  // available harness at once, and a profile id is only meaningful against the
+  // provider that minted it. A harness absent from the map is on its default
+  // account - which is every harness for the app-load fill and the label
+  // surfaces, and all but the browsed/selected pair for the picker.
+  //
+  // The fan-out asks the choke point once per harness rather than trusting the
+  // map: this hook is the LAST place a `profileId` can turn into a request, so
+  // a caller that hands it a managed profile for a host that cannot answer for
+  // one must lose the request here, not have it rejected on the wire.
+  const scopingSupported = useHarnessCatalogProfileScopingSupport(
+    client?.getActiveHostId() ?? null,
+  );
+  const scopeByHarnessId = useMemo(() => {
+    const map = new Map<GuiHarnessId, HarnessCatalogProfileScope>();
+    for (const harnessId of harnessIds) {
+      map.set(
+        harnessId,
+        harnessCatalogProfileScope(
+          profileIdByHarnessId.get(harnessId) ?? null,
+          scopingSupported,
+        ),
+      );
+    }
+    return map;
+  }, [harnessIds, profileIdByHarnessId, scopingSupported]);
+  // Only the harnesses whose scope resolved may hold an observer at all. A
+  // held one keyed on the default account would surface the slot the app-load
+  // fill populated - the substitution D21 forbids - so they are dropped from
+  // the batch entirely and their entries are synthesized below.
+  const scopedHarnessIds = useMemo(
+    () =>
+      harnessIds.filter(
+        (harnessId) => scopeByHarnessId.get(harnessId)?.status === "ready",
+      ),
+    [harnessIds, scopeByHarnessId],
+  );
   const requests = useMemo(() => {
-    if (harnessIds.length === 0) return EMPTY_GUI_MODEL_REQUESTS;
-    return harnessIds.map((harnessId) => ({
+    if (scopedHarnessIds.length === 0) return EMPTY_GUI_MODEL_REQUESTS;
+    return scopedHarnessIds.map((harnessId) => ({
       method: "agent.gui.listModels" as const,
-      params: { harnessId, workingDirectory },
+      params: {
+        harnessId,
+        workingDirectory,
+        profileId: scopeByHarnessId.get(harnessId)?.profileId ?? null,
+      },
     }));
-  }, [harnessIds, workingDirectory]);
+  }, [scopeByHarnessId, scopedHarnessIds, workingDirectory]);
 
   const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
@@ -461,17 +694,18 @@ export function useGuiHarnessCatalogForClient(
 
   const queryByHarnessId = useMemo(() => {
     const queryMap = new Map<GuiHarnessId, (typeof modelQueries)[number]>();
-    harnessIds.forEach((id, index) => {
+    scopedHarnessIds.forEach((id, index) => {
       queryMap.set(id, modelQueries[index]);
     });
     return queryMap;
-  }, [harnessIds, modelQueries]);
+  }, [modelQueries, scopedHarnessIds]);
 
   const harnesses = useMemo<ReadonlyArray<GuiHarnessCatalogEntry>>(
     () =>
       attached && harnessesQuery.data !== undefined
         ? harnessesQuery.data.harnesses.map((harness) => {
             const modelQuery = queryByHarnessId.get(harness.id);
+            const scopeStatus = scopeByHarnessId.get(harness.id)?.status;
             return {
               ...harness,
               models: modelQuery?.data?.models ?? EMPTY_GUI_MODEL_OPTIONS,
@@ -481,15 +715,20 @@ export function useGuiHarnessCatalogForClient(
               // as an eternal spinner. `isLoading` (`isPending && isFetching`)
               // reflects the query's shared fetch state, so it also turns true
               // while a surface's own targeted query fills this same slot.
-              modelsLoading: modelQuery?.isLoading ?? false,
+              // A scope still waiting on the host's handshake IS a fetch
+              // coming: the verdict lands with the manifest and the batch
+              // picks the harness up on that render.
+              modelsLoading:
+                (modelQuery?.isLoading ?? false) || scopeStatus === "pending",
               modelsError:
                 modelQuery?.error instanceof HostRpcError
                   ? modelQuery.error
                   : null,
+              modelsProfileUnsupported: scopeStatus === "unsupported",
             };
           })
         : EMPTY_GUI_HARNESS_CATALOG_ENTRIES,
-    [attached, harnessesQuery.data, queryByHarnessId],
+    [attached, harnessesQuery.data, queryByHarnessId, scopeByHarnessId],
   );
   // Same predicate as the per-entry flag above: a slot nothing will fetch is
   // not "loading", however empty it is.
@@ -620,12 +859,14 @@ export function useRefreshHarnessCatalogForClient(
 function guiHarnessCommandsQueryParams(
   harnessId: GuiHarnessId,
   workingDirectories: ReadonlyArray<string>,
+  profileId: string | null,
 ) {
   const normalized = dedupeNonEmptyStrings(workingDirectories);
   return {
     harnessId,
     workingDirectory: normalized[0] ?? null,
     workingDirectories: normalized,
+    profileId,
   };
 }
 

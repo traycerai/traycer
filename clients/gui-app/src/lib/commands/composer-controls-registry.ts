@@ -15,6 +15,7 @@
  */
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
+  HarnessModelSelection,
   PermissionMode,
   ProviderId,
   ReasoningLevel,
@@ -54,6 +55,16 @@ export interface FocusedComposerEntry {
    * resolving (the subpages then list nothing rather than another host's).
    */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
+  /**
+   * The focused composer's COMMITTED destination (D09/D25). The palette's
+   * "Pick provider" / "Pick model" subpages list the catalog of the account
+   * this names, so a composer running on a managed profile is offered that
+   * profile's models rather than the default account's - and `selectModel`
+   * commits back onto the same profile instead of moving the composer off it.
+   * Carried here rather than looked up because the registry is the only thing
+   * the palette holds; the composer's own toolbar store owns the value.
+   */
+  readonly selection: HarnessModelSelection;
 }
 
 let registered: FocusedComposerEntry | null = null;
@@ -63,8 +74,14 @@ export function registerFocusedComposerControls(
   kind: FocusedComposerKind,
   controls: ComposerControls,
   hostClient: HostClient<HostRpcRegistry> | null,
+  selection: HarnessModelSelection,
 ): () => void {
-  const entry: FocusedComposerEntry = { kind, controls, hostClient };
+  const entry: FocusedComposerEntry = {
+    kind,
+    controls,
+    hostClient,
+    selection,
+  };
   registered = entry;
   notify();
   return () => {
