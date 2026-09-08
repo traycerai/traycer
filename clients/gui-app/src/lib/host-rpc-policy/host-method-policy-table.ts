@@ -790,7 +790,7 @@ export const HOST_METHOD_POLL_TABLE = {
   "workspace.browseFolders": { ...LATEST_SCHEDULING, poll: null },
   "workspace.readFile": { ...LATEST_SCHEDULING, poll: null },
   "workspace.getAppearance": { ...LATEST_SCHEDULING, poll: null },
-  // Appearance saves persist configuration and assets under a revision check.
+  // Appearance saves persist configuration and an asset file to disk.
   "workspace.setAppearance": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

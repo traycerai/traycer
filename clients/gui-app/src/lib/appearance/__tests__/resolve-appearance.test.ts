@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  WorkspaceAppearance,
-  WorkspaceAppearanceRead,
-} from "@traycer/protocol/host/workspace/appearance-schemas";
+import type { WorkspaceAppearanceRead } from "@traycer/protocol/host/workspace/appearance-schemas";
 import { mergeAppearanceRead } from "../resolve-appearance";
 
 function read(
@@ -13,7 +10,6 @@ function read(
   return {
     workspacePath: "/repo",
     canonicalSourceRoot: "/repo/.git-root",
-    revision: "rev-1",
     appearance: null,
     issues: [],
     ...overrides,
@@ -61,18 +57,16 @@ describe("mergeAppearanceRead", () => {
     expect(merged.issues).toEqual(next.issues);
   });
 
-  it("falls back to the previous snapshot on 'unavailable' and 'unsupported' too", () => {
+  it("falls back to the previous snapshot on 'unavailable' too", () => {
     const previous = read({
       status: "present",
       appearance: { version: 1, color: "#112233" },
     });
-    for (const status of ["unavailable", "unsupported"] as const) {
-      const merged = mergeAppearanceRead(
-        read({ status, appearance: null }),
-        previous,
-      );
-      expect(merged.appearance).toEqual(previous.appearance);
-    }
+    const merged = mergeAppearanceRead(
+      read({ status: "unavailable", appearance: null }),
+      previous,
+    );
+    expect(merged.appearance).toEqual(previous.appearance);
   });
 
   it("does not fall back when the previous snapshot is for a different source root", () => {
@@ -139,12 +133,15 @@ describe("mergeAppearanceRead", () => {
       appearance: {
         version: 1,
         color: "#112233",
-        icon: { kind: "symbol", value: "folder" },
+        icon: { kind: "emoji", value: "\u{1f4c1}" },
       },
     });
     const next = read({
       status: "present",
-      appearance: { version: 1, icon: { kind: "symbol", value: "rocket" } },
+      appearance: {
+        version: 1,
+        icon: { kind: "emoji", value: "\u{1f680}" },
+      },
       issues: ["color"],
     });
 
@@ -152,57 +149,49 @@ describe("mergeAppearanceRead", () => {
     expect(merged.appearance?.color).toBe("#112233");
     // The new read's own icon is authoritative and untouched.
     expect(merged.appearance?.icon).toEqual({
-      kind: "symbol",
-      value: "rocket",
+      kind: "emoji",
+      value: "\u{1f680}",
     });
   });
 
-  it("backfills a missing wallpaper from cache only when 'wallpaper' is flagged AND the new read omits it", () => {
-    const cachedWallpaper = {
+  it("backfills a missing icon from cache only when 'icon' is flagged AND the new read omits it", () => {
+    const cachedIcon = {
       kind: "image",
       path: "appearance/old.png",
-      focalPoint: [0.5, 0.5],
-      treatment: "original",
-      dimming: 0,
-      strength: 1,
-    } satisfies WorkspaceAppearance["wallpaper"];
+    } satisfies NonNullable<WorkspaceAppearanceRead["appearance"]>["icon"];
     const previous = read({
       status: "present",
-      appearance: { version: 1, wallpaper: cachedWallpaper },
+      appearance: { version: 1, icon: cachedIcon },
     });
     const next = read({
       status: "present",
       appearance: { version: 1 },
-      issues: ["wallpaper"],
+      issues: ["icon"],
     });
 
-    expect(mergeAppearanceRead(next, previous).appearance?.wallpaper).toEqual(
-      cachedWallpaper,
+    expect(mergeAppearanceRead(next, previous).appearance?.icon).toEqual(
+      cachedIcon,
     );
   });
 
-  it("keeps the host's own wallpaper when the host still returns one despite the flagged issue", () => {
-    const cachedWallpaper = {
+  it("keeps the host's own icon when the host still returns one despite the flagged issue", () => {
+    const cachedIcon = {
       kind: "image",
       path: "appearance/old.png",
-      focalPoint: [0.5, 0.5],
-      treatment: "original",
-      dimming: 0,
-      strength: 1,
-    } satisfies WorkspaceAppearance["wallpaper"];
-    const freshWallpaper = { ...cachedWallpaper, path: "appearance/new.png" };
+    } satisfies NonNullable<WorkspaceAppearanceRead["appearance"]>["icon"];
+    const freshIcon = { ...cachedIcon, path: "appearance/new.png" };
     const previous = read({
       status: "present",
-      appearance: { version: 1, wallpaper: cachedWallpaper },
+      appearance: { version: 1, icon: cachedIcon },
     });
     const next = read({
       status: "present",
-      appearance: { version: 1, wallpaper: freshWallpaper },
-      issues: ["wallpaper"],
+      appearance: { version: 1, icon: freshIcon },
+      issues: ["icon"],
     });
 
-    expect(mergeAppearanceRead(next, previous).appearance?.wallpaper).toEqual(
-      freshWallpaper,
+    expect(mergeAppearanceRead(next, previous).appearance?.icon).toEqual(
+      freshIcon,
     );
   });
 
@@ -242,20 +231,15 @@ describe("mergeAppearanceRead", () => {
       appearance: {
         version: 1,
         color: "#112233",
-        icon: { kind: "symbol", value: "folder" },
-        wallpaper: {
-          kind: "image",
-          path: "appearance/old.png",
-          focalPoint: [0.5, 0.5],
-          treatment: "original",
-          dimming: 0,
-          strength: 1,
-        },
+        icon: { kind: "emoji", value: "\u{1f4c1}" },
       },
     });
     const next = read({
       status: "malformed",
-      appearance: { version: 1, wallpaper: { kind: "none" } },
+      appearance: {
+        version: 1,
+        icon: { kind: "emoji", value: "\u{1f680}" },
+      },
       issues: ["color"],
     });
 
@@ -264,9 +248,10 @@ describe("mergeAppearanceRead", () => {
     expect(merged.appearance?.color).toBe("#112233");
     // Explicitly returned by the host (even though not the flagged field) ->
     // authoritative, never backfilled.
-    expect(merged.appearance?.wallpaper).toEqual({ kind: "none" });
-    // Not flagged and not returned -> stays absent, never invented from cache.
-    expect(merged.appearance?.icon).toBeUndefined();
+    expect(merged.appearance?.icon).toEqual({
+      kind: "emoji",
+      value: "\u{1f680}",
+    });
   });
 
   it("still falls back to the whole cached snapshot for a totally malformed read (no salvageable appearance)", () => {

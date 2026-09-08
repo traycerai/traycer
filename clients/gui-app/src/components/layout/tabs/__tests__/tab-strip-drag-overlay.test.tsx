@@ -45,7 +45,7 @@ function epicTab(color: string): Extract<HeaderTab, { kind: "epic" }> {
     canOpenInNewWindow: true,
     repositoryIdentity: {
       color,
-      icon: { kind: "symbol", value: "rocket" },
+      icon: { kind: "emoji", value: "\u{1f680}" },
       scope: null,
       assetRefreshKey: 1,
       iconRejected: false,
@@ -76,8 +76,8 @@ describe("HeaderTabDragOverlay: identity tint + status outside strip context", (
     });
     const chip = screen.getByTestId("header-tab-drag-overlay");
     expect(chip.style.backgroundColor).toContain("654321");
-    // Identity icon (symbol) and the running-activity status render together.
-    expect(document.querySelector("svg")).not.toBeNull();
+    // Identity icon (emoji) and the running-activity status render together.
+    expect(screen.getByText("\u{1f680}")).toBeTruthy();
     expect(screen.getByTestId("header-tab-activity-tab-1")).toBeTruthy();
   });
 
@@ -91,7 +91,7 @@ describe("HeaderTabDragOverlay: identity tint + status outside strip context", (
     render(<HeaderTabDragOverlay tab={tab} width={200} />);
 
     expect(screen.queryByTestId("header-tab-activity-tab-1")).toBeNull();
-    expect(document.querySelector("svg")).not.toBeNull();
+    expect(screen.getByText("\u{1f680}")).toBeTruthy();
   });
 
   it("surfaces real server attention through the scoped provider, then clears it while identity stays put", () => {

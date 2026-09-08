@@ -6,6 +6,9 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useWorkspaceAppearance } from "@/hooks/appearance/use-workspace-appearance";
+import { RepositoryIdentityIcon } from "@/components/layout/tabs/repository-identity";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -49,10 +52,7 @@ export function FolderRow(props: {
         className="inline-flex w-full max-w-full min-w-0 items-center gap-1.5 px-1 py-1 text-ui-sm"
         data-testid="folder-chip"
       >
-        <Folder
-          className="size-3.5 shrink-0 text-muted-foreground/70"
-          aria-hidden
-        />
+        <FolderRowIcon item={item} />
         {/* Scoped to the NAME, not the whole chip. The chip also holds the
               missing-folder warning and the copy-path button, each with its own
               tooltip - a chip-wide trigger meant hovering either one could
@@ -127,6 +127,42 @@ export function FolderRow(props: {
         moveToRecent={props.moveToRecent}
       />
     </div>
+  );
+}
+
+/**
+ * The repo's own icon when it has one (emoji or committed logo), the neutral
+ * folder glyph otherwise. Read-only: the icon is edited in Repository settings.
+ */
+function FolderRowIcon(props: { readonly item: WorkspaceRunItem }) {
+  const { item } = props;
+  const { hostId } = useReactiveHostReadiness(item.hostClient);
+  const appearance = useWorkspaceAppearance({
+    hostId,
+    // Only a Git checkout can carry a committed identity; a plain folder must
+    // not cost a read.
+    workspacePath: item.isGitRepo ? item.displayPath : null,
+  });
+  const icon = appearance.appearance?.appearance?.icon ?? null;
+  if (icon === null) {
+    return (
+      <Folder
+        className="size-3.5 shrink-0 text-muted-foreground/70"
+        aria-hidden
+      />
+    );
+  }
+  return (
+    <RepositoryIdentityIcon
+      identity={{
+        color: appearance.appearance?.appearance?.color ?? null,
+        icon,
+        scope: appearance.scope,
+        assetRefreshKey: appearance.assetRefreshKey,
+        iconRejected: appearance.appearance?.issues.includes("icon") ?? false,
+      }}
+      fallbackIcon={null}
+    />
   );
 }
 
@@ -296,14 +332,14 @@ function PrimaryPinControl(props: {
   );
 }
 
-/** The ⚙ button — opens the setup/teardown scripts modal in every mode. */
+/** The ⚙ button — opens the Repository settings modal in every mode. */
 function EnvironmentButton(props: {
   readonly item: WorkspaceRunItem;
   readonly onEdit: (workspacePath: string) => void;
 }) {
   return (
     <TooltipWrapper
-      label="Setup & teardown scripts"
+      label="Repository settings"
       side="top"
       sideOffset={undefined}
       align={undefined}
@@ -312,7 +348,7 @@ function EnvironmentButton(props: {
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label="Edit setup and teardown scripts"
+        aria-label="Repository settings"
         data-testid="folder-scripts-trigger"
         onClick={() => props.onEdit(props.item.displayPath)}
         // Always visible (muted, brightening on hover/focus) - user decision:

@@ -10,7 +10,7 @@ import {
   linkOpenModeForKind,
   tilePlacementForCategory,
   useSettingsStore,
-  type GlobalWallpaper,
+  type StartPageWallpaper,
 } from "@/stores/settings/settings-store";
 
 /** Seeds localStorage with one persisted payload and rehydrates from it. */
@@ -41,7 +41,7 @@ function resetSettingsStore(): void {
     worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
-    globalWallpaper: null,
+    startPageWallpaper: null,
     showGreeting: true,
     showRecentHistory: true,
   });
@@ -881,34 +881,27 @@ describe("useSettingsStore", () => {
     );
   });
 
-  it("defaults the global wallpaper to null and greeting/history to shown", () => {
-    expect(useSettingsStore.getState().globalWallpaper).toBeNull();
+  it("defaults the start-page wallpaper to null and greeting/history to shown", () => {
+    expect(useSettingsStore.getState().startPageWallpaper).toBeNull();
     expect(useSettingsStore.getState().showGreeting).toBe(true);
     expect(useSettingsStore.getState().showRecentHistory).toBe(true);
   });
 
-  it("persists and rehydrates a global wallpaper image set via the setter", async () => {
+  it("persists and rehydrates a start-page wallpaper set via the setter", async () => {
     const wallpaper = {
-      kind: "image",
-      path: "appearance/global.png",
-      focalPoint: [0.5, 0.5],
-      treatment: "original",
-      dimming: 0.2,
-      strength: 0.8,
-    } satisfies GlobalWallpaper;
-    useSettingsStore.getState().setGlobalWallpaper(wallpaper);
+      style: "dither",
+      intensity: 0.8,
+    } satisfies StartPageWallpaper;
+    useSettingsStore.getState().setStartPageWallpaper(wallpaper);
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(persisted ?? "").toContain('"appearance/global.png"');
     if (persisted === null) throw new Error("expected persisted settings");
-    // Confirm the actual stored JSON (not just a substring) carries the real
-    // wallpaper object at the protocol's `state.` path.
     const parsedPersisted: unknown = JSON.parse(persisted);
     expect(
-      (parsedPersisted as { state: { globalWallpaper: unknown } }).state
-        .globalWallpaper,
+      (parsedPersisted as { state: { startPageWallpaper: unknown } }).state
+        .startPageWallpaper,
     ).toEqual(wallpaper);
 
-    useSettingsStore.setState({ globalWallpaper: null });
+    useSettingsStore.setState({ startPageWallpaper: null });
     // `setState` writes through the persist middleware too, so it just
     // clobbered `persisted` in storage with the reset value - restore the
     // captured JSON before rehydrating, or rehydrate only re-reads the
@@ -916,7 +909,7 @@ describe("useSettingsStore", () => {
     window.localStorage.setItem("traycer-gui-app:settings", persisted);
     await useSettingsStore.persist.rehydrate();
 
-    expect(useSettingsStore.getState().globalWallpaper).toEqual(wallpaper);
+    expect(useSettingsStore.getState().startPageWallpaper).toEqual(wallpaper);
   });
 
   it("persists and rehydrates showGreeting/showRecentHistory independently via their setters", async () => {
@@ -949,26 +942,29 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().showRecentHistory).toBe(false);
   });
 
-  it("rehydrates a malformed persisted wallpaper to null rather than trusting it verbatim", async () => {
-    await rehydrateFrom({ globalWallpaper: { kind: "image" } });
+  it("rehydrates a persisted wallpaper with an unknown style to null", async () => {
+    await rehydrateFrom({ startPageWallpaper: { style: "mosaic" } });
 
-    expect(useSettingsStore.getState().globalWallpaper).toBeNull();
+    expect(useSettingsStore.getState().startPageWallpaper).toBeNull();
+  });
+
+  it("repairs an out-of-range persisted intensity to the default, keeping the style", async () => {
+    await rehydrateFrom({
+      startPageWallpaper: { style: "grain", intensity: 42 },
+    });
+
+    expect(useSettingsStore.getState().startPageWallpaper).toEqual({
+      style: "grain",
+      intensity: 0.6,
+    });
   });
 
   it("rehydrates old settings without the appearance fields to their defaults", async () => {
     await rehydrateFrom({ artifactIconColorMode: "none" });
 
-    expect(useSettingsStore.getState().globalWallpaper).toBeNull();
+    expect(useSettingsStore.getState().startPageWallpaper).toBeNull();
     expect(useSettingsStore.getState().showGreeting).toBe(true);
     expect(useSettingsStore.getState().showRecentHistory).toBe(true);
-  });
-
-  it("rehydrates a persisted 'none' wallpaper (not just 'image')", async () => {
-    await rehydrateFrom({ globalWallpaper: { kind: "none" } });
-
-    expect(useSettingsStore.getState().globalWallpaper).toEqual({
-      kind: "none",
-    });
   });
 
   it("picks up another window's settings write via the cross-window storage listener", async () => {

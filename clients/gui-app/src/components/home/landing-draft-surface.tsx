@@ -24,8 +24,11 @@ import {
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
-import { LandingCustomizeEntry } from "@/components/appearance/landing-customize-button";
 import { LandingAppearanceWallpaper } from "@/components/home/landing-appearance-wallpaper";
+import { Paintbrush } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
 
@@ -161,7 +164,7 @@ export function LandingDraftSurface() {
         ) : null}
         <div className="relative mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
-          <LandingCustomizeEntry draftId={draftId} />
+          <CustomizeStartPageButton />
         </div>
 
         <section
@@ -279,6 +282,40 @@ function restoreLandingSurfaceFocus(
   // partner here; if no active endpoint exists, the local editor's own
   // autofocus effect will run as soon as it registers.
   focusRegisteredActiveComposer();
+}
+
+/**
+ * The start page's only entry into its own appearance. Every setting it opens
+ * (wallpaper, greeting, recent tasks) lives in Settings, so this is a shortcut
+ * into that panel rather than a second editor. Phones have no room for it and
+ * reach the same panel through the drawer.
+ */
+function CustomizeStartPageButton() {
+  const { openSettings } = useSystemTabModalActions();
+  const isMobile = useIsMobileViewport();
+  if (isMobile || isMobileApp()) return null;
+  return (
+    <div className="absolute top-full right-6 z-10 mt-2">
+      <TooltipWrapper
+        label="Customize start page"
+        side="left"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground"
+          aria-label="Customize start page"
+          onClick={() => {
+            openSettings({ section: "appearance", resetToGeneral: false });
+          }}
+        >
+          <Paintbrush className="size-3.5" />
+        </Button>
+      </TooltipWrapper>
+    </div>
+  );
 }
 
 function renderLandingWorkspaceControls(

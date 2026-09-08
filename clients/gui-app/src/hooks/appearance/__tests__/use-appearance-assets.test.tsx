@@ -1,6 +1,4 @@
-import { useState, type ReactNode } from "react";
 import { Blob as NodeBlob } from "node:buffer";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
   afterEach,
@@ -14,7 +12,6 @@ import {
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import { IMAGE_FETCH_MAX_ATTEMPTS } from "@/lib/attachments/use-image-blob-url";
 import type { UseFileAssetResult } from "@/hooks/assets/use-file-asset";
-import type { GlobalWallpaper } from "@/stores/settings/settings-store";
 import type { DecodedBitmap } from "@/lib/images/bitmap-codec";
 import type { AppearanceScope } from "@/lib/appearance/appearance-cache";
 import {
@@ -23,19 +20,14 @@ import {
   animatedPng1x1,
   oversizedBytes,
 } from "@/lib/appearance/__tests__/appearance-image-fixtures";
-import {
-  MAX_APPEARANCE_ICON_BYTES,
-  MAX_APPEARANCE_WALLPAPER_BYTES,
-  type AppearanceUpload,
-} from "@traycer/protocol/host/workspace/appearance-schemas";
+import { MAX_APPEARANCE_ICON_BYTES } from "@traycer/protocol/host/workspace/appearance-schemas";
 
 /**
  * `useHostFileAsset` (the "live" host stream) is mocked wholesale here - its
  * own coalescing/race behavior is `use-file-asset.test.tsx`'s job. What this
  * file owns is the layer ABOVE it: account-scope gating, cache write-through,
  * cached-vs-live precedence, rejected-replacement retention of last-known-
- * good artwork, decode-failure cache eviction, and the global wallpaper save
- * flow.
+ * good artwork, and decode-failure cache eviction.
  */
 const hostFileAssetMock = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -154,8 +146,8 @@ async function installValidationBarrier(): Promise<{
     Promise<{ status: "fulfilled" } | { status: "rejected"; error: unknown }>
   > = [];
   vi.spyOn(validationModule, "validateAppearanceAssetBlob").mockImplementation(
-    (blob, target) => {
-      const settled = original(blob, target).then(
+    (blob) => {
+      const settled = original(blob).then(
         () => ({ status: "fulfilled" as const }),
         (error: unknown) => ({ status: "rejected" as const, error }),
       );
@@ -231,15 +223,6 @@ function signIn(authStore: AuthModule["useAuthStore"], userId: string): void {
     status: "signed-in",
     contextMetadata: { userId, username: userId },
   });
-}
-
-function Wrapper(props: { readonly children: ReactNode }): ReactNode {
-  const [client] = useState(
-    () => new QueryClient({ defaultOptions: { mutations: { retry: false } } }),
-  );
-  return (
-    <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
-  );
 }
 
 const SCOPE = {
@@ -342,7 +325,6 @@ describe("useAppearanceAsset: account-scope gating", () => {
       hooks.useAppearanceAsset({
         scope: SCOPE,
         path: "appearance/bg.png",
-        target: "wallpaper",
         rejected: false,
         focused: true,
         refreshKey: 0,
@@ -362,7 +344,6 @@ describe("useAppearanceAsset: account-scope gating", () => {
       hooks.useAppearanceAsset({
         scope: SCOPE,
         path: "appearance/bg.png",
-        target: "wallpaper",
         rejected: false,
         focused: true,
         refreshKey: 0,
@@ -389,7 +370,6 @@ describe("useAppearanceAsset: account-scope gating", () => {
       hooks.useAppearanceAsset({
         scope: SCOPE,
         path: "appearance/bg.png",
-        target: "wallpaper",
         rejected: true,
         focused: true,
         refreshKey: 0,
@@ -401,7 +381,6 @@ describe("useAppearanceAsset: account-scope gating", () => {
       hooks.useAppearanceAsset({
         scope: null,
         path: "global-bg.png",
-        target: "wallpaper",
         rejected: false,
         focused: true,
         refreshKey: 0,
@@ -455,7 +434,6 @@ describe("useAppearanceAsset: live/cache precedence and write-through", () => {
       hooks.useAppearanceAsset({
         scope: SCOPE,
         path: "appearance/bg.png",
-        target: "wallpaper",
         rejected: false,
         focused: true,
         refreshKey: 0,
@@ -490,7 +468,6 @@ describe("useAppearanceAsset: live/cache precedence and write-through", () => {
       hooks.useAppearanceAsset({
         scope: SCOPE,
         path: "appearance/bg.png",
-        target: "wallpaper",
         rejected: false,
         focused: true,
         refreshKey: 0,
@@ -524,63 +501,34 @@ describe("useAppearanceAsset: rejected replacement artwork never overwrites last
 
   const cases: Array<{
     readonly name: string;
-    readonly target: AppearanceUpload["target"];
     readonly ordering: "issue-first" | "candidate-first";
     readonly rejectedBytes: () => Uint8Array<ArrayBuffer>;
   }> = [
     {
-      name: "wallpaper, host already flags the issue (issue-first)",
-      target: "wallpaper",
-      ordering: "issue-first",
-      rejectedBytes: animatedPng1x1,
-    },
-    {
-      name: "wallpaper, the hook's own validation catches an animated replacement (candidate-first)",
-      target: "wallpaper",
-      ordering: "candidate-first",
-      rejectedBytes: animatedPng1x1,
-    },
-    {
-      name: "icon, host already flags the issue (issue-first)",
-      target: "icon",
+      name: "host already flags the issue (issue-first)",
       ordering: "issue-first",
       rejectedBytes: () => oversizedBytes(MAX_APPEARANCE_ICON_BYTES),
     },
     {
-      name: "icon, the hook's own validation catches an oversized replacement (candidate-first)",
-      target: "icon",
+      name: "the hook's own validation catches an oversized replacement (candidate-first)",
       ordering: "candidate-first",
       rejectedBytes: () => oversizedBytes(MAX_APPEARANCE_ICON_BYTES),
     },
     {
-      name: "icon, animated replacement (issue-first)",
-      target: "icon",
+      name: "animated replacement (issue-first)",
       ordering: "issue-first",
       rejectedBytes: animatedPng1x1,
     },
     {
-      name: "icon, animated replacement (candidate-first)",
-      target: "icon",
+      name: "animated replacement (candidate-first)",
       ordering: "candidate-first",
       rejectedBytes: animatedPng1x1,
-    },
-    {
-      name: "wallpaper, oversized replacement (issue-first)",
-      target: "wallpaper",
-      ordering: "issue-first",
-      rejectedBytes: () => oversizedBytes(MAX_APPEARANCE_WALLPAPER_BYTES),
-    },
-    {
-      name: "wallpaper, oversized replacement (candidate-first)",
-      target: "wallpaper",
-      ordering: "candidate-first",
-      rejectedBytes: () => oversizedBytes(MAX_APPEARANCE_WALLPAPER_BYTES),
     },
   ];
 
   it.each(cases)(
     "valid cached artwork survives a rejected same-path replacement, then going offline - $name",
-    async ({ target, ordering, rejectedBytes }) => {
+    async ({ ordering, rejectedBytes }) => {
       const { hooks, cache, authStore } = await loadHooks();
       signIn(authStore, "acct-1");
       const path = "appearance/asset.png";
@@ -591,7 +539,6 @@ describe("useAppearanceAsset: rejected replacement artwork never overwrites last
           hooks.useAppearanceAsset({
             scope: SCOPE,
             path,
-            target,
             rejected: props.rejected,
             focused: true,
             refreshKey: 0,
@@ -650,7 +597,6 @@ describe("useAppearanceAsset: rejected replacement artwork never overwrites last
         hooks.useAppearanceAsset({
           scope: SCOPE,
           path,
-          target,
           rejected: false,
           focused: true,
           refreshKey: 0,
@@ -662,76 +608,71 @@ describe("useAppearanceAsset: rejected replacement artwork never overwrites last
     },
   );
 
-  it.each([{ target: "wallpaper" as const }, { target: "icon" as const }])(
-    "a structurally valid PNG that fails real decoding is rejected the same way, retaining last-known-good - $target",
-    async ({ target }) => {
-      const { hooks, cache, authStore } = await loadHooks();
-      signIn(authStore, "acct-1");
-      const path = "appearance/asset.png";
-      await cache.writeAppearanceBlob(SCOPE, path, pngBlob(realPng1x1()));
+  it("a structurally valid PNG that fails real decoding is rejected the same way, retaining last-known-good", async () => {
+    const { hooks, cache, authStore } = await loadHooks();
+    signIn(authStore, "acct-1");
+    const path = "appearance/asset.png";
+    await cache.writeAppearanceBlob(SCOPE, path, pngBlob(realPng1x1()));
 
-      const { result, rerender, unmount } = renderHook(() =>
-        hooks.useAppearanceAsset({
-          scope: SCOPE,
-          path,
-          target,
-          rejected: false,
-          focused: true,
-          refreshKey: 0,
-        }),
-      );
-      // Let the CACHED blob resolve first - installing the barrier only
-      // AFTER this means outcomes[0] below is unambiguously the live
-      // candidate's own validation, not the unrelated initial one.
-      await waitFor(() => expect(result.current.url).not.toBeNull());
-      const lastKnownGoodUrl = result.current.url;
-      const barrier = await installValidationBarrier();
+    const { result, rerender, unmount } = renderHook(() =>
+      hooks.useAppearanceAsset({
+        scope: SCOPE,
+        path,
+        rejected: false,
+        focused: true,
+        refreshKey: 0,
+      }),
+    );
+    // Let the CACHED blob resolve first - installing the barrier only
+    // AFTER this means outcomes[0] below is unambiguously the live
+    // candidate's own validation, not the unrelated initial one.
+    await waitFor(() => expect(result.current.url).not.toBeNull());
+    const lastKnownGoodUrl = result.current.url;
+    const barrier = await installValidationBarrier();
 
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>(() =>
-          Promise.resolve(new Response(pngBlob(realPng1x1Alt()))),
-        ),
-      );
-      bitmapCodecMock.decodeBitmap.mockRejectedValueOnce(
-        new Error("corrupt IDAT"),
-      );
-      hostFileAssetMock.result = liveState({
-        status: "ready",
-        url: "blob:live-corrupt",
-        totalBytes: 1,
-      });
-      rerender();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(new Response(pngBlob(realPng1x1Alt()))),
+      ),
+    );
+    bitmapCodecMock.decodeBitmap.mockRejectedValueOnce(
+      new Error("corrupt IDAT"),
+    );
+    hostFileAssetMock.result = liveState({
+      status: "ready",
+      url: "blob:live-corrupt",
+      totalBytes: 1,
+    });
+    rerender();
 
-      await waitFor(() => expect(barrier.outcomes.length).toBe(1));
-      const outcome = await barrier.outcomes[0];
-      expect(outcome.status).toBe("rejected");
+    await waitFor(() => expect(barrier.outcomes.length).toBe(1));
+    const outcome = await barrier.outcomes[0];
+    expect(outcome.status).toBe("rejected");
 
-      expect(result.current.url).toBe(lastKnownGoodUrl);
-      expect(result.current.status).toBe("ready");
-      const stillPersisted = await readPersistedBytes(cache, SCOPE, path);
-      expect(stillPersisted).toEqual(realPng1x1());
+    expect(result.current.url).toBe(lastKnownGoodUrl);
+    expect(result.current.status).toBe("ready");
+    const stillPersisted = await readPersistedBytes(cache, SCOPE, path);
+    expect(stillPersisted).toEqual(realPng1x1());
 
-      // Offline + remount: prove the survival is genuinely PERSISTED, not
-      // just an in-memory `retained` value this same component held onto.
-      hostFileAssetMock.result = liveState({});
-      unmount();
-      currentImageBlobCache?.clear();
-      const { result: remounted } = renderHook(() =>
-        hooks.useAppearanceAsset({
-          scope: SCOPE,
-          path,
-          target,
-          rejected: false,
-          focused: true,
-          refreshKey: 0,
-        }),
-      );
-      await waitFor(() => expect(remounted.current.url).not.toBeNull());
-      const rereadBytes = await readPersistedBytes(cache, SCOPE, path);
-      expect(rereadBytes).toEqual(realPng1x1());
-    },
-  );
+    // Offline + remount: prove the survival is genuinely PERSISTED, not
+    // just an in-memory `retained` value this same component held onto.
+    hostFileAssetMock.result = liveState({});
+    unmount();
+    currentImageBlobCache?.clear();
+    const { result: remounted } = renderHook(() =>
+      hooks.useAppearanceAsset({
+        scope: SCOPE,
+        path,
+        rejected: false,
+        focused: true,
+        refreshKey: 0,
+      }),
+    );
+    await waitFor(() => expect(remounted.current.url).not.toBeNull());
+    const rereadBytes = await readPersistedBytes(cache, SCOPE, path);
+    expect(rereadBytes).toEqual(realPng1x1());
+  });
 
   it.each<{ readonly mechanism: "unmount" | "account-switch" | "issue-param" }>(
     [
@@ -752,7 +693,6 @@ describe("useAppearanceAsset: rejected replacement artwork never overwrites last
           hooks.useAppearanceAsset({
             scope: SCOPE,
             path,
-            target: "wallpaper",
             rejected: props.rejected,
             focused: true,
             refreshKey: 0,
@@ -834,7 +774,6 @@ describe("useAppearanceAsset: offline fallback re-acquires the newest live bytes
       hooks.useAppearanceAsset({
         scope: SCOPE,
         path: "bg.png",
-        target: "wallpaper",
         rejected: false,
         focused: true,
         refreshKey: 0,
@@ -876,7 +815,6 @@ describe("useAppearanceAsset: offline fallback re-acquires the newest live bytes
       hooks.useAppearanceAsset({
         scope: SCOPE,
         path: "bg.png",
-        target: "wallpaper",
         rejected: false,
         focused: true,
         refreshKey: 0,
@@ -935,7 +873,6 @@ describe("useAppearanceAsset: offline fallback re-acquires the newest live bytes
       hooks.useAppearanceAsset({
         scope: SCOPE,
         path: "bg.png",
-        target: "wallpaper",
         rejected: false,
         focused: true,
         refreshKey: 0,
@@ -970,200 +907,5 @@ describe("useAppearanceAsset: offline fallback re-acquires the newest live bytes
     expect(result.current.url).toBe(urlB);
     const stillCachedBytes = await readPersistedBytes(cache, SCOPE, "bg.png");
     expect(stillCachedBytes).toEqual(realPng1x1Alt());
-  });
-});
-
-describe("useResolvedAppearanceAssets: wallpaper precedence", () => {
-  it("suppresses every wallpaper URL when the project explicitly sets 'none'", async () => {
-    const { hooks, authStore, settingsStore } = await loadHooks();
-    signIn(authStore, "acct-1");
-    settingsStore.setState({
-      globalWallpaper: {
-        kind: "image",
-        path: "global.png",
-        focalPoint: [0.5, 0.5],
-        treatment: "original",
-        dimming: 0,
-        strength: 1,
-      },
-    });
-
-    const { result } = renderHook(() =>
-      hooks.useResolvedAppearanceAssets({
-        scope: SCOPE,
-        appearance: { version: 1, wallpaper: { kind: "none" } },
-        issues: [],
-        focused: true,
-        refreshKey: 0,
-      }),
-    );
-
-    expect(result.current.wallpaperUrl).toBeNull();
-    expect(result.current.wallpaper).toEqual({ kind: "none" });
-  });
-
-  it("falls back to the global wallpaper when the project has none set", async () => {
-    const { hooks, cache, authStore, settingsStore } = await loadHooks();
-    signIn(authStore, "acct-1");
-    const globalWallpaper = {
-      kind: "image",
-      path: "global.png",
-      focalPoint: [0.5, 0.5],
-      treatment: "original",
-      dimming: 0,
-      strength: 1,
-    } satisfies GlobalWallpaper;
-    settingsStore.setState({ globalWallpaper });
-    await cache.writeAppearanceBlob(null, "global.png", pngBlob(realPng1x1()));
-    const persistedBytes = await readPersistedBytes(cache, null, "global.png");
-    expect(persistedBytes).toEqual(realPng1x1());
-
-    const { result } = renderHook(() =>
-      hooks.useResolvedAppearanceAssets({
-        scope: SCOPE,
-        appearance: null,
-        issues: [],
-        focused: true,
-        refreshKey: 0,
-      }),
-    );
-
-    await waitFor(() => expect(result.current.wallpaperUrl).not.toBeNull());
-    expect(result.current.wallpaper).toEqual(globalWallpaper);
-  });
-
-  it("routes a host-flagged wallpaper issue straight to the wallpaper asset as rejected, never asking the live host", async () => {
-    const { hooks, authStore } = await loadHooks();
-    signIn(authStore, "acct-1");
-
-    renderHook(() =>
-      hooks.useResolvedAppearanceAssets({
-        scope: SCOPE,
-        appearance: {
-          version: 1,
-          wallpaper: {
-            kind: "image",
-            path: "bg.png",
-            focalPoint: [0.5, 0.5],
-            treatment: "original",
-            dimming: 0,
-            strength: 1,
-          },
-        },
-        issues: ["wallpaper"],
-        focused: true,
-        refreshKey: 0,
-      }),
-    );
-
-    const projectCall = hostFileAssetMock.calls.find(
-      (call) => call.request !== null,
-    );
-    expect(projectCall).toBeUndefined();
-  });
-});
-
-describe("useSaveGlobalAppearance", () => {
-  it("writes the blob, pins it, then commits settings - in that order", async () => {
-    const { hooks, cache, authStore, settingsStore } = await loadHooks();
-    signIn(authStore, "acct-1");
-    const order: string[] = [];
-    const writeSpy = vi
-      .spyOn(cache, "writeAppearanceBlob")
-      .mockImplementation(() => {
-        order.push("write");
-        return Promise.resolve();
-      });
-    const pinSpy = vi
-      .spyOn(cache, "pinGlobalAppearanceBlob")
-      .mockImplementation(() => {
-        order.push("pin");
-        return Promise.resolve();
-      });
-
-    const { result } = renderHook(() => hooks.useSaveGlobalAppearance(), {
-      wrapper: Wrapper,
-    });
-    const wallpaper = {
-      kind: "image",
-      path: "global.png",
-      focalPoint: [0.5, 0.5],
-      treatment: "original",
-      dimming: 0,
-      strength: 1,
-    } satisfies GlobalWallpaper;
-    await act(async () => {
-      await result.current.mutateAsync({
-        wallpaper,
-        blob: pngBlob(realPng1x1()),
-        showGreeting: false,
-        showRecentHistory: false,
-      });
-    });
-
-    expect(order).toEqual(["write", "pin"]);
-    expect(writeSpy).toHaveBeenCalledWith(null, "global.png", expect.any(Blob));
-    expect(pinSpy).toHaveBeenCalledWith("global.png");
-    expect(settingsStore.getState().globalWallpaper).toEqual(wallpaper);
-    expect(settingsStore.getState().showGreeting).toBe(false);
-    expect(settingsStore.getState().showRecentHistory).toBe(false);
-  });
-
-  it("unpins (kind: 'none') without ever writing a blob", async () => {
-    const { hooks, cache, authStore, settingsStore } = await loadHooks();
-    signIn(authStore, "acct-1");
-    const writeSpy = vi.spyOn(cache, "writeAppearanceBlob");
-    const pinSpy = vi
-      .spyOn(cache, "pinGlobalAppearanceBlob")
-      .mockResolvedValue(undefined);
-
-    const { result } = renderHook(() => hooks.useSaveGlobalAppearance(), {
-      wrapper: Wrapper,
-    });
-    await act(async () => {
-      await result.current.mutateAsync({
-        wallpaper: { kind: "none" },
-        blob: null,
-        showGreeting: true,
-        showRecentHistory: true,
-      });
-    });
-
-    expect(writeSpy).not.toHaveBeenCalled();
-    expect(pinSpy).toHaveBeenCalledWith(null);
-    expect(settingsStore.getState().globalWallpaper).toEqual({ kind: "none" });
-  });
-
-  it("refuses to commit settings when the appearance cache was wiped mid-save (a sign-out wipe raced the pin)", async () => {
-    // The saved wallpaper is GLOBAL (scope null), and a null-scope session is
-    // deliberately immune to an account switch (see
-    // `appearance-cache.test.ts`'s "keeps a global session current across
-    // account switches") - only `clearAppearanceCache()` (the sign-out wipe)
-    // can invalidate it, so that is what this test races against the pin.
-    const { hooks, cache, authStore, settingsStore } = await loadHooks();
-    signIn(authStore, "acct-1");
-    vi.spyOn(cache, "writeAppearanceBlob").mockResolvedValue(undefined);
-    vi.spyOn(cache, "pinGlobalAppearanceBlob").mockImplementation(async () => {
-      await cache.clearAppearanceCache();
-    });
-    settingsStore.setState({ showGreeting: true });
-
-    const { result } = renderHook(() => hooks.useSaveGlobalAppearance(), {
-      wrapper: Wrapper,
-    });
-    await act(async () => {
-      await expect(
-        result.current.mutateAsync({
-          wallpaper: { kind: "none" },
-          blob: null,
-          showGreeting: false,
-          showRecentHistory: false,
-        }),
-      ).rejects.toThrow();
-    });
-
-    // The stale-session guard fired before the settings write - the earlier
-    // value must survive untouched.
-    expect(settingsStore.getState().showGreeting).toBe(true);
   });
 });

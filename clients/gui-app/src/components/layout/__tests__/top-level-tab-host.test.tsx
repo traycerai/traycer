@@ -191,6 +191,11 @@ vi.mock("@/components/home/home-hero", () => ({
 vi.mock("@/components/home/host-update-banner", () => ({
   HostUpdateBanner: () => null,
 }));
+// Reads the landing draft's repository identity through the host runtime,
+// which this suite mounts no provider for.
+vi.mock("@/components/home/landing-appearance-wallpaper", () => ({
+  LandingAppearanceWallpaper: () => null,
+}));
 vi.mock("@/components/epics/epics-list-panel", () => ({
   EpicsListPanel: () => null,
 }));

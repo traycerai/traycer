@@ -15,6 +15,8 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useWorktreeSetRepoScriptsFor } from "@/hooks/worktree/use-worktree-set-repo-scripts-mutation";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
+import { RepoIdentityFields } from "@/components/workspaces/repo-identity-fields";
+import { useRepoIdentityDraft } from "@/components/workspaces/use-repo-identity-draft";
 import { RepoBranchPrefixSection } from "@/components/home/worktree/repo-branch-prefix-section";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,6 +35,12 @@ import {
  */
 export interface WorktreeScriptsContext {
   readonly epicId: string;
+  /**
+   * The host whose checkout this dialog is editing. Only the repository
+   * identity section needs it by id (its read/write hooks are host-keyed);
+   * scripts continue to ride `hostClient`.
+   */
+  readonly hostId: string | null;
   readonly ownerId: string | null;
   readonly ownerKind: WorktreeBindingOwnerKind | null;
   readonly binding: WorktreeBinding | null;
@@ -65,8 +73,11 @@ export interface WorktreeScriptsTarget {
 }
 
 /**
- * Per-folder setup/teardown editor, opened from the workspace picker's
- * Environment footer. The modal stacks on the still-open picker (the picker's
+ * The per-folder "Repository settings" dialog, opened from the workspace
+ * picker's ⚙ and from a header tab's context menu. It carries the repository
+ * identity (colour + icon, always written to the source repo) plus the
+ * setup/teardown scripts and branch naming. The modal stacks on the still-open
+ * picker (the picker's
  * `preserveWhenNestedOverlay` keeps it from dismissing), so closing the modal
  * returns to the picker. Reuses the Settings ▸ Worktrees modal design
  * (`ScriptsReviewDialog`). Where the edit lands follows what the folder is set
@@ -237,6 +248,13 @@ function WorktreeScriptsDialogBody(props: {
   const seedPending = !branchReadSettled && stagedScripts === null;
 
   const saveMutation = useWorktreeSetRepoScriptsFor(context.hostClient);
+  // Identity is a property of the SOURCE repo, so it is seeded and saved at the
+  // canonical source root regardless of where the scripts edit lands.
+  const identity = useRepoIdentityDraft({
+    hostId: context.hostId,
+    workspacePath,
+    epicId: context.epicId,
+  });
 
   // Radix's Dialog dismissable layer listens for Escape on `document` in the
   // capture phase - before any bubbling `onKeyDown` inside the content ever
@@ -303,8 +321,13 @@ function WorktreeScriptsDialogBody(props: {
     <ScriptsReviewDialog
       key={seedKey}
       testId="worktree-scripts-dialog"
-      title="Worktree environment"
+      title="Repository settings"
       description={environmentDialogDescription(summary, workspacePath)}
+      identity={{
+        slot: <RepoIdentityFields draft={identity} />,
+        changed: identity.changed,
+        save: identity.save,
+      }}
       pathLabel={descriptor.pathLabel}
       pathValue={descriptor.pathValue}
       scriptSeed={scriptSeed}
@@ -338,7 +361,7 @@ function WorktreeScriptsDialogBody(props: {
         ) : null
       }
       inUseNote={null}
-      saveLabel="Save scripts"
+      saveLabel="Save"
       onSave={handleSave}
       onEscapeKeyDown={(event) => {
         if (cancelBranchEditingRef.current === null) return;
@@ -365,7 +388,7 @@ function environmentDialogDescription(
       ? `${summary.repoIdentifier.owner}/${summary.repoIdentifier.repo}`
       : lastPathSegment(workspacePath);
   return summary.isGitRepo
-    ? `Configure lifecycle scripts and branch prefix for ${label}.`
+    ? `Identity, lifecycle scripts, and branch prefix for ${label}.`
     : `Configure lifecycle scripts for ${label}.`;
 }
 

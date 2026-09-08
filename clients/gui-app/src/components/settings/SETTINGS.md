@@ -740,10 +740,10 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - The pre-refactor keys (`browserLinkDefaultMode`,
     `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
     migrated once in the store's persist `merge` and then dropped.
-- `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
-  specialized in one column: **Theme**, **Interface**, **Typography**,
-  **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
-  bordered card; changes apply live, the surrounding app stays the primary
+- `Appearance` Six preference groups via `settings-group.tsx`, broad-to-
+  specialized in one column: **Theme**, **Start page**, **Interface**,
+  **Typography**, **Terminal**, **Artifact icons** - each a quiet `<h2>` label
+  outside its own bordered card; changes apply live, the surrounding app stays the primary
   preview. A design pass (`settings-related-panels-core-flows` artifact,
   extending the compact Settings language past General/Worktrees to five more
   panels - Appearance, Notifications, Diagnostics, Shell, Host) introduced
@@ -752,6 +752,21 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - **Theme**: Theme mode (`ThemeModeToggle` - Light/Dark/System,
     `theme`/`setTheme`) and Preset (`ThemePresetPicker`,
     `themePreset`/`setThemePreset`) - broad color/surface choices lead.
+  - **Start page** (`start-page-settings-section.tsx`): the personal landing
+    backdrop. A 16:7 preview card renders the REAL `AppearanceWallpaper` over
+    ghosts of the greeting, composer, and recent-task rows, and is itself a
+    drop target for an image file - so the card shows the actual treatment
+    rather than an illustration of it. Rows: Wallpaper (thumbnail + "Choose
+    image..." + Remove; secondary text is the stored file name, or "None"),
+    Style (segmented Photo / Dither / Grain, only once a wallpaper is set),
+    Intensity (0..100 range input, only for Dither and Grain), Greeting and
+    Recent tasks (`showGreeting` / `showRecentHistory` switches). The style and
+    intensity live in the settings store (`startPageWallpaper`); the bytes live
+    only in the appearance blob store
+    (`lib/appearance/start-page-wallpaper.ts`), stored as a `File` so the row
+    can name the image without a second settings key shadowing it. The start
+    page's own `Paintbrush` button opens this panel - there is no separate
+    appearance editor.
   - **Interface**: Zoom (`DesktopZoomSettingsRow` - desktop-only, renders
     nothing without a zoom bridge; backed by
     `useRunnerZoomPercentQuery`/`SetMutation`/`ResetMutation` against host/OS

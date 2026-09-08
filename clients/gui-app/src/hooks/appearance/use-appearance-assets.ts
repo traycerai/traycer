@@ -1,9 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import type {
-  AppearanceUpload,
-  WorkspaceAppearance,
-} from "@traycer/protocol/host/workspace/appearance-schemas";
 import { useHostFileAsset } from "@/hooks/assets/use-file-asset";
 import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
 import {
@@ -14,17 +9,11 @@ import {
   appearanceAssetKey,
   readAppearanceBlob,
   writeAppearanceBlob,
-  pinGlobalAppearanceBlob,
   captureAppearanceSession,
   isAppearanceSessionCurrent,
   type AppearanceScope,
 } from "@/lib/appearance/appearance-cache";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import {
-  useSettingsStore,
-  type GlobalWallpaper,
-} from "@/stores/settings/settings-store";
-import { workspaceMutationKeys } from "@/lib/query-keys";
 
 export interface AppearanceAssetState {
   readonly url: string | null;
@@ -66,12 +55,6 @@ function appearanceAssetStatus(args: {
   return "loading";
 }
 
-function appearanceImagePath(
-  image: WorkspaceAppearance["icon"] | WorkspaceAppearance["wallpaper"] | null,
-): string | null {
-  return image?.kind === "image" ? image.path : null;
-}
-
 function appearanceAssetRequest(
   scope: AppearanceScope | null,
   path: string | null,
@@ -89,15 +72,15 @@ function loadAppearanceAssetValidation() {
   return import("@/lib/appearance/appearance-asset-validation");
 }
 
+/** The repository logo is the only appearance asset the host serves. */
 export function useAppearanceAsset(args: {
   readonly scope: AppearanceScope | null;
   readonly path: string | null;
-  readonly target: AppearanceUpload["target"];
   readonly rejected: boolean;
   readonly focused: boolean;
   readonly refreshKey: number;
 }): AppearanceAssetState {
-  const { path, focused, target, rejected } = args;
+  const { path, focused, rejected } = args;
   const scope = useStableAppearanceScope(args.scope);
   const accountId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
@@ -110,10 +93,7 @@ export function useAppearanceAsset(args: {
     focused,
     refreshKey: args.refreshKey,
   });
-  const identity = appearanceAssetKey(
-    scope,
-    JSON.stringify([accessiblePath, target]),
-  );
+  const identity = appearanceAssetKey(scope, JSON.stringify([accessiblePath]));
   const [rejectedUrl, setRejectedUrl] = useState<string | null>(null);
   const [failedResolution, setFailedResolution] = useState<{
     identity: string;
@@ -138,7 +118,7 @@ export function useAppearanceAsset(args: {
         if (latest === null) {
           const { validateAppearanceAssetBlob } =
             await loadAppearanceAssetValidation();
-          await validateAppearanceAssetBlob(blob, target);
+          await validateAppearanceAssetBlob(blob);
         }
         signal.throwIfAborted();
         if (!isAppearanceSessionCurrent(scope?.accountId ?? null, session))
@@ -149,7 +129,7 @@ export function useAppearanceAsset(args: {
         };
       },
     }),
-    [identity, scope, accessiblePath, latest, target],
+    [identity, scope, accessiblePath, latest],
   );
   const cached = useImageBlobUrlState(
     accessiblePath,
@@ -176,7 +156,7 @@ export function useAppearanceAsset(args: {
       const { validateAppearanceAssetBlob } =
         await loadAppearanceAssetValidation();
       controller.signal.throwIfAborted();
-      await validateAppearanceAssetBlob(blob, target);
+      await validateAppearanceAssetBlob(blob);
       if (
         controller.signal.aborted ||
         !isAppearanceSessionCurrent(scope.accountId, session)
@@ -190,7 +170,7 @@ export function useAppearanceAsset(args: {
       if (!controller.signal.aborted) setRejectedUrl(liveUrl);
     });
     return () => controller.abort();
-  }, [liveUrl, accessiblePath, scope, identity, target, rejected]);
+  }, [liveUrl, accessiblePath, scope, identity, rejected]);
   const url = cached.url;
   const failed =
     failedResolution?.identity === identity && failedResolution.url === url;
@@ -229,82 +209,4 @@ export function useAppearanceAsset(args: {
       // Keep persistence untouched: this failed lease may predate a newer accepted write.
     },
   };
-}
-
-export function useResolvedAppearanceAssets(args: {
-  readonly scope: AppearanceScope | null;
-  readonly appearance: WorkspaceAppearance | null;
-  readonly issues: readonly string[];
-  readonly focused: boolean;
-  readonly refreshKey: number;
-}) {
-  const globalWallpaper = useSettingsStore((state) => state.globalWallpaper);
-  const wallpaper = args.appearance?.wallpaper ?? globalWallpaper;
-  const projectPath =
-    args.scope === null
-      ? null
-      : appearanceImagePath(args.appearance?.wallpaper);
-  const project = useAppearanceAsset({
-    scope: args.scope,
-    path: projectPath,
-    target: "wallpaper",
-    rejected: args.issues.includes("wallpaper"),
-    focused: args.focused,
-    refreshKey: args.refreshKey,
-  });
-  const globalPath =
-    wallpaper?.kind === "none" ? null : appearanceImagePath(globalWallpaper);
-  const global = useAppearanceAsset({
-    scope: null,
-    path: globalPath,
-    target: "wallpaper",
-    rejected: false,
-    focused: args.focused,
-    refreshKey: args.refreshKey,
-  });
-  const icon = useAppearanceAsset({
-    scope: args.scope,
-    path:
-      args.scope === null ? null : appearanceImagePath(args.appearance?.icon),
-    target: "icon",
-    rejected: args.issues.includes("icon"),
-    focused: args.focused,
-    refreshKey: args.refreshKey,
-  });
-  const usesProject = projectPath !== null && project.url !== null;
-  const resolvedWallpaper = usesProject ? wallpaper : globalWallpaper;
-  const wallpaperUrl = usesProject ? project.url : global.url;
-  return {
-    wallpaper: wallpaper?.kind === "none" ? wallpaper : resolvedWallpaper,
-    wallpaperUrl: wallpaper?.kind === "none" ? null : wallpaperUrl,
-    iconUrl: icon.url,
-    project,
-    icon,
-  };
-}
-
-export function useSaveGlobalAppearance() {
-  return useMutation({
-    mutationKey: workspaceMutationKeys.saveGlobalAppearance(),
-    mutationFn: async (input: {
-      readonly wallpaper: GlobalWallpaper;
-      readonly blob: Blob | null;
-      readonly showGreeting: boolean;
-      readonly showRecentHistory: boolean;
-    }) => {
-      const session = captureAppearanceSession();
-      if (input.wallpaper?.kind === "image" && input.blob !== null)
-        await writeAppearanceBlob(null, input.wallpaper.path, input.blob);
-      await pinGlobalAppearanceBlob(
-        input.wallpaper?.kind === "image" ? input.wallpaper.path : null,
-      );
-      if (!isAppearanceSessionCurrent(null, session))
-        throw new Error("Appearance settings are being cleared.");
-      useSettingsStore.setState({
-        globalWallpaper: input.wallpaper,
-        showGreeting: input.showGreeting,
-        showRecentHistory: input.showRecentHistory,
-      });
-    },
-  });
 }

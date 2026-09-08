@@ -64,6 +64,14 @@ import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 
+// The drag ghost decorates the dragged tab with its repository identity,
+// activity and notification state - all host-runtime reads, and this harness
+// mounts no provider. It is covered by `tab-strip-drag-overlay.test.tsx`;
+// what these tests observe is the tear-off wiring underneath it.
+vi.mock("@/components/layout/tabs/tab-strip-drag-overlay", () => ({
+  HeaderTabDragOverlay: () => null,
+}));
+
 const NEIGHBOUR_TAB_ID = "detach-neighbour";
 const EPIC_TAB_EPIC_ID = "detach-epic-id";
 

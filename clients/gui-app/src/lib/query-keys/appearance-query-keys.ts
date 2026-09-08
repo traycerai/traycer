@@ -19,6 +19,4 @@ export const appearanceQueryKeys = {
       accountId,
       source,
     ] as const,
-  blob: (scopeKey: string, identity: string | null) =>
-    ["appearance-blob", scopeKey, identity] as const,
 };

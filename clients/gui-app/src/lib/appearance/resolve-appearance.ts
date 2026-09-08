@@ -23,11 +23,10 @@ export function mergeAppearanceRead(
   const merged = { ...appearance };
   retainInvalidField(merged, cached, read.issues, "color");
   retainInvalidField(merged, cached, read.issues, "icon");
-  retainInvalidField(merged, cached, read.issues, "wallpaper");
   return { ...read, appearance: merged };
 }
 
-function retainInvalidField<Key extends "color" | "icon" | "wallpaper">(
+function retainInvalidField<Key extends "color" | "icon">(
   appearance: WorkspaceAppearance,
   cached: WorkspaceAppearance | null,
   issues: readonly string[],

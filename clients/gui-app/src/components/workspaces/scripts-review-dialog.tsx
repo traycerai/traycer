@@ -73,11 +73,23 @@ export function ScriptsReviewDialog(props: {
   // Worktrees delete-review flow, which reuses this same presentational shell
   // as a single, unlabeled section).
   readonly repositoryDefaultsSlot: ReactNode | null;
+  /**
+   * Repository identity (colour + icon), rendered ABOVE the scripts block and
+   * persisted by this dialog's single Save alongside them. `null` for the
+   * Settings ▸ Worktrees delete-review flow, which reviews one worktree's
+   * scripts and has no repository to identify.
+   */
+  readonly identity: {
+    readonly slot: ReactNode;
+    readonly changed: boolean;
+    /** Rejects on failure (the caller surfaces its own toast). */
+    readonly save: () => Promise<unknown>;
+  } | null;
   readonly testId: string;
   // Footer action label (idle state only - a successful save always shows
-  // "Saved" regardless). Callers name what they're persisting: "Save scripts"
-  // for the Worktree environment dialog, "Save" for the Settings delete-review
-  // flow (unchanged from its prior hardcoded text).
+  // "Saved" regardless). Callers name what they're persisting - both current
+  // callers use "Save": Repository settings persists identity and scripts
+  // together, and the Settings delete-review flow keeps its prior text.
   readonly saveLabel: string;
   // Returns a promise that resolves when the save actually succeeded and rejects
   // when it failed, so the dialog only shows "Saved"/closes on real success
@@ -125,6 +137,9 @@ export function ScriptsReviewDialog(props: {
     };
   }, [clearSaveTimers]);
 
+  const identity = props.identity;
+  const identityChanged = identity !== null && identity.changed;
+  const anythingChanged = scriptsChanged || identityChanged;
   const saveBusy = saveState !== "idle";
 
   const handleOpenChange = (nextOpen: boolean): void => {
@@ -133,14 +148,19 @@ export function ScriptsReviewDialog(props: {
   };
 
   const handleSave = (): void => {
-    if (saveBusy || !scriptsChanged) return;
+    if (saveBusy || !anythingChanged) return;
     const payload = repoScriptsRequestPayload(scripts);
     clearSaveTimers();
     setSaveState("saving");
     // Drive the confirmation off the real save outcome: "Saved" + auto-close on
     // success only; a failed save (the caller surfaces its own error toast)
     // returns to idle so the user can retry instead of seeing a false success.
-    void props.onSave(payload).then(
+    // Each concern writes only when it actually changed - an untouched scripts
+    // form must not rewrite the environment file just because a colour moved.
+    void Promise.all([
+      scriptsChanged ? props.onSave(payload) : Promise.resolve(),
+      identityChanged ? identity.save() : Promise.resolve(),
+    ]).then(
       () => {
         if (!mountedRef.current) return;
         setSaveState("saved");
@@ -168,46 +188,24 @@ export function ScriptsReviewDialog(props: {
           <DialogDescription>{props.description}</DialogDescription>
         </DialogHeader>
         <div className="flex max-h-[min(80vh,42rem)] flex-col gap-5 overflow-y-auto px-5 pb-5">
+          {identity !== null ? (
+            <div className="border-b border-border/60 pb-5">
+              {identity.slot}
+            </div>
+          ) : null}
           <div className="flex flex-col gap-4">
             {props.repositoryDefaultsSlot !== null ? (
               <p className="text-ui-xs font-medium text-muted-foreground/70 uppercase tracking-wide">
                 Setup &amp; teardown scripts
               </p>
             ) : null}
-            {props.pathLabel !== null && props.pathValue !== null ? (
-              <div className="flex flex-col gap-1.5">
-                <span className="text-ui-xs font-medium text-muted-foreground">
-                  {props.pathLabel}
-                </span>
-                <code className="rounded-md bg-foreground/5 px-2.5 py-2 font-mono text-code-xs text-foreground wrap-anywhere select-all">
-                  {props.pathValue}
-                </code>
-              </div>
-            ) : null}
+            <ScriptsPathRow label={props.pathLabel} value={props.pathValue} />
             {props.scriptsNote !== null ? (
               <p className="text-ui-xs text-muted-foreground">
                 {props.scriptsNote}
               </p>
             ) : null}
-            {props.errorNote !== null ? (
-              <div
-                className="text-ui-xs text-destructive"
-                role="alert"
-                data-testid={`${props.testId}-error-note`}
-              >
-                <span>{props.errorNote}</span>
-                <ReportIssueAction
-                  context={createReportIssueContext({
-                    title: "Could not load workspace scripts",
-                    message: null,
-                    code: null,
-                    source: "Workspace scripts",
-                  })}
-                  presentation="link"
-                  className="ml-1 h-auto p-0 text-current"
-                />
-              </div>
-            ) : null}
+            <ScriptsErrorNote note={props.errorNote} testId={props.testId} />
             {props.seedPending ? (
               <div
                 className="flex min-h-[8rem] items-center justify-center gap-2 text-muted-foreground"
@@ -251,7 +249,7 @@ export function ScriptsReviewDialog(props: {
             type="button"
             variant="default"
             size="sm"
-            disabled={saveBusy || props.seedPending || !scriptsChanged}
+            disabled={saveBusy || props.seedPending || !anythingChanged}
             aria-live="polite"
             onClick={handleSave}
           >
@@ -268,6 +266,49 @@ export function ScriptsReviewDialog(props: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ScriptsPathRow(props: {
+  readonly label: string | null;
+  readonly value: string | null;
+}): ReactNode {
+  if (props.label === null || props.value === null) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-ui-xs font-medium text-muted-foreground">
+        {props.label}
+      </span>
+      <code className="rounded-md bg-foreground/5 px-2.5 py-2 font-mono text-code-xs text-foreground wrap-anywhere select-all">
+        {props.value}
+      </code>
+    </div>
+  );
+}
+
+function ScriptsErrorNote(props: {
+  readonly note: string | null;
+  readonly testId: string;
+}): ReactNode {
+  if (props.note === null) return null;
+  return (
+    <div
+      className="text-ui-xs text-destructive"
+      role="alert"
+      data-testid={`${props.testId}-error-note`}
+    >
+      <span>{props.note}</span>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Could not load workspace scripts",
+          message: null,
+          code: null,
+          source: "Workspace scripts",
+        })}
+        presentation="link"
+        className="ml-1 h-auto p-0 text-current"
+      />
+    </div>
   );
 }
 

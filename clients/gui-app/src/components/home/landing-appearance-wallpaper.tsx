@@ -1,29 +1,33 @@
 import { useLandingDraftAppearance } from "@/hooks/appearance/use-landing-draft-appearance";
-import { useResolvedAppearanceAssets } from "@/hooks/appearance/use-appearance-assets";
+import { useStartPageWallpaperImage } from "@/lib/appearance/start-page-wallpaper";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { AppearanceWallpaper } from "./appearance-wallpaper";
 
-export function LandingAppearanceWallpaper({
-  draftId,
-}: {
+/**
+ * The start page's backdrop: the personal wallpaper, plus a faint wash of the
+ * repository's own color when the landing draft's primary folder has one. The
+ * wash renders with or without a wallpaper (it is the identity, not the
+ * treatment); the wallpaper takes the same color as its dither tint.
+ */
+export function LandingAppearanceWallpaper(props: {
   readonly draftId: string | null;
 }) {
-  const source = useLandingDraftAppearance(draftId);
-  const assets = useResolvedAppearanceAssets({
-    scope: source.scope,
-    appearance: source.appearance?.appearance ?? null,
-    issues: source.appearance?.issues ?? [],
-    focused: true,
-    refreshKey: source.assetRefreshKey,
-  });
-  const project =
-    assets.wallpaperUrl !== null && assets.wallpaperUrl === assets.project.url;
+  const wallpaper = useSettingsStore((state) => state.startPageWallpaper);
+  const image = useStartPageWallpaperImage();
+  const appearance = useLandingDraftAppearance(props.draftId);
+  const color = appearance.appearance?.appearance?.color ?? null;
   return (
-    <AppearanceWallpaper
-      persistTreatment
-      wallpaper={assets.wallpaper?.kind === "image" ? assets.wallpaper : null}
-      originalUrl={assets.wallpaperUrl}
-      scope={project ? source.scope : null}
-      onDecodeFailure={project ? assets.project.reportDecodeFailure : null}
-    />
+    <>
+      {color === null ? null : (
+        <div
+          className="pointer-events-none absolute inset-0"
+          aria-hidden="true"
+          style={{
+            background: `radial-gradient(ellipse at 50% 30%, color-mix(in srgb, ${color} 6%, transparent), transparent 70%)`,
+          }}
+        />
+      )}
+      <AppearanceWallpaper wallpaper={wallpaper} url={image.url} tint={color} />
+    </>
   );
 }

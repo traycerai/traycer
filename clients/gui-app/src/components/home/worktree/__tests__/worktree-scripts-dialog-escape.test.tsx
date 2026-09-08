@@ -56,6 +56,30 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+// Identity is not what this file exercises; stub its host reads so the dialog
+// renders without a host runtime.
+vi.mock("@/hooks/appearance/use-workspace-appearance", () => ({
+  useWorkspaceAppearance: () => ({
+    appearance: null,
+    scope: null,
+    canEdit: false,
+    readSupport: true,
+    writeSupport: true,
+    assetRefreshKey: 0,
+  }),
+  useWorkspaceSetAppearance: () => ({
+    mutateAsync: () => Promise.resolve({}),
+  }),
+}));
+vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
+  useAppearanceAsset: () => ({
+    url: null,
+    status: "empty",
+    reason: null,
+    reportDecodeFailure: () => {},
+  }),
+}));
+
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => mocks.supportsSetRepoBranchPrefix.current,
@@ -183,6 +207,7 @@ function stagedWorktreeIntent(
 
 const PRE_CREATE_CONTEXT: WorktreeScriptsContext = {
   epicId: "",
+  hostId: "host-a",
   ownerId: null,
   ownerKind: null,
   binding: null,

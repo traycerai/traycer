@@ -6,12 +6,13 @@ import {
   PanelLeftClose,
   PanelRightClose,
   Pencil,
-  Paintbrush,
   Pin,
+  Settings2,
   SplitSquareHorizontal,
   X,
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
   ContextMenuContent,
@@ -44,7 +45,15 @@ interface TabContextMenuContentProps {
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   /** Switches the epic tab title into the inline editable input. */
   readonly onEditTitle: () => void;
-  readonly onCustomize: (() => void) | null;
+  /**
+   * Opens Repository settings for the repo this epic tab is bound to. `null`
+   * when the tab has no repository; `disabled` when the viewer's epic role is
+   * read-only (the item stays visible so the capability is discoverable).
+   */
+  readonly repositorySettings: {
+    readonly onSelect: () => void;
+    readonly disabled: boolean;
+  } | null;
   readonly onSetTaskPinned: (pinned: boolean) => void;
 }
 
@@ -102,11 +111,11 @@ export function TabContextMenuContent(
               />
             ) : null}
           </ContextMenuItem>
-          {props.onCustomize !== null ? (
-            <ContextMenuItem onSelect={props.onCustomize}>
-              <Paintbrush />
-              Customize repository
-            </ContextMenuItem>
+          {props.repositorySettings !== null ? (
+            <RepositorySettingsItem
+              tabId={tab.id}
+              settings={props.repositorySettings}
+            />
           ) : null}
           <ContextMenuSeparator />
         </>
@@ -337,5 +346,39 @@ export function SplitQuickActionsMenuContent(props: {
         {TAB_SPLIT_COMMANDS.swap.label}
       </DropdownMenuItem>
     </DropdownMenuContent>
+  );
+}
+
+/**
+ * Radix disables pointer events on a disabled menu item, so the read-only
+ * reason rides a wrapping span - the item itself stays inert.
+ */
+function RepositorySettingsItem(props: {
+  readonly tabId: string;
+  readonly settings: {
+    readonly onSelect: () => void;
+    readonly disabled: boolean;
+  };
+}): React.ReactNode {
+  const item = (
+    <ContextMenuItem
+      disabled={props.settings.disabled}
+      onSelect={props.settings.onSelect}
+      data-testid={`tab-repository-settings-${props.tabId}`}
+    >
+      <Settings2 />
+      Repository settings…
+    </ContextMenuItem>
+  );
+  if (!props.settings.disabled) return item;
+  return (
+    <TooltipWrapper
+      label="Read-only access"
+      side="right"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="block">{item}</span>
+    </TooltipWrapper>
   );
 }

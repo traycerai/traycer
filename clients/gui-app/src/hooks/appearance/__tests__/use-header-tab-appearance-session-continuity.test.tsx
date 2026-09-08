@@ -150,7 +150,6 @@ function appearanceResponse(
         workspacePath,
         canonicalSourceRoot: workspacePath,
         status: "present",
-        revision: "r",
         appearance: { version: 1, color },
         issues: [],
       },

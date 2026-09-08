@@ -61,7 +61,6 @@ function appearanceRead(
   return {
     workspacePath: "/repo",
     status: "present",
-    revision: "rev-1",
     appearance: { version: 1, color: "#112233" },
     issues: [],
     ...overrides,

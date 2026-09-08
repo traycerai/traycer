@@ -17,6 +17,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { hostQueryKeys, workspaceMutationKeys } from "@/lib/query-keys";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
 import {
   type AppearanceScope,
@@ -39,7 +40,7 @@ interface ResolvedAppearanceRead extends WorkspaceAppearanceRead {
   readonly assetRefreshKey: number;
 }
 
-// Referenced bytes can change while the configuration revision stays equal.
+// Referenced bytes can change while the configuration itself stays equal.
 // Each read must allow asset consumers to re-stat that unchanged path.
 let nextAssetRefreshKey = 1;
 
@@ -111,11 +112,7 @@ function resolvedReadSource(
   fallback: WorkspaceAppearanceRead | null | undefined,
 ): string | null {
   if (read.canonicalSourceRoot !== null) return read.canonicalSourceRoot;
-  if (
-    read.status === "unavailable" ||
-    read.status === "malformed" ||
-    read.status === "unsupported"
-  )
+  if (read.status === "unavailable" || read.status === "malformed")
     return (
       previous?.canonicalSourceRoot ?? fallback?.canonicalSourceRoot ?? null
     );
@@ -323,8 +320,13 @@ export function useEpicAppearance(args: {
   return useWorkspaceAppearance(useEpicAppearanceSource(args));
 }
 
-export function useWorkspaceSetAppearance(args: { readonly hostId: string }) {
-  const client = useHostClientForHostId(args.hostId);
+export function useWorkspaceSetAppearance(args: {
+  readonly hostId: string | null;
+}) {
+  const boundClient = useHostClientForHostId(args.hostId);
+  // A `null` host must not fall through to the app-wide client: identity is a
+  // write to one machine's checkout. `useHostMutation` rejects on a null client.
+  const client = args.hostId === null ? null : boundClient;
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -337,8 +339,11 @@ export function useWorkspaceSetAppearance(args: { readonly hostId: string }) {
     options: {
       mutationKey: workspaceMutationKeys.setAppearance(),
       onMutate: async () => {
+        const hostId = args.hostId;
+        if (hostId === null)
+          throw new Error("No host is available to save to.");
         const context = {
-          hostId: args.hostId,
+          hostId,
           accountId: useAuthStore.getState().contextMetadata?.userId ?? null,
           session: captureAppearanceSession(),
         };
@@ -418,6 +423,10 @@ export function useWorkspaceSetAppearance(args: { readonly hostId: string }) {
                   }
                 : previous,
           );
+          const upload = variables.upload;
+          const uploaded =
+            upload === null ? null : base64ToBytes(upload.dataBase64);
+          const icon = read.appearance?.icon;
           await Promise.all([
             writeAppearanceSnapshot(scope, merged),
             writeAppearanceSource(
@@ -426,17 +435,16 @@ export function useWorkspaceSetAppearance(args: { readonly hostId: string }) {
               variables.workspacePath,
               source,
             ),
-            ...(response.status === "saved"
-              ? variables.uploads.map(async (upload) => {
-                  const image = read.appearance?.[upload.target];
-                  const bytes = base64ToBytes(upload.dataBase64);
-                  if (image?.kind === "image" && bytes !== null)
-                    await writeAppearanceBlob(
-                      scope,
-                      image.path,
-                      new Blob([bytes], { type: upload.mediaType }),
-                    );
-                })
+            // Seed the local cache with the bytes just accepted, so the icon
+            // renders before the host round-trips its own copy back.
+            ...(upload !== null && uploaded !== null && icon?.kind === "image"
+              ? [
+                  writeAppearanceBlob(
+                    scope,
+                    icon.path,
+                    new Blob([uploaded], { type: upload.mediaType }),
+                  ),
+                ]
               : []),
           ]).catch(() => {});
         }
@@ -447,6 +455,8 @@ export function useWorkspaceSetAppearance(args: { readonly hostId: string }) {
           ),
         });
       },
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't save repository identity."),
     },
   });
 }

@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import {
-  MAX_APPEARANCE_ICON_BYTES,
-  MAX_APPEARANCE_WALLPAPER_BYTES,
-} from "@traycer/protocol/host/workspace/appearance-schemas";
+import { MAX_APPEARANCE_ICON_BYTES } from "@traycer/protocol/host/workspace/appearance-schemas";
 import {
   pngWithDeclaredDimensions,
   realJpeg1x1,
@@ -39,9 +36,10 @@ vi.mock("@/lib/images/bitmap-codec", () => ({
 
 import {
   APPEARANCE_INPUT_MAX_BYTES,
-  ditherAppearanceRows,
+  ditherRows,
   processAppearanceImage,
   validateAppearanceImage,
+  type AppearanceRamp,
 } from "../appearance-image-processing";
 
 function blobOf(bytes: Uint8Array<ArrayBuffer>, type: string): Blob {
@@ -105,60 +103,84 @@ describe("validateAppearanceImage", () => {
   });
 });
 
-describe("ditherAppearanceRows (real pixel math)", () => {
-  it("leaves every channel, including alpha, byte-identical at strength 0", () => {
-    const pixels = fakeImageData(4, 4, 128);
-    const before = new Uint8ClampedArray(pixels.data);
-    ditherAppearanceRows(pixels, 0, 0, 4);
-    expect(Array.from(pixels.data)).toEqual(Array.from(before));
-  });
+const RAMP: AppearanceRamp = [
+  [0, 0, 0],
+  [100, 50, 200],
+  [255, 255, 255],
+];
 
-  it("never touches the alpha channel at full strength", () => {
-    const pixels = fakeImageData(4, 4, 128);
-    ditherAppearanceRows(pixels, 1, 0, 4);
-    for (let i = 3; i < pixels.data.length; i += 4) {
-      expect(pixels.data[i]).toBe(200);
+describe("ditherRows (real pixel math)", () => {
+  function tonesIn(pixels: ImageData): Set<string> {
+    const tones = new Set<string>();
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      tones.add(
+        `${pixels.data[i]},${pixels.data[i + 1]},${pixels.data[i + 2]}`,
+      );
     }
-  });
+    return tones;
+  }
 
-  it("only mutates rows within [start, end)", () => {
-    const pixels = fakeImageData(4, 4, 128);
-    const before = new Uint8ClampedArray(pixels.data);
-    ditherAppearanceRows(pixels, 1, 1, 3);
-    const rowBytes = 4 * 4;
-    expect(Array.from(pixels.data.slice(0, rowBytes))).toEqual(
-      Array.from(before.slice(0, rowBytes)),
-    );
-    expect(Array.from(pixels.data.slice(3 * rowBytes, 4 * rowBytes))).toEqual(
-      Array.from(before.slice(3 * rowBytes, 4 * rowBytes)),
-    );
-  });
-
-  it("applies a genuinely spatial (not flat) threshold across one 4x4 Bayer tile", () => {
-    // At strength 1 (3 levels, step 127.5) a flat 128 input rounds to the
-    // SAME level everywhere (127.5/128 straddles no boundary for any of the
-    // 16 threshold offsets) - that would pass even with the ordered part of
-    // ordered dithering broken. 64 sits close enough to the 0/127.5 boundary
-    // that different Bayer offsets push it to different sides.
-    const pixels = fakeImageData(4, 4, 64);
-    ditherAppearanceRows(pixels, 1, 0, 4);
-    const reds = new Set<number>();
-    for (let i = 0; i < pixels.data.length; i += 4) reds.add(pixels.data[i]);
-    expect(reds.size).toBeGreaterThan(1);
-  });
-
-  it("tiles the threshold pattern every 4 rows/columns, independent of image size", () => {
-    // Positions 4 apart in x and y share the same Bayer cell, so identical
-    // input there must dither identically - the modulus contract the
-    // 16-row yield loop in `applyDither` relies on to resume without seams.
+  it("paints only ramp endpoints at two levels, and forces alpha opaque", () => {
     const pixels = fakeImageData(8, 8, 64);
-    ditherAppearanceRows(pixels, 1, 0, 8);
+    ditherRows(pixels, 2, RAMP);
+    for (const tone of tonesIn(pixels))
+      expect(["0,0,0", "255,255,255"]).toContain(tone);
+    for (let i = 3; i < pixels.data.length; i += 4)
+      expect(pixels.data[i]).toBe(255);
+  });
+
+  /** A horizontal luminance gradient, so the level count is observable. */
+  function gradient(width: number, height: number): ImageData {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4;
+        const value = Math.round((x / (width - 1)) * 255);
+        data[offset] = value;
+        data[offset + 1] = value;
+        data[offset + 2] = value;
+        data[offset + 3] = 200;
+      }
+    }
+    return { width, height, data, colorSpace: "srgb" };
+  }
+
+  it("produces more tones as the level count rises", () => {
+    const two = gradient(64, 8);
+    ditherRows(two, 2, RAMP);
+    const eight = gradient(64, 8);
+    ditherRows(eight, 8, RAMP);
+    expect(tonesIn(two).size).toBe(2);
+    expect(tonesIn(eight).size).toBe(8);
+  });
+
+  it("applies a genuinely spatial (not flat) threshold across one 8x8 Bayer tile", () => {
+    // A flat input must still break into more than one tone: that is the
+    // ordered part of ordered dithering, and a broken threshold table would
+    // paint the whole tile one color.
+    const pixels = fakeImageData(8, 8, 64);
+    ditherRows(pixels, 4, RAMP);
+    expect(tonesIn(pixels).size).toBeGreaterThan(1);
+  });
+
+  it("tiles the threshold pattern every 8 rows/columns, independent of image size", () => {
+    const pixels = fakeImageData(16, 16, 64);
+    ditherRows(pixels, 4, RAMP);
     const at = (x: number, y: number): number[] => {
-      const offset = (y * 8 + x) * 4;
+      const offset = (y * 16 + x) * 4;
       return Array.from(pixels.data.slice(offset, offset + 4));
     };
-    expect(at(0, 0)).toEqual(at(4, 4));
-    expect(at(2, 1)).toEqual(at(6, 5));
+    expect(at(0, 0)).toEqual(at(8, 8));
+    expect(at(2, 1)).toEqual(at(10, 9));
+  });
+
+  it("is monotonic in luminance: a brighter flat input never darkens the tile", () => {
+    const dark = fakeImageData(8, 8, 32);
+    ditherRows(dark, 8, RAMP);
+    const bright = fakeImageData(8, 8, 200);
+    ditherRows(bright, 8, RAMP);
+    for (let i = 0; i < dark.data.length; i += 4)
+      expect(bright.data[i]).toBeGreaterThanOrEqual(dark.data[i]);
   });
 });
 
@@ -182,9 +204,8 @@ describe("processAppearanceImage", () => {
 
   /**
    * `createBitmapCanvas` is mocked, so this is what gives the fake canvas
-   * its dimensions - `applyDither` reads `canvas.width`/`canvas.height`
-   * back, and the cleanup-to-zero assertions below only mean something if
-   * they started non-zero.
+   * its dimensions, and the cleanup-to-zero assertions below only mean
+   * something if they started non-zero.
    */
   function installCanvas(canvas: FakeCanvas): void {
     bitmapCodecMocks.createBitmapCanvas.mockImplementation(
@@ -200,56 +221,33 @@ describe("processAppearanceImage", () => {
     installDecode(100, 100);
     await expect(
       processAppearanceImage(
-        {
-          kind: "normalize",
-          blob: blobOf(minimalGif(), "image/gif"),
-          target: "wallpaper",
-        },
+        blobOf(minimalGif(), "image/gif"),
         new AbortController().signal,
       ),
     ).rejects.toThrow(/PNG, JPEG, or WebP/);
     expect(bitmapCodecMocks.decodeBitmap).not.toHaveBeenCalled();
   });
 
-  it("rejects an out-of-range dither strength before decoding", async () => {
-    installDecode(100, 100);
-    await expect(
-      processAppearanceImage(
-        {
-          kind: "dither",
-          blob: blobOf(realPng1x1(), "image/png"),
-          strength: 1.5,
-        },
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow(/between zero and one/);
-    expect(bitmapCodecMocks.decodeBitmap).not.toHaveBeenCalled();
-  });
-
-  it("downscales a wallpaper to at most 2560 on its longest edge and encodes on the first attempt", async () => {
-    const { close } = installDecode(5120, 2560);
+  it("downscales to at most 256 on its longest edge and encodes on the first attempt", async () => {
+    const { close } = installDecode(512, 256);
     const { canvas, context } = makeFakeCanvas(noCanvasOverrides());
     installCanvas(canvas);
     const encoded = blobOf(new Uint8Array([1, 2, 3]), "image/webp");
     bitmapCodecMocks.bitmapCanvasToBlob.mockResolvedValueOnce(encoded);
 
     const result = await processAppearanceImage(
-      {
-        kind: "normalize",
-        blob: blobOf(realPng1x1(), "image/png"),
-        target: "wallpaper",
-      },
+      blobOf(realPng1x1(), "image/png"),
       new AbortController().signal,
     );
 
-    expect(result.width).toBe(2560);
-    expect(result.height).toBe(1280);
+    expect(result.width).toBe(256);
+    expect(result.height).toBe(128);
     expect(context.drawImage).toHaveBeenCalledWith(
       expect.anything(),
       0,
       0,
-      2560,
-      1280,
+      256,
+      128,
     );
     expect(bitmapCodecMocks.bitmapCanvasToBlob).toHaveBeenCalledTimes(1);
     expect(bitmapCodecMocks.bitmapCanvasToBlob).toHaveBeenCalledWith(
@@ -262,12 +260,10 @@ describe("processAppearanceImage", () => {
     expect(canvas.height).toBe(0);
   });
 
-  it("bounds an icon to 256px, and rejects a candidate over the 256 KiB icon budget even though it fits the 4 MiB wallpaper one", async () => {
+  it("rejects a candidate over the 256 KiB icon budget and retries at a lower quality", async () => {
     installDecode(1000, 500);
     const { canvas } = makeFakeCanvas(noCanvasOverrides());
     installCanvas(canvas);
-    // Between the two budgets: a production bug that used the wallpaper
-    // budget for icons would accept this on the first attempt instead.
     const tooLargeForIcon = blobOf(
       new Uint8Array(MAX_APPEARANCE_ICON_BYTES + 1024),
       "image/webp",
@@ -278,11 +274,7 @@ describe("processAppearanceImage", () => {
       .mockResolvedValueOnce(fits);
 
     const result = await processAppearanceImage(
-      {
-        kind: "normalize",
-        blob: blobOf(realPng1x1(), "image/png"),
-        target: "icon",
-      },
+      blobOf(realPng1x1(), "image/png"),
       new AbortController().signal,
     );
 
@@ -296,7 +288,7 @@ describe("processAppearanceImage", () => {
     const { canvas } = makeFakeCanvas(noCanvasOverrides());
     installCanvas(canvas);
     const oversized = blobOf(
-      new Uint8Array(MAX_APPEARANCE_WALLPAPER_BYTES + 1),
+      new Uint8Array(MAX_APPEARANCE_ICON_BYTES + 1),
       "image/webp",
     );
     const fits = blobOf(new Uint8Array(10), "image/webp");
@@ -307,11 +299,7 @@ describe("processAppearanceImage", () => {
       .mockResolvedValueOnce(fits);
 
     const result = await processAppearanceImage(
-      {
-        kind: "normalize",
-        blob: blobOf(realPng1x1(), "image/png"),
-        target: "wallpaper",
-      },
+      blobOf(realPng1x1(), "image/png"),
       new AbortController().signal,
     );
 
@@ -331,42 +319,12 @@ describe("processAppearanceImage", () => {
 
     await expect(
       processAppearanceImage(
-        {
-          kind: "normalize",
-          blob: blobOf(realPng1x1(), "image/png"),
-          target: "wallpaper",
-        },
+        blobOf(realPng1x1(), "image/png"),
         new AbortController().signal,
       ),
     ).rejects.toThrow(/could not be reduced/);
     expect(bitmapCodecMocks.bitmapCanvasToBlob).toHaveBeenCalledTimes(9); // 3 scales x 3 qualities
     expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it("runs the dither pass (real pixel math) before encoding when requested", async () => {
-    installDecode(4, 4);
-    const initial = fakeImageData(4, 4, 64);
-    const before = Uint8ClampedArray.from(initial.data);
-    const { canvas, context } = makeFakeCanvas({
-      getContextReturnsNull: undefined,
-      imageData: initial,
-    });
-    installCanvas(canvas);
-    bitmapCodecMocks.bitmapCanvasToBlob.mockResolvedValueOnce(
-      blobOf(new Uint8Array(10), "image/webp"),
-    );
-
-    await processAppearanceImage(
-      { kind: "dither", blob: blobOf(realPng1x1(), "image/png"), strength: 1 },
-      new AbortController().signal,
-    );
-
-    expect(context.getImageData).toHaveBeenCalled();
-    expect(context.putImageData).toHaveBeenCalledTimes(1);
-    const call = context.putImageData.mock.calls.at(0);
-    if (call === undefined) throw new Error("expected a putImageData call");
-    // Dithering actually changed pixels, rather than a no-op passthrough.
-    expect(Array.from(call[0].data)).not.toEqual(Array.from(before));
   });
 
   it("propagates abort raised mid-ladder and still closes the decoded bitmap", async () => {
@@ -381,11 +339,7 @@ describe("processAppearanceImage", () => {
 
     await expect(
       processAppearanceImage(
-        {
-          kind: "normalize",
-          blob: blobOf(realPng1x1(), "image/png"),
-          target: "wallpaper",
-        },
+        blobOf(realPng1x1(), "image/png"),
         controller.signal,
       ),
     ).rejects.toThrow("cancelled mid-ladder");
@@ -402,11 +356,7 @@ describe("processAppearanceImage", () => {
 
     await expect(
       processAppearanceImage(
-        {
-          kind: "normalize",
-          blob: blobOf(realPng1x1(), "image/png"),
-          target: "wallpaper",
-        },
+        blobOf(realPng1x1(), "image/png"),
         new AbortController().signal,
       ),
     ).rejects.toThrow(/unavailable in this browser/);

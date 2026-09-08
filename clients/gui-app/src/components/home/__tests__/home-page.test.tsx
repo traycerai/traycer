@@ -72,6 +72,7 @@ type ComposerCommit = {
 
 const homeMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  openSettings: vi.fn(),
   systemModalOpen: false,
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   getActiveHostId: vi.fn(() => "host-home"),
@@ -397,6 +398,17 @@ vi.mock(
       props.children,
   }),
 );
+
+// The Customize-start-page button's only job is the settings funnel, which
+// needs a live router this suite deliberately does not build.
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: homeMocks.openSettings,
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
+  }),
+}));
 
 vi.mock("@/components/home/landing-appearance-wallpaper", () => ({
   LandingAppearanceWallpaper: () => {

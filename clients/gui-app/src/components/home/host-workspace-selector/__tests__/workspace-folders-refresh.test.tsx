@@ -92,6 +92,37 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// The folder row's repository icon (and the Repository settings dialog) read
+// committed appearance over the host. Stub those reads so this picker suite
+// keeps needing no host runtime.
+vi.mock("@/hooks/appearance/use-workspace-appearance", () => {
+  const stub = () => ({
+    appearance: null,
+    scope: null,
+    canEdit: false,
+    readSupport: true,
+    writeSupport: true,
+    assetRefreshKey: 0,
+  });
+  return {
+    useWorkspaceAppearance: stub,
+    useDraftAppearance: stub,
+    useEpicAppearance: stub,
+    useEpicAppearanceSource: () => ({ hostId: null, workspacePath: null }),
+    useWorkspaceSetAppearance: () => ({
+      mutateAsync: () => Promise.resolve({}),
+    }),
+  };
+});
+vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
+  useAppearanceAsset: () => ({
+    url: null,
+    status: "empty",
+    reason: null,
+    reportDecodeFailure: () => {},
+  }),
+}));
+
 describe("folder-mapping refresh affordance", () => {
   it("forces one re-derive when the picker opens, so the chip's stale branch heals on the way in", async () => {
     const fixture = renderControl({

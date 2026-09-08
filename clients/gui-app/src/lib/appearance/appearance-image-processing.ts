@@ -1,7 +1,4 @@
-import {
-  MAX_APPEARANCE_ICON_BYTES,
-  MAX_APPEARANCE_WALLPAPER_BYTES,
-} from "@traycer/protocol/host/workspace/appearance-schemas";
+import { MAX_APPEARANCE_ICON_BYTES } from "@traycer/protocol/host/workspace/appearance-schemas";
 import { imageSize } from "image-size";
 import {
   canonicalImageMimeType,
@@ -15,22 +12,76 @@ import {
 } from "@/lib/images/bitmap-codec";
 
 export const APPEARANCE_INPUT_MAX_BYTES = 20 * 1024 * 1024;
-export const APPEARANCE_INPUT_MAX_PIXELS = 50_000_000;
-export type AppearanceImageTarget = "wallpaper" | "icon";
-export type AppearanceImageRequest =
-  | {
-      readonly kind: "normalize";
-      readonly blob: Blob;
-      readonly target: AppearanceImageTarget;
-    }
-  | { readonly kind: "dither"; readonly blob: Blob; readonly strength: number };
+const APPEARANCE_INPUT_MAX_PIXELS = 50_000_000;
+export const APPEARANCE_ICON_MAX_EDGE = 256;
+const APPEARANCE_WALLPAPER_MAX_EDGE = 2560;
+/** The start-page wallpaper never leaves this machine, so it can be generous. */
+const MAX_START_PAGE_WALLPAPER_BYTES = 4 * 1024 * 1024;
 export interface ProcessedAppearanceImage {
   readonly blob: Blob;
   readonly width: number;
   readonly height: number;
 }
 
-const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+/** One channel triple, 0..255, in the page's own color space. */
+export type AppearanceRampColor = readonly [number, number, number];
+/** Shadow, tint, highlight. Tone 0..0.5 walks the first pair, 0.5..1 the second. */
+export type AppearanceRamp = readonly [
+  AppearanceRampColor,
+  AppearanceRampColor,
+  AppearanceRampColor,
+];
+
+// prettier-ignore
+const BAYER_8 = [
+   0, 32,  8, 40,  2, 34, 10, 42,
+  48, 16, 56, 24, 50, 18, 58, 26,
+  12, 44,  4, 36, 14, 46,  6, 38,
+  60, 28, 52, 20, 62, 30, 54, 22,
+   3, 35, 11, 43,  1, 33,  9, 41,
+  51, 19, 59, 27, 49, 17, 57, 25,
+  15, 47,  7, 39, 13, 45,  5, 37,
+  63, 31, 55, 23, 61, 29, 53, 21,
+];
+
+function rampSample(ramp: AppearanceRamp, tone: number, channel: number) {
+  const second = tone >= 0.5;
+  const from = second ? ramp[1] : ramp[0];
+  const to = second ? ramp[2] : ramp[1];
+  const mix = second ? (tone - 0.5) * 2 : tone * 2;
+  return from[channel] + (to[channel] - from[channel]) * mix;
+}
+
+/**
+ * In place, whole-buffer, pure: luminance through an 8x8 ordered Bayer
+ * quantization into `levels` tones, each tone painted from `ramp`. Sized for a
+ * low-resolution canvas the caller upscales with `image-rendering: pixelated`.
+ */
+export function ditherRows(
+  pixels: ImageData,
+  levels: number,
+  ramp: AppearanceRamp,
+): void {
+  const steps = Math.max(2, Math.round(levels)) - 1;
+  const data = pixels.data;
+  for (let y = 0; y < pixels.height; y += 1) {
+    const bayerRow = (y % 8) * 8;
+    for (let x = 0; x < pixels.width; x += 1) {
+      const offset = (y * pixels.width + x) * 4;
+      const luminance =
+        (0.2126 * data[offset] +
+          0.7152 * data[offset + 1] +
+          0.0722 * data[offset + 2]) /
+        255;
+      const threshold = (BAYER_8[bayerRow + (x % 8)] + 0.5) / 64 - 0.5;
+      const quantized = Math.round(luminance ** 1.1 * steps + threshold);
+      const tone = Math.max(0, Math.min(steps, quantized)) / steps;
+      for (let channel = 0; channel < 3; channel += 1)
+        data[offset + channel] = rampSample(ramp, tone, channel);
+      data[offset + 3] = 255;
+    }
+  }
+}
 
 export async function yieldImageWork(signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
@@ -81,53 +132,6 @@ function processingCanvas(
     : createBitmapCanvas(width, height);
 }
 
-/** Color quantization with ordered Bayer thresholds; alpha is left intact. */
-export function ditherAppearanceRows(
-  pixels: ImageData,
-  strength: number,
-  start: number,
-  end: number,
-): void {
-  const levels = 7 - Math.round(strength * 4);
-  const step = 255 / (levels - 1);
-  for (let y = start; y < end; y += 1) {
-    for (let x = 0; x < pixels.width; x += 1) {
-      const threshold = (BAYER[(y % 4) * 4 + (x % 4)] + 0.5) / 16 - 0.5;
-      const offset = (y * pixels.width + x) * 4;
-      for (let channel = 0; channel < 3; channel += 1) {
-        const original = pixels.data[offset + channel];
-        const quantized = Math.max(
-          0,
-          Math.min(255, Math.round(original / step + threshold) * step),
-        );
-        pixels.data[offset + channel] =
-          original + (quantized - original) * strength;
-      }
-    }
-  }
-}
-
-async function applyDither(
-  canvas: HTMLCanvasElement | OffscreenCanvas,
-  strength: number,
-  signal: AbortSignal,
-): Promise<void> {
-  const context = canvas.getContext("2d");
-  if (context === null)
-    throw new Error("Image processing is unavailable in this browser.");
-  const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-  for (let row = 0; row < pixels.height; row += 16) {
-    if (typeof document !== "undefined") await yieldImageWork(signal);
-    ditherAppearanceRows(
-      pixels,
-      strength,
-      row,
-      Math.min(row + 16, pixels.height),
-    );
-  }
-  context.putImageData(pixels, 0, 0);
-}
-
 async function encodeCanvas(
   canvas: HTMLCanvasElement | OffscreenCanvas,
   maxBytes: number,
@@ -152,7 +156,6 @@ async function encodeCanvas(
 async function renderCandidate(
   args: {
     readonly image: DecodedBitmap;
-    readonly request: AppearanceImageRequest;
     readonly scale: number;
     readonly maxBytes: number;
   },
@@ -167,8 +170,6 @@ async function renderCandidate(
       throw new Error("Image processing is unavailable in this browser.");
     await yieldImageWork(signal);
     context.drawImage(args.image.source, 0, 0, width, height);
-    if (args.request.kind === "dither")
-      await applyDither(canvas, args.request.strength, signal);
     const blob = await encodeCanvas(canvas, args.maxBytes, signal);
     return blob === null ? null : { blob, width, height };
   } finally {
@@ -177,36 +178,31 @@ async function renderCandidate(
   }
 }
 
-export async function processAppearanceImage(
-  request: AppearanceImageRequest,
+/**
+ * Re-encodes a chosen image down to `maxEdge` and `maxBytes`, backing the scale
+ * off twice before giving up. One normalizer, two budgets: a committed repo
+ * logo (small, travels over RPC) and the local start-page wallpaper (large,
+ * never leaves this machine).
+ */
+async function normalizeAppearanceImage(
+  blob: Blob,
+  limits: { readonly maxEdge: number; readonly maxBytes: number },
   signal: AbortSignal,
 ): Promise<ProcessedAppearanceImage> {
   signal.throwIfAborted();
-  await validateAppearanceImage(request.blob);
-  if (
-    request.kind === "dither" &&
-    (!Number.isFinite(request.strength) ||
-      request.strength < 0 ||
-      request.strength > 1)
-  ) {
-    throw new Error("Image strength must be between zero and one.");
-  }
+  await validateAppearanceImage(blob);
   await yieldImageWork(signal);
-  const image = await decodeBitmap(request.blob);
+  const image = await decodeBitmap(blob);
   try {
     signal.throwIfAborted();
     validateDimensions(image);
-    const icon = request.kind === "normalize" && request.target === "icon";
-    const maxBytes = icon
-      ? MAX_APPEARANCE_ICON_BYTES
-      : MAX_APPEARANCE_WALLPAPER_BYTES;
     const scale = Math.min(
       1,
-      (icon ? 256 : 2560) / Math.max(image.width, image.height),
+      limits.maxEdge / Math.max(image.width, image.height),
     );
     for (const multiplier of [1, 0.75, 0.5]) {
       const result = await renderCandidate(
-        { image, request, scale: scale * multiplier, maxBytes },
+        { image, scale: scale * multiplier, maxBytes: limits.maxBytes },
         signal,
       );
       if (result !== null) return result;
@@ -217,4 +213,34 @@ export async function processAppearanceImage(
   } finally {
     image.close();
   }
+}
+
+/** Normalizes a chosen logo to the committed icon budget (256 px, 256 KiB). */
+export function processAppearanceImage(
+  blob: Blob,
+  signal: AbortSignal,
+): Promise<ProcessedAppearanceImage> {
+  return normalizeAppearanceImage(
+    blob,
+    {
+      maxEdge: APPEARANCE_ICON_MAX_EDGE,
+      maxBytes: MAX_APPEARANCE_ICON_BYTES,
+    },
+    signal,
+  );
+}
+
+/** Normalizes a chosen start-page wallpaper to 2560 px / 4 MiB. */
+export function processStartPageWallpaperImage(
+  blob: Blob,
+  signal: AbortSignal,
+): Promise<ProcessedAppearanceImage> {
+  return normalizeAppearanceImage(
+    blob,
+    {
+      maxEdge: APPEARANCE_WALLPAPER_MAX_EDGE,
+      maxBytes: MAX_START_PAGE_WALLPAPER_BYTES,
+    },
+    signal,
+  );
 }

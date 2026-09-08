@@ -65,10 +65,10 @@ function identityWithRejectedImage(): HeaderTabRepositoryIdentity {
   };
 }
 
-function identityWithSymbol(): HeaderTabRepositoryIdentity {
+function identityWithEmoji(): HeaderTabRepositoryIdentity {
   return {
     color: "#112233",
-    icon: { kind: "symbol", value: "rocket" },
+    icon: { kind: "emoji", value: "\u{1f680}" },
     scope: null,
     assetRefreshKey: 1,
     iconRejected: false,
@@ -154,7 +154,7 @@ describe("TabLeadingIcon: missing logo falls back to a neutral icon", () => {
     );
 
     expect(mocks.useAppearanceAsset).toHaveBeenCalledWith(
-      expect.objectContaining({ target: "icon", rejected: true }),
+      expect.objectContaining({ rejected: true }),
     );
   });
 });
@@ -164,7 +164,7 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
     const { rerender } = render(
       <TabLeadingIcon
         icon={null}
-        identity={identityWithSymbol()}
+        identity={identityWithEmoji()}
         titleGenerationPending={false}
         activityStatus="turn"
         tabId="tab-3"
@@ -172,14 +172,14 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
       />,
     );
 
-    // Identity: one symbol svg. Status: the running spinner testid.
-    expect(document.querySelectorAll("svg").length).toBeGreaterThan(0);
+    // Identity: the emoji glyph. Status: the running spinner testid.
+    expect(screen.getByText("\u{1f680}")).toBeTruthy();
     expect(screen.getByTestId("header-tab-activity-tab-3")).toBeTruthy();
 
     rerender(
       <TabLeadingIcon
         icon={null}
-        identity={identityWithSymbol()}
+        identity={identityWithEmoji()}
         titleGenerationPending={false}
         activityStatus="idle"
         tabId="tab-3"
@@ -189,7 +189,7 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
 
     // Activity indicator is gone; the identity icon survives the status change.
     expect(screen.queryByTestId("header-tab-activity-tab-3")).toBeNull();
-    expect(document.querySelectorAll("svg").length).toBeGreaterThan(0);
+    expect(screen.getByText("\u{1f680}")).toBeTruthy();
   });
 
   it("renders the identity icon alongside a real attention tone, which wins over an idle running status", () => {
@@ -202,7 +202,7 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
     render(
       <TabLeadingIcon
         icon={null}
-        identity={identityWithSymbol()}
+        identity={identityWithEmoji()}
         titleGenerationPending={false}
         activityStatus="idle"
         tabId="tab-5"
@@ -211,8 +211,9 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
     );
 
     expect(screen.getByTestId("header-tab-failure-tab-5")).toBeTruthy();
-    // The identity symbol renders alongside the attention glyph - two svgs.
-    expect(document.querySelectorAll("svg").length).toBe(2);
+    // The identity emoji renders alongside the attention glyph.
+    expect(screen.getByText("\u{1f680}")).toBeTruthy();
+    expect(document.querySelectorAll("svg").length).toBe(1);
   });
 
   it("still renders a real running status when no repository identity is configured", () => {

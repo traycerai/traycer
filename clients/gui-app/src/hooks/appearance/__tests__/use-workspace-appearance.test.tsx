@@ -155,7 +155,6 @@ function appearanceRead(
   return {
     canonicalSourceRoot: "/repo/root",
     status: "present",
-    revision: "rev-1",
     appearance: { version: 1, color: "#112233" },
     issues: [],
     ...overrides,
@@ -624,7 +623,7 @@ describe("useWorkspaceAppearance: canonical fallback via a fresh disk read", () 
         appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: "/repo/root",
-          status: "unsupported",
+          status: "unavailable",
           appearance: null,
         }),
       ]),
@@ -923,7 +922,6 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
     route.setAppearance.mockImplementation(() => {
       abortedBeforeDispatch = requireSignal(readSignal).aborted;
       return Promise.resolve({
-        status: "saved",
         appearance: appearanceRead({ workspacePath: "/repo" }),
       } satisfies WorkspaceSetAppearanceResponse);
     });
@@ -948,9 +946,8 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
       await mutation.result.current.mutateAsync({
         epicId: "epic-1",
         workspacePath: "/repo",
-        expectedRevision: "rev-1",
         patch: { color: "#000000" },
-        uploads: [],
+        upload: null,
       });
     });
 
@@ -974,9 +971,8 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
       mutation.result.current.mutateAsync({
         epicId: "epic-1",
         workspacePath: "/repo",
-        expectedRevision: null,
         patch: { color: "#000000" },
-        uploads: [],
+        upload: null,
       }),
     ).rejects.toThrow(/editing session has ended/);
     expect(route.setAppearance).not.toHaveBeenCalled();
@@ -993,7 +989,6 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
       appearance: { version: 1, color: "#ABCDEF" },
     });
     route.setAppearance.mockResolvedValue({
-      status: "saved",
       appearance: saved,
     } satisfies WorkspaceSetAppearanceResponse);
     const writeSnapshotSpy = vi.spyOn(cache, "writeAppearanceSnapshot");
@@ -1009,9 +1004,8 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
       await mutation.result.current.mutateAsync({
         epicId: "epic-1",
         workspacePath: "/repo",
-        expectedRevision: "rev-1",
         patch: { color: "#ABCDEF" },
-        uploads: [],
+        upload: null,
       });
     });
 
@@ -1110,9 +1104,8 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
       mutatePromise = mutation.result.current.mutateAsync({
         epicId: "epic-1",
         workspacePath: "/repo",
-        expectedRevision: "rev-1",
         patch: { color: "#000000" },
-        uploads: [],
+        upload: null,
       });
       await reached.promise;
     });
@@ -1131,7 +1124,6 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
     // write-through to actually be reached - bounded and immediately awaited.
     await act(async () => {
       setReached.resolve({
-        status: "saved",
         appearance: appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: "/repo/root",
@@ -1195,7 +1187,7 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
     expect(query.result.current.appearance?.appearance).toBeNull();
   });
 
-  it("still writes the conflicting authoritative state through on a 'conflict' response, but uploads no blobs", async () => {
+  it("caches the uploaded logo bytes under the path the host echoes back", async () => {
     const { hooks, cache, authStore, manifests } = await loadHooks();
     signIn(authStore, "acct-1");
     fullSupport(manifests, "host-a");
@@ -1203,13 +1195,14 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
     const authoritative = appearanceRead({
       workspacePath: "/repo",
       canonicalSourceRoot: "/repo/root",
-      appearance: { version: 1, color: "#fedcba" },
+      appearance: {
+        version: 1,
+        icon: { kind: "image", path: "appearance/logo.png" },
+      },
     });
     route.setAppearance.mockResolvedValue({
-      status: "conflict",
       appearance: authoritative,
     } satisfies WorkspaceSetAppearanceResponse);
-    const writeSnapshotSpy = vi.spyOn(cache, "writeAppearanceSnapshot");
     const writeBlobSpy = vi.spyOn(cache, "writeAppearanceBlob");
     const { Wrapper } = makeWrapper();
 
@@ -1217,27 +1210,23 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
       () => hooks.useWorkspaceSetAppearance({ hostId: "host-a" }),
       { wrapper: Wrapper },
     );
-    const response = await act(async () =>
-      mutation.result.current.mutateAsync({
+    await act(async () => {
+      await mutation.result.current.mutateAsync({
         epicId: "epic-1",
         workspacePath: "/repo",
-        expectedRevision: "stale-rev",
-        patch: { color: "#000000" },
-        uploads: [
-          { target: "icon", mediaType: "image/png", dataBase64: "AAAA" },
-        ],
-      }),
-    );
+        patch: {},
+        upload: { mediaType: "image/png", dataBase64: "AAAA" },
+      });
+    });
 
-    expect(response.status).toBe("conflict");
-    expect(writeSnapshotSpy).toHaveBeenCalledWith(
+    expect(writeBlobSpy).toHaveBeenCalledWith(
       {
         accountId: "acct-1",
         hostId: "host-a",
         canonicalSourceRoot: "/repo/root",
       },
-      expect.objectContaining({ appearance: authoritative.appearance }),
+      "appearance/logo.png",
+      expect.any(Blob),
     );
-    expect(writeBlobSpy).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import type { AppearanceWorkerReply } from "../appearance-image-worker";
 import type { ProcessedAppearanceImage } from "../appearance-image-processing";
 
 const processingMocks = vi.hoisted(() => ({
@@ -21,89 +20,11 @@ vi.mock("../appearance-image-processing", async (importOriginal) => {
 import {
   appearanceContentHash,
   prepareAppearanceImage,
-  runAppearanceImageProcessing,
 } from "../appearance-image-preparation";
 
-/**
- * A controllable stand-in for the real `Worker` (jsdom has none). Tests
- * drive the worker/main-thread fork in `runAppearanceImageProcessing` by
- * calling its `onmessage` directly (see `deliverWorkerReply`) instead of
- * spinning up a real worker thread - which is also why this is the seam
- * under test here, not `appearance-image-worker.ts` itself (that file only
- * ever runs inside an actual worker).
- */
-class FakeWorker {
-  onmessage: ((event: MessageEvent<AppearanceWorkerReply>) => void) | null =
-    null;
-  onerror: (() => void) | null = null;
-  readonly terminate = vi.fn();
-  readonly postMessage = vi.fn();
-}
-
-interface WorkerTestEnvironment {
-  readonly instances: FakeWorker[];
-  readonly restore: () => void;
-}
-
-function installWorkerEnvironment(): WorkerTestEnvironment {
-  const instances: FakeWorker[] = [];
-  const originalWorker = globalThis.Worker;
-  const originalOffscreen = globalThis.OffscreenCanvas;
-  class TrackedFakeWorker extends FakeWorker {
-    constructor() {
-      super();
-      instances.push(this);
-    }
-  }
-  Object.defineProperty(globalThis, "Worker", {
-    configurable: true,
-    writable: true,
-    value: TrackedFakeWorker,
-  });
-  Object.defineProperty(globalThis, "OffscreenCanvas", {
-    configurable: true,
-    writable: true,
-    value: class {},
-  });
-  return {
-    instances,
-    restore: () => {
-      Object.defineProperty(globalThis, "Worker", {
-        configurable: true,
-        writable: true,
-        value: originalWorker,
-      });
-      Object.defineProperty(globalThis, "OffscreenCanvas", {
-        configurable: true,
-        writable: true,
-        value: originalOffscreen,
-      });
-    },
-  };
-}
-
-/**
- * Delivers a reply to the most recently constructed `FakeWorker`.
- * `runWorker` assigns `worker.onmessage` synchronously, before calling
- * `postMessage`, all inside the *first* synchronous slice of
- * `runAppearanceImageProcessing` - so by the time that call returns its
- * pending promise, `onmessage` is already wired and this can fire it
- * directly, with no timing race to fake around.
- */
-function deliverWorkerReply(
-  instances: FakeWorker[],
-  reply: AppearanceWorkerReply,
-): void {
-  const worker = instances.at(-1);
-  if (worker === undefined) throw new Error("expected a constructed worker");
-  worker.onmessage?.(new MessageEvent("message", { data: reply }));
-}
-
-const NORMALIZE_REQUEST = {
-  kind: "normalize" as const,
-  blob: new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }),
-  target: "wallpaper" as const,
-};
+const SOURCE_BLOB = new Blob([new Uint8Array([1, 2, 3])], {
+  type: "image/png",
+});
 
 describe("appearanceContentHash", () => {
   it("hashes real bytes with SHA-256, matching an independent digest", async () => {
@@ -131,119 +52,6 @@ describe("appearanceContentHash", () => {
   });
 });
 
-describe("runAppearanceImageProcessing worker/main-thread fork", () => {
-  afterEach(() => {
-    // `vi.restoreAllMocks` only restores `vi.spyOn` spies; it leaves a
-    // plain hoisted `vi.fn()`'s queued mockResolvedValue/mockRejectedValue
-    // in place, so an explicit reset is what actually isolates tests here.
-    processingMocks.processAppearanceImage.mockReset();
-    processingMocks.validateAppearanceImage.mockReset();
-  });
-
-  it("uses the main thread directly when Worker/OffscreenCanvas are unavailable", async () => {
-    const expected: ProcessedAppearanceImage = {
-      blob: new Blob([new Uint8Array([1])], { type: "image/webp" }),
-      width: 10,
-      height: 10,
-    };
-    processingMocks.processAppearanceImage.mockResolvedValueOnce(expected);
-    const result = await runAppearanceImageProcessing(
-      NORMALIZE_REQUEST,
-      new AbortController().signal,
-    );
-    expect(result).toBe(expected);
-  });
-
-  describe("with Worker/OffscreenCanvas present", () => {
-    let env: WorkerTestEnvironment;
-    beforeEach(() => {
-      env = installWorkerEnvironment();
-    });
-    afterEach(() => {
-      env.restore();
-    });
-
-    it("returns the worker's result and never falls back to the main thread", async () => {
-      const expected: ProcessedAppearanceImage = {
-        blob: new Blob([new Uint8Array([2])], { type: "image/webp" }),
-        width: 20,
-        height: 20,
-      };
-      const promise = runAppearanceImageProcessing(
-        NORMALIZE_REQUEST,
-        new AbortController().signal,
-      );
-      deliverWorkerReply(env.instances, { result: expected });
-      const result = await promise;
-      expect(result).toBe(expected);
-      expect(processingMocks.processAppearanceImage).not.toHaveBeenCalled();
-      expect(env.instances[0]?.terminate).toHaveBeenCalledTimes(1);
-    });
-
-    it("falls back to the main thread when the worker reports itself unsupported", async () => {
-      const expected: ProcessedAppearanceImage = {
-        blob: new Blob([new Uint8Array([3])], { type: "image/png" }),
-        width: 5,
-        height: 5,
-      };
-      processingMocks.processAppearanceImage.mockResolvedValueOnce(expected);
-      const promise = runAppearanceImageProcessing(
-        NORMALIZE_REQUEST,
-        new AbortController().signal,
-      );
-      deliverWorkerReply(env.instances, { unsupported: true });
-      const result = await promise;
-      expect(result).toBe(expected);
-      expect(processingMocks.processAppearanceImage).toHaveBeenCalledTimes(1);
-    });
-
-    it("propagates a worker processing error without a duplicate main-thread attempt", async () => {
-      const promise = runAppearanceImageProcessing(
-        NORMALIZE_REQUEST,
-        new AbortController().signal,
-      );
-      deliverWorkerReply(env.instances, { error: "decode failed" });
-      await expect(promise).rejects.toThrow("decode failed");
-      expect(processingMocks.processAppearanceImage).not.toHaveBeenCalled();
-    });
-
-    it("falls back to the main thread when constructing the worker itself throws", async () => {
-      Object.defineProperty(globalThis, "Worker", {
-        configurable: true,
-        writable: true,
-        value: class {
-          constructor() {
-            throw new Error("blocked by sandbox");
-          }
-        },
-      });
-      const expected: ProcessedAppearanceImage = {
-        blob: new Blob([new Uint8Array([4])], { type: "image/png" }),
-        width: 1,
-        height: 1,
-      };
-      processingMocks.processAppearanceImage.mockResolvedValueOnce(expected);
-      const result = await runAppearanceImageProcessing(
-        NORMALIZE_REQUEST,
-        new AbortController().signal,
-      );
-      expect(result).toBe(expected);
-    });
-
-    it("terminates the worker and rejects when the caller aborts before it replies", async () => {
-      const controller = new AbortController();
-      const promise = runAppearanceImageProcessing(
-        NORMALIZE_REQUEST,
-        controller.signal,
-      );
-      controller.abort(new Error("cancelled"));
-      await expect(promise).rejects.toThrow("cancelled");
-      expect(env.instances[0]?.terminate).toHaveBeenCalledTimes(1);
-      expect(processingMocks.processAppearanceImage).not.toHaveBeenCalled();
-    });
-  });
-});
-
 describe("prepareAppearanceImage", () => {
   afterEach(() => {
     // `vi.restoreAllMocks` only restores `vi.spyOn` spies; it leaves a
@@ -260,10 +68,7 @@ describe("prepareAppearanceImage", () => {
       ),
     );
     await expect(
-      prepareAppearanceImage(
-        { blob: NORMALIZE_REQUEST.blob, target: "wallpaper" },
-        new AbortController().signal,
-      ),
+      prepareAppearanceImage(SOURCE_BLOB, new AbortController().signal),
     ).rejects.toThrow(/matching file format/);
     expect(processingMocks.processAppearanceImage).not.toHaveBeenCalled();
   });
@@ -278,7 +83,7 @@ describe("prepareAppearanceImage", () => {
     } satisfies ProcessedAppearanceImage);
 
     const prepared = await prepareAppearanceImage(
-      { blob: NORMALIZE_REQUEST.blob, target: "wallpaper" },
+      SOURCE_BLOB,
       new AbortController().signal,
     );
 
@@ -300,7 +105,7 @@ describe("prepareAppearanceImage", () => {
     } satisfies ProcessedAppearanceImage);
 
     const prepared = await prepareAppearanceImage(
-      { blob: NORMALIZE_REQUEST.blob, target: "icon" },
+      SOURCE_BLOB,
       new AbortController().signal,
     );
 
@@ -311,10 +116,7 @@ describe("prepareAppearanceImage", () => {
     const controller = new AbortController();
     controller.abort(new Error("pre-aborted"));
     await expect(
-      prepareAppearanceImage(
-        { blob: NORMALIZE_REQUEST.blob, target: "wallpaper" },
-        controller.signal,
-      ),
+      prepareAppearanceImage(SOURCE_BLOB, controller.signal),
     ).rejects.toThrow("pre-aborted");
     expect(processingMocks.validateAppearanceImage).not.toHaveBeenCalled();
   });

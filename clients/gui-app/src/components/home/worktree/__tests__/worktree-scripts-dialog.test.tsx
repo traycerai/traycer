@@ -65,6 +65,48 @@ const mocks = vi.hoisted(() => ({
   // tests can pin that the SOURCE branch (new) / checkout branch is read - not
   // just that the query fired.
   lastReadScriptsRef: { current: "" },
+  // Repository identity: the committed read the section seeds from, and the
+  // write the dialog's single Save is expected to make.
+  setAppearanceMutate: vi.fn<(variables: unknown) => void>(),
+  appearanceCanEdit: { current: true },
+  appearanceStatus: {
+    current: "present",
+  },
+}));
+
+const SOURCE_ROOT = "/tmp/a-source";
+
+vi.mock("@/hooks/appearance/use-workspace-appearance", () => ({
+  useWorkspaceAppearance: () => ({
+    appearance: {
+      workspacePath: "/tmp/a",
+      // The identity write must land on the canonical SOURCE root, never on
+      // the workspace path the dialog was opened for.
+      canonicalSourceRoot: SOURCE_ROOT,
+      status: mocks.appearanceStatus.current,
+      appearance: { version: 1 as const },
+      issues: [],
+    },
+    scope: null,
+    canEdit: mocks.appearanceCanEdit.current,
+    readSupport: true,
+    writeSupport: true,
+    assetRefreshKey: 0,
+  }),
+  useWorkspaceSetAppearance: () => ({
+    mutateAsync: (variables: unknown) => {
+      mocks.setAppearanceMutate(variables);
+      return Promise.resolve({});
+    },
+  }),
+}));
+vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
+  useAppearanceAsset: () => ({
+    url: null,
+    status: "empty",
+    reason: null,
+    reportDecodeFailure: () => {},
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -282,6 +324,7 @@ function liveWorktreeBinding(): WorktreeBinding {
 
 const PRE_CREATE_CONTEXT: WorktreeScriptsContext = {
   epicId: "",
+  hostId: "host-a",
   ownerId: null,
   ownerKind: null,
   binding: null,
@@ -292,6 +335,7 @@ const PRE_CREATE_CONTEXT: WorktreeScriptsContext = {
 
 const IN_EPIC_CONTEXT: WorktreeScriptsContext = {
   epicId: "epic-1",
+  hostId: "host-a",
   ownerId: "chat-1",
   ownerKind: "chat",
   binding: liveWorktreeBinding(),
@@ -339,8 +383,9 @@ function setupDefaultField(): HTMLTextAreaElement {
 }
 
 function saveScriptsButton(): HTMLElement {
-  // Footer action is "Save scripts" (independent of Branch naming's Apply).
-  return screen.getByRole("button", { name: "Save scripts" });
+  // One footer action for the whole dialog (independent of Branch naming's
+  // Apply): it persists identity and scripts together.
+  return screen.getByRole("button", { name: "Save" });
 }
 
 describe("<WorktreeScriptsDialog />", () => {
@@ -363,9 +408,53 @@ describe("<WorktreeScriptsDialog />", () => {
       isError: false,
     });
     mocks.lastReadScriptsRef.current = "";
+    mocks.setAppearanceMutate.mockReset();
+    mocks.appearanceCanEdit.current = true;
+    mocks.appearanceStatus.current = "present";
   });
   afterEach(() => {
     cleanup();
+  });
+
+  it("saves a swatch + emoji identity to the canonical source root, leaving scripts alone", async () => {
+    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
+
+    fireEvent.click(screen.getByRole("button", { name: "Color #7c6cf0" }));
+    fireEvent.change(screen.getByLabelText("Emoji"), {
+      target: { value: "🧭" },
+    });
+    await act(async () => {
+      fireEvent.click(saveScriptsButton());
+      await Promise.resolve();
+    });
+
+    expect(mocks.setAppearanceMutate).toHaveBeenCalledTimes(1);
+    expect(mocks.setAppearanceMutate.mock.calls[0][0]).toEqual({
+      epicId: "",
+      // The SOURCE root, not the workspace the dialog was opened for.
+      workspacePath: SOURCE_ROOT,
+      patch: { color: "#7c6cf0", icon: { kind: "emoji", value: "🧭" } },
+      upload: null,
+    });
+    // Untouched scripts must not be rewritten just because identity moved.
+    expect(mocks.setRepoScriptsMutate).not.toHaveBeenCalled();
+  });
+
+  it("disables the identity controls when the repo has no editable appearance", () => {
+    mocks.appearanceCanEdit.current = false;
+    mocks.appearanceStatus.current = "non-git";
+    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
+
+    expect(
+      screen
+        .getByRole("button", { name: "Color #7c6cf0" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen.getByText(
+        "This folder isn't a Git repository, so it has no shared identity.",
+      ),
+    ).toBeTruthy();
   });
 
   it("stages onto the worktree intent (no setRepoScripts) for a staged new worktree", () => {
@@ -459,7 +548,7 @@ describe("<WorktreeScriptsDialog />", () => {
   it("does not show 'Saved' (and keeps the dialog open) when the write fails", async () => {
     // Regression: the dialog used to animate to "Saved" + close on a fixed timer
     // regardless of the mutation outcome, so a failed setRepoScripts read as a
-    // false success. It must stay on "Save scripts" when the write rejects.
+    // false success. It must stay on "Save" when the write rejects.
     mocks.rejectSave.current = true;
     renderDialog(IN_EPIC_CONTEXT, summaryWith(null));
 
@@ -472,7 +561,7 @@ describe("<WorktreeScriptsDialog />", () => {
       await Promise.resolve();
     });
     expect(screen.queryByRole("button", { name: "Saved" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Save scripts" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   });
 
   it("prefills from the staged override for a new worktree", () => {
@@ -577,13 +666,18 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(setupDefaultField().value).toBe("echo wt-own");
   });
 
-  it("renders setup scripts first, Branch naming last, and titles the dialog Worktree environment", () => {
+  it("renders identity first, then scripts, then Branch naming, and titles the dialog Repository settings", () => {
     renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
     expect(
-      screen.getByRole("heading", { name: "Worktree environment" }),
+      screen.getByRole("heading", { name: "Repository settings" }),
     ).toBeTruthy();
     expect(
-      screen.getByText(/Configure lifecycle scripts and branch prefix for a/),
+      screen.getByText(/Identity, lifecycle scripts, and branch prefix for a/),
+    ).toBeTruthy();
+    const identity = screen.getByTestId("repo-identity-fields");
+    expect(
+      identity.compareDocumentPosition(screen.getByText("Branch prefix")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByTestId("repo-branch-prefix-section")).toBeTruthy();
     expect(screen.getByText("Branch prefix")).toBeTruthy();
@@ -596,7 +690,7 @@ describe("<WorktreeScriptsDialog />", () => {
       scriptsEyebrow.compareDocumentPosition(branchNaming) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save scripts" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
     // New-branch worktree: no disconnected top-level branch path block.
     expect(screen.queryByText("New worktree branch")).toBeNull();
   });
@@ -612,7 +706,7 @@ describe("<WorktreeScriptsDialog />", () => {
     // (single unlabeled section - same as before the redesign).
     expect(screen.queryByText("Setup & teardown scripts")).toBeNull();
     expect(screen.getByText(/Configure lifecycle scripts for a/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save scripts" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   });
 
   it("keeps Branch naming Apply and scripts Save as independent actions", () => {

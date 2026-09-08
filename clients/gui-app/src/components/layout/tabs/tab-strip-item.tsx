@@ -1,4 +1,3 @@
-import { useTabAppearanceEditor } from "@/components/appearance/appearance-editor-launcher";
 import {
   memo,
   useCallback,
@@ -68,6 +67,7 @@ import {
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import { useTabRepositorySettings } from "@/components/layout/tabs/tab-repository-settings";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
@@ -199,11 +199,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const titleGenerationPending = useRegisteredEpicTitleGenerating(tabEpicId);
   const activityStatus = useEpicActivityStatus(tabEpicId);
   const permissionRole = useRegisteredEpicPermissionRole(tabEpicId);
-  const { editor: appearanceEditor, onCustomize } = useTabAppearanceEditor(
-    tab,
-    !isEditableRole(permissionRole),
-    tabRef,
-  );
+  const repositorySettings = useTabRepositorySettings(tab);
   const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
   const canClose = tab.kind !== "epic" || tab.canClose;
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
@@ -496,7 +492,14 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         canCloseOtherTabs={canCloseOtherTabs}
         canOpenInNewWindow={canOpenInNewWindow}
         canEditTitle={canEditTitle}
-        onCustomize={onCustomize}
+        repositorySettings={
+          repositorySettings.onOpen === null
+            ? null
+            : {
+                onSelect: repositorySettings.onOpen,
+                disabled: !isEditableRole(permissionRole),
+              }
+        }
         taskPinned={taskPinned}
         isTaskPinPending={isTaskPinPending}
         onCloseOtherTabs={onCloseOtherTabs}
@@ -506,7 +509,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         onEditTitle={rename.startEditing}
         onSetTaskPinned={handleSetTaskPinned}
       />
-      {appearanceEditor}
+      {repositorySettings.dialog}
     </ContextMenu>
   );
   if (!includeMotionFrame) return control;

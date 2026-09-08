@@ -1,7 +1,3 @@
-import {
-  appearanceWallpaperSchema,
-  type WorkspaceAppearance,
-} from "@traycer/protocol/host/workspace/appearance-schemas";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
@@ -120,15 +116,31 @@ export const DEFAULT_CODE_FONT_SIZE = 12;
 // source of truth.
 export const DEFAULT_WORKTREE_BRANCH_PREFIX = "traycer/";
 
-export type GlobalWallpaper = NonNullable<
-  WorkspaceAppearance["wallpaper"]
-> | null;
+export const START_PAGE_WALLPAPER_STYLES = [
+  "photo",
+  "dither",
+  "grain",
+] as const;
+export type StartPageWallpaperStyle =
+  (typeof START_PAGE_WALLPAPER_STYLES)[number];
+export const DEFAULT_START_PAGE_WALLPAPER_INTENSITY = 0.6;
+
+/**
+ * The personal start-page wallpaper's SETTINGS. `null` means no wallpaper. The
+ * image bytes live in the appearance blob store
+ * (`lib/appearance/start-page-wallpaper.ts`), never here.
+ */
+export interface StartPageWallpaper {
+  readonly style: StartPageWallpaperStyle;
+  /** 0..1. Applies to `dither` and `grain` only. */
+  readonly intensity: number;
+}
 
 export interface SettingsState {
-  globalWallpaper: GlobalWallpaper;
+  startPageWallpaper: StartPageWallpaper | null;
   showGreeting: boolean;
   showRecentHistory: boolean;
-  setGlobalWallpaper: (wallpaper: GlobalWallpaper) => void;
+  setStartPageWallpaper: (wallpaper: StartPageWallpaper | null) => void;
   setShowGreeting: (visible: boolean) => void;
   setShowRecentHistory: (visible: boolean) => void;
   theme: ThemeMode;
@@ -283,7 +295,7 @@ export interface SettingsState {
 
 type PersistedSettingsState = Pick<
   SettingsState,
-  | "globalWallpaper"
+  | "startPageWallpaper"
   | "showGreeting"
   | "showRecentHistory"
   | "theme"
@@ -360,7 +372,7 @@ function clampCodeFontSize(value: number): number {
 
 function partializeSettingsState(state: SettingsState): PersistedSettingsState {
   return {
-    globalWallpaper: state.globalWallpaper,
+    startPageWallpaper: state.startPageWallpaper,
     showGreeting: state.showGreeting,
     showRecentHistory: state.showRecentHistory,
     theme: state.theme,
@@ -405,10 +417,10 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      globalWallpaper: null,
+      startPageWallpaper: null,
       showGreeting: true,
       showRecentHistory: true,
-      setGlobalWallpaper: makeSetter(set, "globalWallpaper"),
+      setStartPageWallpaper: makeSetter(set, "startPageWallpaper"),
       setShowGreeting: makeSetter(set, "showGreeting"),
       setShowRecentHistory: makeSetter(set, "showRecentHistory"),
       theme: "system",
@@ -587,9 +599,9 @@ export const useSettingsStore = create<SettingsState>()(
         const merged: SettingsState = { ...currentState, ...persisted };
         return {
           ...merged,
-          globalWallpaper:
-            appearanceWallpaperSchema.safeParse(persisted.globalWallpaper)
-              .data ?? null,
+          startPageWallpaper: parseStartPageWallpaper(
+            persisted.startPageWallpaper,
+          ),
           showGreeting:
             typeof persisted.showGreeting === "boolean"
               ? persisted.showGreeting
@@ -633,6 +645,25 @@ export const useSettingsStore = create<SettingsState>()(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseStartPageWallpaper(value: unknown): StartPageWallpaper | null {
+  if (!isRecord(value)) return null;
+  const style = START_PAGE_WALLPAPER_STYLES.find(
+    (candidate) => candidate === value.style,
+  );
+  if (style === undefined) return null;
+  const intensity = value.intensity;
+  return {
+    style,
+    intensity:
+      typeof intensity === "number" &&
+      Number.isFinite(intensity) &&
+      intensity >= 0 &&
+      intensity <= 1
+        ? intensity
+        : DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
+  };
 }
 
 function resolvePersistedNotificationChimeSounds(

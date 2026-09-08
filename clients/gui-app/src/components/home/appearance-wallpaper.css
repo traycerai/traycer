@@ -7,6 +7,10 @@
   background-color: color-mix(in srgb, var(--foreground) 3%, var(--background));
 }
 
+.appearance-wallpaper-canvas {
+  image-rendering: pixelated;
+}
+
 .appearance-wallpaper-texture {
   background-image: radial-gradient(
     circle,

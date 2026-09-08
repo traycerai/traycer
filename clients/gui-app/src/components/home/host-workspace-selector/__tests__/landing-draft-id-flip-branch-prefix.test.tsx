@@ -100,6 +100,37 @@ const hostClient: MockHostClient = {
   onChange: () => () => undefined,
 };
 
+// The folder row's repository icon (and the Repository settings dialog) read
+// committed appearance over the host. Stub those reads so this picker suite
+// keeps needing no host runtime.
+vi.mock("@/hooks/appearance/use-workspace-appearance", () => {
+  const stub = () => ({
+    appearance: null,
+    scope: null,
+    canEdit: false,
+    readSupport: true,
+    writeSupport: true,
+    assetRefreshKey: 0,
+  });
+  return {
+    useWorkspaceAppearance: stub,
+    useDraftAppearance: stub,
+    useEpicAppearance: stub,
+    useEpicAppearanceSource: () => ({ hostId: null, workspacePath: null }),
+    useWorkspaceSetAppearance: () => ({
+      mutateAsync: () => Promise.resolve({}),
+    }),
+  };
+});
+vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
+  useAppearanceAsset: () => ({
+    url: null,
+    status: "empty",
+    reason: null,
+    reportDecodeFailure: () => {},
+  }),
+}));
+
 vi.mock("@/components/ui/select", () => ({
   Select: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
@@ -330,9 +361,7 @@ function renderLandingLikeHarness(draftId: string | null): {
 async function openEnvironmentDialog(): Promise<void> {
   fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
   await screen.findByTestId("home-workspace-rows-popover");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Edit setup and teardown scripts" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
   await screen.findByTestId("scripts-dialog");
 }
 
