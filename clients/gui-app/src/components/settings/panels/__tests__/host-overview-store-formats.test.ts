@@ -89,6 +89,49 @@ describe("hostStoreFormatRestriction", () => {
     });
   });
 
+  it("clears a same-format rollback while the first survey is still pending - formats settle it before any survey state (Codex)", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0-rc.1",
+          publishedFormats: { chatDb: 9 },
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: null,
+              epicCount: 0,
+              survey: "pending",
+            },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps an older-format target pending while the first survey is pending - formats cannot excuse it", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.2.0",
+          publishedFormats: { chatDb: 8 },
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: null,
+              epicCount: 0,
+              survey: "pending",
+            },
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "pending",
+      reason: "Checking chat stores…",
+      detail: null,
+      confirmation: null,
+    });
+  });
+
   it("unlocks an older row after a completed empty survey", () => {
     expect(
       hostStoreFormatRestriction(

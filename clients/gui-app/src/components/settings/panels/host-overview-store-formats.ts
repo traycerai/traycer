@@ -4,6 +4,7 @@ import {
   storeFloorApplicability,
   storeFloorClearedByFormats,
   type HostStoreFormats,
+  type HostStoreFormatsKnowledge,
 } from "@traycer/protocol/host/store-formats";
 import type { HostStatusStoreFormats } from "@traycer/protocol/host/status/index";
 import type { HostUpdateStoreFloorRefusal } from "@traycer/protocol/host/maintenance/index";
@@ -89,6 +90,20 @@ export function hostStoreFormatRestriction(
   if (input.storeFormats === null) return null;
   const target = resolveHostStoreFormats(input.version, input.publishedFormats);
   const chatDb = input.storeFormats.chatDb;
+  // Formats FIRST, before either uncertain survey state. A target that reads
+  // at least this build's format cannot make any store newly unreadable, so
+  // nothing a survey could find - pending, failed or complete - changes the
+  // answer. An rc.4 → rc.1 move inside one chat-store format is the everyday
+  // case: both stamp 9, and holding it on "Checking chat stores…" would wait
+  // for a walk whose result cannot matter.
+  //
+  // `storeFloorClearedByFormats` rather than a local `>=` because this is the
+  // same predicate the CLI clears a move with before it walks the disk and
+  // the host clears a refusal with before it sends one. Three ends, one rule;
+  // a fourth spelling here is how they drift.
+  if (downgrade && targetReadsCurrentFormat(target, chatDb.current)) {
+    return null;
+  }
   // Boot uncertainty is transient. Do not offer loss consent until the
   // first survey has answered, even if this target's metadata is unknown.
   if (downgrade && chatDb.survey === "pending") {
@@ -102,36 +117,16 @@ export function hostStoreFormatRestriction(
   // A completed empty survey has no chats to lose access to, even when the
   // target's format is unknown. A fresh RPC refusal can still override this
   // cached observation if a store appeared after the status poll.
-  if (
-    chatDb.survey === "complete" &&
-    chatDb.onDiskMax === null &&
-    chatDb.epicCount === 0
-  ) {
-    return null;
-  }
+  if (surveyCompleteAndEmpty(chatDb)) return null;
   if (target.kind === "unknown") {
     return downgrade ? unknownTargetRestriction(input.version) : null;
   }
+  // A failed survey read no file, so on its own it can only ever produce
+  // uncertainty; the formats-first clearance above has already excused every
+  // target that reads this build's files anyway, so what reaches here is a
+  // target that reads an OLDER format over stores nobody could inspect.
   if (downgrade && chatDb.survey === "failed") {
-    // A failed survey read no file, so on its own it can only ever produce
-    // uncertainty - and uncertainty about files the target can read ANYWAY is
-    // not a reason to demand destructive consent. An rc.4 → rc.1 move inside
-    // one chat-store format is the everyday case: both stamp 9, so there is
-    // nothing a completed walk could have found that would change the answer.
-    //
-    // `storeFloorClearedByFormats` rather than a local `===` because this is
-    // the same predicate the CLI clears a move with before it walks the disk
-    // and the host clears a refusal with before it sends one. Three ends, one
-    // rule; a fourth spelling here is how they drift. It also reads `>=`, not
-    // equality, which matters for the target that stamps NEWER than this
-    // build.
-    const clearedByFormats = storeFloorClearedByFormats(target, {
-      kind: "known",
-      formats: { chatDb: chatDb.current },
-    });
-    if (!clearedByFormats) {
-      return unreadableStoresRestriction(input.version);
-    }
+    return unreadableStoresRestriction(input.version);
   }
   if (chatDb.onDiskMax === null || chatDb.onDiskMax <= target.formats.chatDb) {
     return null;
@@ -144,6 +139,34 @@ export function hostStoreFormatRestriction(
     target.formats.chatDb,
     chatDb.onDiskMax,
     null,
+  );
+}
+
+/**
+ * Whether a target whose format is known reads at least this build's format,
+ * by the shared predicate. An unknown target cannot be excused this way.
+ */
+function targetReadsCurrentFormat(
+  target: HostStoreFormatsKnowledge,
+  current: number,
+): boolean {
+  return (
+    target.kind === "known" &&
+    storeFloorClearedByFormats(target, {
+      kind: "known",
+      formats: { chatDb: current },
+    })
+  );
+}
+
+/** A completed survey that found no chat store at all. */
+function surveyCompleteAndEmpty(
+  chatDb: HostStatusStoreFormats["chatDb"],
+): boolean {
+  return (
+    chatDb.survey === "complete" &&
+    chatDb.onDiskMax === null &&
+    chatDb.epicCount === 0
   );
 }
 

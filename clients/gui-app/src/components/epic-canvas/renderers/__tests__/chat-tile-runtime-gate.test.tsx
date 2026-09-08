@@ -406,6 +406,50 @@ describe("<ChatTilePreSnapshotGate />", () => {
     expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
   });
 
+  it("a retry from the fatal pane starts a fresh loading budget - time spent on the error was not loading time (Codex)", () => {
+    vi.useFakeTimers();
+    const onRetry = vi.fn();
+    const fatal: ChatTileFatalDetails = {
+      code: "UNAUTHORIZED",
+      reason: "CHAT_INVALID: nope",
+      upgradeGuidance: null,
+    };
+    const { rerender } = render(
+      <ChatTilePreSnapshotGate
+        fatalClose={fatal}
+        retries={null}
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByTestId("chat-tile-error")).toBeTruthy();
+
+    // The error pane sits open past the whole budget. The gate never
+    // unmounts: a pre-snapshot fatal close leaves `snapshotLoaded` false.
+    act(() => {
+      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS + 1);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    rerender(
+      <ChatTilePreSnapshotGate
+        fatalClose={null}
+        retries={null}
+        onRetry={onRetry}
+      />,
+    );
+
+    // A fresh attempt, with its own budget - not "still opening" on sight.
+    expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(STALLED_CHAT_LOAD_ELAPSED_MS - 1);
+    });
+    expect(screen.getByTestId("chat-tile-loading")).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.getByTestId("chat-tile-still-trying")).toBeTruthy();
+  });
+
   it("a fatal close always wins over any retry streak", () => {
     render(
       <ChatTilePreSnapshotGate

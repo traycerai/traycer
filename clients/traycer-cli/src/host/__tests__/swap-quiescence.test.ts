@@ -683,12 +683,29 @@ describe("macosServiceMayRespawn (field parsing, real launchctl-print classifica
       label,
       fakeRunner(() => ({
         exitCode: 0,
-        stdout: "\tlast exit code = (never exited)\n",
+        stdout: "\tlast exit code = 0\n",
       })),
       10_000,
     );
 
     expect(respawn).toBe(false);
+  });
+
+  it("a loaded job that has NEVER run may respawn - RunAtLoad is about to start it (Codex)", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner(() => ({
+        exitCode: 0,
+        stdout: "\tlast exit code = (never exited)\n",
+      })),
+      10_000,
+    );
+
+    expect(respawn).toBe(true);
   });
 
   it("a job that is not loaded at all does not respawn", async () => {

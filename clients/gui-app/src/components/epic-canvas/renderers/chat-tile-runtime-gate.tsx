@@ -88,8 +88,9 @@ export function ChatTilePreSnapshotGate(props: {
   readonly onRetry: () => void;
 }): ReactNode {
   const hostUpdate = useChatTileHostUpdate();
-  // The wait starts when this gate first renders for this session, NOT at the
-  // first failure - that distinction is the whole deadline.
+  // The wait starts when this gate first renders for this session (or when
+  // the reader asks for a retry, below), NOT at the first failure - that
+  // distinction is the whole deadline.
   //
   // A host can ack `chat.subscribe` and then send neither a snapshot nor a
   // close, with heartbeat pongs keeping the socket alive underneath. Nothing
@@ -98,7 +99,19 @@ export function ChatTilePreSnapshotGate(props: {
   // until the tab is closed. Invariant 6 asks for a deadline on every
   // host-dependent loading state, and "no evidence yet" is precisely the state
   // that needs one most, because it is the one nothing else can end.
-  const [waitStartedAt] = useState(() => Date.now());
+  const [waitStartedAt, setWaitStartedAt] = useState(() => Date.now());
+  // A retry from the fatal pane begins a NEW wait. The gate stays mounted
+  // across it (a fatal close before the first snapshot never flips
+  // `snapshotLoaded`, so there is no remount to restart the anchor), and the
+  // time the reader spent looking at the error was not loading time - without
+  // this reset the fresh attempt would be declared stalled on sight once the
+  // error pane had been open for the budget. The streak's own start still
+  // wins below where it is earlier: the store keeps it across a click on
+  // purpose, because the failures are evidence about the host.
+  const handleRetry = (): void => {
+    setWaitStartedAt(Date.now());
+    props.onRetry();
+  };
   // The streak's own start still wins where it is EARLIER, so a tile mounting
   // into a stall that is already old inherits it instead of restarting the
   // budget. `Math.min` rather than a preference for one or the other: whichever
@@ -118,7 +131,7 @@ export function ChatTilePreSnapshotGate(props: {
       <ChatTileError
         details={props.fatalClose}
         hostUpdate={hostUpdate}
-        onRetry={props.onRetry}
+        onRetry={handleRetry}
       />
     );
   }
@@ -135,7 +148,7 @@ export function ChatTilePreSnapshotGate(props: {
       <ChatTileStillTrying
         retries={props.retries}
         hostUpdate={hostUpdate}
-        onRetry={props.onRetry}
+        onRetry={handleRetry}
       />
     );
   }

@@ -1534,18 +1534,21 @@ async function launchdJobMayRespawn(
 /**
  * Whether `launchctl print`'s exit fields describe a CLEAN last exit.
  *
- * `(never exited)` counts: a job that has never run has not crashed, so
- * nothing is scheduled to bring it back. A `last exit reason` means the
- * process was signalled or jetsammed, which is never clean. An absent code
- * field is UNKNOWN and answers false - the format is not stable across macOS
- * releases (this file has been broken by that once already), and the safe
- * direction for the caller is "may respawn".
+ * Only an actual `0` is clean. `(never exited)` is NOT: both jobs this file
+ * knows are `RunAtLoad`, so a loaded job that has not run yet is one launchd
+ * is about to start - the survey or swap could be racing its first spawn,
+ * which is the writer race the settle wait exists to close. It reads as may
+ * respawn and the settle loop keeps asking; a job that does start shows a
+ * pid on the next poll, and one that never does spends the window and
+ * refuses, which is the honest answer for a job nobody can prove idle. A
+ * `last exit reason` means the process was signalled or jetsammed, which is
+ * never clean. An absent code field is UNKNOWN and answers false - the format
+ * is not stable across macOS releases (this file has been broken by that once
+ * already), and the safe direction for the caller is "may respawn".
  */
 function lastExitWasClean(fields: ReadonlyMap<string, string>): boolean {
   if (fields.get("last exit reason") !== undefined) return false;
-  const code = fields.get("last exit code");
-  if (code === undefined) return false;
-  return code === "0" || code === "(never exited)";
+  return fields.get("last exit code") === "0";
 }
 
 // launchctl returns "Service is already loaded" / "Bootstrap failed:
