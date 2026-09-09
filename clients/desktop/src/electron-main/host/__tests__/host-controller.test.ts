@@ -3948,7 +3948,12 @@ describe("platform matrix", () => {
       expect(readyOrder).toBeGreaterThan(restartOrder);
     });
 
-    it("with no running host and a login item that is not enabled, and no takeover is possible, fails immediately naming the parked registration and never spawns a restart", async () => {
+    // The message is the whole point of this case. `doctor` re-runs the very
+    // register cycle that parks, and the entry guard refuses the same legacy
+    // registration every time, so routing a person there leaves them running a
+    // command that cannot work on a machine with no host. Only removing the
+    // stale row in System Settings hands the label back.
+    it("with no running host and a legacy BTM record holding the label, names the System Settings remedy instead of host doctor", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = newController("production");
       writeInstallRecord("production", {
@@ -3973,7 +3978,15 @@ describe("platform matrix", () => {
 
       expect(outcome.kind).toBe("failed");
       if (outcome.kind === "failed") {
-        expect(outcome.message).toContain("no host is running to restart");
+        expect(outcome.message).toContain("Login Items & Extensions");
+        expect(outcome.message).toContain("older Traycer login item");
+        // The remedy REPLACES the doctor routing rather than joining it: two
+        // instructions, one of which cannot work, is what sent this machine
+        // round the same command.
+        expect(outcome.message).not.toContain("host doctor");
+        expect(outcome.message).not.toContain("no host is running to restart");
+        // Never the machine-wide reset - it clears every app's login items.
+        expect(outcome.message).not.toContain("resetbtm");
       }
       expect(readParkedRegistrationTakeover).toHaveBeenCalled();
       const restartCallIndex = vi
@@ -3993,6 +4006,40 @@ describe("platform matrix", () => {
         );
       expect(serviceInstallCallIndex).toBe(-1);
       expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
+    // The control for the message above: `legacy-registered` is the ONE
+    // refusal a person can act on and the one doctor cannot clear. Every other
+    // refusal is transient or genuinely doctor's, and must keep the doctor
+    // routing - otherwise the new copy is just an unconditional rewrite that
+    // would send someone to System Settings over a launchd job that happened
+    // to be running.
+    it("keeps the host-doctor routing for a refusal that is not the legacy-label record", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      // launchd reported a live process under one of the labels, so the
+      // takeover is refused for a reason that has nothing to do with a stale
+      // BTM row and may well be gone by the next attempt.
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "no-takeover",
+        reason: "job-running",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        expect(outcome.message).toContain("no host is running to restart");
+        expect(outcome.message).toContain("host doctor");
+        expect(outcome.message).not.toContain("Login Items & Extensions");
+      }
     });
 
     // Contrasts with the immediately-preceding test: when the legacy label
