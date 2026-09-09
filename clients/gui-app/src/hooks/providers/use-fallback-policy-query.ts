@@ -39,12 +39,30 @@ export function useFallbackPolicyQuery(): UseQueryResult<
     client,
     method: "providers.fallbackPolicy.get",
     params: FALLBACK_POLICY_PARAMS,
-    // Refetch on focus is left at its default ON, unlike the agent-guide
-    // editor beside it. That editor refuses refetches because its whole
-    // content is the draft; here the editable policy is seeded once into a
-    // reducer keyed on the host, so a refetch cannot reach a control - it only
-    // freshens `inFlightCount`, which is derived per read and is the number
-    // the master toggle's helper prints.
+    // No options, so this takes the app-wide defaults - which include
+    // `refetchOnWindowFocus: false` and `refetchOnReconnect: false`
+    // (`lib/query-client.ts`). Nothing AMBIENT re-reads this row, then:
+    // `inFlightCount` is as fresh as the last read and no fresher, and it will
+    // not silently change under someone who has the page open.
+    //
+    // That is narrower than "the only refetch is the panel's own", and the
+    // difference is not academic - an earlier version of this comment made the
+    // wider claim and was wrong. Turning off focus and reconnect refetching
+    // says nothing about INVALIDATION, which starts a refetch by a route these
+    // flags never see. It happens that no invalidation refetches this row
+    // today: `set` and `restoreTierGroups` write the response in place with
+    // `setQueriesData`, and `reset` invalidates with `refetchType: "none"` on
+    // purpose (its own caller does the read, because a refetch started by an
+    // invalidation cannot report whether it succeeded). That is four call sites
+    // agreeing, not a property of the defaults - a fifth writer invalidating
+    // normally would refetch this query and nothing here would change.
+    //
+    // So the two re-reads to expect are both the panel's own and both
+    // deliberate: the read-back after a save whose reply was lost, and the read
+    // after a reset. And the panel does not treat a post-mount error as "one of
+    // those failed" - it keeps the editor mounted through ANY failed fetch once
+    // there is a policy to edit and reports the failure in place, rather than
+    // replacing the page - see `FallbackSettingsPanelBody`.
     options: null,
   });
 }

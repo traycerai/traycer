@@ -124,11 +124,16 @@ describe("ConfirmDestructiveDialog - focus returns to the opener", () => {
     //   the DOM resets activeElement to body immediately, before the dialog
     //   even closes).
     // Both paths are observationally identical at this level, so this test
-    // pins only "closing over a detached opener does not throw or hang" - the
-    // guard's actual, DISTINGUISHING consequence (the surface supplying a
-    // real replacement focus target after its own remount) is pinned in
-    // `fallback-danger-zone.test.tsx`'s `focusResetOnMount` pair and the
-    // panel suite's confirmed-reset case.
+    // pins only "closing over a detached opener does not throw or hang".
+    //
+    // The guard's DISTINGUISHING consequence - a caller supplying its own
+    // replacement focus target - is pinned by `fallback-danger-zone.test.tsx`'s
+    // `focusResetOnMount` pair at the component level, and end to end by the
+    // panel suite's "R3: a reset refused AFTER the dialog has closed..." and
+    // "a confirmed reset returns focus to the remounted Reset button" cases.
+    // It is NOT pinned by the panel's other confirmed-reset test, which asserts
+    // policy values only and says nothing about focus - this comment claimed it
+    // did, and the coverage walk had already recorded that half as open.
     render(<Harness hideOpener />);
     const opener = screen.getByRole("button", { name: "Open" });
     // Both controls are resolved BEFORE the dialog opens: a modal Radix dialog

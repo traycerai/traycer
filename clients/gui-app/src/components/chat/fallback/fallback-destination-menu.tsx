@@ -217,11 +217,39 @@ export function FallbackDestinationMenu({
          * bypass the toast layer, so before this the inline line was the only
          * feedback and a screen reader never learnt of it at all.
          *
+         * `empty:sr-only`, NOT `empty:hidden`, and the difference is the whole
+         * claim above. `display:none` takes an element out of the
+         * accessibility tree entirely, so the "persistent" region was absent
+         * for exactly as long as it had nothing to say and appeared already
+         * carrying its text - the mount-with-content case this comment
+         * describes as announcing nothing. It was written correct and built
+         * inert. `sr-only` keeps the element in the tree, so the region is
+         * observed from open, and it is `position: absolute`, so an empty one
+         * is not a flex item and contributes no gap to the column - which is
+         * the layout problem `empty:hidden` was there to solve.
+         *
          * One element rather than a visible line plus an `sr-only` copy. A
          * second hidden copy is not a neutral addition: it says the same
          * sentence twice into the accessibility tree, and it is also visible
          * to `getByText`, so it turns every existing single-match query into a
          * double match. The lesson was not "the tests were too strict".
+         *
+         * That prediction was correct and has since been collected. F25 needed
+         * the FAILURE and STALE states announced as well, and for those there
+         * is no single-element form: the sentence lives inside `MenuBody`'s
+         * branch, a persistent live wrapper around the body would announce
+         * every destination row once the list arrived, and `aria-hidden` on
+         * the visible copy would delete the only readable sentence for the
+         * users the region exists for. So those two - and ONLY those two - are
+         * deliberately duplicated, and the first run after the change reddened
+         * `renders a sentence and no rows for every non-listed listTargets
+         * outcome` on `Found multiple elements`, exactly as written above.
+         *
+         * The suite now pins the duplication at `toHaveLength(2)` rather than
+         * tolerating it, so removing either copy reds. The paragraph above
+         * still governs the REFUSAL, which keeps its single-element form for
+         * the reason it gives: where one element can be both the visible line
+         * and the live region, that is still the better shape.
          *
          * It is also why {@link MenuBody} renders nothing at all while
          * `preparing` with a refusal in hand: this line is the refusal now, and
@@ -231,23 +259,44 @@ export function FallbackDestinationMenu({
         <div
           role="status"
           aria-live="polite"
-          className="px-1 text-ui-xs text-amber-700 empty:hidden dark:text-amber-300"
+          className="px-1 text-ui-xs text-amber-700 empty:sr-only dark:text-amber-300"
         >
           {refusal}
         </div>
         {/*
-         * READINESS, and only readiness - the one state with no visible
-         * equivalent to duplicate. The popup can open showing "Pausing the
-         * countdown…" with no focusable rows at all, and when the rows arrive
-         * nothing changes that a screen reader is looking at; every other
-         * state is a sentence the body already renders, and announcing those
-         * from here would be the duplication this region is careful to avoid.
+         * Every OTHER settled state of the menu: the listing failed, the
+         * listing is stale, or the rows are ready.
+         *
+         * This used to carry readiness alone, on the argument that the rest
+         * "already render a line the reader can find". Findable is not
+         * announced. The popover does not move focus when its body swaps, so a
+         * screen-reader user who opened the menu and waited heard the row
+         * count arrive and heard NOTHING when the listing failed or when the
+         * chat had moved on underneath them - the two states where doing
+         * nothing further is the wrong next move. Silence is not a neutral
+         * default; it is the menu withholding the one fact that changes what
+         * the user should do.
+         *
+         * The refusal is excluded because it has its own live region above,
+         * which is both the visible line and the announcement - one element,
+         * one sentence, said once.
+         *
+         * Failure and staleness are NOT excluded, and they do put their
+         * sentence into the accessibility tree twice: once here, once in the
+         * body that renders it visibly. That cost is taken deliberately. The
+         * alternative - a second, terser wording for the live region only -
+         * would be a parallel copy table for the same five outcomes, and this
+         * module's own history is that the rule living in two places gets
+         * fixed in one. Two mentions of the truth beats one mention of a
+         * divergent version of it. Note for the suite: `getByText` sees both
+         * copies, so queries on those sentences want `getAllByText` or a
+         * role-scoped query.
          *
          * No focus movement anywhere. The fix for a silent popup is not to
          * start stealing focus.
          */}
         <div role="status" aria-live="polite" className="sr-only">
-          {menuReadinessAnnouncement({
+          {menuStatusAnnouncement({
             preparing,
             refusal,
             isPending: targets.isPending,
@@ -273,21 +322,30 @@ export function FallbackDestinationMenu({
 }
 
 /**
- * How many destinations became available, or `""` for every state that has a
- * visible sentence of its own.
+ * What the menu has SETTLED on, for the live region - a failure, a stale
+ * listing, or a count of what can be chosen. `""` only while nothing has
+ * settled yet, or when another element is already announcing.
  *
- * The empty string is the important half of the contract: this region says
- * NOTHING while the menu is preparing, loading, refused, unreachable or moved
- * on, because each of those already renders a line the reader can find. A
- * region that echoed them would say each sentence twice into the
- * accessibility tree - and, being real DOM, would double every `getByText` in
- * this component's suite, which is how the duplication announced itself.
+ * The two silences left, and why each is right:
+ *
+ * - **A refusal.** Spoken by its own region above, which is simultaneously the
+ *   visible line. Repeating it here would be the same sentence from two live
+ *   regions in the same popover.
+ * - **Preparing or loading.** A spinner is not a result. The user asked for
+ *   this by opening the menu, the visible line says which wait it is, and an
+ *   announcement per intermediate state turns the arrival of the real answer
+ *   into the third thing they heard rather than the first.
+ *
+ * Everything after that speaks, including the two states that used to be
+ * silent on the theory that a visible line was enough. It is not: nothing here
+ * moves focus, so a body that swaps under an open popover is a change no
+ * screen reader is looking at.
  *
  * Counts SELECTABLE rows rather than rows: "3 destinations available" over a
  * list where none can be clicked would be this region contradicting every row
  * under it, which is the same defect F12 fixed in the visible half.
  */
-function menuReadinessAnnouncement(input: {
+function menuStatusAnnouncement(input: {
   readonly preparing: boolean;
   readonly refusal: string | null;
   readonly isPending: boolean;
@@ -296,8 +354,16 @@ function menuReadinessAnnouncement(input: {
 }): string {
   if (input.refusal !== null) return "";
   if (input.preparing || input.isPending) return "";
-  if (input.isError || input.data === undefined) return "";
-  if (describeListTargetsOutcome(input.data.outcome) !== null) return "";
+  // The transport failed. Same words the body prints, for the reason given at
+  // the call site: one wording per fact, even at the cost of saying it twice.
+  if (input.isError || input.data === undefined) return HOST_UNREACHABLE_LABEL;
+  // The listing arrived and is already stale - the chat resumed, the decision
+  // was made, a later turn ran, or the host could not read its own state. The
+  // menu is open over rows that will refuse every pick, and this is the state
+  // where hearing nothing costs the user the most: they are waiting to choose
+  // from a list that is not going to work.
+  const moved = describeListTargetsOutcome(input.data.outcome);
+  if (moved !== null) return moved;
   const failedTuple = input.data.failedTuple;
   const selectable =
     input.data.profileTargets.filter((target) =>

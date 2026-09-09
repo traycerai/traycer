@@ -1923,6 +1923,19 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     its enabled set, and derives afresh only when the incoming policy genuinely
     reorders (a restore, or a policy written elsewhere). An externally authored
     early `notify` still renders where it is stored.
+    **Rendering an early `notify` honestly is not the same as letting rows cross
+    it.** Holding the `notify` slot fixed stops `notify` moving and says nothing
+    about the other rows: with `[profile, notify, tier]` hydrated, the movable
+    list is `[profile, wait, tier]` around a fixed slot, so dragging `profile` to
+    the end of that list writes `[wait, tier, notify, profile]` - an enabled step
+    that ran a moment ago, now below the terminal one, from a gesture that
+    mentioned neither. The same splice can do it to a row the user never touched:
+    dragging `tier` to the top shifts an enabled `wait` down across the slot, so
+    clamping only the moved row would not close it. `moveFallbackRung` therefore
+    REFUSES a move whose two ends lie on opposite sides of the slot, and the ▲▼
+    buttons are disabled at that boundary so a refused move is never offered as
+    an active control. Neither can fire on a ladder this panel wrote, where
+    `notify` is last and every movable row is above it.
   - **The Advanced per-failure matrix is collapsed by default and derived, not
     written out.** Its rows are `HOST_NOTIFICATION_STOPPED_REASONS` minus
     `EXCLUDED_FALLBACK_REASONS`, so a new failure reason gets a row the day it
@@ -2089,8 +2102,16 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       unanswered, and it replaces what is on screen only while the user has not
       edited since - so the standing rule that a later read never yanks a control
       out from under someone mid-edit still holds. A read-back that fails leaves
-      the notice standing with its own **Check again**; a newer save supersedes
-      the ticket, so a late answer to the old episode is dropped.
+      the notice standing with its own **Check again**. The ticket is superseded
+      only by a newer save that SUCCEEDS - a newer save's start, and its refusal,
+      both preserve it, because starting is not an answer and "B was not written"
+      says nothing about A - or by a confirmed reset **that went out after the
+      unanswered save**, which voids the question rather than answering it. Both
+      discharges are the same request-ORDER test, and the reset needs it for the
+      same reason the success does: a reset is no evidence about a write
+      dispatched later than itself, and voiding that write's ticket left the
+      uncertainty notice on screen with nothing behind its retry. A late answer
+      to a ticket that really was superseded is dropped.
   - **The per-row "resolves to" preview is an RPC, not a computation.**
     Resolving a family to a slug needs the live catalog, the provider's enabled
     and runnable state, and which account would run it - none of which the
@@ -2132,16 +2153,48 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     them - but the tier rung re-reads the model groups LIVE, so a reset does
     change where an armed traversal can hop to. It says "keep the steps and
     timings they started with" and claims nothing more.
-  - **Reset INVALIDATES and remounts; restore writes in place.** The asymmetry
-    is the seed marker. `reset` clears it, so the default policy it returns is
+  - **Reset re-reads and remounts; restore writes in place.** The asymmetry is
+    the seed marker. `reset` clears it, so the default policy it returns is
     stale the moment the next read re-seeds - writing that response into the
     cache would show an empty model-group list while the engine resolves against
-    a full seeded set. So the reset awaits its own refetch and the editor
-    remounts (a `resetGeneration` in its key), which matters because the reducer
-    is seeded ONCE and deliberately ignores later reads: an invalidate alone
-    would refetch into a component still rendering the pre-reset draft.
-    `restoreTierGroups` does not clear the marker, so its response IS what a
-    later read would produce and `save-succeeded` takes it directly.
+    a full seeded set. So the panel performs its own `refetchPolicy()` after the
+    reset and remounts the editor (a `resetGeneration` in its key) onto what
+    came back, which matters because the reducer is seeded ONCE and deliberately
+    ignores later reads. `restoreTierGroups` does not clear the marker, so its
+    response IS what a later read would produce and `save-succeeded` takes it
+    directly.
+    **Confirmed reset and successful refresh are reported separately**, and the
+    panel remounts only on the second. The hook's `invalidateQueries` is
+    `refetchType: "none"` and starts no fetch, because an invalidation could not
+    have reported one anyway: `refetchQueries` swallows a failed fetch
+    (`if (!fetchOptions.throwOnError) promise = promise.catch(noop)`) and its
+    `Promise.all(...).then(noop)` resolves either way, so awaiting it from
+    `onSuccess` - which this used to do, and describe as waiting for fresh data
+    - remounted the editor onto the pre-reset cache and presented it as the
+      result of the reset. When the read fails now, the reset is NOT called
+      refused: the editor stays as it is under a panel-wide banner saying the
+      reset went through and these values are out of date, with a **Try again**
+      that re-reads and remounts on success.
+      That banner is panel state of its own, not a fourth save-notice outcome:
+      a save notice describes ONE request and is correctly cleared by the next
+      edit and the next save start, whereas this describes the HOST'S ROW, which
+      no keystroke here can change. It carries the revision as of the reset's
+      **dispatch**, because its strongest sentence is about where the values on
+      screen came from and that sentence expires the moment they change - after
+      an edit the display is the user's own draft, which a save since may well
+      have stored, so the banner keeps a weaker second sentence ("what the reset
+      left has not been read yet") rather than a false first one. Dispatch and
+      not the moment the read failed: the read is a round trip during which every
+      control except Reset and Restore stays live, so a save submitted inside
+      that window had already moved the revision, and the banner called a
+      post-reset policy the settings from before the reset. It is cleared by a read that
+      succeeds, by a save that succeeds ON THE DRAFT BEING SHOWN, and by an
+      old-revision success that is ADOPTED into the view to correct a refusal
+      rollback - but not by an old-revision success the user has typed past,
+      where the host's row still is not what is displayed. It is also not RAISED
+      by a reset's failed read that a later write has already answered for: the
+      same request-order test the ticket uses, or the page would claim staleness
+      about a policy confirmed into it a moment earlier.
   - **The confirmation returns the keyboard, in two halves.** `ConfirmDestructiveDialog`
     is opened by setting `open` from a button rendered outside the dialog's own
     root - no caller renders a `DialogTrigger` - so Radix's modal content was
@@ -2159,25 +2212,125 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     replacement was a reset and the new Danger Zone takes focus onto its Reset
     button as it mounts, then clears the intent so a later remount for another
     reason (a host switch) does not steal focus onto a button nobody pressed.
-  - **Two failure kinds, decided once** in `fallback/fallback-policy-draft.ts`
-    rather than per control. A **local validation failure** keeps the draft in
-    the control, shows the error and **sends nothing**; a **host rejection**
-    reverts the control to the last persisted value and prints the host's
-    reason. Both messages state which value is on screen and which is in force,
-    because "couldn't save" alone leaves the control ambiguous. Validity is
-    decided by `fallbackPolicySchema.safeParse` - the wire schema itself, so
-    the local check cannot drift from the host's - and this module only turns
-    the failing path into a sentence.
+  - **The failure outcomes are decided once** in
+    `fallback/fallback-policy-draft.ts` rather than per control. A **local
+    validation failure** keeps the draft in the control, shows the error and
+    **sends nothing**. A **host rejection** prints the host's reason, and
+    reverts the control to the last persisted value only when that revert is
+    supportable: not when the user has edited since (the refusal judged an
+    older draft, so reverting would throw away typing the host never saw), and
+    not while an earlier save's outcome is still unknown (the persisted value
+    may already be stale, so "still in force" would be a claim about the host
+    that nothing has established). A **lost reply** claims nothing at all: the
+    draft stands, the notice says the value may or may not have been saved, and
+    an authoritative read-back - automatic, with a "Check again" retry - is
+    what settles it. Only a successful save (dispatched after the unanswered
+    one) or that read-back discharges the uncertainty - a newer request's START
+    is not an answer at all, and its REFUSAL answers for itself alone: "B was
+    not written" says nothing about whether A was. A confirmed reset discharges
+    it too, by voiding the question rather than answering it - but only when the
+    reset went out AFTER the unanswered save, for the reason above.
+    A save FAILURE has two outcomes on the wire and the NOTICE has four, which
+    is not an accounting error: a refusal arriving while an earlier reply is
+    still missing is both a rejection and an open question, so it is its own
+    notice (`refused-unverified`) rather than borrowing the plain unknown one.
+    The difference is invisible until a later success discharges the ticket -
+    the uncertainty expires there and the refusal does not, so that notice
+    DOWNGRADES to the ordinary "the host turned this down" rather than
+    disappearing with the ticket. Discharging a ticket also takes its
+    **Check again** with it, which is gated on the ticket and not on the notice
+    beside it: a button that re-reads for a request nobody is waiting on looks
+    like recovery and does nothing.
+    Every message states which value is on screen and what is known about what
+    is in force, because "couldn't save" alone leaves the control ambiguous.
+    **Two** of those sentences claim a setting is in force, and each needs its
+    own evidence. A refusal that reverts claims the restored policy is in
+    force - true unless that policy predates an unread reset, and it stops
+    predating one as soon as any write lands after the reset, so the test is
+    whether the confirmed write outranks the reset's own request, not whether
+    the banner is up. A refusal that KEEPS the draft claims the displayed
+    values are stored, and that takes **two** independent facts. Comparing the
+    values against `persisted` establishes only SAMENESS - never
+    `revision === persistedRevision`, an ordering watermark that parts company
+    with the values on both adoption paths (a moved-on read-back stamps it
+    while keeping a draft the host never saw; a correcting rollback adopts a
+    confirmed policy without moving the revision at all). **Authority** of
+    `persisted` is the second fact and a separate condition (**D330**): after a
+    reset whose read failed, `persisted` is the PRE-reset policy and the host's
+    row is unknown, so sameness with it proves only that the display equals an
+    invalidated baseline. Two refusals with no success since land exactly
+    there. Both facts, or no in-force claim.
+    The same rule bounds what may be said about the HOST's values at all. A
+    reset that succeeded proves the host wrote something; it does not prove the
+    result differs from what is on screen - resetting an already-default policy
+    yields identical values back, and the follow-up read that would have shown
+    that is the request that failed. So the copy hedges ("may not be what this
+    host is using now") instead of asserting an inequality no client can know.
+    And a claim about DISPATCH comes from the request's own state - pending,
+    confirmed, rolled back, or uncommitted - never from "this revision differs
+    from the unanswered one", which covers all four.
+    Dispatch is a property of the displayed VALUES, and it travels with them
+    (**D339**). The revision names an EDIT, and adoption changes the values
+    without changing the revision - `adoptPolicyIntoView` replaces the draft and
+    leaves `revision` alone - so after a read-back adopts, or a correcting
+    rollback adopts, the revision still names an edit that is no longer what
+    anyone is looking at. That is why confirmation is recorded against the
+    revision the confirmed values are DISPLAYED at rather than the one the
+    request carried, and why "hasn't been sent" now needs positive evidence: a
+    display above every revision this editor has ever dispatched
+    (`lastDispatchedRevision`, stamped only where a draft is actually sent - a
+    reset dispatches DEFAULTS, not the screen). Reached by elimination instead,
+    that sentence was told to three sequences whose values the host had already
+    received, and where nothing at all is known the copy says so - "sent, but we
+    don't know what the host did with it" - rather than picking one of the two
+    verdicts it cannot support.
+    Two corollaries the eighth pass added (**D347**), both the same rule as
+    D339 applied to the SENTENCE rather than to the classification. A
+    confirmation records that the display equals the host's row; it does not
+    record who authored those values or when, so the sentence describes that
+    relation ("what's on screen is what this host has saved") and never a
+    history - a read-back can adopt the ORIGINAL policy while two saves are
+    outstanding, and "a change you made since has been saved" is then false
+    twice, since no change of theirs was stored and the controls show what was
+    always there. And an unanswered request is described as the request it
+    was: `reset` and `restore` move no revision, so their own lost replies
+    create uncertainty stamped at the display's revision, and the notice must
+    name the operation rather than borrow the draft's sentence - which is why
+    the dispatch discriminator distinguishes the two operations instead of
+    lumping them as "not a draft".
+    None of these sentences says which request was newer, deliberately: a
+    refusal can name a request older than the one that succeeded OR newer than
+    one a correcting rollback displaced, so any ordering word is wrong half the
+    time. For the same reason the uncertainty sentence names the DRAFT it is
+    about - "what's on screen" is the unanswered request's draft only while the
+    user has not typed past it.
+    A failure also leaves alone the validation error belonging to a draft it
+    never judged, so a group emptied while an older save was in flight keeps
+    its error rather than reading as accepted. That is the one case where the
+    panel's status place carries two messages at once - the validation error
+    and the host notice are statements about different things, and an early
+    return for the first used to take the second's Check again off the page
+    while its ticket was still open.
+    Validity is decided by `fallbackPolicySchema.safeParse` - the wire schema
+    itself, so the local check cannot drift from the host's - and this module
+    only turns the failing path into a sentence.
   - **`storedPolicyUnreadable`** is surfaced, never swallowed. The host answers
     a corrupt row with the default policy plus that flag instead of throwing,
     so that this page still renders and a save can replace the bad row; the
     notice says what is on screen is not what is stored.
   - **`inFlightCount`** is rendered as a plain number in the master toggle's
     helper with **no link**: every holding or waiting chat already shows its own
-    card with its own stop action. It is derived per read, which is why this
-    query keeps `refetchOnWindowFocus` on while the agent-guide editor beside it
-    turns it off - a refetch here cannot reach a control, because the editable
-    policy is seeded once into a reducer.
+    card with its own stop action. It is derived per read, so it is only as
+    fresh as the last one - and this query takes the app-wide
+    `refetchOnWindowFocus: false` and `refetchOnReconnect: false`
+    (`lib/query-client.ts`), so nothing AMBIENT re-reads it to freshen it. That
+    is not the same as "nothing else refetches": those flags say nothing about
+    INVALIDATION, which starts a refetch by a route they never see. It happens
+    that none does today - `set` and `restoreTierGroups` write their response in
+    place with `setQueriesData`, and `reset` invalidates with
+    `refetchType: "none"` - so the only reads are the panel's own two, both
+    deliberate: the read-back after a save whose reply was lost, and the read
+    after a reset.
   - **No per-chat and no per-task control exists anywhere in the app**, by
     decision. The harness/model picker and the composer gain nothing from this
     feature; per-chat intervention is the actions on the cards themselves.
@@ -2890,6 +3043,149 @@ level`, `Host log level` and the host's log tails described the selected host.
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking
 an editor in its dropdown sets it as the default and persists across reloads.
+
+## The fallback save-notice matrix (D353)
+
+Eight audit passes fixed this surface one cell at a time, and each fix exposed the next
+composition. That is the signature of copy derived per-case instead of from a model, so
+this section IS the model: every sentence the notice can render is derived here, and the
+code implements the derivation rather than the cases.
+
+**The composition space is 8 × 3 × 4 = 96 cells** — DISPLAY state × OPERATION reported ×
+OUTCOME. (Eight, not the six this section first claimed: the tenth pass added
+`refused-on-screen` and wrote down `unanswered`, which the classifier had all along.) But
+the notice is TWO sentences answering two independent questions, and that is why the space
+factorises:
+
+- the **REQUEST account** — what is known about the operation whose outcome is being
+  reported — depends on OPERATION × OUTCOME only: **12 derivations**;
+- the **DISPLAY account** — what is known about the values on screen — depends on DISPLAY
+  state × whether display authority is intact: **9 derivations**. Not 16: only SEVEN of the
+  eight states produce a display account at all (`unanswered` is answered by the combined
+  sentence instead), and only two carry a second account — `confirmed` under
+  `unverifiedHostRow`, `rollback` under `persistedUnverified`. Those are two DIFFERENT
+  inputs, which is why the second column below is headed by the condition rather than by a
+  single "authority" flag, and it is what follow-up #17 is about.
+
+**21 derivations cover all 96 cells** — of the notice's two sentences. Composing them
+per-case is what produced eight passes of whack-a-mole; a cell is now wrong only if one of
+the 21 is wrong.
+
+**What the 21 govern, stated exactly (P3).** They govern the notice's TWO sentences — the
+request account and the display account — and nothing else. The status place renders four
+further strings, each deriving from a field this matrix has no axis for. They are LISTED
+rather than swallowed into it, because widening the axes to fit them would turn the
+factorisation into a claim about a bigger space than anything has tested:
+
+| Other sentence                                                                        | Derives from                                                   | Why it is not on an axis                                                                                                              |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| the `unknown` arm's COMBINED sentence                                                 | `unknownCarries` and `displayDispatch` together                | the one place the two accounts are composed rather than concatenated, so it is a single 3 × 8 cell and not a pair of independent ones |
+| the refusal consequences (`refused-reverted` / `refused-kept` / `refused-unverified`) | `hostError.outcome` × `persistedUnverified` × `draftConfirmed` | the notice outcome is FINER than the operation axis: one wire refusal becomes three outcomes, decided by what else was outstanding    |
+| the staleness banner                                                                  | `unrefreshedReset` + `unrefreshedResetSubject`                 | a different surface with a different owner (D327): the banner owns the reset's unread state, the notice owns display provenance       |
+| the validation alert                                                                  | `localError`                                                   | about the draft's SHAPE, and rendered whether or not any request exists                                                               |
+
+### Axis 1 — the DISPLAY account (8 states × authority)
+
+Display authority is the right to say what the HOST holds. It is intact unless an
+operation that does not carry the display has an unanswered outcome — a `reset` or
+`restore` whose own reply was lost. Those two are the only operations that can invalidate
+it while the display still looks confirmed, because they are the only ones that do not
+move the revision: a draft save dispatched after a confirmation implies an edit, and that
+edit moves `revision` away from `confirmedViewRevision`, so its own uncertainty is
+reported by a different display state entirely.
+
+(This is deliberately more conservative than "dispatched since the confirmation", and the
+looser variant was CONSIDERED AND REJECTED — do not reintroduce it. It would need a
+`confirmedViewRequestId` to order the unanswered operation against the confirmation, and it
+is unsafe on its own terms: a reset dispatched BEFORE a later save was confirmed would keep
+its in-force claim, but a lost reply says nothing about WHEN the reset landed, and it may
+have replaced the row after that save. The ordering test answers a question the evidence
+cannot settle. The rule as written needs no ORDERING field — it does need a field, and it has one: `unverifiedHostRow` on the reducer, added in the tenth pass when the ninth's carrier (the unanswered ticket) turned out to be a slot the next failure overwrites. What was rejected is the ORDER test, not the state.)
+
+| DISPLAY state                                                                                                                                               | Authority intact                                                                                    | Alternative account, under the row's OWN condition: `confirmed` when `unverifiedHostRow` is set (an unanswered reset/restore); `refused-rollback` when `persistedUnverified` (a confirmed reset whose read failed) — two different inputs |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loaded-unchanged` — values equal `persisted`, nothing dispatched                                                                                           | "What's on screen is what was loaded; nothing has been changed since."                              | same — the sentence makes NO host claim, so nothing to invalidate                                                                                                                                                                         |
+| `edited-unsent` — `revision > lastDispatchedRevision`                                                                                                       | "What's on screen is a newer edit that hasn't been sent."                                           | same — no host claim                                                                                                                                                                                                                      |
+| `dispatched-pending`                                                                                                                                        | "Another change is being saved."                                                                    | same — no host claim                                                                                                                                                                                                                      |
+| `confirmed` — `confirmedViewRevision === revision`                                                                                                          | "What's on screen is what this host has saved."                                                     | "What's on screen was confirmed as saved on this host. A <reset\|restore> is also outstanding whose result is unknown, so what the host has now hasn't been re-read." (the operation is named; NO order is claimed in either direction)   |
+| `refused-rollback`                                                                                                                                          | "What's back on screen is your last saved settings, put back."                                      | the pre-reset account (`persistedUnverified`, D330)                                                                                                                                                                                       |
+| `sent-unknown`                                                                                                                                              | "What's on screen was sent, but we don't know what the host did with it."                           | same — the sentence already claims neither verdict                                                                                                                                                                                        |
+| `refused-on-screen` - a refusal that did NOT revert, because another outcome was unknown (NOT the `refused-kept` NOTICE outcome, which is a different axis) | "What's on screen is a change the host turned down; it's kept here so you can fix it."              | same - neither "saved" nor "put back" is claimed, so there is no host claim to invalidate                                                                                                                                                 |
+| `unanswered` - the display IS the draft whose own reply was lost                                                                                            | the COMBINED sentence, rendered by the `unknown` arm rather than by this table (see the scope note) | n/a - the operation with no answer is the display's own draft                                                                                                                                                                             |
+
+**Only `confirmed` and `refused-rollback` make host claims, so only those two have a second
+column.** That is the matrix's own answer to "which sentences need the authority rule",
+and it is why the rule is stated once rather than per cell.
+
+**Reachability of `edited-unsent` (the classifier's `uncommitted`), and which operations can
+host it.** `commit` dispatches `edited` and then `save-started` in the same tick, and
+`applySaveStarted` stamps `lastDispatchedRevision` at the post-edit revision — so every
+switch, select, arrow and button leaves `revision === lastDispatchedRevision`, and its
+display is `sent-unknown` — **when the edit is VALID**. That qualifier is the tenth pass's
+correction, and both sentences the ninth pass built on it were false:
+
+- **"only a text edit reaches it" is FALSE.** `commit` dispatches `edited` and then returns
+  early when `validateFallbackPolicyDraft(next).kind === "invalid"`, BEFORE `save-started`.
+  So any control whose value is invalid reaches `edited-unsent` — and one is a plain button:
+  "Add a model" calls `onCommit` with a candidate whose `modelFamily` is `""` (deliberately,
+  so the panel never invents a family the user did not choose), which the wire schema
+  rejects. A button, not a keystroke.
+- **"restore cannot host it" is FALSE.** Only the Restore button itself takes
+  `restorePending`; "Add a group" lives outside `EmptyGroups` and stays enabled while the
+  restore's RPC is in flight. So the display can be edited while a restore is unanswered.
+  One refinement the corrected argument needs and the first version of it missed: an empty
+  group is schema-VALID (`candidates: z.array(...)` with no `.min(1)`), so "Add a group"
+  alone dispatches a save and lands on `sent-unknown`. The sequence that actually reaches
+  `edited-unsent` is Restore → Add a group → **Add a model**, whose empty family is what
+  makes the draft unsendable.
+
+So `edited-unsent` is reachable from any control that can produce an invalid draft, under
+any of the three operations, and the write path — not the control kind — is what decides
+it: **a draft is unsent exactly when `commit` returned before `save-started`, plus the
+text-field path that never calls `commit` at all.**
+
+The `loaded-unchanged` / `edited-unsent` split is controlled from BOTH sides, by different
+pins and different mutations: **M3** (`matchesPersisted ? "loaded-unchanged" : "uncommitted"`
+collapsed to `"uncommitted"`) reddens the restore pin, which holds the `loaded-unchanged`
+half; the **inverse** collapse to `"loaded-unchanged"` reddens the eighth-pass reset pin's
+closing `toContain("hasn't been sent")`, which holds the other. Both of those reach
+`uncommitted` through an INVALID draft, where a validation alert above the notice already
+says the edit was not sent; the ninth-pass pin covers the VALID-draft variant neither of
+them has, where the notice carries the claim alone.
+
+### Axis 2 — the REQUEST account (3 operations × 4 outcomes)
+
+| OUTCOME                       | `set` (draft)                                                   | `reset`                                                                                      | `restore`                                                                                   |
+| ----------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| success                       | no notice — the controls carry it                               | no notice; the editor remounts on the re-read                                                | no notice                                                                                   |
+| refused                       | "Couldn't save: <host reason>" + the rollback/kept split (D330) | "Couldn't save: <host reason>" - the operation is NOT named; one classifier serves all three | same as reset                                                                               |
+| unknown (own reply lost)      | "That change may or may not have been saved."                   | "We don't know whether the reset went through - it hasn't been re-read."                     | "We don't know whether restoring the default groups went through - it hasn't been re-read." |
+| unknown-after-failed-read (S) | n/a — a draft save has no post-write read of its own            | the staleness banner owns it (D327/D330); the notice is not the surface                      | n/a                                                                                         |
+
+### Reachability and coverage
+
+Every cell is either pinned or carries its reason. The unreachable ones are unreachable by
+construction, not by assumption:
+
+| Cell                                                    | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `confirmed` × reset × unknown                           | **PINNED** (ninth pass, cell 1) — the composition eight passes never reached                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `loaded-unchanged` × restore × unknown                  | **PINNED** (ninth pass, cell 3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `edited-unsent` × reset × unknown, validation preserved | **PINNED** (ninth pass, cell 2) — both alerts asserted together                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `edited-unsent` × reset × unknown, VALID draft          | **PINNED** (ninth pass, cell 4) — the reset is the operation because it is the cheapest one that reaches this display state — NOT because a restore cannot, which the row below proves it can (the ninth pass's claim here was wrong and is corrected in the reachability note above), and the draft is valid because both older `uncommitted` assertions carry a validation alert that says "not sent" beside the notice                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `edited-unsent` × restore × unknown                     | **PINNED** (tenth pass) — the cell the ninth pass argued was impossible. Restore → Add a group → Add a model while the restore is pending, then lose its reply. "Add a group" is outside `EmptyGroups` and never disabled. The middle step is NOT optional: `candidates: z.array(tierCandidateSchema)` carries no `.min(1)` (`protocol/src/host/fallback-policy.ts:44`), so an empty group is schema-VALID and adding one alone dispatches a save — it is "Add a model", whose family is deliberately blank, that makes the draft unsendable                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `refused-on-screen` × set × refused-while-unknown       | **PINNED** (tenth pass, N1) — the display state the matrix did not have. X/A/B: A lost, B refused while A is unknown, X lost                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `confirmed` × reset × unknown, ticket REPLACED since    | **PINNED** (tenth pass, N2) — R lost, then A lost. The obligation has to outlive the notice that raised it. The obligation's RECOVERY is pinned per operation and they are not the same path: a restore's success reaches `save-succeeded` and clears it there, while a reset's success never dispatches `save-succeeded` at all — `resetAll` re-reads and the panel REMOUNTS, so the reset's recovery is the fresh initial state, asserted separately                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `confirmed` × reset × unknown, reset dispatched FIRST   | **PINNED** (tenth pass, N3) — the reverse dispatch order, which is why the sentence may not claim one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `confirmed` × set × unknown                             | **PINNED** (seventh pass, sequences 1 and 2)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `sent-unknown` × set × unknown                          | **PINNED** (seventh pass, sequence 3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `edited-unsent` × set × unknown                         | **PINNED** (fifth pass, the invalid-C two-alert pin)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `refused-rollback` × set × refused                      | **PINNED** (D330, R10-A and the revert pins)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `dispatched-pending` × set × unknown                    | **PINNED** (sixth pass, the PENDING control)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `*` × set × success                                     | **UNPINNED, and no sentence to pin** — a success renders no notice; the controls are the report                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `confirmed`/`sent-unknown` × restore × unknown          | **UNPINNED** — the restore's request account is pinned at `loaded-unchanged`, and the display axis is pinned independently at `set`. Since the two accounts are independent by construction, the composition adds no derivation; pinning it would assert the factorisation, not test it. **The pin that WOULD refute the factorisation** is a restore composition whose DISPLAY account differs from the reset's at the same display state — `confirmed × restore × unknown` asserting a display sentence other than "…a restore is also outstanding whose result is unknown…". If that ever needs writing, the factorisation is false and this whole section is the thing to fix, not the cell                                                                                                                                                                                                                                                        |
+| `*` × reset × unknown-after-failed-read                 | **UNREACHABLE as a notice.** A confirmed reset whose read fails raises the BANNER, not the notice (D327: the banner owns the reset's unread state). The notice path requires an unanswered SAVE, and a reset that was confirmed has no unanswered outcome to report                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `loaded-unchanged` × set × refused                      | **REACHABLE; the composition is UNPINNED and the reason is that pinning it cannot fail differently.** Recorded UNREACHABLE by the ninth pass on an argument that assumed a refusal implies the refused draft is still displayed; a refusal of an OLDER draft takes the `refused-kept` arm and reverts nothing, so Enter-commit a family, type it back without committing, and let the refusal arrive. But `refused-kept` never calls `displayAccount` (see the P3 scope table), and its `draftConfirmed` branch is taken whether the display got there by a confirmed save or by typing the value back — the draft equals `persisted` either way — so the rendered text is identical to the CONFIRMED-display case, which IS pinned. The tenth pass's first pin for this row asserted a display string the path cannot produce, reddened under no recipe, and now stands under its real claim: the `refused-kept` consequence over a confirmed display |
 
 ## Current Status
 

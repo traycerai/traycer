@@ -39,12 +39,17 @@ import { useFallbackChoiceLease } from "./use-fallback-choice-lease";
  * pausing, in the present progressive, because the countdown really is still
  * running. The card's own headline follows the same rule.
  *
- * **It does not keep a refused hold open.** A `refused` lease means the host
- * declined the hold, so the menu says so and closes rather than listing
- * destinations for a window nobody holds. It does NOT mean the traversal
- * advanced: an accepted ack that mints no token refuses too, and reopening from
- * `choosing` has been a normal path since B1. The menu reports that it has
- * nothing to list, never a cause it did not learn.
+ * **It does not list under a refused hold.** A `refused` lease means the host
+ * declined the hold, so the menu says so and lists nothing, rather than
+ * offering destinations for a window nobody holds. It stays OPEN while it says
+ * it - the popover's `open` is the user's, and yanking it shut would take the
+ * sentence away at the moment it appeared. Closing is the user's next move, or
+ * the card's when the traversal ends.
+ *
+ * A refusal also does NOT mean the traversal advanced: an accepted ack that
+ * mints no token refuses too, and reopening from `choosing` has been a normal
+ * path since B1. The menu reports that it has nothing to list, never a cause it
+ * did not learn.
  *
  * **It does not decide when a token is handed back.** Close is a plain
  * `release()`; the STREAM STORE owns the rest, because menu visibility and
@@ -96,6 +101,70 @@ export function FallbackGraceMenu({
     },
     [hold, pending.traversalId, release],
   );
+
+  // REACQUIRE when an authoritative frame retires the lease under an OPEN menu.
+  //
+  // B1 made a reconnect retire the old-epoch lease, which is correct - a token
+  // minted on a dead connection cannot be presented on the new one. What it
+  // left behind is this: the only `hold(...)` call used to be in
+  // `onOpenChange(true)`, so nothing re-asked. A user with the menu open
+  // through a detach came back to `preparing` forever - "Pausing the
+  // countdown…" printed over a countdown the host had resumed and was actively
+  // spending - until the traversal advanced or they closed and reopened it. The
+  // card stays mounted across `hold` and `choosing`, so nothing remounted this
+  // component to re-run the open path either.
+  //
+  // Stream sync, not derived state: the trigger is an authoritative frame
+  // arriving, which is exactly the external-source case effects are for.
+  //
+  // Asks ONCE per retirement, with no guard flag, and the two branches of
+  // `fallbackHoldForChoice` are why - they are worth stating separately,
+  // because only one of them is the "it wrote the slot" story.
+  //
+  // When the send SUCCEEDS the slot is written synchronously, so `lease` is
+  // non-null on the very next render and stays non-null while the request is in
+  // flight (`pending`), once it is `held`, and if the host refuses it
+  // (`refused` is non-null too - the refusal surfaces as neutral feedback
+  // below, which is the "or close it" half of this recovery). Nothing re-asks.
+  //
+  // When the send FAILS the slot is NOT written, and `lease === null` is still
+  // true. `sendAction` returns null whenever `canSendAction` is false, which is
+  // FOUR distinct conditions, not one: the session is disposed, there is no
+  // stream client, `connectionStatus !== "open"`, or `access.canAct !== true`.
+  // Two of those are not connectivity at all - a disposed session and a viewer
+  // without permission to act are settled facts, not gaps to wait out - so this
+  // deliberately does NOT diagnose which one occurred or assert that it will
+  // clear.
+  //
+  // It does not need to. The recovery is stated as a rule about frames rather
+  // than about causes: `pending` is a dependency as the whole object rather
+  // than as its two fields, the DTO is replaced per authoritative frame, so
+  // every frame re-evaluates the guards above. Where the condition has cleared
+  // the hold goes out; where it has not, `canSendAction` refuses again and
+  // nothing is sent. That is the whole contract, and it is deliberately stated
+  // without a claim about how often frames arrive in any of the four cases -
+  // the retry is correct whether they arrive or not. It cannot spin: between
+  // frames nothing in the dependency list moves.
+  //
+  // `hold` only - never `release` - because a retired lease has no token to
+  // hand back: the store dropped it with the connection it was minted on.
+  useEffect(() => {
+    if (!open) return;
+    if (lease !== null) return;
+    // Only a live grace window can be frozen, and `hold` is the only state
+    // that has one running.
+    //
+    // The distinction this guard turns on is NOT whether the lease was retired
+    // - a reconnect retires it in `choosing` exactly as in `hold`, and the
+    // integration suite's control does precisely that. It is whether there is
+    // a countdown left to stop. `choosing` means the host already froze the
+    // window and is running no timer against it, so re-asking would request a
+    // freeze of something that is not being spent; anything terminal has no
+    // window at all. In `hold` the clock is running, and a client that cannot
+    // re-ask watches it run out behind a menu that says it is paused.
+    if (pending.state !== "hold") return;
+    hold(pending.traversalId);
+  }, [open, lease, pending, hold]);
 
   // Latest-value refs rather than effect dependencies, so the cleanup below
   // runs on UNMOUNT and on nothing else. Depending on `open`/`release`
@@ -182,9 +251,14 @@ export function FallbackGraceMenu({
       // A REFUSED hold satisfies this too, and deliberately - `refused` is not
       // `held`, so it reads as "not entitled to list", which is exactly what it
       // is. An earlier version excluded it (`!refusedHold && …`) and thereby
-      // fetched and listed destinations for a traversal the host had just told
-      // us had moved on: every row a pick that could only answer
-      // `traversal_advanced`.
+      // fetched and listed destinations for a window this client had just been
+      // told it does not hold.
+      //
+      // What the refusal does NOT establish is why. It is not evidence the
+      // traversal advanced - the doc above enumerates the refusals that carry
+      // no such claim - so the rows are withheld because listing them would
+      // offer picks this client cannot back with a token, not because their
+      // destinations are known to be stale.
       preparing={lease?.status !== "held" || pending.state !== "choosing"}
       refusal={refusedHold ? COUNTDOWN_NOT_PAUSED_LABEL : refusal}
       emptyStateActions={null}
@@ -276,11 +350,18 @@ export function FallbackWaitingMenu({
 }
 
 /**
- * "Resumes at 3:00 PM unless you pick something", or `null`.
+ * "Resumes at 3:00 PM unless you pick something. <consequences>", or the
+ * consequences alone.
  *
- * `null` for a wait with no deadline in hand rather than a sentence with a hole
- * in it. The waiting card above already reads "Resuming shortly…" in that state,
- * so the menu adds nothing by repeating a time it does not have.
+ * NEVER `null`, and the doc used to say otherwise. A missing deadline drops the
+ * RESET FRAGMENT rather than the whole header: the consequences of picking a
+ * destination - the message replays, the queue moves, a fresh session starts -
+ * are true whether or not a reset time is in hand, and F10 is the finding that
+ * they must be stated before the countdown spends them. Returning `null` there
+ * hid them on exactly the wait whose end nobody can name.
+ *
+ * The waiting card above still reads "Resuming shortly…" in that state, so the
+ * time itself is not repeated here - only the part this menu owns.
  */
 function waitingMenuHeader(
   deadline: number | null,

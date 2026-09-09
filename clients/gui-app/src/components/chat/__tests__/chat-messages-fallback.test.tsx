@@ -51,6 +51,11 @@ import {
 } from "@/lib/registries/chat-session-registry";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import {
+  createFallbackAnnouncementObserver,
+  type FallbackAnnouncementsInput,
+  type FallbackTraversalAnnouncement,
+} from "@/stores/chats/chat-announcements";
 import { ChatMessages } from "@/components/chat/chat-messages";
 import type {
   ChatMessage as ChatMessageModel,
@@ -114,6 +119,13 @@ import { makeMessage } from "./chat-message-fixtures";
  * harness, its own tail response, real `useRenderedMessages`) proves the
  * eventual-body/eventual-projection side of the same outcome-metadata
  * pipeline.
+ *
+ * This file also includes one DIRECT observer guard control ("traversal
+ * absorption", `createFallbackAnnouncementObserver` called with no React
+ * involved at all) alongside its usual mounted-component integration
+ * style - used where a mounted assertion stacks more than one independent
+ * baseline protection and no single mutation against the mounted tree
+ * alone can attribute a silence to one specific guard.
  */
 
 // Bound to `mockLocalHostEntry.hostId` deliberately: the real
@@ -757,6 +769,11 @@ interface ChatRenderState {
   // `null` everywhere except the T4 real-windowed-hydration case, which
   // passes the harness's actual `state.transcriptWindow` instead.
   transcriptWindow: TranscriptWindow | null;
+  // `HOST_ID` everywhere except the parent rebase reset control below, which
+  // sets this `null` to disable the fallback child (`ChatMessages`'s own
+  // `handle !== null && props.hostId !== null` gate) without touching any
+  // other prop.
+  hostId: string | null;
 }
 
 /**
@@ -793,7 +810,7 @@ function chatScene(
           taskTitle="Fallback integration chat"
           taskId={CHAT_ID}
           epicId={EPIC_ID}
-          hostId={HOST_ID}
+          hostId={state.hostId}
           messages={state.messages}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={() => undefined}
@@ -826,6 +843,7 @@ function renderChat(
     coldRewrittenMessageIds: new Set(),
     visible: true,
     transcriptWindow: null,
+    hostId: HOST_ID,
   };
   const result = render(chatScene(state, client));
   return {
@@ -1538,6 +1556,117 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     expect(liveRegionSpan()).toBe(spokenNode);
   });
 
+  // The mounted initial-connect test below stacks TWO independent baseline
+  // protections over one live-region assertion. The two controls here
+  // isolate each one on its own, with the other never in play at all:
+  it("traversal absorption (pure observer, no React queue): a fresh observer's FIRST traversal observation is absorbed as baseline, and only a genuinely NEW semantic transition afterward speaks", () => {
+    const observer = createFallbackAnnouncementObserver();
+    const base: FallbackAnnouncementsInput = {
+      ready: true,
+      baselineEpoch: 1,
+      hydrationSequence: 0,
+      coldRewrittenMessageIds: new Set(),
+      residentMessageIds: new Set(),
+      traversal: {
+        traversalId: "trav-absorb",
+        revision: 1,
+        semanticKey: "hold",
+        text: "hold text",
+      },
+      returnOffer: null,
+      liveOutcome: null,
+      notices: [],
+      manualOutcome: null,
+    };
+    // First observation: absorbed as baseline. There is no mounted React
+    // queue here at all, so nothing but this observer's own guard could
+    // hide a spurious enqueue.
+    expect(observer.observe(base)).toEqual([]);
+    // Falsification: remove ONLY `absorb ||` from `observeTraversal`'s
+    // `if (seen || absorb || prior?.semanticKey === next.semanticKey)
+    // return;` (chat-announcements.ts ~623) - `seen` is false (first
+    // observation of this key) and `prior` is `undefined`, so nothing
+    // else would stop this from being pushed, and this assertion goes
+    // red.
+
+    const switching: FallbackTraversalAnnouncement = {
+      traversalId: "trav-absorb",
+      revision: 2,
+      semanticKey: "switching",
+      text: "switching text",
+    };
+    const second = observer.observe({ ...base, traversal: switching });
+    // Positive control: the observer is not permanently silent - a
+    // genuinely new semantic transition (higher revision AND a different
+    // semanticKey) on the SAME traversal afterward still speaks exactly
+    // once, with its own text.
+    expect(second).toHaveLength(1);
+    expect(second[0]?.text).toBe("switching text");
+  });
+
+  it("parent rebase reset (hostless ChatMessages, no fallback child): a real completion the announcer queue already holds is cleared on a baseline-only rerender by ChatLiveAnnouncements's OWN reset(), with no fallback observer involved at all", async () => {
+    // No harness, no registry lease - `hostId: null` disables
+    // `ChatFallbackAnnouncementSource` entirely (`handle !== null &&
+    // props.hostId !== null`, chat-messages.tsx ~1235), and
+    // `useExistingChatSessionHandle` returns `null` directly for a `null`
+    // hostId (chat-session-registry.ts ~302: `hostId === null ? null :
+    // registry.peek(...)`) rather than falling back to another key.
+    expect(getChatSessionRegistry().peek(EPIC_ID, CHAT_ID, HOST_ID)).toBeNull();
+
+    const chat = renderChat(0, undefined);
+    chat.rerenderWith({ hostId: null });
+    await flushAnnouncer();
+    expect(liveRegionText()).toBe("");
+
+    // A real streaming-to-completed transition, the SAME technique used
+    // elsewhere in this file - `props.completion` is derived purely from
+    // `useChatAnnouncements({messages, baselineEpoch, ...})` in the public
+    // `ChatMessages` and has no dependency on `handle`/`hostId` at all.
+    const userMsg = makeMessage(0, "user");
+    const assistantStreaming: ChatMessageModel = {
+      ...makeMessage(1, "assistant"),
+      completedAt: null,
+      stopped: null,
+      runState: "running",
+    };
+    chat.rerenderWith({ messages: [userMsg, assistantStreaming] });
+    await flushAnnouncer();
+    expect(liveRegionText()).toBe("");
+    chat.rerenderWith({
+      messages: [
+        userMsg,
+        {
+          ...assistantStreaming,
+          completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
+        },
+      ],
+    });
+    await flushAnnouncer();
+    // Positive control: this queue genuinely holds a completion before the
+    // rebase below - proving the coming silence is REBASE clearing it, not
+    // an announcement that never existed.
+    expect(liveRegionText()).toBe(
+      "Fallback integration chat finished responding.",
+    );
+    expect(liveRegionSpan()).not.toBeNull();
+
+    // ONE field changes: `baselineEpoch` only - same mounted root, same
+    // completed rows, same `visible: true`, `hostId` still `null`.
+    chat.rerenderWith({ baselineEpoch: 1 });
+    await flushAnnouncer();
+    // Falsification: delete ONLY `reset()` from `ChatLiveAnnouncements`'s
+    // `observeCompletion`'s `if (rebase)` branch (chat-messages.tsx
+    // ~1211-1216) - `useChatAnnouncements` absorbs the new baseline
+    // internally without clearing its OWN already-emitted completion
+    // value, so with no fallback child or subscription mounted at all to
+    // reset the queue independently, the final span would stay the SAME
+    // nonnull node with the SAME text instead of clearing.
+    expect(liveRegionText()).toBe("");
+    expect(liveRegionSpan()).toBeNull();
+  });
+
   it("absorbs the initial connect, a reconnect (new epoch), and hide/show silently - no history announced", async () => {
     const harness = createHarness();
     registerHarness(harness);
@@ -1561,9 +1690,25 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const baselineEpoch = bootstrap(harness, initialHold, undefined, undefined);
     const chat = renderChat(baselineEpoch, undefined);
     await flushAnnouncer();
-    // Falsification: absorb only on `changedEpoch`, never on the very first
-    // ready observation - this would speak the mount-time hold as if it were
-    // a live transition nobody asked to hear.
+    // This mounted-component assertion has TWO independent baseline
+    // protections stacked over it - neither is isolated HERE, by design;
+    // each has its own single-guard falsifier in the two tests directly
+    // above ("traversal absorption" and "parent rebase reset"):
+    //  1. `createFallbackAnnouncementObserver`'s `absorb` guard
+    //     (chat-announcements.ts ~589/~623) would, on its own, already
+    //     keep a fresh observer's first traversal observation silent -
+    //     proven with no React queue at all by "traversal absorption"
+    //     above.
+    //  2. `ChatLiveAnnouncements`'s OWN mount/rebase protection
+    //     (chat-messages.tsx ~1211-1216, `observeCompletion`'s `rebase`
+    //     branch calling `reset()` on the shared announcement queue) would,
+    //     on its own, already clear a real completion the queue held
+    //     before a baseline-only rerender - proven with no fallback
+    //     observer mounted at all by "parent rebase reset" above.
+    // Because they are independently sufficient here, no single-guard
+    // mutation against THIS mounted test can attribute the silence to
+    // either one specifically; that attribution is what the two tests
+    // above are for.
     expect(liveRegionText()).toBe("");
 
     // Hide, then show again: same epoch, no announcement either way.
@@ -1835,9 +1980,10 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
         scopedSwitch({ hostId: "some-other-host" }),
       );
     await flushAnnouncer();
-    // Falsification: drop the `hostId` conjunct alone from the
-    // `scopedManual` guard in `ChatFallbackAnnouncementSource` - this record
-    // would speak despite naming a different host.
+    // Falsification: drop `manual.hostId !== scope.hostId` alone from
+    // `observeManualFallbackAction`'s rejection guard (chat-messages.tsx
+    // ~1026-1032) - this record would speak despite naming a different
+    // host.
     expect(liveRegionText()).not.toContain("Switched");
   });
 
@@ -1869,7 +2015,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     expect(liveRegionText()).not.toContain("Switched");
   });
 
-  it("a confirmed RETRY (not a switch) is recorded but never spoken as 'Switched'", async () => {
+  it("a confirmed RETRY (not a switch) is recorded but never spoken as 'Switched' - including a non-null-target RETRY, which isolates the rung guard from the separate null-target guard", async () => {
     const harness = createHarness();
     registerHarness(harness);
     const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
@@ -1888,9 +2034,37 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       harness.handle.store.getState().confirmedManualFallbackAction?.rung,
     ).toBe("retry"); // the store DOES record it
     expect(liveRegionText()).not.toContain("Switched"); // the announcer does not speak it
+
+    // A SECOND record, same rung, this time with a non-null `target` - a
+    // boundary input `ConfirmedManualFallbackAction`'s type allows, not a
+    // claim that the real unary publisher ever sends a target alongside a
+    // non-switch rung. `observeManualFallbackAction`'s guard
+    // (chat-messages.tsx ~1036) is `!newManual || manual.rung !== "switch"
+    // || manual.target === null` - with `target: null` above, the rung
+    // and target disjuncts are indistinguishable; only a fresh,
+    // non-null-target record isolates `manual.rung !== "switch"` as the
+    // one still blocking speech.
+    harness.handle.store.getState().publishConfirmedManualFallbackAction({
+      hostId: HOST_ID,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      rung: "retry",
+      userMessageId: "user-msg-retry-2",
+      turnId: "turn-retry-2",
+      target: TARGET_TUPLE,
+    });
+    await flushAnnouncer();
+    const secondRecord =
+      harness.handle.store.getState().confirmedManualFallbackAction;
+    expect(secondRecord?.rung).toBe("retry");
+    expect(secondRecord?.target).toBe(TARGET_TUPLE);
+    // Falsification: drop `manual.rung !== "switch"` from the guard - with
+    // a fresh sequence and a non-null target, this second record has
+    // nothing else left to block it, and this speaks "Switched" instead.
+    expect(liveRegionText()).not.toContain("Switched");
   });
 
-  it("a confirmed WAIT_ONCE (not a switch) is recorded but never spoken as 'Switched'", async () => {
+  it("a confirmed WAIT_ONCE (not a switch) is recorded but never spoken as 'Switched' - including a non-null-target WAIT_ONCE, which isolates the rung guard from the separate null-target guard", async () => {
     const harness = createHarness();
     registerHarness(harness);
     const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
@@ -1909,9 +2083,34 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       harness.handle.store.getState().confirmedManualFallbackAction?.rung,
     ).toBe("wait_once");
     expect(liveRegionText()).not.toContain("Switched");
-    // Falsification: drop the `scopedManual.rung === "switch"` conjunct in
-    // `ChatFallbackAnnouncementSource` and either the retry or the
-    // wait_once case above would speak "Switched" too.
+
+    // A SECOND record, same rung, this time with a non-null `target` - a
+    // boundary input `ConfirmedManualFallbackAction`'s type allows, not a
+    // claim that the real unary publisher ever sends a target alongside a
+    // non-switch rung. `observeManualFallbackAction`'s guard
+    // (chat-messages.tsx ~1036) is `!newManual || manual.rung !== "switch"
+    // || manual.target === null` - with `target: null` above, the rung
+    // and target disjuncts are indistinguishable; only a fresh,
+    // non-null-target record isolates `manual.rung !== "switch"` as the
+    // one still blocking speech.
+    harness.handle.store.getState().publishConfirmedManualFallbackAction({
+      hostId: HOST_ID,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      rung: "wait_once",
+      userMessageId: "user-msg-wait-2",
+      turnId: "turn-wait-2",
+      target: TARGET_TUPLE,
+    });
+    await flushAnnouncer();
+    const secondRecord =
+      harness.handle.store.getState().confirmedManualFallbackAction;
+    expect(secondRecord?.rung).toBe("wait_once");
+    expect(secondRecord?.target).toBe(TARGET_TUPLE);
+    // Falsification: drop `manual.rung !== "switch"` from the guard - with
+    // a fresh sequence and a non-null target, this second record has
+    // nothing else left to block it, and this speaks "Switched" instead.
+    expect(liveRegionText()).not.toContain("Switched");
   });
 
   it("a manual switch RPC still PENDING (unresolved) is neither recorded nor spoken - only a settled outcome writes the publisher record", async () => {

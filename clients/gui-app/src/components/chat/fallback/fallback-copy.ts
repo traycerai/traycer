@@ -307,7 +307,19 @@ export function describeWaitDisposition(
         ? "This limit resets later than your longest wait allows."
         : `This limit resets at ${resetsAtLabel}, later than your longest wait allows.`;
     case "attempt_unavailable":
-      return "This message can't be re-sent on the account it ran on.";
+      // NO CAUSE, and specifically not a claim about resend or the account
+      // (D220's rule, applied to the disposition the cold review caught).
+      //
+      // The withdrawn sentence was "This message can't be re-sent on the
+      // account it ran on", which asserts far more than the producer
+      // established. The host returns this disposition when the wait REPLAY
+      // ENVELOPE is absent, and it adds `retry` and `switch` independently
+      // whenever the chat has settings - so an untyped terminal failure with
+      // automation off renders an ENABLED Retry directly beside it, on the
+      // original settings. The card would have been contradicting its own
+      // button. What the host actually withheld is the wait rung; why is not
+      // ours to state.
+      return "Waiting isn't available for this message.";
   }
 }
 

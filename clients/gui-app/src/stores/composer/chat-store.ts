@@ -672,6 +672,38 @@ export interface ChatMessage {
    */
   turnId?: string;
   /**
+   * The id of the ONE error segment on this row that carries the manual
+   * recovery actions (Retry / Switch… / Wait), or absent when this row carries
+   * none.
+   *
+   * `turnId` says which host attempt a row belongs to; this says which SEGMENT
+   * inside the row the affordances hang off. Both are needed, and neither
+   * substitutes for the other: a failed turn routinely carries several error
+   * blocks that all share one `turnId` (the queue-pause notice the host appends
+   * beside the failure, a non-terminal extension error before the real
+   * terminal), and a turn that was steered splits into several ROWS that also
+   * all share it. Turn identity alone therefore selects a set, not a place.
+   *
+   * Resolved once per turn over the complete pre-split block list by
+   * `manualRungAnchorSegmentId` - read its doc for the predicate and for why
+   * the per-row walk it replaced was wrong across a split - and stamped on the
+   * single row that contains the chosen segment. Every other row of the turn
+   * leaves it absent, which is the same answer a row with no error at all
+   * gives, so a reader needs no special case for either.
+   *
+   * Absent rather than `null` for `turnId`'s reason one field up: an explicit
+   * `undefined` would be a present key whose value must not be read as an
+   * identity.
+   *
+   * `renderAssistantTurnRows` is the only writer, and that is safe rather than
+   * merely tidy: of the three other assistant rows `rendered-messages.ts`
+   * builds, two carry `segments: []` and can hold no anchor, and the third -
+   * the synthesized notification-anchor row - carries one error segment on
+   * purpose and no `turnId`, so it offered no rungs before this field existed
+   * and offers none now. Absence here and absence there agree.
+   */
+  manualRungAnchorId?: string;
+  /**
    * Whether this completed row should render the elapsed footer. `false` for
    * a background-completion notification that no provider turn adopted; its
    * non-null `completedAt` still records terminal state for transcript

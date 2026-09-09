@@ -14,7 +14,6 @@ import type { ChatFallbackListTargetsResponse } from "@traycer/protocol/host/cha
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
-import { describeFallbackOutcome } from "@/components/chat/fallback/fallback-copy";
 import { formatClockTime } from "@/lib/relative-time";
 import {
   BANNED_VOCABULARY,
@@ -31,6 +30,16 @@ const HOST_ID = "host-manual";
 const TURN_ID = "turn-attempt";
 const USER_MESSAGE_ID = "user-msg-attempt";
 const RESETS_AT = new Date(2026, 5, 15, 15, 0, 0).getTime();
+
+/**
+ * Cold-review re-review: the `rung_unavailable` cases used to compute this
+ * from `describeFallbackOutcome("rung_unavailable")` and assert against that
+ * same call - a test that derives its expectation from the code under test
+ * cannot reject a change to that code (restoring the withdrawn "this chat has
+ * moved on" copy would still satisfy such an assertion). Written out
+ * literally instead.
+ */
+const RUNG_UNAVAILABLE_LABEL = "That action isn't available right now.";
 
 const harness = vi.hoisted(() => {
   // The published confirmed actions, in order. The announcer reads this slot
@@ -270,6 +279,204 @@ describe("FallbackManualRungActions", () => {
     expect(text).not.toContain("rate_limit");
   });
 
+  // F10: this card always calls `switchConsequencesText(null)` - a failed
+  // ATTEMPT carries no queue figure - and nothing pinned that the menu it
+  // opens actually says so, as opposed to staying silent about the queue or
+  // (the waiting-menu bug this batch is fixing elsewhere) reading a stale
+  // zero as "nothing queued".
+  it("states the switch consequences, with the no-queue-figure phrasing, in the Switch… menu header", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
+    // Falsification: change `switchConsequencesText(null)` to
+    // `switchConsequencesText(0)` at this card's call site - both compile,
+    // but `0` takes the "queue not mentioned" branch instead of the "no
+    // figure exists" one, and this exact sentence goes red.
+    expect(
+      screen.getByText(
+        "Replays this message on the destination you pick. Starts a fresh session from this transcript. Any queued messages move with it.",
+      ),
+    ).toBeDefined();
+  });
+
+  // F6: `describeWaitDisposition`'s sentence is shared by the card (`Body`'s
+  // full-width line) AND the Switch… menu's empty state - one source, two
+  // renderers - and nothing pinned either half. `attempt_unavailable`'s
+  // sentence was also rewritten (D220): the withdrawn wording claimed the
+  // message "can't be re-sent on the account it ran on", which the host never
+  // told us; the fixed sentence says only that waiting is not on offer.
+  it("states the wait disposition on the card, and repeats it inside the empty Switch… menu", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        // No "wait_once": the disposition explains its own absence, and no
+        // "retry" either, to keep this fixture minimal - only "switch" is
+        // needed to reach the menu's empty-state branch below.
+        eligibleRungs: ["switch"],
+        resetsAt: undefined,
+        waitDisposition: "attempt_unavailable",
+      }),
+    );
+    // Empty listing, so the menu's own empty-state branch (which carries
+    // `emptyStateActions`, and therefore this sentence) is what renders.
+    harness.listData = listTargetsResponse({
+      outcome: "listed",
+      failedTuple: FAILED_CLAUDE_TUPLE,
+      profileTargets: [],
+      modelTargets: [],
+      modelTargetsSkip: null,
+    });
+    renderActions(TURN_ID);
+    // Falsification: revert `attempt_unavailable`'s copy to the withdrawn
+    // sentence ("This message can't be re-sent on the account it ran on.")
+    // and both assertions below go red - they are pinned to the FIXED wording.
+    expect(
+      screen.getByText("Waiting isn't available for this message."),
+    ).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
+    // Falsification (the other half): delete the `waitExplanation` block from
+    // `emptyStateActions` in `fallback-manual-rungs.tsx` - the card-level
+    // sentence above stays green and this one alone goes red, which is the
+    // whole reason F6 needs its own menu-side pin rather than trusting the
+    // card's copy to cover both renderers.
+    expect(
+      screen.getAllByText("Waiting isn't available for this message."),
+    ).toHaveLength(2);
+  });
+
+  // Cold-review re-review, F6 gap 1: `checking` and `beyond_cap` had NO render
+  // fixture anywhere - only `no_verified_reset` and `attempt_unavailable` were
+  // ever seeded. Two literal sentences, neither derived from
+  // `describeWaitDisposition`.
+  it("renders the checking sentence while a reset probe is in flight", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: undefined,
+        waitDisposition: "checking",
+      }),
+    );
+    renderActions(TURN_ID);
+    // Falsification: change the `checking` arm of `describeWaitDisposition`
+    // to any other wording - this literal goes red.
+    expect(
+      screen.getByText(
+        "Checking whether this account has a confirmed reset time.",
+      ),
+    ).toBeDefined();
+  });
+
+  it("renders the beyond-cap sentence, with and without a named reset time", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: undefined,
+        waitDisposition: "beyond_cap",
+      }),
+    );
+    const { unmount } = renderActions(TURN_ID);
+    // Falsification: swap the `resetsAtLabel === null` branches in
+    // `describeWaitDisposition`'s `beyond_cap` arm - this goes red for a
+    // failure with no verified reset time in hand.
+    expect(
+      screen.getByText(
+        "This limit resets later than your longest wait allows.",
+      ),
+    ).toBeDefined();
+    unmount();
+
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: RESETS_AT,
+        waitDisposition: "beyond_cap",
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(
+      screen.getByText(
+        `This limit resets at ${formatClockTime(RESETS_AT)}, later than your longest wait allows.`,
+      ),
+    ).toBeDefined();
+  });
+
+  // Cold-review re-review, F6 gap 2: the no-reset sentence had a fixture
+  // (`no_verified_reset` is used elsewhere in this file to keep the Wait
+  // button off) but no assertion on its actual TEXT anywhere.
+  it("renders the no-confirmed-reset sentence independently of the Wait button's absence", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: undefined,
+        waitDisposition: "no_verified_reset",
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
+    // Falsification: change `no_verified_reset`'s copy to any other wording -
+    // this literal goes red independently of the button-absence check above.
+    expect(
+      screen.getByText(
+        "No confirmed reset time for this account yet, so there's nothing to wait for.",
+      ),
+    ).toBeDefined();
+  });
+
+  // Cold-review re-review, F6 gap 3: every `attempt_unavailable` case so far
+  // deliberately excluded Retry. The contract the sentence has to keep is
+  // that it stays TRUTHFUL while Retry is still on offer - this is the
+  // control that would have caught the withdrawn copy claiming something
+  // about the account the message ran on, since that claim would have read
+  // as false beside a live, clickable Retry button.
+  it("keeps Retry enabled and clickable beside the attempt-unavailable sentence", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: undefined,
+        waitDisposition: "attempt_unavailable",
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(
+      screen.getByText("Waiting isn't available for this message."),
+    ).toBeDefined();
+    const retry = screen.getByRole("button", { name: "Retry" });
+    if (!(retry instanceof HTMLButtonElement)) {
+      throw new Error("expected the Retry button");
+    }
+    // Falsification: this is the control the withdrawn copy would have
+    // failed - "can't be re-sent on the account it ran on" beside an ENABLED
+    // Retry button is a contradiction the sentence must not make.
+    expect(retry.disabled).toBe(false);
+  });
+
   it("renders no action buttons and does render the settings link when eligibleRungs is empty", () => {
     seedAttempt(
       positiveAttempt({
@@ -286,6 +493,34 @@ describe("FallbackManualRungActions", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Fallback settings" }),
+    ).toBeDefined();
+  });
+
+  // F12: the companion case to the one above. The Settings link is not the
+  // consolation prize for an empty state - the ticket's own wording is that
+  // it "stays reachable" on an ACTIONABLE card too, alongside Retry/Switch…/
+  // Wait until, not only in their absence.
+  it("renders the settings link alongside the action buttons when rungs are available", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+    // Falsification: wrap `<FallbackNoticeSettingsLink />` at :331 in the
+    // condition it used to be guarded by - render it only when no rung
+    // buttons exist - and this assertion goes red while the all-disabled
+    // menu case (F12's other half, `fallback-destination-menu.test.tsx`)
+    // stays green: that split is what distinguishes "the link exists
+    // somewhere" from "the link exists where the user has other options".
     expect(
       screen.getByRole("button", { name: "Fallback settings" }),
     ).toBeDefined();
@@ -539,17 +774,13 @@ describe("FallbackManualRungActions", () => {
       ],
       modelTargetsSkip: null,
     });
-    const refusal = describeFallbackOutcome("rung_unavailable");
-    if (refusal === null) {
-      throw new Error("expected copy for rung_unavailable");
-    }
     harness.mutationResult = { outcome: "rung_unavailable" };
     renderActions(TURN_ID);
     fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
     });
-    expect(screen.getByText(refusal)).toBeDefined();
+    expect(screen.getByText(RUNG_UNAVAILABLE_LABEL)).toBeDefined();
     expect(screen.getByRole("button", { name: /Codex · gpt-5/ })).toBeDefined();
     // Falsification: restore onSuccess: toastFallbackOutcome on the useFallbackRunManualRung hook and this assertion must go red.
     expect(harness.toast).not.toHaveBeenCalled();
@@ -603,7 +834,7 @@ describe("FallbackManualRungActions", () => {
     expect(harness.toast).not.toHaveBeenCalled();
   });
 
-  it("toasts a Retry refusal with the describeFallbackOutcome text", () => {
+  it("toasts a Retry refusal with the literal rung_unavailable copy", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -614,15 +845,11 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "eligible",
       }),
     );
-    const refusal = describeFallbackOutcome("rung_unavailable");
-    if (refusal === null) {
-      throw new Error("expected copy for rung_unavailable");
-    }
     harness.mutationResult = { outcome: "rung_unavailable" };
     renderActions(TURN_ID);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     // Falsification: drop the per-call onSuccess from the run() call site and this must go red.
-    expect(harness.toast).toHaveBeenCalledWith(refusal);
+    expect(harness.toast).toHaveBeenCalledWith(RUNG_UNAVAILABLE_LABEL);
   });
 
   it("toasts a Wait-until refusal too", () => {
@@ -636,10 +863,6 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "eligible",
       }),
     );
-    const refusal = describeFallbackOutcome("rung_unavailable");
-    if (refusal === null) {
-      throw new Error("expected copy for rung_unavailable");
-    }
     harness.mutationResult = { outcome: "rung_unavailable" };
     renderActions(TURN_ID);
     fireEvent.click(
@@ -647,6 +870,6 @@ describe("FallbackManualRungActions", () => {
         name: `Wait until ${formatClockTime(RESETS_AT)}`,
       }),
     );
-    expect(harness.toast).toHaveBeenCalledWith(refusal);
+    expect(harness.toast).toHaveBeenCalledWith(RUNG_UNAVAILABLE_LABEL);
   });
 });

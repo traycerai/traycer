@@ -93,22 +93,76 @@ describe("FallbackLadderEditor", () => {
     const profileDown = screen.getByLabelText<HTMLButtonElement>(
       `Move ${FALLBACK_RUNG_COPY.profile.label} down`,
     );
-    // "profile" is the first MOVABLE row (movable index 0) in this fixture,
-    // so its "up" is disabled (nothing above it among movable steps) but its
-    // "down" is not.
+    // R5 RE-SPECIFIED the second of these. It used to read:
+    //
+    //     expect(profileUp.disabled).toBe(true);
+    //     expect(profileDown.disabled).toBe(false);
+    //
+    // on the reasoning that "profile" is the first movable row, so only its
+    // "up" has nowhere to go. That was the behaviour R5 removed: this
+    // fixture's `notify` sits at displayOrder index 1, so the fixed slot is
+    // immediately BELOW "profile", and moving it down carried an enabled step
+    // past the terminal one - a row that reads as running and never can.
+    // Both of its arrows are therefore disabled here, for two different
+    // reasons: nothing above it, and the boundary immediately below it.
     expect(profileUp.disabled).toBe(true);
-    expect(profileDown.disabled).toBe(false);
+    expect(profileDown.disabled).toBe(true);
+    // ...and the control needs a row whose arrow is genuinely LIVE, or
+    // "the buttons exist" is satisfied by two permanently greyed-out ones and
+    // proves much less than it looks like it does. "wait" is the last movable
+    // row and sits below the slot, so its "up" moves within the far side and
+    // is enabled.
+    expect(
+      screen.getByLabelText<HTMLButtonElement>(
+        `Move ${FALLBACK_RUNG_COPY.wait.label} up`,
+      ).disabled,
+    ).toBe(false);
   });
 
   it("clicking a movable row's down arrow calls onMove with indices among the MOVABLE steps, not into displayOrder", () => {
     const { onMove } = renderLadder(vi.fn(), vi.fn());
+    // R5 RE-SPECIFIED which row this drives. It used to click "profile" down
+    // and assert:
+    //
+    //     expect(onMove).toHaveBeenCalledWith(0, 1);
+    //
+    // That move straddles the fixed slot, so its arrow is now disabled and the
+    // click reaches nothing - the test would pass only by proving the button
+    // is dead. The PROPOSITION is unchanged and is not about "profile": the
+    // indices handed to `onMove` are positions among the MOVABLE steps, not
+    // into `displayOrder`. "tier" is movable index 1 but displayOrder index 2,
+    // and "wait" is movable 2 but displayOrder 3, so a caller passing display
+    // indices would report (2, 3) here and this still separates them.
     fireEvent.click(
-      screen.getByLabelText(`Move ${FALLBACK_RUNG_COPY.profile.label} down`),
+      screen.getByLabelText(`Move ${FALLBACK_RUNG_COPY.tier.label} down`),
     );
-    // "profile" is movable index 0 (displayOrder index 0); "tier" is the next
-    // MOVABLE step (movable index 1), skipping over the fixed `notify` slot
-    // at displayOrder index 1.
-    expect(onMove).toHaveBeenCalledWith(0, 1);
+    expect(onMove).toHaveBeenCalledWith(1, 2);
+  });
+
+  it("R5: the arrow that would carry a movable row across an early `notify` is disabled on BOTH sides of the slot", () => {
+    // The pair the two cases above only half-cover, and the reason this file
+    // needed its own R5 case rather than an edited assertion: the boundary is
+    // a two-sided rule. Reaching it from below is refused as firmly as
+    // reaching it from above, and neither is the ordinary "you are at the end
+    // of the list" disable that a ladder with `notify` last would produce.
+    renderLadder(vi.fn(), vi.fn());
+    // Above the slot, moving down: refused (and "profile" is not last).
+    expect(
+      screen.getByLabelText<HTMLButtonElement>(
+        `Move ${FALLBACK_RUNG_COPY.profile.label} down`,
+      ).disabled,
+    ).toBe(true);
+    // Below the slot, moving up: refused (and "tier" is not first).
+    expect(
+      screen.getByLabelText<HTMLButtonElement>(
+        `Move ${FALLBACK_RUNG_COPY.tier.label} up`,
+      ).disabled,
+    ).toBe(true);
+    // Falsification: drop `|| movableIndex === movableBoundary` from the up
+    // arrow and `|| movableIndex === movableBoundary - 1` from the down arrow
+    // in `fallback-ladder-editor.tsx`. Both arrows go live, and
+    // `moveFallbackRung` then refuses the move SILENTLY - a control that
+    // responds to a click by doing nothing and saying nothing.
   });
 
   it("toggling a step's switch calls onToggle for that step alone, leaving order to the caller", () => {

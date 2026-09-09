@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { FALLBACK_RUNG_COPY } from "@/components/settings/panels/fallback/fallback-rung-copy";
+import { fallbackMovableBoundary } from "@/components/settings/panels/fallback/fallback-policy-draft";
 import { cn } from "@/lib/utils";
 
 export interface FallbackLadderEditorProps {
@@ -58,6 +59,11 @@ export function FallbackLadderEditor(
 ): ReactNode {
   const { displayOrder, enabled, onToggle, onMove, profileStepHint } = props;
   const movable = displayOrder.filter((rung) => rung !== "notify");
+  // How many movable rows sit above the fixed step. `movable.length` for every
+  // ladder this panel writes, since `notify` is last there and nothing is below
+  // it; smaller only for an externally authored early `notify`, which is the one
+  // case where a move has a boundary to cross. See `moveFallbackRung`.
+  const boundary = fallbackMovableBoundary(displayOrder);
   // A small distance constraint so a click on the row's switch or arrows is
   // never swallowed by a drag that started on the same pointer-down.
   const sensors = useSensors(
@@ -105,6 +111,7 @@ export function FallbackLadderEditor(
                     }}
                     movableIndex={movableIndex}
                     movableCount={movable.length}
+                    movableBoundary={boundary}
                     onMove={onMove}
                     hint={rung === "profile" ? profileStepHint : null}
                   />
@@ -145,11 +152,21 @@ function FallbackLadderRow(props: {
   /** `-1` for the fixed `notify` step. */
   readonly movableIndex: number;
   readonly movableCount: number;
+  /** Movable rows above the fixed step; see `fallbackMovableBoundary`. */
+  readonly movableBoundary: number;
   readonly onMove: (fromIndex: number, toIndex: number) => void;
   readonly hint: ReactNode;
 }): ReactNode {
-  const { rung, enabled, onToggle, movableIndex, movableCount, onMove, hint } =
-    props;
+  const {
+    rung,
+    enabled,
+    onToggle,
+    movableIndex,
+    movableCount,
+    movableBoundary,
+    onMove,
+    hint,
+  } = props;
   const copy = FALLBACK_RUNG_COPY[rung];
   const fixed = movableIndex === -1;
   const {
@@ -209,10 +226,20 @@ function FallbackLadderRow(props: {
           </>
         ) : (
           <>
+            {/* The second clause on each is the `notify` boundary, and unlike
+                the fixed step's reserved gutters these ARE disabled buttons:
+                "not right now" is exactly right here. The row can move, just
+                not across the terminal step, and every other row in the list
+                has the same two arrows in the same places. It cannot fire on a
+                ladder this panel wrote - `notify` is last there, so `boundary`
+                is the movable count and the first clause already covers the
+                last row - and only an externally authored early `notify` ever
+                greys one out. `moveFallbackRung` refuses the same move
+                independently; this is what stops it being refused silently. */}
             <ReorderButton
               direction="up"
               label={copy.label}
-              disabled={movableIndex <= 0}
+              disabled={movableIndex <= 0 || movableIndex === movableBoundary}
               onClick={() => {
                 onMove(movableIndex, movableIndex - 1);
               }}
@@ -220,7 +247,10 @@ function FallbackLadderRow(props: {
             <ReorderButton
               direction="down"
               label={copy.label}
-              disabled={movableIndex >= movableCount - 1}
+              disabled={
+                movableIndex >= movableCount - 1 ||
+                movableIndex === movableBoundary - 1
+              }
               onClick={() => {
                 onMove(movableIndex, movableIndex + 1);
               }}

@@ -59,11 +59,42 @@ export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
   } = props;
   const [confirming, setConfirming] = useState(false);
   const resetButtonRef = useRef<HTMLButtonElement | null>(null);
+  /**
+   * A confirmed reset that this component started and that has not settled.
+   *
+   * A ref and not state: nothing renders from it, and the effect below already
+   * re-runs on the only transition it cares about.
+   */
+  const awaitingResetRef = useRef(false);
   useEffect(() => {
     if (!focusResetOnMount) return;
     resetButtonRef.current?.focus();
     onFocusApplied();
   }, [focusResetOnMount, onFocusApplied]);
+  /**
+   * Put the keyboard back on Reset when a confirmed reset settles WITHOUT
+   * replacing the editor - which in practice means it failed.
+   *
+   * The shared dialog cannot do this one. Confirming closes the dialog and
+   * starts the request in the same gesture, so by the time Radix runs
+   * `onCloseAutoFocus` - deferred to a `setTimeout(0)`, after that render - the
+   * opener it captured is still mounted but now `disabled={isPending}`. The
+   * dialog therefore takes the branch for a live opener, prevents Radix's own
+   * restoration, and calls `.focus()` on a disabled button, which is a silent
+   * no-op. Focus lands on `document.body` and stays there: when the refusal
+   * arrives the button is enabled again, but nothing is left to move focus, and
+   * the panel only signals a focus intent when a reset SUCCEEDS and remounts.
+   *
+   * Keying on `isPending` falling rather than on the failure itself keeps this
+   * component ignorant of the outcome - it restores focus for any settled reset
+   * it is still mounted for, and the successful one replaces it before this can
+   * run (that path is `focusResetOnMount` above).
+   */
+  useEffect(() => {
+    if (!awaitingResetRef.current || isPending) return;
+    awaitingResetRef.current = false;
+    resetButtonRef.current?.focus();
+  }, [isPending]);
   return (
     <SettingsGroup
       title="Danger Zone"
@@ -103,6 +134,7 @@ export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
         blockedReason={null}
         onConfirm={() => {
           setConfirming(false);
+          awaitingResetRef.current = true;
           onConfirm();
         }}
       />

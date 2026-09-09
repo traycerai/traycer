@@ -155,6 +155,11 @@ function bodyProps(overrides: BodyPropsOverrides) {
     completedAt: overrides.completedAt ?? null,
     stopped: overrides.stopped ?? null,
     meta: overrides.meta ?? null,
+    // No row in this file is the recovery anchor - every case here passes
+    // `turnId={null}` as well, so nothing would render a rung group either
+    // way. The anchor's own coverage is F11's projected-turn fixture, which
+    // exercises the split this prop exists to survive.
+    manualRungAnchorId: null,
     nextStepActions: null,
     forkAction: null,
     interviewDeliveryRetry: null,

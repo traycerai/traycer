@@ -459,19 +459,24 @@ function CandidateRow(props: {
  * typo was accepted, saved as policy, and then silently dropped at resolution -
  * so the value on screen did not mean the effort the fallback would run at.
  *
- * Two states, and the difference between them is "no answer" versus "an answer
- * that happens to be empty":
+ * Two states, decided by whether any levels are ADVERTISED - which is not the
+ * same distinction the comment here used to draw. It described "no answer"
+ * versus "an answer that happens to be empty" as if the control could tell them
+ * apart; it cannot. The lookup returns an array, and a harness that advertises
+ * nothing and a harness nothing is known about both arrive as an empty one. So
+ * the rule this implements, and the rule D207 states, is the weaker and true
+ * one: with no levels on offer, free text is accepted.
  *
- *  - **the catalog answered.** Its levels, plus "Any effort" for the `null`
- *    that means no constraint. A STORED value outside the set keeps an option
- *    of its own and stays selected, labelled as not offered - the same rule
- *    {@link HarnessSelect} applies to an unknown harness, and for the same
+ *  - **levels are advertised.** A `Select` of them, plus "Any effort" for the
+ *    `null` that means no constraint. A STORED value outside the set keeps an
+ *    option of its own and stays selected, labelled as not offered - the same
+ *    rule {@link HarnessSelect} applies to an unknown harness, and for the same
  *    reason: silently rewriting a stored value on a page someone opened to read
  *    is worse than showing them what is actually saved.
- *  - **nothing answered** - an older host, a harness the user no longer has, a
- *    cold catalog slot. Then the text input stands, because a `Select` built
- *    from nothing would offer only "Any effort" and would take away a level the
- *    user can legitimately type.
+ *  - **none are** - an older host, a harness the user no longer has, a cold
+ *    catalog slot, or a harness that genuinely offers none. The text input
+ *    stands, because a `Select` built from nothing would offer only "Any
+ *    effort" and would take away a level the user can legitimately type.
  */
 function EffortControl(props: {
   readonly reasoningEffort: string | null;

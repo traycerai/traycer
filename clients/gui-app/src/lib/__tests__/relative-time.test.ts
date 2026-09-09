@@ -432,7 +432,11 @@ describe("createSharedClock batching contract", () => {
   /**
    * Control: a fully frozen clock (nobody ever sees it move) costs ZERO
    * notifications, catching a guard that fires gratuitously (e.g. weakened
-   * from `now > sampleTheRenderSaw` to unconditional, or removed outright).
+   * from `now > sampleTheRenderSaw` to `now >= sampleTheRenderSaw`, made
+   * unconditional, or removed outright). With a frozen `BASE`, every
+   * subscription samples `now === sampleTheRenderSaw`, so `>=` (unlike
+   * `!==`, which stays false on an equal sample too and would leave this
+   * control green) fires on the very first subscription.
    */
   it("costs zero notifications on a fully frozen clock (frozen-time control)", async () => {
     vi.useFakeTimers();
@@ -447,8 +451,13 @@ describe("createSharedClock batching contract", () => {
         }),
       );
     }
-    // Falsification: weaken the guard to fire unconditionally (or on any
-    // `!==` rather than `>`) - this becomes >0 with nothing ever moving.
+    // Falsification: weaken the guard to fire unconditionally, remove it
+    // outright, or change `now > sampleTheRenderSaw` to
+    // `now >= sampleTheRenderSaw` - any of these fires on the very first
+    // subscription (this frozen `now` always EQUALS `sampleTheRenderSaw`),
+    // making this >0 with nothing ever moving. (A `!==` comparison is NOT
+    // a falsifier here: an equal sample makes it false too, same as `>`,
+    // so that edit alone would leave this control green.)
     expect(calls).toBe(0);
     await Promise.resolve();
     await Promise.resolve();

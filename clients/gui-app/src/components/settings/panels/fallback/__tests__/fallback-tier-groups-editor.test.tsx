@@ -196,7 +196,16 @@ describe("FallbackTierGroupsEditor - F16 a group rename survives duplicate and e
     }
 
     fireEvent.blur(input);
-    // The FULL final value committed, not an intermediate one.
+    // The full final value is what the field holds - NOT evidence that blur
+    // committed it. This harness routes `onChange` and `onCommit` to the same
+    // `adopt`, so "fastest" was already in the input before the blur and this
+    // assertion holds whether or not the blur commit exists. It is kept as the
+    // closing state of the identity walk above, which is what this test pins.
+    //
+    // The commit rule itself is pinned where the real save path is observable:
+    // "R6: a GROUP RENAME sends nothing while typing..." in
+    // `panels/__tests__/fallback-settings-panel.test.tsx`, against the panel's
+    // mutation spy.
     expect(nameInputs()[0].value).toBe("fastest");
   });
 

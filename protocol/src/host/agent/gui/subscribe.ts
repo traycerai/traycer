@@ -964,12 +964,28 @@ export const pendingFallbackSchema = z.object({
   targetTuple: chatRunSettingsSchema.nullable(),
   /**
    * What the host will do when this window ends - published DURING the hold and
-   * before any settings commit. `null` only when the host can name no takeable
-   * rung at all, which is a traversal about to settle as exhausted.
+   * before any settings commit.
+   *
+   * `null` in two unrelated cases, and a reader that treats them as one will
+   * misread the second:
+   *
+   * 1. The host can name no takeable rung at all - a traversal about to settle
+   *    as exhausted.
+   * 2. The prediction has been SPENT because the chat already took the action.
+   *    Both wait paths clear it - the automatic `waiting` transition and a
+   *    manual `wait_once` - because `waitDeadline` then carries everything the
+   *    card needs, and a plan left behind would keep announcing an impending
+   *    action for a move that has already happened.
+   *
+   * So `null` means "nothing is coming from this field", never "nothing is
+   * happening": in case 2 the chat is mid-wait and `waitDeadline` is non-null.
    *
    * Required-and-nullable rather than optional: `1.9` is the live line and the
-   * host always sets this key, so `null` is a fact ("nothing is takeable")
-   * rather than an absence a reader has to distinguish from an older host. Every
+   * host always sets this key, so `null` is a FACT - one of the two above -
+   * rather than an absence a reader has to distinguish from an older host. It
+   * is deliberately not restated here as "nothing is takeable": that is case 1
+   * alone, and reading it as the meaning of `null` is exactly the collapse the
+   * two cases above exist to prevent. Every
    * released `1.0`-`1.8` line drops the whole `pendingFallback` container at the
    * projector's explicit-delete sites, so a nested key never reaches one.
    */

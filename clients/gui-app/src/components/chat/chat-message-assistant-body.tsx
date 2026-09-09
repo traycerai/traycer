@@ -39,7 +39,6 @@ import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import { PlanSegment } from "./segments/plan-segment";
 import { ProviderNoticeSegment } from "./segments/provider-notice-segment";
 import { FallbackWaitResumedMarker } from "@/components/chat/fallback/fallback-notice-attribution";
-import { manualRungAnchorSegmentId } from "@/components/chat/fallback/fallback-action-anchor";
 import { ReasoningSegment } from "./segments/reasoning-segment";
 import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
@@ -108,6 +107,20 @@ interface AssistantBodyProps {
    * no host-named attempt and therefore offer no manual rungs.
    */
   turnId: string | null;
+  /**
+   * The error segment on THIS row that carries the manual recovery actions, or
+   * `null` when the row carries none - resolved once per turn at projection
+   * time (see `manualRungAnchorSegmentId`) and read here rather than
+   * recomputed.
+   *
+   * It is not derivable from this component's own inputs, which is why it is a
+   * prop: a steered turn splits into several rows that share one `turnId`, and
+   * this row sees only its own slice. A walk over that slice answers "which
+   * block of this FRAGMENT describes the failure", and on a turn whose failure
+   * straddles a steer both fragments answer confidently - two recovery groups
+   * for one failed attempt.
+   */
+  manualRungAnchorId: string | null;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
@@ -127,6 +140,7 @@ export function AssistantMessageBody({
   stopped,
   meta,
   turnId,
+  manualRungAnchorId,
   nextStepActions,
   forkAction,
   interviewDeliveryRetry,
@@ -139,15 +153,6 @@ export function AssistantMessageBody({
         promotedToolBlockIds: backgroundToolBlockIds,
       }),
     [activityTimelineTurnState, backgroundToolBlockIds, segments],
-  );
-  // Derived from the timeline the rows are drawn from, not from `segments`, so
-  // an error the renderer never mounts can never be named the anchor. Memoised
-  // on the same identity the timeline is: this walk is O(rows) and re-running
-  // it on every countdown tick of an unrelated card would be the cost the
-  // timeline's own cache exists to avoid.
-  const manualRungAnchorId = useMemo(
-    () => manualRungAnchorSegmentId(timeline),
-    [timeline],
   );
   // A content-less boundary row's own segments never carry copyable text
   // (the reply lives on an earlier row in the same turn, before the trailing
@@ -248,17 +253,30 @@ export function AssistantMessageBody({
             // the chat has since switched away from. `null` on legacy turns with
             // no metadata; the affordance then falls back to the section root.
             harnessId={meta?.provider ?? null}
-            // ONE row, not every error row on the turn. A failed turn routinely
-            // carries several error blocks that all share this `turnId` - the
-            // queue-pause notice the host appends beside the failure, a
-            // non-terminal extension error before the real terminal - and
-            // handing the id to each of them rendered a full recovery group
-            // under each, including under "Resume the queue to send them",
-            // where Retry retried the failed prompt instead. The anchor names
-            // the block that describes the failed ATTEMPT; every other row
-            // gets `null`, which is the same answer a row with no turn
-            // identity already gets.
-            turnId={item.id === manualRungAnchorId ? turnId : null}
+            // ONE segment, not every error row on the turn, and not one per
+            // row of a split turn. A failed turn routinely carries several
+            // error blocks that all share this `turnId` - the queue-pause
+            // notice the host appends beside the failure, a non-terminal
+            // extension error before the real terminal - and handing the id to
+            // each of them rendered a full recovery group under each,
+            // including under "Resume the queue to send them", where Retry
+            // retried the failed prompt instead.
+            //
+            // The anchor names the segment that describes the failed ATTEMPT.
+            // It is resolved over the WHOLE turn, but not before the split -
+            // `planAssistantTurnRows` splits first and the rows are built, then
+            // `withManualRungAnchor` runs LAST and rebuilds the ordered
+            // whole-turn segment list from those finished rows
+            // (`assistantTurnSegments`). Whole-turn is a claim about the INPUT
+            // to the walk, not about its position in the pipeline. Either way a
+            // turn rendered as several rows still names exactly one. On every
+            // other row `manualRungAnchorId` is null and nothing here matches
+            // - the same answer a row with no turn identity already gets.
+            turnId={
+              manualRungAnchorId !== null && item.id === manualRungAnchorId
+                ? turnId
+                : null
+            }
           />
         );
       })}

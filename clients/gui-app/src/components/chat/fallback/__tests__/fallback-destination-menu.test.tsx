@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +24,9 @@ import {
 } from "@/components/chat/fallback/fallback-card-menus";
 import {
   COUNTDOWN_NOT_PAUSED_LABEL,
+  HOST_UNREACHABLE_LABEL,
   NO_DESTINATIONS_LABEL,
+  NO_SELECTABLE_DESTINATIONS_LABEL,
   PAUSING_COUNTDOWN_LABEL,
   describeListTargetsOutcome,
 } from "@/components/chat/fallback/fallback-copy";
@@ -654,6 +657,145 @@ describe("FallbackDestinationMenu", () => {
     expect(unknown.textContent).toContain("Host skip label verbatim");
   });
 
+  // F23: `usageStatusText` is the row's actual accessible-name statement
+  // (the bar beside it is `aria-hidden` decoration) and nothing pinned its
+  // four distinct outputs. `usedPercent: null` is "not checked" and
+  // `usedPercent: 0` is "known-zero" - the pair the review named specifically,
+  // because collapsing them is the one direction this bug can hide in: a `||`
+  // where the code means `??` reads 0 as falsy and reports it as unchecked.
+  it("gives each row a distinct accessible name for healthy, limited, unread, and known-zero usage", () => {
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [
+          profileRow({
+            profileId: "healthy-profile",
+            label: "healthy-account",
+            severity: "ok",
+            usedPercent: 10,
+            selectable: true,
+            skip: null,
+          }),
+          profileRow({
+            profileId: "limited-profile",
+            label: "limited-account",
+            severity: "hard_limit",
+            usedPercent: 95,
+            selectable: true,
+            skip: null,
+          }),
+          profileRow({
+            profileId: "unread-profile",
+            label: "unread-account",
+            severity: "near_limit",
+            usedPercent: null,
+            selectable: true,
+            skip: null,
+          }),
+          profileRow({
+            profileId: "zero-profile",
+            label: "zero-account",
+            severity: "ok",
+            usedPercent: 0,
+            selectable: true,
+            skip: null,
+          }),
+        ],
+        modelTargets: [],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+
+    expect(
+      screen.getByRole("button", {
+        name: /healthy-account.*Healthy · 10% used/,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: /limited-account.*Limited · 95% used/,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: /unread-account.*Running low · usage not checked/,
+      }),
+    ).toBeDefined();
+    // Falsification: change `usedPercent === null` to `!usedPercent` in
+    // `usageStatusText` and THIS assertion goes red - the known-zero row would
+    // then read "Usage not checked" too, identical to a gauge nobody read.
+    expect(
+      screen.getByRole("button", { name: /zero-account.*Healthy · 0% used/ }),
+    ).toBeDefined();
+  });
+
+  // F23: the popover carries `aria-label` for its own name and, only when a
+  // header is present, an `aria-describedby` naming that header's element -
+  // nothing exercised the pairing (a screen reader announcing the dialog
+  // reads the label as its NAME and the header as its DESCRIPTION, so the two
+  // attributes must point at the same rendered text, not just both exist).
+  it("names the dialog and, when a header is given, describes it by the header's own element", () => {
+    const { unmount } = renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [],
+        modelTargets: [],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+    const undescribed = screen.getByRole("dialog", {
+      name: "Choose a destination",
+    });
+    expect(undescribed.getAttribute("aria-describedby")).toBeNull();
+    unmount();
+
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [],
+        modelTargets: [],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: "Switching now cancels the countdown",
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+    const described = screen.getByRole("dialog", {
+      name: "Choose a destination",
+    });
+    const describedBy = described.getAttribute("aria-describedby");
+    expect(describedBy).not.toBeNull();
+    // Falsification: hardcode `aria-describedby` to a fixed string instead of
+    // `headerId` and this goes red - it must name the header `<div>`'s ACTUAL
+    // rendered id, not merely be non-null.
+    const describingElement =
+      describedBy === null ? null : document.getElementById(describedBy);
+    expect(describingElement?.textContent).toBe(
+      "Switching now cancels the countdown",
+    );
+  });
+
   it("does not send from a model row whose target is null, whatever selectable says", () => {
     const onPick = vi.fn();
     renderMenu({
@@ -798,7 +940,48 @@ describe("FallbackDestinationMenu", () => {
         onPick: () => undefined,
         onOpenChange: () => undefined,
       });
-      expect(screen.getByText(sentence)).toBeDefined();
+      // TWO copies, and the count is the assertion rather than an allowance.
+      // One sits in the visible body, for a screen-reader user navigating the
+      // popover and for everyone else reading it. One sits in the concise
+      // `sr-only` live region, so the change is ANNOUNCED - nothing here moves
+      // focus, and a body that swaps under an open popover is a change no
+      // screen reader is looking at.
+      //
+      // The two alternatives were checked and are worse. Making a persistent
+      // wrapper around the body live would announce the whole body on every
+      // change, every destination row included, once the list arrives.
+      // `aria-hidden` on the visible copy would delete the only readable
+      // sentence in the body for the very users the live region is for.
+      //
+      // So `toHaveLength(2)` pins the duplication as INTENDED: it reds if the
+      // live-region arm is removed (back to silence) and it reds if the
+      // visible sentence goes (announced but unreadable).
+      const matches = screen.getAllByText(sentence);
+      expect(matches).toHaveLength(2);
+      // A document-wide count alone cannot tell "one copy sits in the live
+      // region" from "two visible copies happen to say the same words" - the
+      // reviewer's own point about the earlier form of this assertion.
+      // `role="status"` appears exactly twice per popover (refusal region,
+      // then the sr-only announcement region below it - see the F25 (i)/(ii)
+      // helpers above) - checked here rather than assumed, since a silent
+      // regression that added a third would let positional reasoning about
+      // "the" status region point at the wrong element.
+      const statusRegionsHere = screen.getAllByRole("status");
+      // This length assertion IS the guard - it fails the test when the second
+      // region is missing, which is what an explicit `=== undefined` throw
+      // below would have done. That throw was unreachable
+      // (`noUncheckedIndexedAccess` is off, so the index read is typed
+      // non-nullish) and the linter rejects it as a condition with no overlap.
+      expect(statusRegionsHere).toHaveLength(2);
+      const announcementRegionHere = statusRegionsHere[1];
+      const matchesInsideAnnouncementRegion = matches.filter((el) =>
+        announcementRegionHere.contains(el),
+      );
+      // Falsification: move the `describeListTargetsOutcome` call out of the
+      // sr-only `menuStatusAnnouncement` div and into a second visible
+      // element instead - the document-wide count stays 2, but this goes red
+      // because neither copy is inside the live region any more.
+      expect(matchesInsideAnnouncementRegion).toHaveLength(1);
       expect(screen.queryByText("should-not-render")).toBeNull();
       expect(
         screen.queryByRole("heading", { name: "Other profiles" }),
@@ -901,6 +1084,65 @@ describe("FallbackDestinationMenu", () => {
       onOpenChange: () => undefined,
     });
     expect(screen.queryByText(EMPTY_ACTIONS_MARKER)).toBeNull();
+  });
+
+  // F12: the prior version of this test only compared an EMPTY response
+  // (both arrays length 0) against a response with one selectable row. That
+  // pair cannot tell "there are no rows" from "there are rows and none of
+  // them can be picked" - and the empty-state rule (`hasSelectableRow` in
+  // `fallback-destination-menu.tsx`) is written against the second fact, not
+  // the first. A regression that reverted the gate to `hasRows` would still
+  // pass the old test.
+  it("treats a nonempty but ALL-DISABLED response as the empty state, not the has-rows state", () => {
+    const marker = <span>{EMPTY_ACTIONS_MARKER}</span>;
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [
+          profileRow({
+            profileId: "dead-profile",
+            label: "dead-account",
+            severity: "ok",
+            usedPercent: 10,
+            selectable: false,
+            skip: null,
+          }),
+        ],
+        modelTargets: [
+          modelRow({
+            harnessId: "codex",
+            modelFamily: "gpt",
+            model: null,
+            reasoningEffort: null,
+            severity: "ok",
+            usedPercent: 10,
+            target: null,
+            selectable: false,
+            skip: null,
+          }),
+        ],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: marker,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+    // The empty-state sentence and the caller's actions render...
+    expect(screen.getByText(NO_SELECTABLE_DESTINATIONS_LABEL)).toBeDefined();
+    expect(screen.getByText(EMPTY_ACTIONS_MARKER)).toBeDefined();
+    // ...and so do the rows themselves, underneath - each disabled row still
+    // carries the host's own reason for being unusable (the "still render
+    // underneath" branch this file's own comment describes).
+    expect(screen.getByText("dead-account")).toBeDefined();
+    // Falsification: change `!hasSelectableRow` back to `!hasRows` in
+    // `fallback-destination-menu.tsx`'s `MenuBody` and the first two
+    // assertions go red - a nonempty, all-disabled response would then take
+    // the has-rows branch and render no empty-state sentence, no marker.
   });
 
   it("suppresses the listTargets fetch while preparing, not just the rows", () => {
@@ -1291,6 +1533,279 @@ describe("FallbackGraceMenu", () => {
     expect(listHarness.calls.every((call) => !call.enabled)).toBe(true);
   });
 
+  // The popover renders exactly two `role="status"` elements: the refusal
+  // region (DOM order 0) and the readiness/announcement region (DOM order
+  // 1). Neither carries an accessible name of its own, so a name-scoped
+  // `getByRole` cannot select between them - positional indexing is the only
+  // option. Positional indexing is exactly the kind of selector that fails
+  // SILENTLY in the direction that matters: add a third status region
+  // anywhere in the popover and index-1 keeps resolving to SOME element,
+  // never throwing, while now measuring the wrong one. The `toHaveLength(2)`
+  // below is the precondition check that closes that gap - every call site
+  // that asks for either region gets it for free.
+  function statusRegions(): readonly [HTMLElement, HTMLElement] {
+    const regions = screen.getAllByRole("status");
+    // The exact-2 guard every caller inherits. It is this assertion, not a
+    // follow-up `=== undefined` throw, that fails the test when a third region
+    // appears or one goes missing - and that throw was unreachable anyway,
+    // since with `noUncheckedIndexedAccess` off both destructured elements are
+    // typed non-nullish.
+    expect(regions).toHaveLength(2);
+    const [refusal, announcement] = regions;
+    return [refusal, announcement];
+  }
+
+  function refusalRegion(): HTMLElement {
+    return statusRegions()[0];
+  }
+
+  function announcementRegion(): HTMLElement {
+    return statusRegions()[1];
+  }
+
+  // F25 (i): the refusal region must stay IN THE ACCESSIBILITY TREE from open,
+  // empty or not - `empty:sr-only`, not `empty:hidden` - so assistive tech is
+  // already observing it when the first refusal actually arrives. This
+  // environment runs under plain jsdom with no stylesheet loaded (see
+  // `vitest.config.ts`), so `display: none` is not something a computed-style
+  // query can observe here; the class name itself is the falsifiable surface.
+  it("keeps the refusal's live region present (empty:sr-only, not empty:hidden) even with nothing to say", () => {
+    leaseHarness.lease = graceLease({ token: null, status: "pending" });
+    render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("hold")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    );
+    const refusal = refusalRegion();
+    expect(refusal.textContent).toBe("");
+    // Falsification: put `empty:hidden` back on this element - the class
+    // string flips and this goes red.
+    expect(refusal.className).toContain("empty:sr-only");
+    expect(refusal.className).not.toContain("empty:hidden");
+  });
+
+  // F25 (ii): a failed or stale listing now reaches the sr-only announcement
+  // region too, not just the visible body - both sentences appear TWICE in
+  // the document (once visible, once in the live region) BY DESIGN. Scoped
+  // via `within(announcementRegion())` rather than a document-wide
+  // `getAllByText(...).toHaveLength(2)`: the old form would stay green even
+  // if `menuStatusAnnouncement` stopped emitting the sentence entirely, so
+  // long as some OTHER two elements in the popover happened to say the same
+  // words - it never actually looked inside the live region.
+  it("announces a failed listing in the live region specifically, alongside the visible line", () => {
+    listHarness.isError = true;
+    render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("choosing")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    leaseHarness.lease = graceLease({ token: "lease-token-1", status: "held" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    );
+    // Falsification: restore the `isError` arm of `menuStatusAnnouncement` to
+    // `return ""` and this goes red - the live region itself would be empty,
+    // whatever the visible body still says.
+    expect(
+      within(announcementRegion()).getByText(HOST_UNREACHABLE_LABEL),
+    ).toBeDefined();
+    // The visible copy still exists, outside the live region.
+    expect(screen.getAllByText(HOST_UNREACHABLE_LABEL)).toHaveLength(2);
+  });
+
+  it("announces a stale (traversal-advanced) listing in the live region specifically, alongside the visible line", () => {
+    listHarness.isError = false;
+    listHarness.data = listTargetsResponse({
+      outcome: "traversal_advanced",
+      failedTuple: FAILED_CLAUDE_TUPLE,
+      profileTargets: [],
+      modelTargets: [],
+      modelTargetsSkip: null,
+    });
+    leaseHarness.lease = graceLease({ token: "lease-token-1", status: "held" });
+    render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("choosing")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    );
+    // Falsification: restore the stale-listing arm of `menuStatusAnnouncement`
+    // (the `describeListTargetsOutcome` branch) to `return ""` and this goes
+    // red - the region would be empty.
+    expect(
+      within(announcementRegion()).getByText("This chat already resumed."),
+    ).toBeDefined();
+    expect(screen.getAllByText("This chat already resumed.")).toHaveLength(2);
+  });
+
+  // F25 (iii): the readiness sentence itself - `menuStatusAnnouncement`'s
+  // "N destinations available to choose." branch - had no assertion anywhere
+  // in this file. `beforeEach` seeds one selectable profile row and one
+  // selectable model row, so the expected count is 2, not 1: a fixture where
+  // only one row exists could not tell the plural branch from the singular
+  // one, which is exactly the kind of off-by-one this sentence can hide.
+  it("announces readiness with the selectable count, inside the live region", () => {
+    leaseHarness.lease = graceLease({ token: "lease-token-1", status: "held" });
+    render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("choosing")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    );
+    // Falsification: change the plural branch's template to hardcode "1" and
+    // this goes red - the fixture's selectable count is 2, not 1.
+    expect(
+      within(announcementRegion()).getByText(
+        "2 destinations available to choose.",
+      ),
+    ).toBeDefined();
+  });
+
+  // F25 (iv): a genuine BEFORE/AFTER transition inside the announcement
+  // region, not just an end-state snapshot - loading (silent, per
+  // `menuStatusAnnouncement`'s `isPending` guard) to ready (the count). A
+  // snapshot alone cannot tell "this region announces readiness" from "this
+  // region always said this, independent of the fetch".
+  it("transitions the live region from silent (loading) to the readiness count once the listing arrives", () => {
+    listHarness.isPending = true;
+    leaseHarness.lease = graceLease({ token: "lease-token-1", status: "held" });
+    const { rerender } = render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("choosing")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    );
+    // Before: still loading, the region is silent.
+    expect(announcementRegion().textContent).toBe("");
+    const focusedBeforeTransition = document.activeElement;
+
+    // The listing settles. The mocked `useFallbackListTargets` reads
+    // `listHarness` fresh on every render, so flipping the flag and
+    // re-rendering the SAME element tree is what a real query settling looks
+    // like from this component's perspective.
+    listHarness.isPending = false;
+    rerender(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("choosing")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    // Falsification: change the `isPending` guard's early `return ""` to
+    // instead return the readiness sentence unconditionally, and the "before"
+    // assertion above goes red instead - proving this test actually
+    // distinguishes the two states rather than only checking the final one.
+    expect(
+      within(announcementRegion()).getByText(
+        "2 destinations available to choose.",
+      ),
+    ).toBeDefined();
+    // Contract: the swap is ANNOUNCED, not focus-moving. Nothing above this
+    // point can have moved focus off whatever it was.
+    expect(document.activeElement).toBe(focusedBeforeTransition);
+  });
+
+  // F25 (v): the OTHER live region's own before/after transition - silent
+  // (no refusal established yet) to the refused-hold sentence, once the lease
+  // comes back `status: "refused"`. This is "refused" in the codebase's own
+  // vocabulary (`FallbackChoiceLease["status"] === "refused"`), and it is the
+  // FIRST `role="status"` region (index 0), not the announcement region above.
+  it("transitions the refusal region from silent to the refused-hold sentence, without moving focus", () => {
+    leaseHarness.lease = graceLease({ token: null, status: "pending" });
+    const { rerender } = render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("hold")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    );
+    const refusal = refusalRegion();
+    // Before: no refusal has been established - a pending lease is not yet a
+    // refusal, so this region has nothing to say.
+    expect(refusal.textContent).toBe("");
+    const focusedBeforeTransition = document.activeElement;
+
+    leaseHarness.lease = graceLease({ token: null, status: "refused" });
+    rerender(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("hold")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    // After: same DOM element (the refusal region persists across the
+    // transition per F25 (i) - it is never unmounted), now carrying the
+    // refused-hold sentence.
+    // Falsification: stop deriving `refusal` from `lease?.status ===
+    // "refused"` in `fallback-card-menus.tsx` and this goes red - the region
+    // stays silent through the transition.
+    expect(refusal.textContent).toBe(COUNTDOWN_NOT_PAUSED_LABEL);
+    // Contract: announced, not focus-moving.
+    expect(document.activeElement).toBe(focusedBeforeTransition);
+  });
+
   it("sends chooseTarget with the lease token on a grace pick", () => {
     leaseHarness.lease = graceLease({
       token: "lease-token-1",
@@ -1573,6 +2088,46 @@ describe("FallbackWaitingMenu", () => {
     // dangling "Resumes at" fragment with nothing to fill it.
     expect(screen.getByText(consequences)).toBeDefined();
     expect(screen.queryByText(/Resumes at/)).toBeNull();
+  });
+
+  // F10: the test above only ever used `queuedItemsMoving: 0`, which takes
+  // the SAME "consequences alone" branch as "queue not mentioned" - it cannot
+  // tell a genuine zero-queue apart from a count the header forgot to state.
+  // This pins the header with an actual queue in flight.
+  it("names the queued-message count in the header before a pick, when messages are queued", () => {
+    render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackWaitingMenu
+          pending={pendingFallback({
+            state: "waiting",
+            reason: "rate_limit",
+            failedTuple: FAILED_CLAUDE_TUPLE,
+            targetTuple: null,
+            impendingAction: null,
+            deadline: null,
+            attempt: 1,
+            maxAttempts: 1,
+            queuedItemsMoving: 3,
+            siblingSwitching: 0,
+            traversalId: "traversal-dest",
+            revision: 8,
+          })}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+    // Falsification: hardcode `waitingMenuHeader`'s call to
+    // `switchConsequencesText(0)` regardless of the real count, and this goes
+    // red - the header would then read the same as the zero-queue case above.
+    expect(
+      screen.getByText(
+        "Replays this message on the destination you pick. Starts a fresh session from this transcript. 3 queued messages will run on the new settings too.",
+      ),
+    ).toBeDefined();
   });
 
   it("sends chooseTarget with leaseToken null on a waiting pick", () => {

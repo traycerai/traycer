@@ -317,8 +317,16 @@ describe("chat-session-store lastFallbackOutcome D215", () => {
 
       emitLegacySnapshot(callbacks, undefined);
       // Falsification: add "?? current.lastFallbackOutcome" to the
-      // applyAuthoritativeSnapshot write and THIS assertion must go red -
-      // `undefined` is a VALUE here (settled/cancelled), not an omission.
+      // applyAuthoritativeSnapshot write and THIS assertion must go red.
+      //
+      // `undefined` is the frame ASSERTING that there is no last outcome, not
+      // the frame declining to mention one. Absence is not an outcome - a
+      // settle and a cancellation are outcomes, each with its own `kind` and
+      // its own block, exactly like OUTCOME_A above - so this case is the
+      // NEW-INCIDENT clear: the host has started a fresh traversal and the
+      // previous one's report no longer describes anything on screen. Reading
+      // it as an omission is what leaves the old sentence standing over a new
+      // incident, which is the defect, and the `??` is how it gets written.
       expect(
         harness.handle.store.getState().lastFallbackOutcome,
       ).toBeUndefined();

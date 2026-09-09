@@ -88,6 +88,7 @@ import type {
   SubagentSegment,
 } from "@/stores/composer/chat-store";
 import type { AgentSenderDisplay } from "@/lib/chat/sender-display";
+import { manualRungAnchorSegmentId } from "@/stores/chats/manual-rung-anchor";
 import type {
   LiveAssistantMessage,
   PendingUserMessage,
@@ -2656,11 +2657,80 @@ function renderAssistantTurnRows(
     });
   });
 
-  if (!plan.split) return withTurnCompletion(rows, input);
-  return withTurnCompletion(
-    attachRunStateToTrailingAssistantSlice(rows, input, plan, rowIdByBlockId),
-    input,
+  // AFTER the completion/run-state passes, not before: both of them rebuild
+  // row objects, and a stamp applied first would have to be preserved by every
+  // future pass added between here and there. Stamping last makes this the one
+  // place the field is written.
+  if (!plan.split) return withManualRungAnchor(withTurnCompletion(rows, input));
+  return withManualRungAnchor(
+    withTurnCompletion(
+      attachRunStateToTrailingAssistantSlice(rows, input, plan, rowIdByBlockId),
+      input,
+    ),
   );
+}
+
+/**
+ * Names the ONE error segment of this turn that carries the manual recovery
+ * actions, and stamps it on the single row that contains it.
+ *
+ * This is the seam the anchor walk had to move to. `planAssistantTurnRows`
+ * splits a steered turn into several assistant rows that all carry the same
+ * `turnId`, and the walk used to run per-ROW inside `AssistantMessageBody` -
+ * so a turn whose failure straddled a steer got an anchor on each side and
+ * rendered two Retry / Switch… / Wait groups for one failed attempt. Here the
+ * turn is still whole, so the predicate is asked the question it was written
+ * to answer.
+ *
+ * Rows that do not contain the anchor are returned by REFERENCE, unchanged -
+ * `chat-stable-rows.ts` compares `manualRungAnchorId` like every other field,
+ * and handing back a fresh object for a row whose answer is "not you" would
+ * churn a row per projection to say nothing.
+ */
+function withManualRungAnchor(
+  rows: ReadonlyArray<ChatMessageModel>,
+): ReadonlyArray<ChatMessageModel> {
+  const anchorId = manualRungAnchorSegmentId(assistantTurnSegments(rows));
+  // The common case by a wide margin: a turn with no error segment at all.
+  if (anchorId === null) return rows;
+  return rows.map((row) =>
+    row.role === "assistant" &&
+    row.segments.some((segment) => segment.id === anchorId)
+      ? { ...row, manualRungAnchorId: anchorId }
+      : row,
+  );
+}
+
+/**
+ * The turn's assistant segments in turn order - the list the split took apart.
+ *
+ * `plan.entries` are ordered and each entry's `blockIndices` are ordered, so
+ * concatenating the assistant rows' segments reconstructs the pre-split order
+ * exactly. Steer rows are skipped: they are user rows, and their content is
+ * the steer bubble, not the turn's blocks.
+ *
+ * The ordering is load-bearing rather than incidental - the predicate picks
+ * the LAST candidate, so a concatenation out of turn order would pick a
+ * different segment and be wrong silently. Checked at the source:
+ * `planAssistantTurnRows` walks `blocks.forEach((block, index) => …)` pushing
+ * ascending indices into a chunk and flushing that chunk at each steer, so
+ * entries are emitted in block order and each `blockIndices` ascends.
+ *
+ * The copy `flat()` makes is deliberate rather than tolerated - the
+ * alternative is a second copy of the anchor predicate that walks rows and
+ * segments together, and this module's own history is that the rule which
+ * exists in two places gets fixed in one. It is also the cheapest thing in
+ * this call: `renderAssistantTurnSlice` has just CONSTRUCTED every segment
+ * object in the list.
+ */
+function assistantTurnSegments(
+  rows: ReadonlyArray<ChatMessageModel>,
+): ReadonlyArray<MessageSegment> {
+  const perRow: Array<ReadonlyArray<MessageSegment>> = [];
+  for (const row of rows) {
+    if (row.role === "assistant") perRow.push(row.segments);
+  }
+  return perRow.flat();
 }
 
 /**

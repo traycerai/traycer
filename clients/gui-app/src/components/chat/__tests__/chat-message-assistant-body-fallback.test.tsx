@@ -95,6 +95,12 @@ function Body({
       runState={null}
       messageId="assistant:turn-fallback"
       turnId="turn-fallback"
+      // Both fixtures are `provider_notice` segments, so the anchor predicate
+      // selects nothing on either - `null` is what the projection would hand
+      // this row, not a convenience. The turn id stays real so these frames
+      // are exercised on a row that HAS turn identity and still renders no
+      // rung group, which is the combination that matters here.
+      manualRungAnchorId={null}
       elapsedStartedAt={0}
       turnHasOnlyAutonomousResumeSegments={false}
       showCompletionFooter={false}

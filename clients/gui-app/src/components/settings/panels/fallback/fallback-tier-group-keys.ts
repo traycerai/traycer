@@ -164,8 +164,10 @@ export function reconcileKeyedGroups(
 
 /**
  * The identities to render when the editor is put BACK to a list it already
- * held identities for - a refused save's revert to `persisted`, or the
- * authoritative read-back after an unknown outcome.
+ * held identities for: a refused save's revert to `persisted`, the
+ * authoritative read-back after an unknown outcome, and a confirmed save that
+ * corrects a rollback the refusal had left on screen. All three go through
+ * `adoptPolicyIntoView` in `fallback-policy-draft.ts`.
  *
  * Weaker than {@link reconcileKeyedGroups} on purpose, and the difference is
  * the whole of AX4's second half. That function asks "are these the same rows
@@ -177,7 +179,7 @@ export function reconcileKeyedGroups(
  *
  * Here the question is only "are these the same rows", answered by SHAPE: the
  * same number of groups, each with the same number of candidates. That is a
- * safe correspondence for these two callers because both restore a list this
+ * safe correspondence for these callers because each restores a list this
  * editor produced or received earlier, so row N really is row N with its value
  * put back - a rename, an effort change, a family correction. It is NOT the
  * positional guess `reconcileKeyedGroups` refuses to make about a list from an
@@ -299,11 +301,43 @@ export function applyGroupsInverse(
   inverse: FallbackGroupsInverse,
 ): readonly KeyedGroup[] {
   if (inverse.kind === "group") {
-    if (groups.some((group) => group.draftKey === inverse.group.draftKey)) {
+    // Two ways this row can already be back, and the identity check alone only
+    // sees the first.
+    //
+    // `draftKey` catches Undo pressed twice: the row this inverse holds is
+    // literally in the list.
+    //
+    // `id` catches the row being restored by a path that RE-SEEDED identities,
+    // which is what a refused save does. The revert hands `revertKeyedGroups` a
+    // list one group longer than the draft, the shape no longer matches, and it
+    // re-keys every group - correctly, since it cannot say which incoming row
+    // is which. The deleted group is then back on screen under a key this
+    // inverse has never seen, so a key-only guard reads "still missing" and
+    // inserts a second copy. Two groups with one name is not a valid policy:
+    // the commit that follows fails local validation and leaves the user with a
+    // duplicate row and an error, from pressing Undo on a deletion that had
+    // already been undone for them.
+    //
+    // A name is not an identity (that is the whole of D174 and why `draftKey`
+    // exists), but it does not need to be here. The question is not "is this
+    // the same row" - it is "would putting this row back produce a policy the
+    // schema rejects", and `fallbackPolicySchema` refines group ids to be
+    // unique, so a name collision answers exactly that.
+    if (
+      groups.some(
+        (group) =>
+          group.draftKey === inverse.group.draftKey ||
+          group.id === inverse.group.id,
+      )
+    ) {
       return groups;
     }
     return insertAt(groups, inverse.group, inverse.index);
   }
+  // The candidate arm needs no such guard: it addresses its group by
+  // `groupDraftKey`, and a re-seed invalidates that too, so the lookup below
+  // fails and the inverse no-ops. It fails SAFE where the group arm failed
+  // open, which is why only one of the two could produce a duplicate.
   const at = groups.findIndex(
     (group) => group.draftKey === inverse.groupDraftKey,
   );

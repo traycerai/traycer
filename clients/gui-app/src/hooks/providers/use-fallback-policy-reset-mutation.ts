@@ -32,10 +32,27 @@ interface FallbackPolicyResetContext {
  * status that lies about live data, not a one-frame cosmetic lag.
  *
  * Invalidating instead makes the panel take the same path a new user takes: read
- * first, let the read seed and mark, render what came back. `onSuccess` returns
- * the invalidation promise, so `mutateAsync` does not settle until the refetch
- * has landed and the caller can remount its editor onto fresh data rather than
- * onto the response.
+ * first, let the read seed and mark, render what came back.
+ *
+ * ## Why the invalidation does NOT refetch, and does not report anything
+ *
+ * `refetchType: "none"` marks the row stale and stops there. The version before
+ * it let the invalidation refetch and returned the promise, on the reasoning
+ * that awaiting `onSuccess` made `mutateAsync` settle only once the refetch had
+ * landed - so the caller could treat a settled reset as fresh data. That is
+ * false, and not marginally: `invalidateQueries` delegates to `refetchQueries`,
+ * which does `if (!fetchOptions.throwOnError) promise = promise.catch(noop)` on
+ * every query it touches and then `Promise.all(promises).then(noop)`. Nothing
+ * here passes `throwOnError`, so a refetch that FAILS resolves this promise
+ * exactly like one that succeeded, and the caller's remount then re-seeded its
+ * editor from whatever the cache still held - the policy from BEFORE the reset,
+ * rendered as the result of the reset.
+ *
+ * A promise that cannot distinguish success from failure is not a signal, so it
+ * is not offered as one. The one caller that must know performs its own read and
+ * reads its outcome (`refetchPolicy` in `fallback-settings-panel.tsx`); the
+ * staleness marked here is for every OTHER observer of this row, which will read
+ * again on its next mount rather than serve a policy this call just replaced.
  */
 export function useFallbackPolicyResetMutation(): UseMutationResult<
   ProvidersFallbackPolicyResetResponse,
@@ -59,16 +76,17 @@ export function useFallbackPolicyResetMutation(): UseMutationResult<
       // slow call, and writing the result into the new host's cache slot would
       // show one machine's policy under another's name.
       onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
-      // Returns the promise on purpose: TanStack awaits a promise returned from
-      // `onSuccess` before `mutateAsync` settles, which is what lets the caller
-      // treat "the reset is done" as "the refetch has landed".
-      onSuccess: async (_data, _variables, ctx) => {
+      // Synchronous, and returns nothing to await. With `refetchType: "none"`
+      // there is no fetch to wait for, and a settled `mutateAsync` means only
+      // what it says: the host confirmed the reset.
+      onSuccess: (_data, _variables, ctx) => {
         if (ctx.hostId === null) return;
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(
             ctx.hostId,
             "providers.fallbackPolicy.get",
           ),
+          refetchType: "none",
         });
       },
     },

@@ -183,6 +183,11 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
         // other row. Absent on a legacy record with no turn identity, which
         // then correctly matches nothing.
         turnId={message.turnId ?? null}
+        // And WHICH segment of this row they hang off. Resolved once per turn
+        // at projection time over the pre-split block list, so a steered turn
+        // rendered as several rows carries it on exactly one of them; absent
+        // on all the others, and on every row with no failure at all.
+        manualRungAnchorId={message.manualRungAnchorId ?? null}
         nextStepActions={nextStepActions}
         forkAction={assistantActions?.fork ?? null}
         interviewDeliveryRetry={

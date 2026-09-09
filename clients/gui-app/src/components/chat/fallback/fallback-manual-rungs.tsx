@@ -260,30 +260,49 @@ function ManualRungActions({
           // two card menus pass `null` because their equivalents are already on
           // the card the popover is anchored to.
           emptyStateActions={
-            <div className="flex flex-wrap items-center gap-2">
-              {rungs.includes("retry") ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={() => {
-                    run("retry");
-                  }}
-                >
-                  Retry
-                </Button>
-              ) : null}
-              {waitUntil === null ? null : (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={() => {
-                    run("wait_once");
-                  }}
-                >
-                  {waitUntil}
-                </Button>
+            <div className="flex w-full flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {rungs.includes("retry") ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      run("retry");
+                    }}
+                  >
+                    Retry
+                  </Button>
+                ) : null}
+                {waitUntil === null ? null : (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      run("wait_once");
+                    }}
+                  >
+                    {waitUntil}
+                  </Button>
+                )}
+              </div>
+              {/*
+               * The SAME disposition the card renders, repeated here because
+               * this is where its absence is confusing. The empty menu offers
+               * Retry and (sometimes) a wait button; when the wait button is
+               * missing, the reader is looking at the one surface that could
+               * explain why and previously said nothing - the sentence lived
+               * only on the card BEHIND the popover. F6 promised both halves
+               * and shipped one.
+               *
+               * Same string, one source (`describeWaitDisposition`), so the
+               * two surfaces cannot drift into two explanations of one fact.
+               */}
+              {waitExplanation === null ? null : (
+                <div className="text-ui-xs text-muted-foreground">
+                  {waitExplanation}
+                </div>
               )}
             </div>
           }

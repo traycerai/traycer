@@ -55,13 +55,19 @@ import {
 import {
   createFallbackPolicyDraftState,
   createFallbackSaveRequestId,
+  fallbackDisplayOrderEnabling,
   fallbackLadderFrom,
   fallbackPolicyDraftReducer,
+  fallbackPolicyValuesEqual,
   fallbackSaveInFlight,
+  draftIsRefused,
   moveFallbackRung,
+  refusedDraftOnScreen,
   validateFallbackPolicyDraft,
   type FallbackPolicyDraftState,
+  type FallbackRefusedDraft,
   type FallbackPolicyField,
+  type FallbackSaveCarries,
   type FallbackSaveFailureOutcome,
   type FallbackSaveNoticeOutcome,
 } from "@/components/settings/panels/fallback/fallback-policy-draft";
@@ -149,9 +155,15 @@ function FallbackSettingsPanelBody(props: {
    * mid-edit. A reset is the one case where that is wrong: the value it seeded
    * from is gone, and the policy the host will serve is not even the one the
    * reset RETURNED - clearing the seed marker means the next read re-seeds the
-   * default model groups. So the reset awaits its own refetch and then remounts,
-   * which re-seeds from what the host actually has rather than from the
-   * response.
+   * default model groups.
+   *
+   * So this is bumped from a SUCCESSFUL post-reset read and from nothing else.
+   * Not from the mutation settling: "the host reset the row" and "we have read
+   * what it now holds" are two facts, and remounting on the first re-seeds the
+   * editor from whatever the cache still holds - the policy from before the
+   * reset, presented as its result. When the read fails, the editor stays put
+   * and says so (`reset-unrefreshed`), which is recoverable; a remount onto
+   * stale values is not, because nothing afterwards marks them as stale.
    */
   const [resetGeneration, setResetGeneration] = useState(0);
   /**
@@ -165,42 +177,68 @@ function FallbackSettingsPanelBody(props: {
   const [returnFocusToReset, setReturnFocusToReset] = useState(false);
 
   /**
-   * The authoritative read of what the host actually has, for the one case that
-   * needs one: a save whose reply was lost. Everything else on this page is
+   * The authoritative read of what the host actually has, for the two cases that
+   * need one: a save whose reply was lost, and a reset - whose result is by
+   * construction not the value it returned. Everything else on this page is
    * seeded once and never re-reads, which is what stops a background refetch
    * yanking a control out from under someone mid-edit.
    */
   const refetchPolicy =
     useCallback(async (): Promise<FallbackPolicy | null> => {
       const result = await query.refetch();
-      return result.data?.policy ?? null;
+      // `isSuccess`, NOT `data !== undefined`. A failed refetch keeps the data
+      // it already had: TanStack's `QueryObserverRefetchErrorResult` types
+      // `data` as PRESENT alongside `isError: true`, and the cache backs that
+      // up - the query's error reducer spreads the previous state and never
+      // clears `data`. This editor is only ever mounted after a successful
+      // initial read, so a failed read-back here does not return `undefined`;
+      // it returns the policy from BEFORE the save whose outcome is in
+      // question. Reading that as an authoritative answer is precisely the
+      // false claim the unknown-outcome notice exists to prevent - it would
+      // settle "did my save land?" with a value that predates the save.
+      //
+      // `null` means "no answer", which is what the caller's notice already
+      // says, so a failed read-back leaves the uncertainty standing.
+      if (!result.isSuccess) return null;
+      return result.data.policy;
     }, [query]);
 
   const clearResetFocusIntent = useCallback((): void => {
     setReturnFocusToReset(false);
   }, []);
 
-  if (query.isError) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm text-muted-foreground"
-      >
-        Couldn&apos;t load fallback settings for this host.
-        <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Couldn't load fallback settings",
-            message: null,
-            code: null,
-            source: "Fallback settings",
-          })}
-          presentation="link"
-          className="ml-1 h-auto p-0"
-        />
-      </div>
-    );
+  // Gated on having NO usable policy, not on `isError` alone. `isError` is set
+  // by any failed fetch on this query, including the read-back the editor runs
+  // itself after a save whose reply was lost - and that is the one moment the
+  // editor must survive. Replacing it wholesale there takes the draft, the
+  // uncertainty notice and the "Check again" button off screen together,
+  // leaving no way to find out what the host stored and no record that a save
+  // was ever in doubt. So the load-error view is for a load that produced
+  // nothing to edit; once there is a policy, a later fetch failure is the
+  // editor's own business and it reports it in place.
+  if (query.data === undefined) {
+    if (query.isError) {
+      return (
+        <div
+          role="alert"
+          className="rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm text-muted-foreground"
+        >
+          Couldn&apos;t load fallback settings for this host.
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load fallback settings",
+              message: null,
+              code: null,
+              source: "Fallback settings",
+            })}
+            presentation="link"
+            className="ml-1 h-auto p-0"
+          />
+        </div>
+      );
+    }
+    return <FallbackPanelSkeleton />;
   }
-  if (query.data === undefined) return <FallbackPanelSkeleton />;
 
   return (
     <FallbackPolicyEditor
@@ -233,7 +271,12 @@ function FallbackPolicyEditor(props: {
   readonly inFlightCount: number;
   readonly storedPolicyUnreadable: boolean;
   readonly hostLabel: string | null;
-  /** Re-reads the host's own policy. Only the unknown-outcome path calls it. */
+  /**
+   * Re-reads the host's own policy, answering `null` when the read failed.
+   *
+   * Two callers: the unknown-outcome read-back, and the reset - which cannot
+   * take its own response as the answer. Nothing else on this page re-reads.
+   */
   readonly refetchPolicy: () => Promise<FallbackPolicy | null>;
   readonly returnFocusToReset: boolean;
   readonly onFocusReturned: () => void;
@@ -258,7 +301,14 @@ function FallbackPolicyEditor(props: {
     initialPolicy,
     createFallbackPolicyDraftState,
   );
-  const [reconcileInFlight, setReconcileInFlight] = useState(false);
+  /**
+   * A read-back of the host's policy is running.
+   *
+   * Covers BOTH read-backs - the unknown-outcome one and the post-reset one -
+   * because they share the one "Check again" affordance, and a flag named for
+   * only one of them would have to be read as covering the other.
+   */
+  const [readBackInFlight, setReadBackInFlight] = useState(false);
   /**
    * The latest reducer state, for the handlers that run LONG after the render
    * that created them.
@@ -348,13 +398,13 @@ function FallbackPolicyEditor(props: {
    */
   const reconcileUnknownSave = useCallback(
     async (requestId: number): Promise<void> => {
-      setReconcileInFlight(true);
+      setReadBackInFlight(true);
       try {
         const policy = await refetchPolicy();
         if (policy === null) return;
         dispatch({ type: "reconciled", requestId, policy });
       } finally {
-        setReconcileInFlight(false);
+        setReadBackInFlight(false);
       }
     },
     [refetchPolicy],
@@ -387,7 +437,7 @@ function FallbackPolicyEditor(props: {
       // observable from this side. The id is the handle the reducer pairs with
       // it, and it is what lets two in-flight saves be told apart.
       const requestId = createFallbackSaveRequestId();
-      dispatch({ type: "save-started", field, requestId });
+      dispatch({ type: "save-started", field, requestId, carries: "draft" });
       void setMutation
         .mutateAsync({ policy: next })
         .then((response) => {
@@ -413,13 +463,14 @@ function FallbackPolicyEditor(props: {
               // which is reached by NOT dispatching `reconciled`, and that has
               // already happened by the time this runs.
               //
-              // This arm is the documented state rather than defensiveness.
-              // `refetchPolicy` reads `result.data`, and TanStack's `refetch()`
-              // resolves with an error-carrying result instead of rejecting, so
-              // today the failure path returns `null` and never reaches here.
-              // That is a library default, not a guarantee of ours: without
-              // this, the promise `void` discards would surface a rejection the
-              // renderer never handles instead of the notice promised above.
+              // `refetchPolicy` returns `null` on a failed read-back because it
+              // tests `isSuccess`; it does NOT reach that by the promise
+              // rejecting, since `refetch()` resolves with an error-carrying
+              // result rather than throwing. So this arm is unreached today,
+              // and it is here because that is a library default rather than a
+              // guarantee of ours: without it the `void` discard would surface
+              // a rejection the renderer never handles, instead of the standing
+              // notice promised above.
             });
           }
         });
@@ -446,16 +497,47 @@ function FallbackPolicyEditor(props: {
   );
 
   /**
-   * The reset, which is NOT a `commit`.
+   * The read that turns a CONFIRMED reset into a rendered one.
    *
-   * `commit` sends a draft the controls built and writes the response back into
-   * the reducer. A reset replaces the whole row and clears the seed marker, so
-   * the authoritative policy afterwards is the one the next READ produces, not
-   * the one this call returns. The mutation therefore awaits its own refetch and
-   * the editor remounts onto it - dispatching `save-succeeded` with the response
-   * here is the exact bug that would show the user an empty model-group list the
-   * host is about to re-seed.
+   * Shared by the reset itself and by the banner's "Try again", because they
+   * are the same act: the host has already replaced the row, and the only thing
+   * missing is a read of what it now holds. On success the panel remounts the
+   * editor onto that read (`onPolicyReplaced`); on failure the editor stays
+   * exactly where it is and the banner says the reset went through and could
+   * not be shown.
+   *
+   * Both outcomes are dispatched from here rather than returned, so the two
+   * callers cannot render the same failure two different ways.
+   *
+   * `requestId` is `null` from the retry, where the reset is long settled and
+   * there is no in-flight request left to name.
    */
+  const refreshAfterReset = useCallback(
+    async (requestId: number | null): Promise<void> => {
+      setReadBackInFlight(true);
+      try {
+        const policy = await refetchPolicy();
+        if (policy === null) {
+          // A retry that fails changes nothing, and says so by dispatching
+          // nothing: the notice this would raise is the notice already on
+          // screen, and re-raising it would only re-render the same sentence.
+          if (requestId === null) return;
+          dispatch({
+            type: "reset-unrefreshed",
+            requestId,
+            message:
+              "Your settings were reset, but we couldn't load what's on the host.",
+          });
+          return;
+        }
+        onPolicyReplaced();
+      } finally {
+        setReadBackInFlight(false);
+      }
+    },
+    [refetchPolicy, onPolicyReplaced],
+  );
+
   /**
    * "Restore the default model groups".
    *
@@ -465,7 +547,16 @@ function FallbackPolicyEditor(props: {
    */
   const restoreDefaultGroups = useCallback((): void => {
     const requestId = createFallbackSaveRequestId();
-    dispatch({ type: "save-started", field: "tierGroups", requestId });
+    // A restore sends nothing from the screen - the host picks the default
+    // groups - so it must not make the displayed values count as dispatched
+    // (D339), and if its own reply is lost the notice has to say that the
+    // RESTORE is what went unanswered (D347).
+    dispatch({
+      type: "save-started",
+      field: "tierGroups",
+      requestId,
+      carries: "restore",
+    });
     void restoreMutation
       .mutateAsync({})
       .then((response) => {
@@ -495,15 +586,53 @@ function FallbackPolicyEditor(props: {
       });
   }, [restoreMutation, reconcileUnknownSave]);
 
+  /**
+   * The reset, which is NOT a `commit`.
+   *
+   * `commit` sends a draft the controls built and writes the response back into
+   * the reducer. A reset replaces the whole row and clears the seed marker, so
+   * the authoritative policy afterwards is the one the next READ produces, not
+   * the one this call returns. So it reads, and remounts only onto that read -
+   * dispatching `save-succeeded` with the response here is the exact bug that
+   * would show the user an empty model-group list the host is about to re-seed.
+   *
+   * The reset and the read are reported separately, because they can differ. The
+   * mutation settling means the host confirmed the reset and nothing more; the
+   * invalidation the mutation fires does not refetch and could not report a
+   * failure if it did (see `use-fallback-policy-reset-mutation.ts`). A failed
+   * read after a confirmed reset is therefore NOT a failed reset, and calling it
+   * one would tell the user their settings are intact when they have just been
+   * cleared.
+   */
   const resetAll = useCallback((): void => {
     const requestId = createFallbackSaveRequestId();
-    dispatch({ type: "save-started", field: "danger", requestId });
-    void resetMutation
-      .mutateAsync({})
-      .then(() => {
-        onPolicyReplaced();
-      })
-      .catch((error: unknown) => {
+    // As the restore above: a reset sends DEFAULTS, not the values on screen,
+    // so "what's on screen was sent" must stay unsupported by it (D339), and a
+    // lost reply is described as the reset's, not the display's (D347).
+    dispatch({
+      type: "save-started",
+      field: "danger",
+      requestId,
+      carries: "reset",
+    });
+    // Two-argument `then`, not `.then(…).catch(…)`. A trailing `catch` sits
+    // downstream of the fulfilment handler and so answers for the refresh as
+    // well as for the mutation - and the handler below classifies whatever it
+    // receives as a failed SAVE, which is the one claim this path must never
+    // make about a reset the host confirmed. This form binds it to the
+    // mutation's own rejection and nothing else.
+    void resetMutation.mutateAsync({}).then(
+      () => {
+        void refreshAfterReset(requestId).catch(() => {
+          // Deliberately nothing, and unreached: `refetchPolicy` reports a
+          // failed read by answering `null` rather than by rejecting - the same
+          // library fact spelled out at the `commit()` call site. Kept because
+          // that is a TanStack default rather than a guarantee of ours, and
+          // because an unowned rejection would replace an accurate banner with
+          // a renderer error nobody handles.
+        });
+      },
+      (error: unknown) => {
         const failure = classifyFallbackSaveFailure(error);
         dispatch({
           type: "save-failed",
@@ -520,8 +649,9 @@ function FallbackPolicyEditor(props: {
             // honest state with a renderer error nobody handles.
           });
         }
-      });
-  }, [resetMutation, onPolicyReplaced, reconcileUnknownSave]);
+      },
+    );
+  }, [resetMutation, refreshAfterReset, reconcileUnknownSave]);
 
   const checkSaveOutcomeAgain = useCallback((): void => {
     const unknown = stateRef.current.unknownSave;
@@ -535,6 +665,22 @@ function FallbackPolicyEditor(props: {
     });
   }, [reconcileUnknownSave]);
 
+  /**
+   * The banner's "Try again" - the second half of the reset, retried on its
+   * own.
+   *
+   * Distinct from `checkSaveOutcomeAgain`, which asks the host what it stored
+   * for a save whose answer never came and may adopt what comes back into this
+   * editor. Nothing is in question here: the reset is confirmed and the host's
+   * row is known, so this only reads it, and a successful read remounts the
+   * editor exactly as the reset itself would have.
+   */
+  const retryResetRefresh = useCallback((): void => {
+    void refreshAfterReset(null).catch(() => {
+      // Nothing, and unreached: same reason as at the `resetAll` call site.
+    });
+  }, [refreshAfterReset]);
+
   const enabledRungs = new Set(state.draft.ladder);
   const saveInFlight = fallbackSaveInFlight(state);
   const saveStatusFor = (
@@ -546,7 +692,7 @@ function FallbackPolicyEditor(props: {
       field={field}
       className={className}
       saveInFlight={saveInFlight}
-      reconcileInFlight={reconcileInFlight}
+      readBackInFlight={readBackInFlight}
       onCheckAgain={checkSaveOutcomeAgain}
     />
   );
@@ -554,6 +700,31 @@ function FallbackPolicyEditor(props: {
   return (
     <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
       {storedPolicyUnreadable ? <UnreadablePolicyNotice /> : null}
+      {state.unrefreshedReset === null ? null : (
+        <UnrefreshedResetNotice
+          message={state.unrefreshedReset.message}
+          // The banner's strongest sentence is about the VALUES on screen, and
+          // it expires the moment they change: after an edit the display is the
+          // user's own draft, which a save since may well have stored. What
+          // stays true either way is that the reset's result has never been
+          // read, so the weaker sentence takes over rather than the banner
+          // going away.
+          //
+          // The revision compared here is the reset's DISPATCH revision, not
+          // the one current when its read failed - the read is a round trip and
+          // this panel disables only Reset and Restore during it, so a save
+          // submitted inside that window had already moved the revision by the
+          // time the failure arrived, and the banner called a post-reset policy
+          // "the settings you had before the reset".
+          //
+          // D327 orders the three cases: a ROLLBACK is checked first, because
+          // it is neither of the other two and the banner says nothing about
+          // provenance there.
+          displaySubject={unrefreshedResetSubject(state)}
+          readBackInFlight={readBackInFlight}
+          onTryAgain={retryResetRefresh}
+        />
+      )}
       <SettingsGroup
         title="Fallback"
         tone="default"
@@ -591,12 +762,30 @@ function FallbackPolicyEditor(props: {
               } else {
                 nextEnabled.delete(rung);
               }
+              // Turning a step ON may have to move it: an externally authored
+              // policy can store `notify` early, and a step sitting after the
+              // terminal step is one that can never run. Disabling deliberately
+              // does NOT move anything, so the row can be below `notify` by the
+              // time it is switched back on.
+              //
+              // That is the only way left for a row to arrive there enabled -
+              // `moveFallbackRung` refuses a move whose ends straddle the fixed
+              // slot, and a hydrated policy is rendered as stored, never
+              // rewritten. It is the only one because that rule exists, not
+              // because a fixed slot implies it: holding `notify` still says
+              // nothing about the other rows crossing it. Same
+              // dispatch-then-commit shape as `onMove`, so what is sent and what
+              // is shown stay the same order.
+              const nextOrder = next
+                ? fallbackDisplayOrderEnabling(state.displayOrder, rung)
+                : state.displayOrder;
+              if (nextOrder !== state.displayOrder) {
+                dispatch({ type: "reordered", displayOrder: nextOrder });
+              }
               commit(
                 {
                   ...state.draft,
-                  ladder: [
-                    ...fallbackLadderFrom(state.displayOrder, nextEnabled),
-                  ],
+                  ladder: [...fallbackLadderFrom(nextOrder, nextEnabled)],
                 },
                 "ladder",
                 null,
@@ -604,6 +793,12 @@ function FallbackPolicyEditor(props: {
             }}
             onMove={(from, to) => {
               const nextOrder = moveFallbackRung(state.displayOrder, from, to);
+              // The move was refused - an out-of-range index, or one whose ends
+              // straddle the fixed `notify` slot. The arrows are disabled at
+              // that boundary, but a DRAG can still ask, and the answer has to
+              // be nothing rather than a save carrying the order that is
+              // already stored. Same rule and same reason as `undoGroupsChange`.
+              if (nextOrder === state.displayOrder) return;
               dispatch({ type: "reordered", displayOrder: nextOrder });
               commit(
                 {
@@ -701,6 +896,118 @@ function masterToggleDescription(inFlightCount: number): string {
  * way to replace it. So the copy has to be clear that what is on screen is not
  * what is stored, and that saving is the repair.
  */
+/**
+ * A reset the host confirmed, whose result this page could not read.
+ *
+ * A banner rather than a line under the danger zone, because it is not about
+ * the button that was pressed - it is about every control above it. The reset
+ * SUCCEEDED and cleared the seed marker, so the host's row is now the default
+ * plus whatever the next read re-seeds; the values still rendered are the ones
+ * from before it. That is a claim about the whole editor, and it has to sit
+ * where the whole editor is, next to the other notice that says the same kind
+ * of thing.
+ *
+ * "Try again", not "Check again": there is nothing to check. The question the
+ * unknown-outcome notice asks - what did the host store? - is already answered
+ * here, and only the read is outstanding.
+ */
+/**
+ * What the controls are currently showing, which decides how much the staleness
+ * banner is entitled to say about them.
+ *
+ * Three, not the two this was a boolean for. The third arrived with the fifth
+ * pass: a refusal ROLLBACK is neither the pre-reset policy nor the user's own
+ * edit, and calling it "your own edit" put the banner in direct contradiction
+ * with the save notice under the control, which was simultaneously describing
+ * the same values as the settings from before the reset.
+ *
+ * A union rather than a second boolean so the impossible pair cannot be
+ * spelled, and so the `switch` below is exhaustive - a fourth subject becomes a
+ * compile error rather than a silently missing sentence.
+ */
+type UnrefreshedResetSubject = "pre-reset-values" | "own-edit" | "rollback";
+
+/**
+ * The banner's body, which is the only part that varies.
+ *
+ * Written out per case rather than assembled from a shared clause: the shared
+ * half differs in capitalisation between the two forms that carry it, and
+ * splicing that at runtime made a sentence harder to read than the duplication
+ * it saved.
+ */
+function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
+  switch (subject) {
+    // D330: a reset that succeeded proves the host WROTE something, not that
+    // what it wrote differs from this. Resetting an already-default policy
+    // yields the same values back, and the follow-up get that would have shown
+    // that is exactly the request that failed - so the old "not what this host
+    // is using now" asserted an inequality the client cannot know.
+    case "pre-reset-values":
+      return "The settings below are the ones you had before the reset - they may not be what this host is using now; the settings on this host haven't been re-read since the reset.";
+    case "own-edit":
+      return "You have changed things since, so what's below is your own edit. Either way, what the reset left on this host has not been read yet.";
+    // D327: the notice under the control already says where these values came
+    // from ("your last saved settings are back on screen", or that they still
+    // predate the reset). The banner's subject is the RESET, so here it says
+    // only that, and the two stop making the same decision in two places.
+    case "rollback":
+      return "What the reset left on this host has not been read yet.";
+  }
+}
+
+function UnrefreshedResetNotice(props: {
+  readonly message: string;
+  /**
+   * What the controls hold right now - see {@link UnrefreshedResetSubject}.
+   *
+   * `pre-reset-values` is the only case where the banner names the displayed
+   * values as out of date. Once anything has been submitted since the reset
+   * went out, that is the user's own draft, which a save since may have stored;
+   * and once a refusal has rolled the display back, D327 gives the provenance
+   * sentence to the save notice and leaves this banner with its own subject -
+   * the reset - alone. Two places describing one set of values is how the two
+   * of them came to disagree.
+   */
+  readonly displaySubject: UnrefreshedResetSubject;
+  readonly readBackInFlight: boolean;
+  readonly onTryAgain: () => void;
+}): ReactNode {
+  return (
+    <div
+      role="alert"
+      className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-5 py-4"
+      data-testid="fallback-reset-unrefreshed"
+    >
+      <div className="font-medium text-ui-sm text-amber-600 dark:text-amber-400">
+        {props.message}
+      </div>
+      {/* A `div`, not the `p` its sibling notice uses: this one carries a
+          button, and a spinner inside a paragraph is invalid nesting the
+          moment the retry is running. */}
+      <div className="mt-1 max-w-[68ch] text-ui-sm text-muted-foreground">
+        {unrefreshedResetBody(props.displaySubject)}
+        <Button
+          type="button"
+          variant="link"
+          className="ml-1 h-auto p-0 text-ui-sm"
+          disabled={props.readBackInFlight}
+          onClick={props.onTryAgain}
+          data-testid="fallback-reset-retry"
+        >
+          Try again
+          {props.readBackInFlight ? (
+            <AgentSpinningDots
+              className="ml-1"
+              testId={undefined}
+              variant="orbit"
+            />
+          ) : null}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function UnreadablePolicyNotice(): ReactNode {
   return (
     <div
@@ -736,55 +1043,107 @@ function FallbackSaveStatus(props: {
   readonly className: string;
   readonly saveInFlight: boolean;
   /** A read-back is running, so "Check again" is already answered. */
-  readonly reconcileInFlight: boolean;
+  readonly readBackInFlight: boolean;
   readonly onCheckAgain: () => void;
 }): ReactNode {
-  const { localError, hostError, activeField } = props.state;
-  const { saveInFlight, reconcileInFlight, onCheckAgain } = props;
-  // One status line for the whole panel, rendered under the group that was
-  // last edited - which is where the person is looking, and where a message
-  // about "your edit" has to be to mean anything.
+  const {
+    localError,
+    hostError,
+    activeField,
+    unrefreshedReset,
+    unknownSave,
+    lastConfirmedRequestId,
+  } = props.state;
+  // D330. After a reset whose read failed, `persisted` is the PRE-reset policy
+  // and the host's row has been replaced by something nobody here has seen. It
+  // stops being unverified only when a post-reset write is confirmed (a read
+  // that succeeds clears the banner outright, so `unrefreshedReset !== null`
+  // already means no read has landed since).
+  //
+  // Every sentence claiming a value "is in force" or naming what the host "is
+  // using" needs this, not just the revert arm that first needed it: two
+  // refusals with no post-reset success leave the pre-reset policy on screen
+  // and EQUAL to `persisted`, and equality with an invalidated baseline is not
+  // evidence that the baseline is current.
+  const persistedUnverified =
+    unrefreshedReset !== null &&
+    !(
+      lastConfirmedRequestId !== null &&
+      lastConfirmedRequestId > unrefreshedReset.requestId
+    );
+  const { saveInFlight, readBackInFlight, onCheckAgain } = props;
+  // One status PLACE for the whole panel, under the group that was last acted
+  // on - which is where the person is looking, and where a message about
+  // "your edit" has to be to mean anything. One place, not one message: what
+  // `activeField` decides is WHERE this renders, and the block below is what
+  // decides how much it has to say there.
   const mine = activeField === props.field;
   if (!mine) return null;
-  if (localError !== null) {
+  // BOTH, when both are set, rather than the local error returning first.
+  //
+  // They are statements about different things - "what you just typed is
+  // invalid and was not sent" and "an earlier request's outcome is unknown" -
+  // and only one of them was ever a reason to hide the other. The collision is
+  // reachable now that a failure preserves a validation error it did not judge:
+  // the failure also claims `activeField`, so its own notice landed in a group
+  // whose status line was already spoken for, and an early return took the
+  // notice AND the only "Check again" off the page while its ticket stayed
+  // open. That is the R9 defect from the other side - an affordance dropped
+  // because a rendered claim was keyed on something other than the fact it
+  // describes - and it predates the preservation on the `refused-kept` arm,
+  // which never wrote `localError` and so could always be masked by one.
+  if (localError !== null || hostError !== null) {
     return (
-      <p
-        role="alert"
-        className={cn("text-ui-sm text-destructive", props.className)}
-        data-testid="fallback-local-error"
-      >
-        {localError} Your edit was kept so you can fix it - nothing has been
-        saved.
-      </p>
-    );
-  }
-  if (hostError !== null) {
-    return (
-      <div
-        role="alert"
-        className={cn("text-ui-sm text-destructive", props.className)}
-        data-testid="fallback-host-error"
-      >
-        {hostError.message} {saveNoticeConsequence(hostError.outcome)}
-        {hostError.outcome === "unknown" ? (
-          <Button
-            type="button"
-            variant="link"
-            className="ml-1 h-auto p-0 text-ui-sm"
-            disabled={reconcileInFlight}
-            onClick={onCheckAgain}
-            data-testid="fallback-check-again"
+      <div className={cn("space-y-1", props.className)}>
+        {localError === null ? null : (
+          <p
+            role="alert"
+            className="text-ui-sm text-destructive"
+            data-testid="fallback-local-error"
           >
-            Check again
-            {reconcileInFlight ? (
-              <AgentSpinningDots
-                className="ml-1"
-                testId={undefined}
-                variant="orbit"
-              />
+            {localError} Your edit was kept so you can fix it - nothing has been
+            saved.
+          </p>
+        )}
+        {hostError === null ? null : (
+          <div
+            role="alert"
+            className="text-ui-sm text-destructive"
+            data-testid="fallback-host-error"
+          >
+            {hostError.message}{" "}
+            {saveNoticeConsequence(
+              hostError.outcome,
+              saveNoticeStatus(props.state, persistedUnverified),
+            )}
+            {/* Gated on the TICKET, not on the notice that accompanied it. A
+                newer save that succeeds discharges the ticket, and this button
+                then re-read for a request that was no longer outstanding and
+                returned immediately - a control that looked like recovery and
+                did nothing. Both outcomes that carry a ticket offer it. */}
+            {unknownSave !== null &&
+            (hostError.outcome === "unknown" ||
+              hostError.outcome === "refused-unverified") ? (
+              <Button
+                type="button"
+                variant="link"
+                className="ml-1 h-auto p-0 text-ui-sm"
+                disabled={readBackInFlight}
+                onClick={onCheckAgain}
+                data-testid="fallback-check-again"
+              >
+                Check again
+                {readBackInFlight ? (
+                  <AgentSpinningDots
+                    className="ml-1"
+                    testId={undefined}
+                    variant="orbit"
+                  />
+                ) : null}
+              </Button>
             ) : null}
-          </Button>
-        ) : null}
+          </div>
+        )}
       </div>
     );
   }
@@ -855,17 +1214,431 @@ function ProfileStepHint(): ReactNode {
  * What follows the failure's own sentence, and it is the only part that makes a
  * claim about the HOST.
  *
- * Kept beside the outcome union rather than inlined per branch so the three
- * arms are read together: the difference between them is the whole of FC7.
+ * Kept beside the outcome union rather than inlined per branch so the FOUR arms
+ * are read together: the difference between them is the whole of FC7.
+ *
+ * ## Why it takes a second argument rather than growing more outcomes
+ *
+ * The union says what happened to one SAVE. Everything in `status` is a fact
+ * about the PAGE at the moment of rendering - what the controls are showing,
+ * and what the host has confirmed - which is independent of that save and
+ * outlives it. Folding those in would mean an outcome per combination.
+ *
+ * ## Which arms claim what, because that is what decides the evidence needed
+ *
+ * TWO arms claim a setting is IN FORCE, not one as this used to say:
+ * `refused-reverted` ("your last saved settings are back on screen and still in
+ * force") and `refused-kept`'s confirmed branch. Each needs its own evidence,
+ * and each was wrong for a different reason before this pass:
+ *
+ *  - `refused-reverted` reverts to `persisted`, which after an unread reset may
+ *    be the PRE-reset policy the host has already discarded - so it would say
+ *    "still in force" beside a banner saying those settings are not what the
+ *    host is using. But `persisted` is only pre-reset until some write lands
+ *    AFTER the reset; once one has, the rollback restores a policy the host is
+ *    actively using and the stale sentence becomes the false one. Hence
+ *    `persistedUnverified` rather than a bare "is the page stale".
+ *  - `refused-kept` claims the DISPLAYED values are stored, and that takes TWO
+ *    facts, not one (**D330**). Comparing the values against `persisted`
+ *    settles only SAMENESS - see {@link fallbackPolicyValuesEqual} - and
+ *    sameness with a copy the host may have discarded is not storage. So this
+ *    arm consults `persistedUnverified` too, and where `persisted` is
+ *    unverified it gives the same pre-reset account `refused-reverted` gives
+ *    rather than claiming force. It deliberately says nothing about which
+ *    request was newer: a refusal can arrive for a request OLDER than the one
+ *    that succeeded, and it can arrive for a NEWER one that a correcting
+ *    rollback then displaced, so any ordering word in this sentence is wrong
+ *    half the time.
+ *
+ * The remaining two claim nothing about what is stored, and only one of them
+ * needs a fact at all: `unknown` names the DRAFT it is uncertain about, which
+ * is not always the draft on screen. `refused-unverified` composes unchanged,
+ * and says "another change" rather than "an earlier change" for the same
+ * ordering reason as above.
  */
-function saveNoticeConsequence(outcome: FallbackSaveNoticeOutcome): string {
+/**
+ * What the DISPLAYED values' own request is doing, from that request's actual
+ * state rather than from a revision comparison (D330), and from POSITIVE
+ * evidence rather than from elimination (D339).
+ *
+ * Two rewrites, one direction. `unknownSave.revision !== revision` was standing
+ * in for "the display was never sent" and covered four situations, three of
+ * which contradict it: a save in flight, a save the host confirmed, a rollback
+ * this reducer performed, and only lastly an edit nobody dispatched. Splitting
+ * those four out fixed the three, and left the LAST arm still reached by
+ * elimination - which three further sequences satisfy with values that had in
+ * fact been sent, because `pendingSaves` is the only record that a request
+ * carried them and it is dropped the moment that request settles.
+ *
+ * So the last arm now asks the question directly, of the values rather than of
+ * the request: is this display above everything this editor has ever
+ * dispatched? Only that PROVES it unsent. Anything else that reaches the end -
+ * dispatched, unconfirmed, unanswered by any outstanding ticket - is
+ * `sent-unknown`, which claims neither verdict.
+ */
+/**
+ * Which of the three things the staleness banner is looking at, as one function
+ * rather than a nested ternary at the call site.
+ *
+ * D327 orders the cases and the order is the rule: a ROLLBACK is checked first,
+ * because the banner says nothing about provenance there - the notice owns the
+ * display's story, and the banner is left saying only that the reset is unread.
+ * Otherwise the display is the pre-reset values when its revision is still the
+ * one the reset was dispatched at, and the user's own live edit when it is not.
+ *
+ * Requires `unrefreshedReset` to be set; the banner does not render otherwise.
+ */
+function unrefreshedResetSubject(
+  state: FallbackPolicyDraftState,
+): UnrefreshedResetSubject {
+  if (draftIsRefused(state)) return "rollback";
+  if (state.unrefreshedReset === null) return "own-edit";
+  return state.revision === state.unrefreshedReset.revision
+    ? "pre-reset-values"
+    : "own-edit";
+}
+
+type FallbackDisplayDispatch =
+  | "unanswered"
+  | "rollback"
+  | "pending"
+  | "confirmed"
+  | "sent-unknown"
+  | "loaded-unchanged"
+  | "uncommitted"
+  /**
+   * A value the host refused that nothing restored - it is still in the
+   * controls because reverting while another outcome was unknown would have
+   * claimed the old value is in force.
+   *
+   * NOT named `refused-kept`, which `FallbackSaveNoticeOutcome` already uses on
+   * a DIFFERENT axis: that one is a REQUEST outcome ("the host refused a
+   * request that judged some other draft") and is what `saveNoticeConsequence`
+   * switches on. A sequence can have either without the other, and two unions
+   * in one file sharing a member name is a misreading waiting to happen.
+   */
+  | "refused-on-screen";
+
+function displayDispatchState(input: {
+  readonly revision: number;
+  readonly unknownSave: FallbackPolicyDraftState["unknownSave"];
+  readonly pendingSaves: FallbackPolicyDraftState["pendingSaves"];
+  readonly confirmedViewRevision: number | null;
+  readonly lastDispatchedRevision: number | null;
+  /**
+   * The refusal record IF it describes what is on screen, which carries the
+   * disposition the two accounts differ on. `boolean` here was N1: both refusal
+   * arms answered `true` and both got the rollback's sentence.
+   */
+  readonly refused: FallbackRefusedDraft | null;
+  /** Whether the displayed values equal `persisted` - SAMENESS only (D330). */
+  readonly matchesPersisted: boolean;
+}): FallbackDisplayDispatch {
+  // The display IS the unanswered draft - the most specific thing that can be
+  // said, and the only case where the uncertainty is about what is visible.
+  //
+  // `carries` is load-bearing, not defensive. A reset or restore whose OWN
+  // reply is lost creates an unknown outcome stamped with the revision current
+  // at its dispatch - which is the display's revision, since neither sends a
+  // draft and neither moves it. Without this check that request's uncertainty
+  // is attached to whatever happens to be on screen, including an invalid edit
+  // that was never sent anywhere: this arm returns before the positive gate is
+  // ever consulted, so the gate cannot save it (D347).
+  if (
+    input.unknownSave !== null &&
+    input.unknownSave.carries === "draft" &&
+    input.unknownSave.revision === input.revision
+  ) {
+    return "unanswered";
+  }
+  // Checked before the two request lookups: neither refusal arm moves the
+  // revision, so what is on screen is this reducer's value or a value the host
+  // judged - not any request's live draft.
+  //
+  // The disposition is READ, not inferred (N1). A refusal that arrives while
+  // another outcome is unknown deliberately does not revert, so the value the
+  // host TURNED DOWN is still in the controls; calling that "your last saved
+  // settings, put back" describes a restore that never happened. The two arms
+  // are one `if` because they share the ordering, and two returns because they
+  // are two different screens.
+  if (input.refused !== null) {
+    return input.refused.restoredPersisted ? "rollback" : "refused-on-screen";
+  }
+  if (input.pendingSaves.some((save) => save.revision === input.revision)) {
+    return "pending";
+  }
+  if (
+    input.confirmedViewRevision !== null &&
+    input.confirmedViewRevision === input.revision
+  ) {
+    return "confirmed";
+  }
+  // The last two arms are the D339 split, and the ORDER is the point: "never
+  // sent" is now claimed only on evidence, never by elimination.
+  //
+  // A display above every revision this editor has dispatched is an edit made
+  // after the last thing that went out - that is what PROVES it unsent, and
+  // nothing weaker does. Three sequences reach this point with values that were
+  // sent: a read-back that adopted them, a correcting rollback that adopted
+  // them, and a save that settled without confirming (its `pendingSaves` entry
+  // is dropped when it settles, so the lookups above cannot see it). Each was
+  // told "hasn't been sent" about values the host had received.
+  const neverDispatched =
+    input.lastDispatchedRevision === null ||
+    input.revision > input.lastDispatchedRevision;
+  if (!neverDispatched) return "sent-unknown";
+  // Never dispatched splits in two, because "no draft was sent" does not make
+  // the display an EDIT (D353). A panel that has only ever loaded a policy has
+  // dispatched nothing and been edited by nobody, and calling that "a newer
+  // edit that hasn't been sent" is false about both halves of the sentence.
+  //
+  // The discriminator is the VALUES, not an edit counter: a draft edited and
+  // then changed back is, as a statement about what is on screen, what was
+  // loaded.
+  return input.matchesPersisted ? "loaded-unchanged" : "uncommitted";
+}
+
+/** The two independent questions a notice answers, resolved once (D353). */
+interface FallbackSaveNoticeStatus {
+  /**
+   * A reset was confirmed, its read failed, and nothing has confirmed a
+   * policy since - so `persisted` is the PRE-reset value and the host's own
+   * row is unknown. No sentence may call anything in force while this holds.
+   */
+  readonly persistedUnverified: boolean;
+  /**
+   * The values on screen are the SAME as `persisted`. Sameness only; whether
+   * `persisted` is still authoritative is `persistedUnverified`.
+   */
+  readonly draftConfirmed: boolean;
+  /** What the displayed draft's own request is doing. */
+  readonly displayDispatch: FallbackDisplayDispatch;
+  /**
+   * What the UNANSWERED request sent, which is a different question from
+   * what the display is - and the `unknown` arm is the one place both are
+   * spoken about in the same breath.
+   */
+  readonly unknownCarries: FallbackSaveCarries;
+  /**
+   * The operation whose unanswered outcome has taken away display authority,
+   * or `null` while it is intact (D353). Only the host-claiming sentences
+   * read it; the matrix in SETTINGS.md says which those are.
+   */
+  readonly authorityInvalidated: FallbackSaveCarries | null;
+}
+
+/**
+ * Resolves everything the notice's two sentences read, so the component that
+ * renders them holds no derivation of its own. Every field is derived from the
+ * matrix axes in SETTINGS.md and nothing here is a per-case judgement.
+ */
+function saveNoticeStatus(
+  state: FallbackPolicyDraftState,
+  persistedUnverified: boolean,
+): FallbackSaveNoticeStatus {
+  return {
+    persistedUnverified,
+    // Compared as VALUES. `revision === persistedRevision` was an ordering
+    // watermark standing in for this, and the two part company on both
+    // adoption paths - a moved-on read-back stamps the revision while keeping
+    // a draft it never confirmed, and the correcting rollback adopts a
+    // confirmed policy without moving the revision at all. See
+    // `fallbackPolicyValuesEqual`.
+    //
+    // SAMENESS only. That the display equals `persisted` says nothing about
+    // whether `persisted` is still what the host holds - that is
+    // `persistedUnverified`, and both are needed before anything may be called
+    // in force.
+    draftConfirmed: fallbackPolicyValuesEqual(state.draft, state.persisted),
+    // A notice with the `unknown` outcome always has its ticket, so the
+    // fallback here is unreachable; it is `"draft"` because that is the shape
+    // every other outcome's sentence already assumes.
+    unknownCarries: state.unknownSave?.carries ?? "draft",
+    // The authority rule, stated once (D353), now read from the OBLIGATION
+    // rather than from the notice (N2). An operation that does not carry the
+    // display and has no answer may already have replaced the host's row, so
+    // nothing on screen may be called what the host holds until something
+    // re-reads it - and that stays true when the next failure replaces the
+    // ticket, which is exactly what the previous carrier got wrong. The
+    // reducer sets `unverifiedHostRow` only for a reset or restore, so no
+    // "is it a draft" test belongs here any more.
+    authorityInvalidated: state.unverifiedHostRow,
+    displayDispatch: displayDispatchState({
+      revision: state.revision,
+      unknownSave: state.unknownSave,
+      pendingSaves: state.pendingSaves,
+      confirmedViewRevision: state.confirmedViewRevision,
+      lastDispatchedRevision: state.lastDispatchedRevision,
+      refused: refusedDraftOnScreen(state),
+      matchesPersisted: fallbackPolicyValuesEqual(state.draft, state.persisted),
+    }),
+  };
+}
+
+/**
+ * The account of the display given while `persisted` is a pre-reset policy the
+ * host has replaced with something nobody here has read.
+ *
+ * D330 forbids "is in force", "is what this host is using now", and "no longer"
+ * in use while that is true. A successful reset proves the host WROTE
+ * something; it does not prove the result differs from what is on screen - an
+ * already-default policy reset to defaults yields identical values - so this
+ * hedges rather than asserting an inequality no client can know.
+ */
+const PRE_RESET_ROLLBACK_ACCOUNT =
+  "What's back on screen is still the settings from before the reset, which may no longer be what this host is using.";
+
+function saveNoticeConsequence(
+  outcome: FallbackSaveNoticeOutcome,
+  status: FallbackSaveNoticeStatus,
+): string {
   switch (outcome) {
     case "refused-reverted":
-      return "Your last saved settings are back on screen and still in force.";
+      return status.persistedUnverified
+        ? `Your edit wasn't saved. ${PRE_RESET_ROLLBACK_ACCOUNT}`
+        : "Your last saved settings are back on screen and still in force.";
     case "refused-kept":
+      // The refusal is about a request that judged some other draft, so the
+      // question is what is on screen NOW - and "haven't been saved yet" is a
+      // claim about that, not about the refusal.
+      //
+      // Both conditions, not just sameness. Two refusals after an unread reset
+      // and with no success since leave the PRE-reset policy on screen and
+      // equal to `persisted` - so equality holds while the host is known to
+      // hold something else. This arm consults the same evidence the revert arm
+      // does, and gives the same account, because it is describing the same
+      // restored values.
+      if (status.draftConfirmed) {
+        return status.persistedUnverified
+          ? `This change wasn't saved. ${PRE_RESET_ROLLBACK_ACCOUNT}`
+          : "This change wasn't saved. What's on screen is a different change the host has confirmed, and it is in force.";
+      }
       return "The changes you have made since are still on screen and haven't been saved yet.";
+    case "refused-unverified":
+      return "This change wasn't saved. Another change is still unconfirmed, so what's stored may not be what you last saw.";
     case "unknown":
-      return "What's on screen is your change, not a confirmed setting - it may or may not have been saved.";
+      // "What's on screen" is only the unanswered draft while the user has not
+      // moved on. Where they have, the second sentence must describe what the
+      // display's OWN request is doing - saying "hasn't been sent" about a save
+      // that is in flight, or one the host has already stored, is a dispatch
+      // claim read off a revision comparison.
+      if (status.displayDispatch === "unanswered") {
+        return "What's on screen is your change, not a confirmed setting - it may or may not have been saved.";
+      }
+      // The REQUEST account and the DISPLAY account are two different sentences
+      // about two different things, and a no-draft request is where they come
+      // apart hardest: the thing whose outcome is unknown is the reset, and the
+      // thing on screen is whatever the user was editing. Naming the operation
+      // matters - calling a restore "the reset" would be this panel's own
+      // recurring defect one noun over.
+      return `${unknownRequestAccount(status.unknownCarries)} ${displayAccount(status)}`;
+  }
+}
+
+/**
+ * What is uncertain, named as the operation that went unanswered.
+ *
+ * A draft save keeps the sentence it always had. The other two say what was
+ * actually lost, because "that change" is not a thing the user made when the
+ * unanswered request was a reset.
+ */
+/** The operation as the copy names it. */
+function operationNoun(carries: FallbackSaveCarries): string {
+  switch (carries) {
+    case "draft":
+      return "save";
+    case "reset":
+      return "reset";
+    case "restore":
+      return "restore";
+  }
+}
+
+function unknownRequestAccount(carries: FallbackSaveCarries): string {
+  switch (carries) {
+    case "draft":
+      return "That change may or may not have been saved.";
+    case "reset":
+      return "We don't know whether the reset went through - it hasn't been re-read.";
+    case "restore":
+      return "We don't know whether restoring the default groups went through - it hasn't been re-read.";
+  }
+}
+
+/**
+ * The account of the DISPLAY, from the matrix's first axis (D353, SETTINGS.md).
+ *
+ * `authorityInvalidated` is the second column of that axis: the right to say
+ * what the HOST holds, which an unanswered `reset` or `restore` takes away. Only
+ * the two states that make a host claim consult it - the matrix says which, and
+ * that is why the rule is applied here once rather than restated per sentence.
+ */
+function displayAccount(status: {
+  readonly persistedUnverified: boolean;
+  readonly displayDispatch: FallbackDisplayDispatch;
+  readonly authorityInvalidated: FallbackSaveCarries | null;
+}): string {
+  switch (status.displayDispatch) {
+    case "pending":
+      return "Another change is being saved.";
+    case "confirmed":
+      // The one sentence the authority rule bites on. A reset or restore whose
+      // reply was lost may already have replaced the row, and nothing has
+      // re-read it - so the confirmation is a fact about the PAST, and the
+      // sentence keeps it rather than collapsing to "we don't know", which
+      // would throw away a confirmation that really did happen (D353).
+      if (status.authorityInvalidated !== null) {
+        // NO ORDER, in either direction. "before the reset" said the
+        // confirmation came first; "since then a reset was sent" said the
+        // reset did - and BOTH are unknowable here, which the second wording
+        // proved by being false in its own pin's sequence (R dispatched before
+        // B was confirmed). A lost reply is not dated: all this state holds is
+        // that a confirmation happened and that an operation is outstanding
+        // with no answer. The sentence says those two facts and nothing that
+        // relates them.
+        return `What's on screen was confirmed as saved on this host. A ${operationNoun(status.authorityInvalidated)} is also outstanding whose result is unknown, so what the host has now hasn't been re-read.`;
+      }
+      // Describes the DISPLAY's relation to the host, and says nothing about
+      // who authored it or when (D347). `confirmedViewRevision` records that
+      // the values on screen ARE the host's row; it does not record that they
+      // are a change the user made. A read-back can adopt the ORIGINAL policy -
+      // neither of the two saves in flight having committed - and confirmation
+      // is then recorded over values nobody changed, where "a change you made
+      // since has been saved" is false twice over: no change of theirs was
+      // saved, and the controls are showing what was there all along.
+      return "What's on screen is what this host has saved.";
+    case "rollback":
+      // Deferring to the rollback account rather than inventing a third
+      // description of the same values.
+      return status.persistedUnverified
+        ? PRE_RESET_ROLLBACK_ACCOUNT
+        : "What's back on screen is your last saved settings, put back.";
+    case "sent-unknown":
+      // Deliberately neutral, and deliberately NOT a dispatch verdict either
+      // way. These values reached the host; what it did with them is the one
+      // thing nobody here knows, and the two sentences that would resolve it -
+      // "hasn't been sent" and "has been saved" - are both false (D339).
+      return "What's on screen was sent, but we don't know what the host did with it.";
+    case "loaded-unchanged":
+      // No host claim at all, which is why this arm has no authority branch:
+      // "what was loaded" is a fact about this page, and an unanswered reset
+      // cannot make it false (D353).
+      return "What's on screen is what was loaded; nothing has been changed since.";
+    case "uncommitted":
+      return "What's on screen is a newer edit that hasn't been sent.";
+    case "refused-on-screen":
+      // NOT the rollback's sentence, which is what N1 found this wearing. The
+      // host turned this value down and the reducer deliberately did not put
+      // `persisted` back - reverting while another outcome is unknown would
+      // claim the old value is in force when the lost reply may already have
+      // replaced it. So the values on screen were never saved and were never
+      // restored, and the two words the rollback account turns on - "saved",
+      // "put back" - are both false here. No host claim is made either, so
+      // this arm needs no authority branch.
+      return "What's on screen is a change the host turned down; it's kept here so you can fix it.";
+    // Handled by the caller, which returns before reaching here.
+    case "unanswered":
+      return "What's on screen is your change, not a confirmed setting.";
   }
 }
 
