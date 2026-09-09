@@ -41,32 +41,55 @@ describe("<SessionConnectivityStrip />", () => {
     });
   }
 
-  it("announces an interruption without blaming the host", () => {
+  it("states the ordinary interruption calmly, without blaming the host", () => {
     mocks.connectivity = "interrupted";
     render(<SessionConnectivityStrip />);
     const strip = screen.getByTestId("session-connectivity-strip");
-    expect(strip.textContent).toContain(
-      "Connection interrupted - reconnecting…",
-    );
-    // The copy and the accessible name both name the CONNECTION: the verdict
-    // cannot distinguish our leg down from the relay's host uplink gone, so a
-    // host claim would be a guess that is wrong half the time it matters.
+    expect(strip.textContent).toContain("Reconnecting…");
+    // The accessible name still names the CONNECTION: the verdict cannot
+    // distinguish our leg down from the relay's host uplink gone, so a host
+    // claim would be a guess that is wrong half the time it matters.
     expect(strip.getAttribute("aria-label")).toBe(
-      "Connection to Traycer Host interrupted",
+      "Connection interrupted - reconnecting",
     );
-    expect(strip.textContent).not.toContain("host is unavailable");
+    // Never a claim about the machine: the verdict cannot tell this device's
+    // leg from the relay's host uplink, and a host is not necessarily a Mac.
+    expect(strip.textContent).not.toMatch(/Mac|host|your machine/i);
+    // Alarm colouring is reserved for something the user must act on. This
+    // state resolves itself in a second or two, and a warning that fires on
+    // every app switch is one people stop reading. Asserted as the tone it
+    // MUST carry, so a swap to any other alarm palette fails here too.
+    expect(strip.className).toContain("bg-background");
+    expect(strip.className).toContain("text-muted-foreground");
+  });
+
+  it("offers no Retry while the transport is still on its expected first attempt", () => {
+    mocks.connectivity = "interrupted";
+    render(<SessionConnectivityStrip />);
+    expect(screen.queryByTestId("session-connectivity-strip-retry")).toBeNull();
+    // The spinner is the pending signal in both announced states.
+    expect(
+      screen.getByTestId("session-connectivity-strip-spinner"),
+    ).toBeTruthy();
   });
 
   it("escalates to the second rung once the outage has run long", () => {
     mocks.connectivity = "interrupted-prolonged";
     render(<SessionConnectivityStrip />);
-    expect(
-      screen.getByTestId("session-connectivity-strip").textContent,
-    ).toContain("Still can't connect - retrying.");
+    const strip = screen.getByTestId("session-connectivity-strip");
+    expect(strip.textContent).toContain("Still reconnecting. Retrying…");
+    // The accessible name escalates with the visible line: a static label
+    // would keep announcing the first rung to a screen reader after the row
+    // had moved on.
+    expect(strip.getAttribute("aria-label")).toBe(
+      "Connection interrupted - still reconnecting",
+    );
+    expect(strip.className).toContain("bg-background");
+    expect(strip.className).toContain("text-muted-foreground");
   });
 
   it("wakes exactly the bound session when Retry is clicked, and not before", async () => {
-    mocks.connectivity = "interrupted";
+    mocks.connectivity = "interrupted-prolonged";
     render(<SessionConnectivityStrip />);
     expect(mocks.wake).not.toHaveBeenCalled();
     await userEvent.click(

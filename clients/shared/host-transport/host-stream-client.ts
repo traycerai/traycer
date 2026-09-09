@@ -109,12 +109,11 @@ export interface IHostStreamClient<
    */
   isReady(): boolean;
   /**
-   * Learned per-method compatibility with the connected host, keyed by
-   * stream method name. `"unknown"` until a subscribe attempt resolves.
-   * `RemoteStreamClient` always reports `"unknown"` today - the mux session
-   * surfaces an incompatible method as a fatal error on that one stream
-   * rather than a cacheable pre-check, so remote hosts don't yet get the
-   * degrade-quietly treatment `WsStreamClient` provides for local hosts.
+   * Learned per-method compatibility with the connected host, keyed by stream
+   * method name. `"unknown"` until capability evidence is available:
+   * `WsStreamClient` learns it from its handshake and `RemoteStreamClient`
+   * learns it from the mux connection's `openAck` manifest. Both then predict
+   * whether a fresh subscription can negotiate before opening that stream.
    */
   getMethodSupport<Method extends keyof Registry & string>(
     method: Method,
@@ -123,8 +122,8 @@ export interface IHostStreamClient<
   subscribeMethodSupport(listener: () => void): () => void;
   /**
    * Learned wire schema version for the connected host, keyed by stream
-   * method name. `null` until a subscribe attempt resolves - mirrors
-   * `getMethodSupport`'s cacheable pre-check.
+   * method name. `null` until a handshake or remote `openAck` supplies enough
+   * manifest evidence - mirrors `getMethodSupport`'s cacheable pre-check.
    */
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,

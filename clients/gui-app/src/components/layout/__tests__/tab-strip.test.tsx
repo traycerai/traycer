@@ -1,3 +1,4 @@
+import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -14,6 +15,7 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { tabItemId } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
@@ -109,7 +111,7 @@ interface TestToastOptions {
 
 const pinTestState = vi.hoisted(
   (): {
-    pinnedByEpicId: Map<string, boolean>;
+    pinnedByEpicId: Map<string, TaskPinnedState>;
     pendingEpicIds: Set<string>;
     mutate: Mock<
       (
@@ -575,10 +577,16 @@ describe("<TabStrip />", () => {
     notificationIndicatorTestState.request = null;
     __resetAppLocalNotificationsStoreForTests();
     resetStores();
+    // The tab History pin is a cloud CAPABILITY, and the store defaults to
+    // `signed-out` - under which the menu item is disabled and every pin
+    // assertion below would pass without exercising anything.
+    useAuthStore.setState({ status: "signed-in" });
   });
 
   afterEach(() => {
     cleanup();
+    // Module-scope store: a staged status outlives this file in the worker.
+    useAuthStore.setState({ status: "signed-out" });
     queryClient.clear();
     headerActivityByEpic.clear();
     resetAgentActivity();
@@ -1359,7 +1367,10 @@ describe("<TabStrip />", () => {
   });
 
   it("pins a task from its tab context menu and offers Undo", async () => {
-    pinTestState.pinnedByEpicId.set(EPIC_A.id, false);
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: false,
+      home: undefined,
+    });
     openEpicFixture(EPIC_A);
     registerEpicHeader(EPIC_A, "owner");
     const router = buildRouter("/epics/e-a/e-a");
@@ -1387,7 +1398,10 @@ describe("<TabStrip />", () => {
   });
 
   it("shows the inverse task-history action for a pinned task", async () => {
-    pinTestState.pinnedByEpicId.set(EPIC_A.id, true);
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: true,
+      home: undefined,
+    });
     openEpicFixture(EPIC_A);
     registerEpicHeader(EPIC_A, "owner");
     const router = buildRouter("/epics/e-a/e-a");
@@ -1396,6 +1410,39 @@ describe("<TabStrip />", () => {
     fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
 
     expect(await screen.findByText("Unpin Task in History")).toBeDefined();
+  });
+
+  it("refuses the cloud-only pin action on a local-home epic tab", async () => {
+    // `home: "local"` reaches the tab strip through
+    // `epic.getTaskContexts@1.2`'s `localHomedTaskIds`. Before that key
+    // existed the strip saw only `pinned: false`, which is indistinguishable
+    // from "in the cloud and not pinned" - so the item rendered enabled, fired
+    // the cloud mutation, and the toast claimed the epic had been pinned.
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: false,
+      home: "local",
+    });
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    const item = await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+    expect(item.getAttribute("data-local-home-pin-unavailable")).toBe("true");
+    // Permanently unavailable, so `aria-disabled` rather than `disabled`:
+    // the explanatory label stays keyboard-reachable.
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("data-disabled")).toBeNull();
+    // States the condition; does not promise a cloud sync that may never come.
+    expect(item.textContent).toContain("stored on this device");
+
+    fireEvent.click(item);
+
+    // The load-bearing assertion: no cloud mutation, and no toast claiming a
+    // pin that never happened.
+    expect(pinTestState.mutate).not.toHaveBeenCalled();
+    expect(toastTestState.messages).toEqual([]);
   });
 
   it("does not expose the task-history pin action on system tabs", async () => {

@@ -19,6 +19,8 @@ import {
 } from "@/lib/reading-position/service";
 import type { ReadingPositionIdentity } from "@/lib/reading-position/types";
 import { appLogger } from "@/lib/logger";
+import { readingPositionKeyPrefix } from "@/lib/persist/keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface TestAnchor {
   readonly offset: number;
@@ -359,6 +361,70 @@ describe("reading-position service", () => {
     saveReadingPosition(another, "native", { offset: 80 });
     expect(readReadingPosition(view, "native", isTestAnchor)).toEqual({
       offset: 80,
+    });
+  });
+
+  // T4: `currentAuthAccountId()` moved from `status === "signed-in"` to
+  // `admitsLocalPlane(status)`. Reading positions are a purely local,
+  // `window.localStorage` fact about this device's own rendering - no
+  // account server is ever consulted - so `unverified` (a stored session
+  // identity with no held `/api/v3/user` verdict) must bind to the same
+  // durable, account-prefixed storage a `signed-in` session gets. Before the
+  // fix every durable write for that cohort was refused by `saveSlot`'s
+  // `accountPrefix` guard (no account ever activated) and every read missed,
+  // so every epic reopened scrolled to the top for the whole `unverified`
+  // session. These tests drive `useAuthStore` directly and go through
+  // `ensureCurrentAccount()` (via `saveReadingPosition`/`readReadingPosition`)
+  // rather than calling `activateReadingPositionAccount` themselves, so the
+  // admission predicate is actually exercised rather than bypassed.
+  describe("account admission (admitsLocalPlane)", () => {
+    afterEach(() => {
+      useAuthStore.getState().setSignedOut();
+    });
+
+    it("binds an unverified session to durable, account-prefixed storage", () => {
+      deactivateReadingPositionAccount(false);
+      useAuthStore.getState().setUnverifiedSession(
+        {
+          userId: "unverified-user",
+          userName: "Unverified User",
+          email: "unverified@example.com",
+        },
+        { userId: "unverified-user", username: "Unverified User" },
+      );
+
+      const view = identity("unverified-view");
+      saveReadingPosition(view, "native", { offset: 51 });
+      flushPendingReadingPositionWrites();
+
+      const prefix = readingPositionKeyPrefix("unverified-user");
+      const keys = Object.keys(window.localStorage);
+      expect(keys.length).toBeGreaterThan(0);
+      expect(keys.every((key) => key.startsWith(prefix))).toBe(true);
+
+      // Survives a fresh service instance the same way a signed-in account's
+      // durable records do (see "restores durable records after the
+      // renderer service is reconstructed" above) - proving the write landed
+      // in durable storage, not just this instance's in-memory map.
+      resetReadingPositionServiceForTests();
+      activateReadingPositionAccount("unverified-user");
+      expect(readReadingPosition(view, "native", isTestAnchor)).toEqual({
+        offset: 51,
+      });
+    });
+
+    it("keeps a signed-out session on in-memory session keys with no durable write", () => {
+      deactivateReadingPositionAccount(false);
+      useAuthStore.getState().setSignedOut();
+
+      const view = identity("signed-out-view");
+      saveReadingPosition(view, "native", { offset: 61 });
+      flushPendingReadingPositionWrites();
+
+      expect(window.localStorage.length).toBe(0);
+      expect(readReadingPosition(view, "native", isTestAnchor)).toEqual({
+        offset: 61,
+      });
     });
   });
 });

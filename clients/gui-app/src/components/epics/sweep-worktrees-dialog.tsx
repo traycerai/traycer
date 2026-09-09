@@ -75,6 +75,10 @@ import {
   formatUncheckedInUseKnown,
   formatUncheckedInUseUnknown,
 } from "@/lib/worktree/teardown-holder-copy";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 const SWEEP_WORKTREES_REFRESH_TIMEOUT_MS = 20_000;
 
@@ -312,9 +316,15 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     row.note === "in-use" ? [...row.holders] : [],
   );
   const agentNames = useTeardownAgentNames(disclosedHolders);
+  // Tier 2 of the title lookup is a cloud spend (`epic.getTaskContexts`), so
+  // it follows the live verdict here exactly as in the Worktrees panel.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   const taskTitles = useWorktreeTaskTitles(
     props.hostClient,
     rows.map((row) => row.entry),
+    cloudAuthorized,
   );
   const kickoff = (targets: ReadonlyArray<EpicSweepWorktreeRow>): void => {
     const kickoffSessionKey = selectionKey;

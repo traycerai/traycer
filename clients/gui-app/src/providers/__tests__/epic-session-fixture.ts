@@ -14,7 +14,7 @@ import type {
   StreamMethodSupport,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import { fakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
 
 export type EpicSessionFixtureArm = "legacy" | "lanes";
@@ -100,7 +100,7 @@ function stateSnapshot(sourceRoot: Y.Doc): EpicStateSnapshotFrame {
 }
 
 function statusSnapshot(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: AUTHORITY_EPOCH,

@@ -38,6 +38,7 @@ import type {
   RegisteredHostsPush,
 } from "../../../ipc-contracts/host-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
 import {
   createDesktopLocalHostEnsurePort,
   DesktopAuthorityIdentitySource,
@@ -50,7 +51,10 @@ const silentLog: AuthorityLog = {
   warn: () => undefined,
 };
 
-function signedInSnapshot(userId: string, token: string) {
+function signedInSnapshot(
+  userId: string,
+  token: string,
+): DesktopAuthSessionSnapshot {
   return {
     status: "signed-in" as const,
     token,
@@ -151,7 +155,7 @@ function recordingRegistryFetch(): {
 describe("DesktopAuthorityIdentitySource", () => {
   it("does not bump the generation or fire onChanged on a token-only refresh (same user)", () => {
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new DesktopAuthorityIdentitySource(authSession);
     expect(identity.current()).toEqual({
       identityKey: "user-a",
@@ -161,7 +165,7 @@ describe("DesktopAuthorityIdentitySource", () => {
     const seen: Array<{ identityKey: string | null; generation: number }> = [];
     identity.onChanged((next) => seen.push(next));
 
-    authSession.set(signedInSnapshot("user-a", "token-2"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-2"));
 
     expect(identity.current()).toEqual({
       identityKey: "user-a",
@@ -173,13 +177,13 @@ describe("DesktopAuthorityIdentitySource", () => {
 
   it("bumps the generation and delivers the new identity on a different signed-in user", () => {
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new DesktopAuthorityIdentitySource(authSession);
 
     const seen: Array<{ identityKey: string | null; generation: number }> = [];
     identity.onChanged((next) => seen.push(next));
 
-    authSession.set(signedInSnapshot("user-b", "token-2"));
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-2"));
 
     expect(seen).toEqual([{ identityKey: "user-b", generation: 1 }]);
     expect(identity.current()).toEqual({
@@ -191,7 +195,7 @@ describe("DesktopAuthorityIdentitySource", () => {
 
   it("counts sign-out and sign-back-in-as-the-same-user as two transitions", () => {
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new DesktopAuthorityIdentitySource(authSession);
 
     const seen: Array<{ identityKey: string | null; generation: number }> = [];
@@ -200,7 +204,7 @@ describe("DesktopAuthorityIdentitySource", () => {
     authSession.set({ status: "signed-out", token: null, profile: null });
     expect(identity.current()).toEqual({ identityKey: null, generation: 1 });
 
-    authSession.set(signedInSnapshot("user-a", "token-3"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-3"));
     expect(identity.current()).toEqual({
       identityKey: "user-a",
       generation: 2,
@@ -215,7 +219,7 @@ describe("DesktopAuthorityIdentitySource", () => {
 
   it("current() is authoritative at any point, and dispose() unsubscribes from later auth-session changes", () => {
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new DesktopAuthorityIdentitySource(authSession);
     expect(identity.current()).toEqual({
       identityKey: "user-a",
@@ -226,7 +230,7 @@ describe("DesktopAuthorityIdentitySource", () => {
     identity.onChanged((next) => seen.push(next));
 
     identity.dispose();
-    authSession.set(signedInSnapshot("user-b", "token-2"));
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-2"));
 
     expect(seen).toEqual([]);
     // current() is frozen at whatever it held at dispose time - the source no
@@ -338,6 +342,25 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve: resolveFn };
 }
 
+/**
+ * Install a signed-in session the way PRODUCTION does.
+ *
+ * `set` alone leaves `verified: false` - main only marks a bearer verified
+ * after it has checked it against JWKS (`auth-ipc`'s `authSessionSet` calls
+ * `beginSet` then `setVerified`). These fixtures used the bare `set`, so every
+ * one of them described a session main does not vouch for, which stopped
+ * mattering the moment a consumer started reading `verified`: the fleet
+ * source now declines its cloud registry read on exactly that flag, and 12 of
+ * these tests were asserting registry behaviour for a session that would
+ * never reach the registry in the field.
+ */
+function setVerifiedSession(
+  session: DesktopAuthSession,
+  snapshot: DesktopAuthSessionSnapshot,
+): void {
+  session.setVerified(snapshot, session.beginSet());
+}
+
 function buildFleetSource(overrides: {
   identity: AuthorityIdentitySource;
   authSession: DesktopAuthSession;
@@ -399,11 +422,88 @@ function buildFleetSourceWithPublisher(overrides: {
 }
 
 describe("DesktopHostFleetSource", () => {
+  /**
+   * A revoked bearer must not keep polling the ACCOUNT REGISTRY.
+   *
+   * `revokeVerification` deliberately keeps `status: "signed-in"` and the
+   * token - flattening either signs sibling windows out - so the revoked
+   * session is indistinguishable from a live one by the `token !== null` test
+   * this source used, and `registered-hosts-broadcast` drives a refresh every
+   * 60 seconds. The local host is kept regardless: it was read from disk and
+   * is dialable whatever the registry says, which is the same rule the two
+   * fetch-failure arms already apply.
+   */
+  it("declines the registry read on an unverified session but keeps the local host", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    // The terminal verdict loss a renderer reports; main keeps the session.
+    authSession.revokeVerification("token-1");
+    expect(authSession.get().token).toBe("token-1");
+    expect(authSession.get().status).toBe("signed-in");
+
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    let registryCalls = 0;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        registryCalls += 1;
+        return {
+          kind: "ok",
+          response: { hosts: [buildHostListItem("local-host")] },
+        };
+      },
+    });
+
+    await fleet.refresh();
+
+    expect(registryCalls).toBe(0);
+    // Not an empty fleet: the offline plane is exactly what an unverified
+    // session still needs, so this machine stays addressable.
+    expect(fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
+      "local-host",
+    ]);
+    fleet.dispose();
+  });
+
+  it("still reads the registry while the session IS verified (non-vacuity)", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    let registryCalls = 0;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        registryCalls += 1;
+        return {
+          kind: "ok",
+          response: { hosts: [buildHostListItem("local-host")] },
+        };
+      },
+    });
+
+    await fleet.refresh();
+
+    expect(registryCalls).toBe(1);
+    fleet.dispose();
+  });
+
   it("maps registry rows to fleet entries carrying only hostId and kind", async () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -430,7 +530,7 @@ describe("DesktopHostFleetSource", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -462,7 +562,7 @@ describe("DesktopHostFleetSource", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -489,7 +589,7 @@ describe("DesktopHostFleetSource", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "m-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -523,7 +623,7 @@ describe("DesktopHostFleetSource", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -575,7 +675,7 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -652,7 +752,7 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -732,7 +832,7 @@ describe("DesktopHostFleetSource", () => {
 
   it("publishes an EMPTY fleet for the incoming generation immediately on an identity change", () => {
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     const never = deferred<HostListFetchResult>();
@@ -764,7 +864,7 @@ describe("DesktopHostFleetSource", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -808,7 +908,7 @@ describe("DesktopHostFleetSource", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -850,7 +950,7 @@ describe("DesktopHostFleetSource", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -912,7 +1012,7 @@ describe("DesktopHostFleetSource", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -1022,7 +1122,7 @@ describe("DesktopHostFleetSource", () => {
     // Half 1: SIGN IN, then drive a local-host change. The read must land and
     // publish the id - this is what proves the pipeline completes inside the
     // flush window, so the silence above was a decision and not a delay.
-    authSession.set(signedInSnapshot("user-b", "token-b"));
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
     host.emitChange();
     await flushIo();
     expect(fleet.snapshot()).toMatchObject({
@@ -1058,7 +1158,7 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -1114,7 +1214,7 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -1162,7 +1262,7 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -1217,7 +1317,7 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -1248,7 +1348,7 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -1291,7 +1391,7 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
@@ -1339,7 +1439,7 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
-    authSession.set(signedInSnapshot("user-a", "token-1"));
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;

@@ -45,6 +45,7 @@ describe("request context: abort always releases the credential lease", () => {
       operationId: "op-1",
       bearerToken: "bearer-token",
       externalAbortSignal,
+      cloudAuthorized: undefined,
     });
   }
 

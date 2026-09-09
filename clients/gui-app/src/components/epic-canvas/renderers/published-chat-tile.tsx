@@ -3,6 +3,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { createStore, useStore } from "zustand";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -29,6 +30,7 @@ import {
   type PublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
 import { ChatDeadTileBannerContainer, ChatTileSessionView } from "./chat-tile";
+import { unreachableHostBannerReason } from "./unreachable-host-banner-reason";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
@@ -226,17 +228,24 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   );
 
   // The same Clone offer the LIVE tile's dead-tile banner makes, on the copy.
-  // Gated (inside the child) on the SAME two signals the lock sentence below
-  // reads - the owner's reachability and `ownerIsThisHost` - so the banner and
-  // the sentence can never describe one host two ways.
-  const deadTileBanner = (
+  // Gated (inside the child) on the SAME reachability the lock sentence below
+  // reads, so the banner and the sentence can never describe one host two ways.
+  //
+  // Mounted on EVERY branch below, not only the ones with a transcript: this
+  // tile owns the unreachable-owner banner (the canvas no longer draws one
+  // over it), and a reader stuck on the load state or a refused read still
+  // needs the host sentence and the way out. `showsPublishedCopy` is what
+  // differs per branch - only the transcript branches have a copy on screen
+  // for the foreign-owner sentence to point at.
+  const deadTileBanner = (showsPublishedCopy: boolean): ReactNode => (
     <PublishedChatDeadTileBanner
       node={node}
       epicId={props.epicId}
       tabId={props.viewTabId}
       ownerStatus={ownerReachability.status}
-      ownerIsThisHost={ownerIsThisHost}
+      ownerUnavailability={ownerReachability.unavailability}
       ownerLabel={ownerLabel}
+      showsPublishedCopy={showsPublishedCopy}
     />
   );
 
@@ -356,6 +365,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (boundedLoad.kind !== "ready") {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+        {deadTileBanner(false)}
         <TileHostLoadState
           load={boundedLoad}
           subject="agent"
@@ -369,7 +379,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (replicaHandle !== null && replicaConversion !== null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-        {deadTileBanner}
+        {deadTileBanner(true)}
         <ChatTileSessionView
           isLiveSession={false}
           handle={replicaHandle}
@@ -403,6 +413,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (applied === null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+        {deadTileBanner(false)}
         <PublishedChatNotice
           state={
             replicaFailure === null
@@ -422,7 +433,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-      {deadTileBanner}
+      {deadTileBanner(true)}
       {/* The heavy content this transcript NAMES - file diffs, full plans -
           is not in the published document; it is content-addressed in the
           cloud. The blocks that expand it decide their own fetch several
@@ -544,6 +555,15 @@ function useAppliedPublishedCopy(input: {
  * copy" notice. Once a copy is on screen, a later key's loading is the
  * footer's business, not this gate's. The replica arm folds in for its own
  * reason (see the call site).
+ *
+ * The final clause is an ALLOWLIST rather than a "not ready" test, and that
+ * is load-bearing for `unauthorized`. It is the one non-ready state waiting
+ * on nothing: the reads were withheld before dispatch, so no answer is in
+ * flight and no deadline can expire into useful news. Counting it would make
+ * an unverified session's published tile accuse the serving host of failing
+ * to answer a question nobody asked it; falling through here sends it to
+ * `PublishedChatNotice` instead. Any state added later is non-pending by
+ * default, which is the safe direction.
  */
 function firstCopyPending(input: {
   readonly handle: PublishedChatSessionHandle | null;
@@ -564,6 +584,13 @@ function firstCopyPending(input: {
  * that said "fetching" for that frame would be describing work that is done.
  * `unsupported` cannot follow a shown copy on the same serving host and is
  * folded into `failed` rather than given words nobody will read.
+ *
+ * `unauthorized` is `idle` for the same reason it is not pending above: the
+ * read was withheld before dispatch, so no re-read is in flight and none
+ * failed. `loading` would describe work nobody started and `failed` would
+ * blame the host for a question it was never asked. That the copy on screen
+ * will not refresh until the session verifies is the unverified-session
+ * surface's news to deliver, not this footer's.
  */
 function publishedCopyRefresh(
   state: CloudChatTranscriptState,
@@ -573,6 +600,8 @@ function publishedCopyRefresh(
       return { kind: "idle" };
     case "loading":
       return { kind: "loading" };
+    case "unauthorized":
+      return { kind: "idle" };
     case "failed":
     case "unsupported":
       return { kind: "failed" };
@@ -590,22 +619,27 @@ function publishedCopyRefresh(
 /**
  * The clone banner an unreachable owner earns on the copy, or nothing.
  *
- * Reachable owner: the row offers the live tab, no clone needed. Owner IS the
- * serving host: that is the canvas substitution arm, whose banner
- * `tab-group-view` already mounts above this tile - a second one here would
- * double it. The ref carries the owner (`ownerUserId`), so it is threaded
- * through rather than re-resolved from the cloud list, which a post-restart
- * host with swept registry facts cannot answer.
+ * Reachable owner: the row offers the live tab, no clone needed. This tile
+ * OWNS the unreachable-owner banner wherever it is mounted - opened directly
+ * from a sidebar row, or substituted by the canvas for a live tab whose bound
+ * host went away. The canvas (`tab-group-view`) mounts a banner above this
+ * tile only for the reasons it alone can know, a REACHABLE host answering
+ * that it has no such chat, so the two never both draw one. The ref carries
+ * the owner (`ownerUserId`), so it is threaded through rather than
+ * re-resolved from the cloud list, which a post-restart host with swept
+ * registry facts cannot answer.
  */
 function PublishedChatDeadTileBanner(props: {
   readonly node: PublishedChatTileRef;
   readonly epicId: string;
   readonly tabId: string;
   readonly ownerStatus: HostReachabilityStatus;
-  readonly ownerIsThisHost: boolean;
+  readonly ownerUnavailability: HostUnavailability | null;
   readonly ownerLabel: string;
+  /** See `ChatDeadTileBannerProps.showsPublishedCopy`. */
+  readonly showsPublishedCopy: boolean;
 }): ReactNode {
-  if (props.ownerStatus !== "unreachable" || props.ownerIsThisHost) {
+  if (props.ownerStatus !== "unreachable") {
     return null;
   }
   return (
@@ -615,8 +649,8 @@ function PublishedChatDeadTileBanner(props: {
       chatId={props.node.chatId}
       sourceHostId={props.node.ownerHostId}
       hostLabel={props.ownerLabel}
-      reason="host-offline"
-      showsPublishedCopy
+      reason={unreachableHostBannerReason(props.ownerUnavailability)}
+      showsPublishedCopy={props.showsPublishedCopy}
       testId={`published-chat-dead-tile-${props.node.chatId}`}
       sourceOwnerUserId={props.node.ownerUserId}
     />
