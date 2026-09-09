@@ -1,6 +1,9 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useEpicRecordViewed } from "@/hooks/epic/use-epic-record-viewed-mutation";
-import { useEpicLocalHomeReading } from "@/lib/registries/epic-session-registry";
+import {
+  useEpicLocalHomeReading,
+  useEpicSessionHostIdForEpic,
+} from "@/lib/registries/epic-session-registry";
 import {
   useNavigate,
   useParams,
@@ -38,8 +41,13 @@ import type { EpicFocusSearch } from "./epic-route-search";
  * this much. The cost of under-waiting is a dropped record on a first open,
  * which is the defect this bound exists to close - so when in doubt this is the
  * direction to be generous in.
+ *
+ * Exported for the bounded-wait suite, which has to tell "the answer arrived
+ * inside the bound" from "after it" - two cases no test can name without the
+ * number. A copy of the literal in the test would keep passing its INSIDE case
+ * while production's bound moved out from under it.
  */
-const RECENCY_HOME_ANSWER_WAIT_MS = 2_000;
+export const RECENCY_HOME_ANSWER_WAIT_MS = 2_000;
 
 export function EpicRoute() {
   const { epicId, tabId } = useParams({ from: "/epics/$epicId/$tabId" });
@@ -74,7 +82,19 @@ function EpicRouteTabSync(props: {
     () => tabNavigationResolutionFailed(locationState),
     () => false,
   );
-  const recordViewedMutation = useEpicRecordViewed();
+  // The SESSION's host, falling back to the window's only when no session is
+  // open. The fallback is not a convenience: the local-home arm of
+  // `epic.recordViewed` is served from the naming host's own store, so a
+  // local-homed epic must be recorded on the machine whose session stated that
+  // - while a cloud-homed one is proxied to the account by any host, which is
+  // what the effective host has always correctly served. `homeReading` and this
+  // id come from the same session, so the admission below and the dispatch
+  // cannot disagree about which machine they are talking about.
+  // `null` when no session is open, which `useEpicRecordViewed` resolves to the
+  // following client - the behaviour that shipped, and right for the cloud arm.
+  const recordViewedMutation = useEpicRecordViewed(
+    useEpicSessionHostIdForEpic(epicId),
+  );
   const recordViewed = recordViewedMutation.mutate;
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -161,6 +181,31 @@ function EpicRouteTabSync(props: {
       recordViewed({ epicId, isLocalHome });
     };
 
+    // The bound is a DEADLINE, and `setTimeout` is only the thing that wakes
+    // it. Timers are not a guarantee: a backgrounded tab throttles them to a
+    // minute or more, and a busy main thread delays them arbitrarily. So a
+    // `local` answer arriving after the bound has passed re-runs this effect
+    // and reaches the branch below while the callback that should have closed
+    // the wait is still queued - recording a view the bound had already
+    // decided to drop, with no upper limit on how late. The publish edge is
+    // the only edge that sees the late answer, so it checks the clock too.
+    //
+    // Unverified sessions only: a held cloud verdict admits the write whatever
+    // the home turns out to be, so there is no wait for it to outlast, and
+    // expiring it here would drop a write that was never waiting.
+    const armedDeadline =
+      recencyWaitDeadline.current?.epicId === epicId
+        ? recencyWaitDeadline.current.at
+        : null;
+    if (
+      !cloudAuthorized &&
+      armedDeadline !== null &&
+      Date.now() >= armedDeadline
+    ) {
+      decideRecency(false);
+      return;
+    }
+
     // Nothing an answer could add. A held verdict admits the write whatever
     // the home turns out to be, and a stated local home admits it without one.
     if (cloudAuthorized || homeReading === "local") {
@@ -181,9 +226,7 @@ function EpicRouteTabSync(props: {
     // rendered - the wait's only output is which branch decides - so an
     // effect-local timer keeps the whole thing on the effect side.
     const deadline =
-      recencyWaitDeadline.current?.epicId === epicId
-        ? recencyWaitDeadline.current.at
-        : Date.now() + RECENCY_HOME_ANSWER_WAIT_MS;
+      armedDeadline ?? Date.now() + RECENCY_HOME_ANSWER_WAIT_MS;
     recencyWaitDeadline.current = { epicId, at: deadline };
     const timer = window.setTimeout(
       () => decideRecency(false),

@@ -571,10 +571,18 @@ export function selectAgentActivityCoverage(
   hostId: string | null,
 ): AgentActivityCoverage {
   if (selectPlaneSpansFleet(byHost)) return "covered";
-  if (hostId !== null) {
-    const host = byHost.get(hostId);
-    if (host !== undefined && hostActivityAnswers(host)) return "covered";
-  }
+  // `unserved` is the claim "the plane answers, and NOT about this entity" -
+  // exclusion. Without a host there is no entity to be excluded, so a narrow
+  // union that answers for some other machine said nothing either way and the
+  // honest arm is `indeterminate`. This used to fall through to the line
+  // below, which read a local union's answer as evidence of exclusion and
+  // rendered unknown where the doc above promises the surface keeps the
+  // reading it already had - and where three static call sites
+  // (`chat-progress-icon`, `tab-strip-item`, `epics-list-shared`) already pass
+  // `indeterminate` by hand for this same no-host case.
+  if (hostId === null) return "indeterminate";
+  const host = byHost.get(hostId);
+  if (host !== undefined && hostActivityAnswers(host)) return "covered";
   return selectPlaneAnswers(byHost) ? "unserved" : "indeterminate";
 }
 

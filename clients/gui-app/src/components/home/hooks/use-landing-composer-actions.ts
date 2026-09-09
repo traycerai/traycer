@@ -306,6 +306,24 @@ export function useLandingComposerActions(
         chat: input.chat,
       })
         .then((response) => {
+          // A REFUSAL resolves, so it arrives HERE and not in the `.catch`
+          // below - and the two arms want opposite things. Rolling back is
+          // what a refusal needs: the seed exists to cover the in-flight
+          // window for an epic that is about to exist, and after a refusal no
+          // epic ever will, so re-asserting it would leave the chip and the
+          // palette's Files/Diff openers listing folders for an epic id the
+          // host never created. Same teardown as the rejection arm, minus the
+          // rethrow: the call sites' own refusal branches settle the attempt,
+          // and turning this into a rejection would route a refused create
+          // into `onError`'s generic "Couldn't create epic." toast, discarding
+          // the host's message and the repair the typed arm exists to offer.
+          if (response.refusal !== undefined) {
+            clearEpicCreateSeedPending(input.epicId);
+            if (seededBindingsKey !== null) {
+              queryClient.removeQueries({ queryKey: seededBindingsKey });
+            }
+            return response;
+          }
           // Re-assert the seed after success to overwrite a racing first fetch
           // that returned `[]` before the host's warm-slot create seed landed
           // (no flicker). `useEpicCreateForClient`'s invalidation then

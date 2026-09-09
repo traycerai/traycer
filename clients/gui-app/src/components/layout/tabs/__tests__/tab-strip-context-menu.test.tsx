@@ -66,13 +66,21 @@ function createPausedEpicHandle(epicId: string, retained: boolean) {
   return handle;
 }
 
+/**
+ * The resolved default every caller used to get implicitly. Named rather than
+ * defaulted: the repo bans defaulted parameters in tests too, and a default
+ * here hid WHICH pin state five cases were exercising - the state is the
+ * subject of three of them.
+ */
+const CLOUD_UNPINNED_KNOWN: TaskPinnedState = {
+  pinned: false,
+  home: undefined,
+  pinnedKnown: true,
+};
+
 function renderPinMenu(
   onSetTaskPinned: (pinned: boolean) => void,
-  taskPinnedState: TaskPinnedState | null = {
-    pinned: false,
-    home: undefined,
-    pinnedKnown: true,
-  },
+  taskPinnedState: TaskPinnedState | null,
 ): void {
   render(
     <ContextMenu open>
@@ -107,7 +115,7 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
     __getOpenEpicRegistryForTests().acquire(EPIC_TAB.epicId, () => handle);
     const onSetTaskPinned = vi.fn<(pinned: boolean) => void>();
 
-    renderPinMenu(onSetTaskPinned);
+    renderPinMenu(onSetTaskPinned, CLOUD_UNPINNED_KNOWN);
 
     const item = await screen.findByTestId(`tab-pin-history-${EPIC_TAB.id}`);
     expect(item.getAttribute("data-preserved-orphan-pin-unavailable")).toBe(
@@ -135,7 +143,7 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
     __getOpenEpicRegistryForTests().acquire(EPIC_TAB.epicId, () => handle);
     const onSetTaskPinned = vi.fn<(pinned: boolean) => void>();
 
-    renderPinMenu(onSetTaskPinned);
+    renderPinMenu(onSetTaskPinned, CLOUD_UNPINNED_KNOWN);
 
     const item = await screen.findByTestId(`tab-pin-history-${EPIC_TAB.id}`);
     expect(item.getAttribute("data-preserved-orphan-pin-unavailable")).toBe(

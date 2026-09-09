@@ -103,10 +103,12 @@ vi.mock("sonner", () => ({
   toast: {
     error: (
       message: string,
-      options?: {
-        readonly description?: string;
-        readonly action?: CapturedToastAction;
-      },
+      options:
+        | {
+            readonly description: string | undefined;
+            readonly action: CapturedToastAction | undefined;
+          }
+        | undefined,
     ) => {
       toastErrorCalls.push({
         message,

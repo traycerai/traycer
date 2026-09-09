@@ -98,6 +98,16 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => mockHostClient,
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => mockHostClient,
+  // Reached since `useEpicRecordViewed` took its host as an argument: the
+  // client for a NAMED host is built from the binding, so a mock that stops at
+  // `useHostClient` leaves the resolver calling an undefined export.
+  useHostBinding: () => ({
+    hostId: HOST_ID,
+    hostClient: {
+      ...mockHostClient,
+      createRequesterForHostId: () => mockHostClient,
+    },
+  }),
 }));
 
 function makeWrapper(
@@ -901,7 +911,7 @@ describe("useCloudEpicTasksQuery", () => {
     const { result } = renderHook(
       () => ({
         tasks: useCloudEpicTasksQuery(lastViewedRequest, { enabled: true }),
-        recordViewed: useEpicRecordViewed(),
+        recordViewed: useEpicRecordViewed(HOST_ID),
       }),
       { wrapper: makeWrapper(queryClient) },
     );

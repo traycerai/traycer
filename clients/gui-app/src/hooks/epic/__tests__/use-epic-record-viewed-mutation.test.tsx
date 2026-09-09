@@ -21,10 +21,25 @@ const testState = vi.hoisted<TestState>(() => ({
   userId: "user-1",
 }));
 
+const mockClient = {
+  getActiveHostId: () => testState.activeHostId,
+  getRequestContextUserId: () => testState.userId,
+};
+
+// `useHostBinding` is mocked alongside `useHostClient` because the hook now
+// resolves its client through `useHostClientForHostId(hostId)`, which reads the
+// BINDING to build a requester for a named host. `createRequesterForHostId`
+// answers the same mock client: this suite's subject is the dispatch gate and
+// the cache invalidation, not which machine a requester addresses - the host
+// routing itself is pinned in `epic-recency-session-host.test.tsx`.
 vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => ({
-    getActiveHostId: () => testState.activeHostId,
-    getRequestContextUserId: () => testState.userId,
+  useHostClient: () => mockClient,
+  useHostBinding: () => ({
+    hostId: testState.activeHostId,
+    hostClient: {
+      ...mockClient,
+      createRequesterForHostId: () => mockClient,
+    },
   }),
 }));
 
@@ -55,6 +70,11 @@ import {
 } from "@/hooks/epic/use-epic-record-viewed-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+// The host the write is dispatched on. This suite mocks `useHostMutation`, so
+// the id only has to be a stable non-null value - what it pins is that the hook
+// now REQUIRES one rather than reaching for the window's effective host.
+const RECORD_VIEWED_HOST_ID = "host-record-viewed";
+
 const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
 const CONTEXT = { userId: "user-1", username: "U" };
 
@@ -84,7 +104,7 @@ describe("useEpicRecordViewed", () => {
   it("refuses a dispatch once the verdict is withdrawn, and admits it again when the verdict returns", () => {
     // The route's effect captured `cloudAuthorized === true` at render; the
     // demotion landed before the effect flushed. The verdict is re-read here.
-    renderHook(() => useEpicRecordViewed(), {
+    renderHook(() => useEpicRecordViewed(RECORD_VIEWED_HOST_ID), {
       wrapper: makeWrapper(new QueryClient()),
     });
     useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
@@ -130,7 +150,7 @@ describe("useEpicRecordViewed", () => {
     const state = useCloudEpicTasksPagesStore.getState();
     state.appendPage(lastViewedIdentity, 0, { tasks: [], hasMore: false });
     state.appendPage(recentIdentity, 0, { tasks: [], hasMore: false });
-    renderHook(() => useEpicRecordViewed(), {
+    renderHook(() => useEpicRecordViewed(RECORD_VIEWED_HOST_ID), {
       wrapper: makeWrapper(queryClient),
     });
 
