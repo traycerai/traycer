@@ -142,10 +142,72 @@ vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => pinTestState.pinnedByEpicId,
 }));
 
-vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
-  useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
-  usePendingSetPinnedEpicIds: () => pinTestState.pendingEpicIds,
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", async (importOriginal) => {
+  // `epicPinDispatchAdmitted` is a real pure predicate `tab-strip.tsx` calls
+  // directly (not through a hook) at both the initial and Undo dispatch
+  // sites - kept REAL here via importOriginal, rather than mocked away,
+  // because a mock that always admits would make the Undo/no-op assertions
+  // below vacuous.
+  const actual = await importOriginal<
+    typeof import("@/hooks/epic/use-epic-set-pinned-mutation")
+  >();
+  return {
+    epicPinDispatchAdmitted: actual.epicPinDispatchAdmitted,
+    useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
+    usePendingSetPinnedEpicIds: () => pinTestState.pendingEpicIds,
+  };
+});
+
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent everywhere in this file. Fixed
+ * at `false`: every pin-related case here predates lane 9 item 5 and pins
+ * the pre-`@1.1` reading (`local-home` permanently unavailable), which this
+ * file's own `EPIC_A` pin fixture (`home: "local"`) still exercises.
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
 }));
+
+/**
+ * `useEpicRecordViewed` also reads `useHostClient()` directly, and mounts on
+ * every epic-tab route rendered through `buildRouter` in this file - unmocked
+ * it throws the same `HostRuntimeProvider` error on nearly every test here,
+ * unrelated to what any of them is actually about.
+ */
+const recordViewedTestState = vi.hoisted(
+  (): { mutate: Mock<(variables: unknown) => void> } => ({
+    mutate: vi.fn(),
+  }),
+);
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewedTestState.mutate }),
+}));
+
+/**
+ * `TabStripBody` itself now reads `useHostClient()` unconditionally, to pass
+ * `hostClient.getActiveHostId()` into `epicPinDispatchAdmitted` at the Undo
+ * dispatch site. Every test in this file renders `TabStripBody`, and none of
+ * them wraps in a `<HostRuntimeProvider>`, so this one call throws on nearly
+ * every case regardless of what it is testing. Partial mock: only
+ * `useHostClient` is replaced, everything else in the module comes from the
+ * real implementation (`useHostBinding`, `useHostDirectory`, etc., which
+ * other parts of the render tree may still call for real).
+ */
+const hostClientTestState = vi.hoisted(
+  (): { activeHostId: string | null } => ({
+    activeHostId: "host-a",
+  }),
+);
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => ({
+      getActiveHostId: () => hostClientTestState.activeHostId,
+    }),
+  };
+});
 
 vi.mock("sonner", () => ({
   toast: {
@@ -1370,6 +1432,7 @@ describe("<TabStrip />", () => {
     pinTestState.pinnedByEpicId.set(EPIC_A.id, {
       pinned: false,
       home: undefined,
+      pinnedKnown: true,
     });
     openEpicFixture(EPIC_A);
     registerEpicHeader(EPIC_A, "owner");
@@ -1381,7 +1444,11 @@ describe("<TabStrip />", () => {
 
     expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
     const firstCall = pinTestState.mutate.mock.calls[0];
-    expect(firstCall[0]).toEqual({ epicId: EPIC_A.id, pinned: true });
+    expect(firstCall[0]).toEqual({
+      epicId: EPIC_A.id,
+      pinned: true,
+      isLocalHome: false,
+    });
     expect(typeof firstCall[1]?.onSuccess).toBe("function");
     expect(toastTestState.messages).toEqual([
       "Pinned “Alpha” to the top of History",
@@ -1394,6 +1461,7 @@ describe("<TabStrip />", () => {
     expect(pinTestState.mutate).toHaveBeenNthCalledWith(2, {
       epicId: EPIC_A.id,
       pinned: false,
+      isLocalHome: false,
     });
   });
 
@@ -1401,6 +1469,7 @@ describe("<TabStrip />", () => {
     pinTestState.pinnedByEpicId.set(EPIC_A.id, {
       pinned: true,
       home: undefined,
+      pinnedKnown: true,
     });
     openEpicFixture(EPIC_A);
     registerEpicHeader(EPIC_A, "owner");
@@ -1421,6 +1490,7 @@ describe("<TabStrip />", () => {
     pinTestState.pinnedByEpicId.set(EPIC_A.id, {
       pinned: false,
       home: "local",
+      pinnedKnown: true,
     });
     openEpicFixture(EPIC_A);
     registerEpicHeader(EPIC_A, "owner");
@@ -1435,7 +1505,11 @@ describe("<TabStrip />", () => {
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.getAttribute("data-disabled")).toBeNull();
     // States the condition; does not promise a cloud sync that may never come.
-    expect(item.textContent).toContain("stored on this device");
+    // "the connected device": the epic lives on the host serving it, not
+    // necessarily the machine rendering this menu.
+    expect(item.textContent).toContain(
+      "Pin Task in History — stored on the connected device",
+    );
 
     fireEvent.click(item);
 

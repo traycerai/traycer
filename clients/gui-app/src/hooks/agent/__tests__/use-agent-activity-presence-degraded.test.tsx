@@ -159,8 +159,17 @@ describe("useAgentActivityPresenceDegraded", () => {
       rerender();
     }).not.toThrow();
 
+    // Lane 9 item 2 changed what an absent slice means for the SERVING host:
+    // right after the rerender above, "durable-local-host" has no slice yet,
+    // and "relay-serving-host" still does - so the reason is null (no claim),
+    // not "stream-down", until this write creates the new host's own slice.
+    // Split from the timer advance below into its own `act`, or the grace
+    // effect for the reason this write produces has not committed yet when
+    // the fake clock moves - the exact race a combined `act` would hide.
     act(() => {
       setHostHealthFor("durable-local-host", { connectionStatus: "closed" });
+    });
+    act(() => {
       vi.advanceTimersByTime(GRACE_MS);
     });
     // And the answer moved to the newly-arrived local host, proving the
@@ -450,5 +459,56 @@ describe("useAgentActivityPresenceDegraded", () => {
       vi.advanceTimersByTime(1);
     });
     expect(result.current).toBe("stream-down");
+  });
+
+  /**
+   * Lane 9 item 2: an absent slice for the SERVING host is two different
+   * facts, and reading both as `stream-down` was this hook asserting a down
+   * stream that was not down.
+   */
+  describe("absent slice for the serving host", () => {
+    it("stays null past the grace when another host has a slice - no claim, not 'stream-down'", () => {
+      setHostHealthFor("some-other-host", { connectionStatus: "open" });
+      const { result } = renderHook(() => useAgentActivityPresenceDegraded());
+
+      expect(result.current).toBe(null);
+
+      act(() => {
+        vi.advanceTimersByTime(GRACE_MS);
+      });
+      // Before the fix this read 'stream-down': the serving host's OWN slice
+      // is absent, but that absence says nothing about the serving host's
+      // stream - a stream IS running, just not for this host.
+      expect(result.current).toBe(null);
+    });
+
+    it("still reads 'stream-down' after the grace when NO host has a slice at all", () => {
+      expect(useAgentActivityStore.getState().byHost.size).toBe(0);
+      const { result } = renderHook(() => useAgentActivityPresenceDegraded());
+
+      expect(result.current).toBe(null);
+      expect(useAgentActivityStore.getState().byHost.size).toBe(0);
+
+      act(() => {
+        vi.advanceTimersByTime(GRACE_MS);
+      });
+      // The store is still completely empty here - the one case an absent
+      // slice keeps the pre-fix reading, because nothing has opened a stream
+      // anywhere, pre-boot or otherwise.
+      expect(useAgentActivityStore.getState().byHost.size).toBe(0);
+      expect(result.current).toBe("stream-down");
+    });
+
+    it("still reads 'stream-down' when the serving host's OWN slice is present but not open", () => {
+      setHostHealthFor(HOST_ID, { connectionStatus: "closed" });
+      const { result } = renderHook(() => useAgentActivityPresenceDegraded());
+
+      expect(result.current).toBe(null);
+
+      act(() => {
+        vi.advanceTimersByTime(GRACE_MS);
+      });
+      expect(result.current).toBe("stream-down");
+    });
   });
 });

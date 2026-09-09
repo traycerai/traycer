@@ -182,6 +182,16 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
 }));
 
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:
+ * every existing case here predates lane 9 item 5 and pins the pre-`@1.1`
+ * reading (`local-home` permanently unavailable).
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
+}));
+
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
     id: "history-epic-1",
@@ -648,6 +658,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(testState.setPinnedMutate).toHaveBeenCalledWith({
         epicId: "epic-from-history",
         pinned: true,
+        isLocalHome: false,
       });
     });
 
@@ -661,7 +672,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Local only epic needs cloud sync; it is stored on this device",
+        name: "Pinning Local only epic needs cloud sync; it is stored on the connected device",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -680,7 +691,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only this device's edits remain",
+        name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only the connected device's edits remain",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -771,7 +782,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         "suppressed-unprovable-filter",
       );
       expect(notice.textContent).toContain(
-        "can't be checked against tasks stored on this device",
+        "can't be checked against tasks stored on the connected device",
       );
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
       expect(screen.getByTestId("epics-list-filtered-empty")).not.toBeNull();

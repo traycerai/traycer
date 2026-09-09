@@ -825,7 +825,11 @@ describe("useCloudEpicTasksQuery", () => {
     // initial dispatch—not a caller remembering a reset wrapper—must create a
     // new finite follow-up budget for its new pending local page.
     act(() => {
-      result.current.pin.mutate({ epicId: "pin-local", pinned: true });
+      result.current.pin.mutate({
+        epicId: "pin-local",
+        pinned: true,
+        isLocalHome: false,
+      });
     });
     await waitFor(() => {
       expect(initialCalls).toBe(2);

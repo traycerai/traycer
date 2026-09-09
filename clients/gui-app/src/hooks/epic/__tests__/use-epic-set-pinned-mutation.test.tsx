@@ -48,15 +48,16 @@ let capturedOptions: {
   onMutate?: (variables: {
     epicId: string;
     pinned: boolean;
+    isLocalHome: boolean;
   }) => MutationContext;
   onSuccess?: (
     response: { pinned: boolean },
-    variables: { epicId: string; pinned: boolean },
+    variables: { epicId: string; pinned: boolean; isLocalHome: boolean },
     context: MutationContext,
   ) => Promise<void>;
   onError?: (
     error: unknown,
-    variables: { epicId: string; pinned: boolean },
+    variables: { epicId: string; pinned: boolean; isLocalHome: boolean },
     context: MutationContext | undefined,
   ) => void;
 } = {};
@@ -193,6 +194,7 @@ describe("useEpicSetPinned", () => {
     const context = capturedOptions.onMutate?.({
       epicId: "epic-1",
       pinned: true,
+      isLocalHome: false,
     });
 
     expect(context).toEqual({ hostId: "host-1", userId: "user-1" });
@@ -239,6 +241,7 @@ describe("useEpicSetPinned", () => {
     const context = capturedOptions.onMutate?.({
       epicId: "epic-1",
       pinned: true,
+      isLocalHome: false,
     });
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": true,
@@ -246,7 +249,7 @@ describe("useEpicSetPinned", () => {
 
     capturedOptions.onError?.(
       { code: "RPC_ERROR", message: "test", fatalDetails: null },
-      { epicId: "epic-1", pinned: true },
+      { epicId: "epic-1", pinned: true, isLocalHome: false },
       context,
     );
 
@@ -284,7 +287,7 @@ describe("useEpicSetPinned", () => {
     useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
 
     expect(() =>
-      capturedOptions.onMutate?.({ epicId: "epic-1", pinned: true }),
+      capturedOptions.onMutate?.({ epicId: "epic-1", pinned: true, isLocalHome: false }),
     ).toThrow(EPIC_PIN_UNAUTHORIZED_MESSAGE);
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": false,
@@ -292,7 +295,7 @@ describe("useEpicSetPinned", () => {
 
     // Non-vacuity: the verdict returning is what admits the same dispatch.
     useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
-    capturedOptions.onMutate?.({ epicId: "epic-1", pinned: true });
+    capturedOptions.onMutate?.({ epicId: "epic-1", pinned: true, isLocalHome: false });
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": true,
     });
@@ -319,7 +322,7 @@ describe("useEpicSetPinned", () => {
         message: EPIC_PIN_UNAUTHORIZED_MESSAGE,
         fatalDetails: null,
       },
-      { epicId: "epic-1", pinned: true },
+      { epicId: "epic-1", pinned: true, isLocalHome: false },
       undefined,
     );
 
@@ -356,6 +359,7 @@ describe("useEpicSetPinned", () => {
     const context = capturedOptions.onMutate?.({
       epicId: "epic-1",
       pinned: true,
+      isLocalHome: false,
     });
     expect(context).toEqual({ hostId: null, userId: "user-1" });
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
@@ -364,7 +368,7 @@ describe("useEpicSetPinned", () => {
 
     await capturedOptions.onSuccess?.(
       { pinned: true },
-      { epicId: "epic-1", pinned: true },
+      { epicId: "epic-1", pinned: true, isLocalHome: false },
       { hostId: null, userId: null },
     );
     expect(removeQueries).not.toHaveBeenCalled();
@@ -372,7 +376,7 @@ describe("useEpicSetPinned", () => {
 
     capturedOptions.onError?.(
       { code: "RPC_ERROR", message: "test", fatalDetails: null },
-      { epicId: "epic-1", pinned: true },
+      { epicId: "epic-1", pinned: true, isLocalHome: false },
       context,
     );
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
@@ -426,7 +430,7 @@ describe("useEpicSetPinned", () => {
 
     await capturedOptions.onSuccess?.(
       { pinned: true },
-      { epicId: "epic-1", pinned: true },
+      { epicId: "epic-1", pinned: true, isLocalHome: false },
       { hostId: "host-1", userId: "user-1" },
     );
 
@@ -451,7 +455,7 @@ describe("useEpicSetPinned", () => {
 
     capturedOptions.onError?.(
       { code: "RPC_ERROR", message: "test", fatalDetails: null },
-      { epicId: "epic-1", pinned: true },
+      { epicId: "epic-1", pinned: true, isLocalHome: false },
       undefined,
     );
 
