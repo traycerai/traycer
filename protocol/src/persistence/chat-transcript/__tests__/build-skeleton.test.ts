@@ -220,6 +220,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     expect(entries).toHaveLength(5);
@@ -281,6 +282,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     expect(entries.map((e) => e.rowId)).toEqual([
@@ -307,6 +309,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     if (entry === undefined) throw new Error("expected an entry");
@@ -325,6 +328,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     if (entry === undefined) throw new Error("expected an entry");
@@ -348,6 +352,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     if (entry === undefined) throw new Error("expected an entry");
@@ -374,6 +379,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     if (entry === undefined) throw new Error("expected an entry");
@@ -395,6 +401,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     if (entry === undefined) throw new Error("expected an entry");
@@ -416,6 +423,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     if (entry === undefined) throw new Error("expected an entry");
@@ -437,6 +445,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     if (entry === undefined) throw new Error("expected an entry");
@@ -466,6 +475,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     expect(smallEntry?.byteLength).toBeGreaterThan(0);
@@ -508,6 +518,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
     const blockOnly = buildRowSkeleton(
       {
@@ -517,6 +528,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     const steerRow = withRecord.find((entry) => entry.rowId === "m-steer");
@@ -557,6 +569,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     for (const entry of entries) {
@@ -585,6 +598,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     expect(entries).toHaveLength(2);
@@ -635,6 +649,7 @@ describe("buildRowSkeleton", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     const steerRows = entries.filter((entry) =>
@@ -714,6 +729,7 @@ describe("row context in the body fingerprint", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
     const card = entries.find((entry) => entry.role === "system");
     expect(card).toBeDefined();
@@ -811,6 +827,7 @@ describe("decorating events in the body fingerprint", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
     const slice = entries.find((entry) => entry.role === "assistant");
     expect(slice).toBeDefined();
@@ -878,6 +895,7 @@ describe("the preview stays well-formed UTF-16", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     const preview = entries[0].preview ?? "";
@@ -904,6 +922,7 @@ describe("the preview stays well-formed UTF-16", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
 
     expect(entries[0].preview).toContain(EMOJI);
@@ -942,6 +961,7 @@ describe("image resolutions in the body fingerprint", () => {
         chatId: "chat-1",
       },
       previewText,
+      null,
     );
     const slice = entries.find((entry) => entry.role === "assistant");
     expect(slice).toBeDefined();

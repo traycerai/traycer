@@ -116,6 +116,7 @@ function slice(
     rows,
     buildTranscriptRecordLookup(messages, events),
     request,
+    null,
   );
 }
 
@@ -827,6 +828,7 @@ describe("a row's records are enumerated, not inferred", () => {
       [row],
       buildTranscriptRecordLookup([user], [stopped]),
       { fromOrdinal: 0, toOrdinal: 0, maxBytes: TRANSCRIPT_RANGE_MAX_BYTES },
+      null,
     );
 
     expect(slice.rowIds).toEqual(["assistant:t-1"]);
@@ -855,6 +857,7 @@ describe("a row's records are enumerated, not inferred", () => {
       [row],
       buildTranscriptRecordLookup([], [stopped]),
       { fromOrdinal: 0, toOrdinal: 0, maxBytes: TRANSCRIPT_RANGE_MAX_BYTES },
+      null,
     );
 
     expect(slice.rowIds).toEqual(["assistant:t-1"]);

@@ -3,14 +3,18 @@ import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
 
-import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 import {
   finishContentFingerprint,
   pushContentFingerprint,
   startContentFingerprint,
 } from "@traycer/protocol/utils/text/digest";
 import { extractPlainTextFromComposerJSONContent } from "@traycer/protocol/common/composer-plain-text";
-import { encodeRecord } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import {
+  fingerprintRecord,
+  type FingerprintedRecord,
+  type RecordFingerprint,
+  type RecordFingerprintMemo,
+} from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   buildTranscriptRecordLookup,
   type TranscriptRecordLookup,
@@ -176,13 +180,35 @@ function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
 }
 
 /**
- * A row's size hint and its body fingerprint, from ONE encoding pass.
+ * A row's size hint and its body fingerprint, from ONE encoding pass PER
+ * RECORD - and, with a memo, from no encoding at all for a record that has not
+ * changed since the last rebuild.
  *
  * The two answers are together because they are computed from the same bytes
  * and the encoding is the expensive part: `JSON.stringify` over every record of
  * every row is the dominant cost of building a 20k-row skeleton, and doing it
  * once per row for the length and again for the digest would double it to
  * produce two views of one string.
+ *
+ * ## Why the digest COMBINES per-record fingerprints
+ *
+ * Both halves are now accumulated from {@link RecordFingerprint}s rather than
+ * from raw bytes: each contributing record (or block, or image-resolution
+ * array) is fingerprinted once by {@link fingerprintRecord}, and the row folds
+ * the fixed-width results in render order.
+ *
+ * The old shape fed every record's whole encoding through the sequential FNV
+ * lanes, which are stateful - each byte depends on the running state - so a row
+ * could not reuse anything about a record it had already seen and the whole
+ * transcript was re-encoded on every rebuild. A live chat rebuilds this on
+ * every commit, so that was O(transcript) work per streamed token batch,
+ * measured at ~14,000 `JSON.stringify` calls and ~11 MB stringified per second
+ * on a 38-hour chat.
+ *
+ * A combine over per-record digests is still order-sensitive (see
+ * {@link CONTRIBUTION_SEPARATOR}) and still fixed-width, which is all
+ * `bodyDigestSchema` asks of it - and it costs one push per record instead of
+ * one push per byte.
  *
  * ## The size half
  *
@@ -220,6 +246,23 @@ interface RowBodyFingerprint {
   readonly byteLength: number;
   readonly bodyDigest: string;
 }
+
+/**
+ * Written before every contribution to a row's digest.
+ *
+ * The combine folds VARIABLE-width strings - `finishContentFingerprint` pads
+ * only its low lane, so a per-record digest is 8 to 14 characters - and
+ * concatenating those into one sequential lane is the ambiguity that module's
+ * own encoding doc calls out one level down: `("1", "23")` and `("12", "3")`
+ * push the same characters in the same order, a collision manufactured by the
+ * combine rather than by the hash.
+ *
+ * A NUL for the same reason {@link ABSENT_RECORD_MARKER} opens with one: it is
+ * the one character `JSON.stringify` can never emit unescaped, so no record's
+ * own content can forge a boundary. One character per contribution, against a
+ * whole encoding per contribution before.
+ */
+const CONTRIBUTION_SEPARATOR = " ";
 
 /** Absorbed where a record was expected and not found. See above. */
 const ABSENT_RECORD_MARKER = " absent";
@@ -266,14 +309,66 @@ function contextFingerprint(context: TranscriptRowContext): string {
   return JSON.stringify(Object.values(fields));
 }
 
+/**
+ * One contributor's fingerprint, through the memo when there is one.
+ *
+ * `null` is the producer that rebuilds ONCE per input - the publisher writing a
+ * head's index section - and computing without remembering is strictly what it
+ * wants: the map it would allocate is read empty and then dropped. Explicit
+ * rather than defaulted, so a new producer has to answer the question.
+ */
+function fingerprintOf(
+  memo: RecordFingerprintMemo | null,
+  record: FingerprintedRecord,
+): RecordFingerprint {
+  return memo === null ? fingerprintRecord(record) : memo.lookup(record);
+}
+
+/**
+ * The row's context digest, through the memo when there is one.
+ *
+ * Keyed on the context OBJECT, which is what makes this worth memoizing at
+ * all: `row-projection.ts` builds ONE context object per turn and hands it to
+ * every row that turn produces, so a heavily-steered turn's slices all read one
+ * entry. Rows with nothing to say share `EMPTY_ROW_CONTEXT`, a module-level
+ * singleton, so the many-rows-no-context case - most of a transcript - is one
+ * entry for the whole chat and survives every rebuild.
+ *
+ * What it does NOT yet get is a hit for a non-empty context across rebuilds:
+ * `projectTranscriptRows` allocates a fresh object per turn per call, so those
+ * miss once per rebuild exactly as they did before. That is a projection
+ * change, not a fingerprint one, and it is deliberately not made here.
+ */
+function contextDigestOf(
+  memo: RecordFingerprintMemo | null,
+  context: TranscriptRowContext,
+): string {
+  return memo === null
+    ? contextFingerprint(context)
+    : memo.lookupContext(context, contextFingerprint);
+}
+
 function rowBodyFingerprint(
   source: TranscriptRowSource,
   context: TranscriptRowContext,
   lookup: TranscriptRecordLookup,
   blocksById: ReadonlyMap<string, ContentBlock>,
+  memo: RecordFingerprintMemo | null,
 ): RowBodyFingerprint {
   const digest = startContentFingerprint();
   let byteLength = 0;
+
+  /**
+   * One contribution, delimited from its neighbours.
+   *
+   * Every push into the row's lane goes through here - the context, each
+   * record's digest, each absent marker - so the boundary rule is stated once
+   * rather than remembered at six call sites.
+   */
+  const absorbContribution = (value: string): void => {
+    pushContentFingerprint(digest, CONTRIBUTION_SEPARATOR);
+    pushContentFingerprint(digest, value);
+  };
 
   // The row's CONTEXT, first and unconditionally.
   //
@@ -290,16 +385,16 @@ function rowBodyFingerprint(
   // change no row's height, and the length is a scroll-height hint. That breaks
   // the "same material" symmetry above in the only safe direction - the digest
   // covers strictly more than the length, never less.
-  pushContentFingerprint(digest, contextFingerprint(context));
+  absorbContribution(contextDigestOf(memo, context));
 
   const absorbRecord = (record: Message | ChatEvent | undefined): void => {
     if (record === undefined) {
-      pushContentFingerprint(digest, ABSENT_RECORD_MARKER);
+      absorbContribution(ABSENT_RECORD_MARKER);
       return;
     }
-    const encoded = encodeRecord(record);
-    byteLength += utf8ByteLength(encoded);
-    pushContentFingerprint(digest, encoded);
+    const fingerprint = fingerprintOf(memo, record);
+    byteLength += fingerprint.byteLength;
+    absorbContribution(fingerprint.digest);
   };
 
   // Digest-only, deliberately: see the call site. `byteLength` is charged per
@@ -307,9 +402,10 @@ function rowBodyFingerprint(
   const absorbEvents = (eventIds: readonly string[]): void => {
     for (const eventId of eventIds) {
       const event = lookup.eventsById.get(eventId);
-      pushContentFingerprint(
-        digest,
-        event === undefined ? ABSENT_RECORD_MARKER : encodeRecord(event),
+      absorbContribution(
+        event === undefined
+          ? ABSENT_RECORD_MARKER
+          : fingerprintOf(memo, event).digest,
       );
     }
   };
@@ -340,7 +436,12 @@ function rowBodyFingerprint(
     for (const messageId of messageIds) {
       const message = lookup.messagesById.get(messageId);
       if (message === undefined || message.role !== "assistant") continue;
-      pushContentFingerprint(digest, JSON.stringify(message.imageResolutions));
+      // Memoized on the ARRAY, not on the message that carries it. Keying on
+      // the message would fold its blocks into this contribution as well, and
+      // those are absorbed per SLICE - so every row of a streaming turn would
+      // then move on every commit, which is precisely the `updated` traffic the
+      // per-slice `blockIds` split exists to avoid.
+      absorbContribution(fingerprintOf(memo, message.imageResolutions).digest);
     }
   };
 
@@ -348,12 +449,16 @@ function rowBodyFingerprint(
     for (const blockId of blockIds) {
       const block = blocksById.get(blockId);
       if (block === undefined) {
-        pushContentFingerprint(digest, ABSENT_RECORD_MARKER);
+        absorbContribution(ABSENT_RECORD_MARKER);
         continue;
       }
-      const encoded = JSON.stringify(block);
-      byteLength += utf8ByteLength(encoded);
-      pushContentFingerprint(digest, encoded);
+      // A BLOCK is memoized like a record, and has to be: the block is the unit
+      // a slice is charged for, and re-encoding every block of the transcript to
+      // rebuild one row's digest was the largest single term in the measured
+      // per-commit cost (7,189 of ~14,000 `JSON.stringify` calls per second).
+      const fingerprint = fingerprintOf(memo, block);
+      byteLength += fingerprint.byteLength;
+      absorbContribution(fingerprint.digest);
     }
   };
 
@@ -507,10 +612,24 @@ function steerBlockSentByAgent(
  * The ordinal of a row IS its index in the returned array, so this and
  * {@link projectTranscriptRows} are the same enumeration - which they are by
  * construction, since this maps over that one.
+ *
+ * ## The memo
+ *
+ * `memo` is where the per-record fingerprints of the PREVIOUS build are found -
+ * see {@link RecordFingerprintMemo}. A producer that rebuilds on every commit
+ * of a live chat passes one it owns for that chat's lifetime and pays only for
+ * the records that actually changed; a producer that builds once per input
+ * passes `null` and computes everything, which is the same work it did before.
+ *
+ * Explicitly, in both cases: the repo forbids optional parameters here, and the
+ * choice is one a new producer should have to make rather than inherit.
+ * Skeletons built with and without a memo are IDENTICAL - the memo decides what
+ * is recomputed, never what is computed.
  */
 export function buildRowSkeleton(
   input: TranscriptRowProjectionInput,
   previewText: TranscriptPreviewProjection,
+  memo: RecordFingerprintMemo | null,
 ): readonly RowSkeletonEntry[] {
   const rows = projectTranscriptRows(input);
   const lookup = buildTranscriptRecordLookup(input.messages, input.events);
@@ -527,7 +646,13 @@ export function buildRowSkeleton(
     const isLastOfTurn =
       source.kind === "assistant-slice" &&
       lastRowIndexByTurn.get(source.turnKey) === index;
-    const body = rowBodyFingerprint(source, row.context, lookup, blocksById);
+    const body = rowBodyFingerprint(
+      source,
+      row.context,
+      lookup,
+      blocksById,
+      memo,
+    );
     return {
       rowId: row.rowId,
       createdAt: row.createdAt,

@@ -6,7 +6,10 @@ import type {
   TranscriptRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
-import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import {
+  recordByteLength,
+  type RecordFingerprintMemo,
+} from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
 /**
@@ -298,6 +301,29 @@ function clamp(value: number, low: number, high: number): number {
 }
 
 /**
+ * What a record costs the budget, through the memo when there is one.
+ *
+ * The number is `recordByteLength`'s either way - the memo's entry is that
+ * length, taken from the same `encodeRecord` as its digest. What the memo
+ * changes is who pays for the encoding: a client paging a long transcript asks
+ * for overlapping spans of the same records over and over, and each request
+ * re-stringified every record it touched to recover a number the skeleton had
+ * already computed for the same objects. A sampling profile attributed 2.6 GB
+ * in 45 seconds to exactly that measurement while a client was paging.
+ *
+ * `null` is a caller with nothing to remember across requests, and gets today's
+ * behaviour unchanged.
+ */
+function recordBytes(
+  memo: RecordFingerprintMemo | null,
+  record: Message | ChatEvent,
+): number {
+  return memo === null
+    ? recordByteLength(record)
+    : memo.lookup(record).byteLength;
+}
+
+/**
  * Slices `[fromOrdinal, toOrdinal]` out of projection order, under a byte
  * budget.
  *
@@ -315,6 +341,7 @@ export function sliceTranscriptRange(
   rows: readonly TranscriptRowDescriptor[],
   lookup: TranscriptRecordLookup,
   request: TranscriptRangeRequest,
+  memo: RecordFingerprintMemo | null,
 ): TranscriptRangeSlice {
   const empty: TranscriptRangeSlice = {
     fromOrdinal: 0,
@@ -387,14 +414,14 @@ export function sliceTranscriptRange(
       // hole in the ids would shift everything after it.
       if (message === undefined) continue;
       freshMessages.push(message);
-      cost += recordByteLength(message) + ELEMENT_SEPARATOR_BYTES;
+      cost += recordBytes(memo, message) + ELEMENT_SEPARATOR_BYTES;
     }
     for (const eventId of needed.eventIds) {
       if (seenEventIds.has(eventId)) continue;
       const event = lookup.eventsById.get(eventId);
       if (event === undefined) continue;
       freshEvents.push(event);
-      cost += recordByteLength(event) + ELEMENT_SEPARATOR_BYTES;
+      cost += recordBytes(memo, event) + ELEMENT_SEPARATOR_BYTES;
     }
     const recordsComplete =
       needed.messageIds.every((messageId) =>
@@ -465,6 +492,19 @@ export interface TranscriptTailSlice {
  * A separate function rather than a flag on {@link sliceTranscriptRange}, because
  * the two differ in both direction and policy, and a boolean parameter would
  * hide the second difference behind the first.
+ *
+ * ## No fingerprint memo, unlike a range
+ *
+ * Deliberate rather than missed. A range is asked repeatedly over the life of a
+ * subscription - a client paging a long transcript re-measures the same records
+ * on every overlapping span - which is what made the memo worth threading
+ * through it. A tail is measured once per snapshot, over the newest rows only,
+ * so a memo parameter here would buy a bounded one-off measurement at the cost
+ * of a parameter every producer has to answer for.
+ *
+ * The numbers are the same either way: the memo stores `recordByteLength`'s own
+ * answer, so a range and a tail charge one record identically whether or not
+ * either holds a memo.
  *
  * ## No always-serve-one exception, unlike a range
  *
