@@ -1614,6 +1614,18 @@ class StreamSession<
   private activeSocket: StreamWebSocketLike | null = null;
   private openFrameToken: string | null = null;
   /**
+   * The verdict this connection's `open` frame actually carried, or `undefined`
+   * when it carried none (a client with no verdict source).
+   *
+   * The verdict twin of {@link openFrameToken}, and it exists for the same
+   * reason: a change that lands DURING the handshake - after the open frame
+   * went out, before `subscribed` - is dropped by the phase gate on the push,
+   * and the frame already sent carries the stale value. Without a record of
+   * what was sent there is nothing to compare against at `openAck`, so the
+   * connection would sit on the wrong verdict for its whole life.
+   */
+  private openFrameCloudAuthorized: boolean | undefined = undefined;
+  /**
    * The hostId of the endpoint THIS connection dialed, captured at dial time.
    * Read from the live socket rather than from `endpoint()` on demand, because
    * the endpoint provider can already point at a different host by the time an
@@ -1919,12 +1931,21 @@ class StreamSession<
    * keeps a newer client from tripping an older host's unknown-frame guard -
    * which on `/stream` is fatal to the connection.
    *
-   * A session that is not `subscribed` sends nothing and needs nothing: it is
-   * mid-reconnect, and its next `open` frame reads the verdict afresh at dial
-   * time. That is the same reasoning `pushCredentialUpdate` relies on, and it
-   * holds here only because the open frame carries the verdict too - a client
-   * that pushed the frame but omitted the open-frame field would lose every
-   * verdict change that landed while it was reconnecting.
+   * A session that is not `subscribed` sends nothing HERE, and what it needs
+   * depends on where in the handshake it is - a distinction an earlier version
+   * of this comment got wrong, and the bug it caused is worth naming:
+   *
+   *   - Before the open frame goes out (`idle` / `dialing`), the drop is
+   *     harmless: that frame reads the verdict afresh at send time.
+   *   - AFTER the open frame goes out (`awaitingOpenAck`), it is NOT. The frame
+   *     already carries the pre-change value, so there is no later read to save
+   *     it, and a true -> false transition would leave the host authorizing a
+   *     session the client has already demoted for the life of the connection.
+   *
+   * `handleOpenAckFrame` closes that second window by comparing the live
+   * verdict against {@link openFrameCloudAuthorized} and pushing once if they
+   * differ - the same shape as the bearer reconciliation beside it, and needed
+   * separately because a verdict moves without the bearer moving.
    */
   pushCloudVerdictUpdate(): void {
     if (this.disposed) {
@@ -2159,6 +2180,13 @@ class StreamSession<
       this.config.registry,
       CLIENT_SERVED_STREAM_MAJORS,
     );
+    // Read ONCE and recorded, rather than read again later for the comparison:
+    // two reads of a live source can straddle a transition, which would make
+    // the reconciliation below compare the frame against a verdict the frame
+    // never carried - and then either push a redundant frame or, worse, skip a
+    // genuinely needed one because the two reads happened to agree.
+    const sentCloudAuthorized = this.config.cloudAuthorized?.();
+    this.openFrameCloudAuthorized = sentCloudAuthorized;
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
@@ -2170,7 +2198,7 @@ class StreamSession<
       // `undefined` (a client with no verdict source) omits the key, which an
       // older host strips anyway and a newer host reads as "does not speak
       // verdicts" - the same answer from both ends.
-      cloudAuthorized: this.config.cloudAuthorized?.(),
+      cloudAuthorized: sentCloudAuthorized,
     };
     if (!this.sendControlText(socket, openFrame)) {
       this.onSendFailure(socket);
@@ -2503,6 +2531,22 @@ class StreamSession<
       this.currentBearerToken() !== this.openFrameToken
     ) {
       this.pushCredentialUpdate();
+    }
+    // THE SAME RECONCILIATION FOR THE VERDICT, and it is needed for a reason
+    // the bearer arm is not: a verdict changes without the bearer moving, so
+    // the arm above cannot stand in for this one. If the verdict moved DURING
+    // the handshake, that change's `notifyCloudVerdictChanged` was dropped by
+    // the phase gate and the open frame carried the old value - which for a
+    // true -> false transition leaves the host authorizing a session the client
+    // has already demoted, for the life of the connection.
+    //
+    // Safe to reach `pushCloudVerdictUpdate` here only because `phase` became
+    // `subscribed` above; the same ordering the bearer arm depends on.
+    if (this.supportsCloudVerdictUpdate) {
+      const current = this.config.cloudAuthorized?.();
+      if (current !== undefined && current !== this.openFrameCloudAuthorized) {
+        this.pushCloudVerdictUpdate();
+      }
     }
     // Reported last, once the connection can actually carry a provision frame:
     // the owning client may respond to this synchronously by flushing a
@@ -3161,6 +3205,13 @@ class StreamSession<
     this.openFrameToken = null;
     this.openFrameHostId = null;
     this.supportsCredentialUpdate = false;
+    // Reset with its siblings. Not currently reachable - the push is gated on
+    // `phase === "subscribed"`, which no redial reaches before the next
+    // `openAck` overwrites this - but a capability flag surviving the socket
+    // that advertised it is wrong on its own terms, and the two doors beside it
+    // already make the opposite decision.
+    this.supportsCloudVerdictUpdate = false;
+    this.openFrameCloudAuthorized = undefined;
     this.supportsHostCredentialProvision = false;
     this.phase = "idle";
     this.pendingBinaryEnvelope = null;

@@ -382,7 +382,7 @@ export class WsRpcClient<
         // client sends - so an authority built before this existed is
         // indistinguishable on the wire from a client that predates it, which
         // is the correct reading of both.
-        cloudAuthorized: authority.cloudAuthorized,
+        cloudAuthorized: authority.cloudAuthorized?.(),
       });
 
       // Handshake stays on the transport default even when the caller

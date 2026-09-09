@@ -930,11 +930,15 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           binding.abortSignal,
           context.abortSignal,
         ]),
-        // Read at authority-construction time, alongside the bearer it belongs
-        // to, so the verdict and the credential this request dispatches under
-        // are one snapshot rather than two reads that can land on opposite
-        // sides of a transition.
-        cloudAuthorized: context.cloudAuthorized,
+        // A READER over this exact context, not its value at capture. The
+        // earlier version snapshotted here and argued that pairing it with the
+        // bearer made them "one snapshot"; that was wrong in the one direction
+        // that matters. `bearer` above is a LIVE source read when the open
+        // frame is built, while this was frozen at capture - so a request
+        // queued by the coordinator and then parked on `session.dial()` sent a
+        // stale verdict alongside a fresh bearer. Bound to the same context so
+        // both answer for the same session.
+        cloudAuthorized: () => context.cloudAuthorized,
       },
       authorityDomain: {
         bindingToken: binding.token,

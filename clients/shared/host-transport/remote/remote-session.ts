@@ -837,6 +837,18 @@ export class RemoteSession<
    */
   private openFrameBearer: string | null = null;
   /**
+   * The verdict this session's `open` payload actually carried, or `undefined`
+   * when it carried none.
+   *
+   * The verdict twin of {@link openFrameBearer}. A change landing DURING the
+   * handshake - after `open` went out, before `ready` - is dropped by the phase
+   * gate on {@link notifyCloudVerdictChanged}, and the payload already sent
+   * carries the stale value. For a true -> false transition that leaves the
+   * host authorizing a session the client has already demoted, for the life of
+   * the session, with every multiplexed stream inheriting it.
+   */
+  private openFrameCloudAuthorized: boolean | undefined = undefined;
+  /**
    * Bounds the rare "valid-but-rejected" loop: authn keeps accepting the
    * bearer (revalidation returns "rotated") yet the host keeps FATAL-ing the
    * session `UNAUTHORIZED` because the token never actually changed (clock
@@ -1584,8 +1596,14 @@ export class RemoteSession<
    * logical stream multiplexed inside the session - a strictly worse outcome
    * than the stale verdict it was trying to fix.
    *
-   * A session that is not `ready` sends nothing and needs nothing: its next
-   * `open` carries the verdict, read afresh at handshake time.
+   * A session that is not `ready` sends nothing HERE, and whether it needs
+   * anything depends on where in the handshake it is. Before `open` goes out
+   * the drop is harmless - that payload reads the verdict afresh. After it goes
+   * out it is not: the payload already carries the pre-change value, so a
+   * true -> false transition would strand the host authorizing a demoted
+   * session, with every stream multiplexed inside it inheriting that.
+   * `handleOpenAck` closes the window against
+   * {@link openFrameCloudAuthorized}.
    */
   notifyCloudVerdictChanged(): void {
     const connection = this.connection;
@@ -2297,6 +2315,12 @@ export class RemoteSession<
       SESSION_OPEN_ACK_TIMEOUT_MS,
       "open-ack-timeout",
     );
+    // Read ONCE and recorded: two reads of a live source can straddle a
+    // transition, which would make the reconciliation at `openAck` compare the
+    // payload against a verdict it never carried - and then skip a genuinely
+    // needed push because the two reads happened to agree.
+    const sentCloudAuthorized = this.options.cloudAuthorized?.();
+    this.openFrameCloudAuthorized = sentCloudAuthorized;
     const open: SessionOpenPayload = {
       muxVersion: CURRENT_MUX_VERSION,
       bearer,
@@ -2319,7 +2343,7 @@ export class RemoteSession<
       // re-opens across relay drops and wake redials, and each of those must
       // assert the verdict it holds now. A capture would let a session that
       // dropped while unverified come back authorized.
-      cloudAuthorized: this.options.cloudAuthorized?.(),
+      cloudAuthorized: sentCloudAuthorized,
     };
     this.enqueueMessage(connection, {
       type: MuxFrameType.OPEN,
@@ -2661,6 +2685,22 @@ export class RemoteSession<
 
     for (const stream of this.subscriptions.values()) {
       this.openSubscription(connection, stream);
+    }
+    // RECONCILE THE VERDICT, now that `phase === "ready"` lets the push through.
+    // A verdict that moved during the handshake had its notification dropped by
+    // that same gate, and the `open` payload carried the pre-change value - so
+    // without this the host keeps the stale verdict for the life of the
+    // session. Placed after `phase = "ready"` (the gate) and after the
+    // subscriptions are re-opened, so the correction rides the same connection
+    // the streams were just restored on.
+    if (
+      connection.cloudVerdictUpdateSupported &&
+      this.options.cloudAuthorized !== undefined
+    ) {
+      const current = this.options.cloudAuthorized();
+      if (current !== this.openFrameCloudAuthorized) {
+        this.notifyCloudVerdictChanged();
+      }
     }
     this.startReauthLoop();
     this.armStandingTimer();
@@ -4647,6 +4687,7 @@ export class RemoteSession<
       this.notifyMethodSupportListeners();
     }
     this.openFrameBearer = null;
+    this.openFrameCloudAuthorized = undefined;
     this.clearPhaseTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
