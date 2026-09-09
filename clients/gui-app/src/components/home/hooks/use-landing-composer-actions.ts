@@ -499,6 +499,26 @@ export function useLandingComposerActions(
             draftRuntimeRegistry.complete(attempt);
             return;
           }
+          // A REFUSAL resolves this promise rather than rejecting it -
+          // `epic.create@1.1` carries it as an optional key on the ordinary
+          // response - so every line below has to be skipped explicitly. None
+          // of it is harmless on a create that did not happen: it would open a
+          // tab and navigate into an epic the host never made, then leave the
+          // user on a route whose `epic.subscribe` fails with a second,
+          // unrelated-looking error. The host also rejects the pending-create
+          // gates on refusal, so those racing opens WILL fail; that is correct
+          // and must not be narrated twice.
+          //
+          // Torn down exactly like the retired case, which is the same
+          // situation from the other side: local state was staged for an epic
+          // that will not exist. The draft and the staged worktree intent
+          // survive on purpose, so a repaired store makes resubmitting work.
+          // `useEpicCreateForClient.onSuccess` owns the user-facing message.
+          if (response.refusal !== undefined) {
+            discardRetiredLandingEpic({ epicId, chatId });
+            draftRuntimeRegistry.complete(attempt);
+            return;
+          }
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
           clearConsumedLandingWorktreeIntent(workspaceContext);
@@ -808,7 +828,26 @@ export function useLandingComposerActions(
         chat: null,
       })
         .then(
-          () => {
+          (response) => {
+            // A REFUSAL lands HERE, not in the arm below: `epic.create@1.1`
+            // answers it as an optional key on a resolved response, so the
+            // fulfilled arm runs for a create that did not happen. This flow
+            // is the dangerous one of the two - it navigated and opened the
+            // tile BEFORE the round-trip, so without this branch it would
+            // clear the staged worktree intent a retry needs, re-arm the
+            // reconciler exemption for an epic that does not exist, and then
+            // chain `agent.tui.prepareLaunch` / `epic.createTuiAgent` against
+            // it, whose own `onError` toast would report the missing epic as a
+            // second, unrelated-looking failure.
+            //
+            // Settled exactly like the rejection arm below, because it is the
+            // same fact: the epic never landed, so drop the marker and let the
+            // existence reconciler prune the orphan tab. `useEpicCreateForClient.onSuccess`
+            // owns the user-facing message and the repair offer.
+            if (response.refusal !== undefined) {
+              unmarkEpicCreatedThisSession(epicId);
+              return;
+            }
             // This staged selection now belongs to a successfully-created
             // epic. Until this point a retry must see the exact same intent.
             clearConsumedLandingWorktreeIntent(workspaceContext);

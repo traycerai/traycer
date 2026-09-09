@@ -16,6 +16,7 @@ import { NotificationFocusBridge } from "@/components/layout/bridges/notificatio
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
+import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
@@ -107,6 +108,13 @@ export function RootComponent() {
       {admission.admitted ? (
         <WindowHostModalHost bypassed={isHostIndependentRoute} />
       ) : null}
+      {/* The local-store repair. Mounted BESIDE the window narrator rather
+          than inside any composer: it answers a refused `epic.create`, and the
+          population it exists for is a user with no openable epic - the only
+          other route to the rebind hangs off `SnapshotErrorBanner`, which
+          requires opening an epic that fails to load. Signed-in only, like its
+          neighbour; an unadmitted shell has no create to refuse. */}
+      {admission.admitted ? <LocalStoreRepairDialogHost /> : null}
       <ChatSessionWakeRetryController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -
