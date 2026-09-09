@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { type HostRpcRegistry } from "@/lib/host";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { cloudEpicTasksLastViewedQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { resetLastViewedCloudEpicTasksPagesForScope } from "@/stores/epics/cloud-epic-tasks-pages-store";
@@ -55,9 +56,33 @@ interface RecordEpicViewedVariables {
   readonly isLocalHome: boolean;
 }
 
-/** Records task recency through the default host used by Task History. */
-export function useEpicRecordViewed() {
-  const client = useHostClient();
+/**
+ * Records task recency on a NAMED host.
+ *
+ * Takes the host rather than resolving `useHostClient()`, and that is the whole
+ * correction: the local-home arm above is served out of the naming host's OWN
+ * store, so a caller that learned "this epic is local-homed" from one machine's
+ * live session and then dispatched on the window's effective host sent the write
+ * to a process that does not have the epic. The two hosts are the same value on
+ * a single-host install and on an unpinned window, which is why it survived
+ * review twice - and differ exactly when a surface is pinned, which is the
+ * configuration the local-first work exists for.
+ *
+ * `isLocalHome` and the host it came from are ONE fact; `useEpicSessionHostIdForEpic`
+ * is its other half. `null` means no session has stated a home, and resolves the FOLLOWING client
+ * - correct for the cloud arm, which any host proxies to the account, and
+ * unreachable for the local arm, which needs an `isLocalHome` no session
+ * supplied.
+ *
+ * Same shape as `useLocalStoreRebindMutation(hostId)`, for the same reason.
+ */
+export function useEpicRecordViewed(hostId: string | null) {
+  // `useHostClientForHostId` rather than a directory lookup of my own: it is
+  // the one sanctioned resolver for "the client for this id" (AGENTS.md), and
+  // its `null` arm already falls back to the FOLLOWING client - so the
+  // no-session case resolves the window's host through the same code path
+  // instead of through a second decision at the call site.
+  const client = useHostClientForHostId(hostId);
   const queryClient = useQueryClient();
   // Generics spelled out for the same reason as `useEpicSetPinned`:
   // `RecordEpicViewedVariables` is wider than the request schema, and
@@ -85,8 +110,8 @@ export function useEpicRecordViewed() {
           throw new Error(EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE);
         }
         return {
-          hostId: client.getActiveHostId(),
-          userId: client.getRequestContextUserId(),
+          hostId: client?.getActiveHostId() ?? null,
+          userId: client?.getRequestContextUserId() ?? null,
         };
       },
       onSuccess: async (_response, _variables, context) => {

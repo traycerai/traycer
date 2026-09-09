@@ -491,6 +491,39 @@ function projectEpicLocalHomeReading(
 
 const UNSTATED_LOCAL_HOME_READING: EpicLocalHomeReading = "unstated";
 
+function projectEpicSessionHostId(
+  canonicalEpicIds: ReadonlyArray<string>,
+): LiveSessionSnapshotCache<string | null> {
+  const [epicId] = canonicalEpicIds;
+  const handle = epicId === undefined ? null : registry.peek(epicId);
+  const hostId = handle === null ? null : getEpicSessionHandleHostId(handle);
+  return { signature: hostId ?? " none", snapshot: hostId };
+}
+
+/**
+ * The host the epic's live session is served from, live, or `null` when no
+ * session is open for it.
+ *
+ * The companion to {@link useEpicLocalHomeReading}, and it exists because the
+ * two must be read TOGETHER. A caller acting on "this epic is local-homed"
+ * learned that from one machine's session, and the write it then makes has to
+ * go to THAT machine: the host's local-home exemption is served out of its own
+ * store, so the same write dispatched on the window's effective host reaches a
+ * process that does not have the epic. The home reading and the host that
+ * stated it are one fact, so they are read through one mechanism.
+ *
+ * Rebinds on registry emissions exactly as the reading does, so a session that
+ * is acquired, re-pointed to another host, or pruned moves this answer.
+ */
+export function useEpicSessionHostIdForEpic(epicId: string): string | null {
+  const epicIds = useMemo(() => [epicId], [epicId]);
+  return useEpicReadLiveSessionSnapshot<string | null>(
+    epicIds,
+    projectEpicSessionHostId,
+    () => null,
+  );
+}
+
 /** Single-epic {@link EpicLocalHomeReading}, live. */
 export function useEpicLocalHomeReading(epicId: string): EpicLocalHomeReading {
   const epicIds = useMemo(() => [epicId], [epicId]);

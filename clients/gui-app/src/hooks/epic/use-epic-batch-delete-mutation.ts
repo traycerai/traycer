@@ -307,7 +307,7 @@ function normalizeEpicTitle(title: string): string | null {
 
 type EpicDeleteToastLevel = "success" | "warning" | "error";
 
-interface EpicDeleteToastParts {
+export interface EpicDeleteToastParts {
   readonly level: EpicDeleteToastLevel;
   readonly message: string;
   /**
@@ -326,7 +326,12 @@ interface EpicDeleteToastParts {
 // The Task-deletion half of the summary toast, factored so the same message can
 // be emitted immediately (no cleanup) or combined with the worktree tally once
 // the streamed cleanup settles.
-function epicDeleteToastParts(args: {
+//
+// Exported for the same reason its four neighbours are: it is a pure function
+// of the response, and the only other way to reach it is to drive the whole
+// mutation - host client, router, stream transport - which would put a mock
+// scaffold between the assertion and the copy it is asserting.
+export function epicDeleteToastParts(args: {
   readonly failures: ReadonlyArray<BatchDeleteItemResult>;
   readonly successes: number;
   readonly total: number;
@@ -482,7 +487,15 @@ export function worktreeCleanupSummary(
   return parts.join(", ");
 }
 
-function emitTaskDeleteSummaryToast(
+/**
+ * The combined toast, once the streamed worktree cleanup settles.
+ *
+ * Exported alongside `epicDeleteToastParts` so the JOIN can be pinned where it
+ * happens. Testing `joinToastDetails` directly would prove the function and not
+ * its use - which half goes first, and whether both are passed at all, are
+ * facts about this caller.
+ */
+export function emitTaskDeleteSummaryToast(
   epicToast: EpicDeleteToastParts,
   outcome: WorktreeCleanupOutcome,
 ): void {
