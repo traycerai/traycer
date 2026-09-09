@@ -143,6 +143,7 @@ import {
   listChatRecordsRequestV11Schema,
   listChatRecordsResponseSchema,
   listChatRecordsResponseV11Schema,
+  listChatRecordsResponseV12Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -933,6 +934,42 @@ export const epicListChatRecordsUpgradeV10ToV11 = defineUpgradePath<
     ...response,
     chats: response.chats.map((row) => ({ ...row, docResident: false })),
   }),
+});
+
+// `@1.2` puts the chat's cloud publication head on each row, so the poll that
+// repairs a lost stream delta carries the same freshness fact the delta does.
+// Request unchanged from `@1.1`; the addition is one optional nested key under
+// `chats[]`, which an older peer's schema strips - the `epic.listTasks@1.1`
+// shape exactly.
+export const epicListChatRecordsV12 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listChatRecordsRequestV11Schema,
+  responseSchema: listChatRecordsResponseV12Schema,
+});
+
+/**
+ * The IDENTITY, in both directions.
+ *
+ * REQUEST: `@1.2` takes `@1.1`'s request unchanged, so there is nothing to
+ * fill.
+ *
+ * RESPONSE: a `@1.1` host never reported a head, so the upgrade leaves the key
+ * ABSENT rather than writing `null`. `null` is the newer wire's affirmative
+ * "this row has no publication", and an upgrade must not put an affirmative
+ * claim in an old peer's mouth - the `host.getInstallationInfo` convention.
+ * Absent says the only true thing: that host was never asked. Consumers read
+ * `head ?? null` and see no difference, which is why the distinction costs
+ * them nothing.
+ */
+export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicListChatRecordsV11,
+  typeof epicListChatRecordsV12
+>({
+  from: epicListChatRecordsV11.schemaVersion,
+  to: epicListChatRecordsV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // One chat image attachment's bytes, resolved by the VIEWER's tab host (local
