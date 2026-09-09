@@ -109,7 +109,7 @@ export function useEpicTaskPinnedStates(
  * for epics it OWNS (`getTaskContextsResponseSchema@1.3` overlays owned rows).
  * So a local-homed epic on another host is not resolved at all: no entry, and
  * the tab strip's Pin item stays disabled behind a spinner instead of saying
- * the epic is stored on this device.
+ * the epic is stored on the connected device.
  *
  * The session wins on `home` where the two are both present, deliberately. A
  * live session is the epic's own stream, and the store's own rule is that

@@ -11,6 +11,20 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
  *
  * The split is also the honest boundary: the rule below is what every
  * responsive surface must agree on, and it has no rendering in it.
+ *
+ * ## "the connected device", never "this device"
+ *
+ * A local-homed epic lives on the HOST that serves it, and after the mobile /
+ * relay work that host is routinely not the machine rendering these strings -
+ * a phone reads its Mac's local epics. "Stored on this device" was written
+ * when the two were always the same and became false without anyone editing
+ * it: a string is a claim about a state space, and a new member invalidates
+ * strings nobody touched.
+ *
+ * "Device" stays the UI word for a host (host identity rule 1: no parallel
+ * `deviceId`), so the fix is the ARTICLE, not the vocabulary. The same
+ * correction applies to the preserved-orphan pair below, whose "this device's
+ * edits" makes the identical claim about the identical machine.
  */
 
 /** The reason a history row cannot dispatch the cloud-only pin mutation. */
@@ -58,10 +72,10 @@ export function historyPinControlLabel(input: {
   readonly isPinned: boolean;
 }): string {
   if (input.unavailableReason === "preserved-orphan") {
-    return `Pinning ${input.displayTitle} is unavailable; its cloud copy was deleted and only this device's edits remain`;
+    return `Pinning ${input.displayTitle} is unavailable; its cloud copy was deleted and only the connected device's edits remain`;
   }
   if (input.unavailableReason === "local-home") {
-    return `Pinning ${input.displayTitle} needs cloud sync; it is stored on this device`;
+    return `Pinning ${input.displayTitle} needs cloud sync; it is stored on the connected device`;
   }
   if (input.unavailableReason === "phase") {
     return `Pinning ${input.displayTitle} is unavailable for phases`;
@@ -78,10 +92,10 @@ export function historyPinUnavailableTooltip(
   reason: HistoryPinUnavailableReason,
 ): string {
   if (reason === "preserved-orphan") {
-    return "This epic's cloud copy was deleted. Only this device's edits remain, so it can't be pinned.";
+    return "This epic's cloud copy was deleted. Only the connected device's edits remain, so it can't be pinned.";
   }
   if (reason === "local-home") {
-    return "This epic is stored on this device. Pinning needs cloud sync.";
+    return "This epic is stored on the connected device. Pinning needs cloud sync.";
   }
   if (reason === "unverified-session") {
     return "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once your sign-in is confirmed.";

@@ -83,11 +83,15 @@ function pinActionLabel(
   taskPinned: boolean | null,
 ): string {
   // Two different unavailabilities, and one label cannot honestly cover both:
-  // "stored on this device" is a fact about the ROW, and stating it for a
-  // cloud-backed row whose session merely lost its verdict would be a false
-  // statement about where the epic lives.
+  // "stored on the connected device" is a fact about the ROW, and stating it
+  // for a cloud-backed row whose session merely lost its verdict would be a
+  // false statement about where the epic lives.
+  //
+  // "the connected device" rather than "this device": the epic lives on the
+  // HOST serving it, which on a phone or a relay-only shell is not the machine
+  // rendering this menu. See `history-pin-availability.ts` for the rule.
   if (unavailableReason === "row") {
-    return "Pin Task in History \u2014 stored on this device";
+    return "Pin Task in History \u2014 stored on the connected device";
   }
   if (unavailableReason === "unverified-session") {
     return "Pin Task in History \u2014 sign-in not confirmed";

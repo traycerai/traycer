@@ -401,7 +401,8 @@ function projectLocalHomedEpicIds(
  * OWNED local-home rows (`getTaskContextsResponseSchema@1.3`), so a host that
  * does not own the epic does not resolve the row at all, the id never reaches
  * the pinned-state map, and the Pin item sits disabled behind a spinner
- * forever instead of explaining that the epic is stored on this device.
+ * forever instead of explaining that the epic is stored on the connected
+ * device.
  *
  * The epic's own session already holds that fact, so this asks it directly
  * rather than routing the RPC by a per-tab host binding. Same shape as
