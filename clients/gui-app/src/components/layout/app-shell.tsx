@@ -11,11 +11,7 @@ import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
-import { AppConnectivityStripContext } from "@/components/layout/app-connectivity-strip-context";
-import {
-  isAnnouncedInterruption,
-  useHostSessionConnectivity,
-} from "@/lib/host/session-connectivity";
+import { useHostSessionConnectivity } from "@/lib/host/session-connectivity";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
@@ -74,7 +70,6 @@ export function AppShell(props: AppShellProps) {
   // would be a second episode, and the two could disagree about whether a bar
   // is on screen.
   const sessionConnectivity = useHostSessionConnectivity();
-  const appStripShowing = isAnnouncedInterruption(sessionConnectivity);
 
   return (
     <PrimaryFocusCoordinatorProvider>
@@ -109,28 +104,23 @@ export function AppShell(props: AppShellProps) {
                   sat under the app header until a tab switch remounted the
                   surface. A clipped box has no scroll offset to drift. */}
                 <div className="relative flex min-h-0 flex-1 overflow-clip">
-                  {/* Wraps the surfaces, not the strip: this publishes whether
-                    the strip above is speaking so the Epic and chat strips
-                    below defer to it, leaving exactly one bar on screen. */}
-                  <AppConnectivityStripContext.Provider value={appStripShowing}>
-                    <TopLevelSurfaceActivationProvider>
-                      <TopLevelTabHost />
-                    </TopLevelSurfaceActivationProvider>
-                    <div
-                      className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"
-                      data-testid="route-adapter-layer"
-                    >
-                      {children}
-                    </div>
-                    {/* Single window-wide terminal mount: the gesture provider's
+                  <TopLevelSurfaceActivationProvider>
+                    <TopLevelTabHost />
+                  </TopLevelSurfaceActivationProvider>
+                  <div
+                    className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"
+                    data-testid="route-adapter-layer"
+                  >
+                    {children}
+                  </div>
+                  {/* Single window-wide terminal mount: the gesture provider's
                     state must survive draft/split focus changes, so it lives
                     here rather than inside any one landing pane. The panel's
                     DOM is portaled into the selected pane's anchor, which owns
                     its layout and clipping. */}
-                    <HostScopeReady scope="default-host">
-                      <LandingTerminalHost />
-                    </HostScopeReady>
-                  </AppConnectivityStripContext.Provider>
+                  <HostScopeReady scope="default-host">
+                    <LandingTerminalHost />
+                  </HostScopeReady>
                 </div>
                 <ReservedBrowserChordsBridge />
                 <TileFindOwnerBridge />

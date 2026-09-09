@@ -6,14 +6,14 @@ import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-cur
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
-import { StreamSyncingBar } from "@/components/sync/stream-syncing-bar";
-import { useAppConnectivityStripShowing } from "@/components/layout/app-connectivity-strip-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import {
   useEpicHostTransportStatus,
   useEpicSnapshotLoaded,
 } from "@/lib/epic-selectors";
+import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
+import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
@@ -73,20 +73,21 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
     hasContent: epicSnapshotLoaded,
     identity: epicId,
   });
-  // The app-wide strip outranks this one. Its subject is this client's whole
-  // transport, so when it is speaking every stream below it is down for the
-  // same reason and an Epic bar under it would be the same sentence a second
-  // time. The spell above still runs - it times the outage, not the drawing -
-  // so this strip takes over mid-outage with its own elapsed time intact when
-  // the session returns while the Epic's stream is still restoring.
-  const appStripShowing = useAppConnectivityStripShowing();
-  const epicStripShowing = !appStripShowing && epicSpell.syncing;
   // The session's own wake, not the app-wide one - this view always sits under
   // a live session, and the handle is what names this Epic's socket.
   const epicHandle = useMaybeOpenEpicHandle();
   const wakeEpicTransport = useCallback(() => {
     epicHandle?.wakeTransport();
   }, [epicHandle]);
+  // REPORTED, not rendered. The one indicator lives in the app shell so it
+  // neither moves nor restarts its animation when the surface speaking for it
+  // changes; ordering against the session and chat legs is the store's rank.
+  usePublishSurfaceSync(`epic:${epicId}`, {
+    rank: SURFACE_SYNC_RANK.epic,
+    label: "Task",
+    spell: epicSpell,
+    wake: epicHandle === null ? null : wakeEpicTransport,
+  });
 
   // Non-null root with no resolvable tile = an empty pane (e.g. the user closed
   // the last tab). Desktop renders the inline `PaneOpener` for this; do the
@@ -124,11 +125,9 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           : undefined
       }
     >
-      {/* Above the tile bar, because the Epic's stream is the OUTER surface:
-          the canvas, the tab list and every sidebar panel go stale together
-          when it drops, while the tile bar below names one tile. The tile's own
-          strip suppresses itself while this one is up (see
-          `MobileCurrentTileBar`), so the two never stack.
+      {/* No bar here. The Epic's stream reports upward and the app shell renders
+          the only one, so a hand-off between surfaces changes what it says
+          rather than which element is saying it.
 
           Phone-only by PLACEMENT, with no viewport check of its own. This view
           is mounted from `TileCanvasLive`'s `useIsMobileViewport()` branch, so
@@ -136,26 +135,9 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           of the same media query is a second decider that can drift from the
           first. It is deliberately not `isMobileApp()`: that names the
           installed Capacitor build as a PRODUCT (see `lib/mobile-app.ts`),
-          which would drop the strip in a mobile browser, where the relay drops
-          the socket exactly the same way. */}
-      {epicStripShowing ? (
-        <StreamSyncingBar
-          spell={epicSpell}
-          onWake={epicHandle === null ? null : wakeEpicTransport}
-          surfaceLabel="Task"
-          testId="epic-stream-syncing-bar"
-        />
-      ) : null}
-      <MobileCurrentTileBar
-        epicId={epicId}
-        tile={selection.ref}
-        // The DECIDED answer for every bar OUTSIDE the tile, not the legs
-        // behind them. The tile bar suppresses its own strip while any of them
-        // is speaking, and re-deriving "is one speaking" down there would be a
-        // second decider that can disagree for a frame - the frame in which two
-        // bars paint.
-        outerStripShowing={appStripShowing || epicStripShowing}
-      />
+          which would drop the report in a mobile browser, where the relay
+          drops the socket exactly the same way. */}
+      <MobileCurrentTileBar epicId={epicId} tile={selection.ref} />
       <div className="relative min-h-0 flex-1">
         <TabBodySelectedContext.Provider value>
           <ActiveTabBody

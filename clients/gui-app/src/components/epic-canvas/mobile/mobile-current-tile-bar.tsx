@@ -6,9 +6,11 @@ import {
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
-import { StreamSyncingBar } from "@/components/sync/stream-syncing-bar";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
+import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
+import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
+import { NO_STREAM_SYNCING_SPELL } from "@/lib/sync/stream-syncing-state";
 import {
   tileRenameKind,
   useSwitcherRename,
@@ -30,14 +32,6 @@ import type {
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
-  /**
-   * Whether any strip OUTSIDE this tile is currently showing a bar - the app-wide
-   * session strip, or the Epic's. The DECIDED answer,
-   * passed down rather than re-derived here. Re-deriving it from the legs
-   * behind it would be a second decider that can disagree with the first for a
-   * frame, and that frame is the one in which both strips paint.
-   */
-  readonly outerStripShowing: boolean;
 }
 
 /**
@@ -149,20 +143,20 @@ function MobileCurrentTileBarBody(
     hasContent: chatSync.hasContent,
     identity: tile.id,
   });
-  // ONE strip on screen at a time. On an app switch every stream is pushed to
-  // `reconnecting` in the same tick, so without this the Epic's strip and the
-  // chat's would appear together saying the same thing twice. The outer surface
-  // wins while it is speaking; when the Epic's stream returns first, this takes
-  // over - carrying however far its own spell had already run - and keeps
-  // saying it until the transcript itself is current. The user therefore sees
-  // exactly one strip, from the first drop until everything on screen is fresh.
+  // REPORTED, not rendered. The one indicator lives in the app shell, which
+  // orders this against the session and Epic legs by rank - so there is no
+  // suppression to coordinate here, and a hand-off changes what the indicator
+  // says rather than which element says it.
   //
-  // The kind is re-checked here rather than left to the `null` host above. A
-  // resolver returning nothing for a non-chat tile is the mechanism, not the
-  // rule, and the rule belongs where the strip is decided: a future resolver
-  // that answered a spec id from some other table would otherwise put a chat's
-  // reconnect banner on an artifact with nothing to say.
-  const showChatStrip = isChat && !props.outerStripShowing && chatSpell.syncing;
+  // A non-chat tile publishes a spell that never runs. Its stream is either
+  // covered by the Epic's report (every artifact kind), or already narrated by
+  // the tile itself (a terminal's overlay, a shell window's banner).
+  usePublishSurfaceSync(`chat:${tile.id}`, {
+    rank: SURFACE_SYNC_RANK.chat,
+    label: "Chat",
+    spell: isChat ? chatSpell : NO_STREAM_SYNCING_SPELL,
+    wake: isChat ? chatSync.wake : null,
+  });
 
   return (
     <div
@@ -189,16 +183,6 @@ function MobileCurrentTileBarBody(
         />
         <ContentMinimapButton tileInstanceId={tile.instanceId} />
       </div>
-      {/* Under the row, inside the bar's own border, so the strip reads as the
-          header's lower edge rather than as a banner floating over the tile. */}
-      {showChatStrip ? (
-        <StreamSyncingBar
-          spell={chatSpell}
-          onWake={chatSync.wake}
-          surfaceLabel="Chat"
-          testId="chat-stream-syncing-bar"
-        />
-      ) : null}
     </div>
   );
 }

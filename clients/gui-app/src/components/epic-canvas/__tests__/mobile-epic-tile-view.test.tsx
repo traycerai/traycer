@@ -2,7 +2,11 @@ import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
-import { AppConnectivityStripContext } from "@/components/layout/app-connectivity-strip-context";
+import {
+  SURFACE_SYNC_RANK,
+  useSurfaceSyncStore,
+  type SurfaceSyncEntry,
+} from "@/stores/sync/surface-sync-store";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -60,22 +64,8 @@ vi.mock("@/components/epic-canvas/canvas/pane-opener", () => ({
 // carrying the tile it was handed, so the view test can assert WHICH tile the
 // bar reflects without pulling the bar's host/title hooks.
 vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
-  MobileCurrentTileBar: ({
-    tile,
-    outerStripShowing,
-  }: {
-    readonly tile: EpicCanvasTileRef;
-    readonly outerStripShowing: boolean;
-  }) => (
-    <div
-      data-testid="current-tile-bar"
-      data-tile-id={tile.id}
-      // Recorded so the view test can prove the bar is handed the SAME legs the
-      // outer strip decided on. The tile bar suppresses its own strip off these;
-      // if the view ever stopped passing them, the two strips would stack and
-      // only this attribute would say so.
-      data-outer-strip-showing={String(outerStripShowing)}
-    />
+  MobileCurrentTileBar: ({ tile }: { readonly tile: EpicCanvasTileRef }) => (
+    <div data-testid="current-tile-bar" data-tile-id={tile.id} />
   ),
 }));
 
@@ -252,118 +242,66 @@ describe("<MobileEpicTileView />", () => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     epicSession.value = { transportStatus: "open", snapshotLoaded: true };
+    useSurfaceSyncStore.setState({ entries: {} });
   });
 
-  describe("stream-syncing strip", () => {
-    function epicStrip(): HTMLElement | null {
-      return screen.queryByTestId("epic-stream-syncing-bar");
+  describe("stream-syncing report", () => {
+    function published(): SurfaceSyncEntry | undefined {
+      const { entries } = useSurfaceSyncStore.getState();
+      return Object.hasOwn(entries, "epic:epic-1")
+        ? entries["epic:epic-1"]
+        : undefined;
     }
 
-    it("stays silent while the Epic's own stream is open", () => {
+    it("reports nothing running while the Epic's own stream is open", () => {
       seed(twoPaneCanvas("pane-A"));
       renderView();
-      expect(epicStrip()).toBeNull();
+      expect(published()?.spell.syncing).toBe(false);
     });
 
-    it("says Syncing… while the Epic's stream comes back under a painted canvas", () => {
+    it("reports a running spell while its stream comes back under a painted canvas", () => {
       epicSession.value = {
         transportStatus: "reconnecting",
         snapshotLoaded: true,
       };
       seed(twoPaneCanvas("pane-A"));
       renderView();
-      expect(epicStrip()).not.toBeNull();
+      expect(published()?.spell.syncing).toBe(true);
+      expect(published()?.rank).toBe(SURFACE_SYNC_RANK.epic);
+      expect(published()?.label).toBe("Task");
       // The tile it describes is still on screen underneath, not replaced by a
-      // skeleton - that is the whole state the strip exists to narrate.
+      // skeleton - that is the whole state the report exists to narrate.
       expect(screen.queryByTestId("tile-spec-1")).not.toBeNull();
     });
 
-    it("stays silent on a cold open, where the skeleton already says loading", () => {
+    it("renders no bar of its own", () => {
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(screen.queryByTestId("epic-stream-syncing-bar")).toBeNull();
+    });
+
+    it("reports nothing on a cold open, where the skeleton already says loading", () => {
       epicSession.value = {
         transportStatus: "connecting",
         snapshotLoaded: false,
       };
       seed(twoPaneCanvas("pane-A"));
       renderView();
-      expect(epicStrip()).toBeNull();
+      expect(published()?.spell.syncing).toBe(false);
     });
 
-    it("stays silent on a closed stream rather than animating forever", () => {
+    it("reports nothing on a closed stream rather than animating forever", () => {
       epicSession.value = { transportStatus: "closed", snapshotLoaded: true };
       seed(twoPaneCanvas("pane-A"));
       renderView();
-      expect(epicStrip()).toBeNull();
+      expect(published()?.spell.syncing).toBe(false);
     });
 
-    it("hands the tile bar its DECIDED answer, so the two never stack", () => {
-      epicSession.value = {
-        transportStatus: "reconnecting",
-        snapshotLoaded: true,
-      };
-      seed(twoPaneCanvas("pane-A"));
-      renderView();
-      expect(epicStrip()).not.toBeNull();
-      expect(
-        screen
-          .getByTestId("current-tile-bar")
-          .getAttribute("data-outer-strip-showing"),
-      ).toBe("true");
-    });
-
-    it("tells the tile bar it is silent when its own status is away but cold", () => {
-      // The suppression signal is whether this strip is SPEAKING, not the raw
-      // status behind it. An Epic still cold shows no strip, so reporting
-      // "showing" here would silence the chat's strip too and leave a stale
-      // transcript with nothing said about it at all.
-      epicSession.value = {
-        transportStatus: "reconnecting",
-        snapshotLoaded: false,
-      };
-      seed(twoPaneCanvas("pane-A"));
-      renderView();
-      expect(epicStrip()).toBeNull();
-      expect(
-        screen
-          .getByTestId("current-tile-bar")
-          .getAttribute("data-outer-strip-showing"),
-      ).toBe("false");
-    });
-
-    it("yields to the app-wide strip, leaving exactly one bar on screen", () => {
-      // An app switch drops this client's whole transport, so the app-wide
-      // strip and every stream below it report the same interruption in the
-      // same tick. Three bars saying one thing is what the rule prevents.
-      epicSession.value = {
-        transportStatus: "reconnecting",
-        snapshotLoaded: true,
-      };
-      seed(twoPaneCanvas("pane-A"));
-      render(
-        <AppConnectivityStripContext.Provider value>
-          <MobileEpicTileView epicId="epic-1" tabId={VIEW_TAB_ID} />
-        </AppConnectivityStripContext.Provider>,
-      );
-      expect(epicStrip()).toBeNull();
-      // …and the tile below is told to stay quiet too, so the deferral reaches
-      // all the way down rather than stopping here.
-      expect(
-        screen
-          .getByTestId("current-tile-bar")
-          .getAttribute("data-outer-strip-showing"),
-      ).toBe("true");
-    });
-
-    it("takes over when the app-wide strip stops but its own stream is still away", () => {
-      epicSession.value = {
-        transportStatus: "reconnecting",
-        snapshotLoaded: true,
-      };
-      seed(twoPaneCanvas("pane-A"));
-      renderView();
-      expect(epicStrip()).not.toBeNull();
-    });
-
-    it("shows no strip on an empty pane, which has no content to be stale", () => {
+    it("still reports on an empty pane - the Epic's own data is what is stale", () => {
       epicSession.value = {
         transportStatus: "reconnecting",
         snapshotLoaded: true,
@@ -376,7 +314,12 @@ describe("<MobileEpicTileView />", () => {
       });
       renderView();
       expect(screen.queryByTestId("pane-opener")).not.toBeNull();
-      expect(epicStrip()).toBeNull();
+      // Deliberate change from when the bar lived inside this view. The report
+      // is about the EPIC's stream - the tab list and the switcher's contents -
+      // not about whichever tile happens to be open, and an empty pane is a
+      // surface the user is about to open a tab from. `snapshotLoaded` is the
+      // Epic's own, so it is still true here.
+      expect(published()?.spell.syncing).toBe(true);
     });
   });
 

@@ -18,6 +18,11 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { ChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
+import {
+  SURFACE_SYNC_RANK,
+  useSurfaceSyncStore,
+  type SurfaceSyncEntry,
+} from "@/stores/sync/surface-sync-store";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (title, rename gating).
@@ -249,39 +254,21 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("shows the current tile title and icon", () => {
-    render(
-      <MobileCurrentTileBar
-        epicId="epic-1"
-        tile={SPEC_TILE}
-        outerStripShowing={false}
-      />,
-    );
+    render(<MobileCurrentTileBar epicId="epic-1" tile={SPEC_TILE} />);
     const bar = screen.getByTestId("mobile-current-tile-bar");
     expect(bar.textContent).toContain("Life Philosophy");
     expect(screen.getByTestId("tab-icon")).not.toBeNull();
   });
 
   it("renders the title as an editable control for a renameable kind and an editor role", () => {
-    render(
-      <MobileCurrentTileBar
-        epicId="epic-1"
-        tile={CHAT_TILE}
-        outerStripShowing={false}
-      />,
-    );
+    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
     expect(screen.getByTestId("mobile-current-tile-title").tagName).toBe(
       "BUTTON",
     );
   });
 
   it("commits an edited title through the rename mutation, keyed to the tile kind", async () => {
-    render(
-      <MobileCurrentTileBar
-        epicId="epic-1"
-        tile={CHAT_TILE}
-        outerStripShowing={false}
-      />,
-    );
+    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
     const input = openEdit();
     fireEvent.change(input, { target: { value: "New title" } });
     fireEvent.blur(input);
@@ -301,13 +288,7 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("Escape restores the previous title and does not commit", () => {
-    render(
-      <MobileCurrentTileBar
-        epicId="epic-1"
-        tile={CHAT_TILE}
-        outerStripShowing={false}
-      />,
-    );
+    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
     const input = openEdit();
     fireEvent.change(input, { target: { value: "Discarded" } });
     fireEvent.keyDown(input, { key: "Escape" });
@@ -318,13 +299,7 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("empty/whitespace commit does not call the mutation and keeps the previous title", () => {
-    render(
-      <MobileCurrentTileBar
-        epicId="epic-1"
-        tile={CHAT_TILE}
-        outerStripShowing={false}
-      />,
-    );
+    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
     const input = openEdit();
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.blur(input);
@@ -335,13 +310,7 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("renders plain text with no editable control for a non-renameable tile kind", () => {
-    render(
-      <MobileCurrentTileBar
-        epicId="epic-1"
-        tile={FILE_TILE}
-        outerStripShowing={false}
-      />,
-    );
+    render(<MobileCurrentTileBar epicId="epic-1" tile={FILE_TILE} />);
     const title = screen.getByTestId("mobile-current-tile-title");
     expect(title.tagName).toBe("SPAN");
     expect(screen.queryByTestId("mobile-current-tile-title-input")).toBeNull();
@@ -349,19 +318,13 @@ describe("<MobileCurrentTileBar />", () => {
 
   it("renders plain text for a viewer role even on a renameable kind", () => {
     holder.role = "viewer";
-    render(
-      <MobileCurrentTileBar
-        epicId="epic-1"
-        tile={CHAT_TILE}
-        outerStripShowing={false}
-      />,
-    );
+    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
     const title = screen.getByTestId("mobile-current-tile-title");
     expect(title.tagName).toBe("SPAN");
     expect(screen.queryByTestId("mobile-current-tile-title-input")).toBeNull();
   });
 
-  describe("stream-syncing strip", () => {
+  describe("stream-syncing report", () => {
     beforeEach(() => {
       chatSyncMock.current.value = {
         status: "closed",
@@ -370,118 +333,83 @@ describe("<MobileCurrentTileBar />", () => {
       };
       chatSyncMock.calls.length = 0;
       chatWakeSpy.mockClear();
+      useSurfaceSyncStore.setState({ entries: {} });
     });
 
     function renderChatBar(input: {
-      readonly outerStripShowing: boolean;
       readonly chat: ChatStreamSyncState;
       readonly tile: EpicCanvasTileRef;
     }): void {
       chatSyncMock.current.value = input.chat;
-      render(
-        <MobileCurrentTileBar
-          epicId="epic-1"
-          tile={input.tile}
-          outerStripShowing={input.outerStripShowing}
-        />,
-      );
+      render(<MobileCurrentTileBar epicId="epic-1" tile={input.tile} />);
     }
 
-    function chatStrip(): HTMLElement | null {
-      return screen.queryByTestId("chat-stream-syncing-bar");
+    function published(): SurfaceSyncEntry | undefined {
+      const { entries } = useSurfaceSyncStore.getState();
+      const key = `chat:${CHAT_TILE.id}`;
+      return Object.hasOwn(entries, key) ? entries[key] : undefined;
     }
 
-    it("shows the chat strip when only the chat's own stream is away", () => {
+    it("renders no bar of its own - it reports instead", () => {
+      // The one element lives in the app shell, so a hand-off changes what the
+      // indicator says rather than which element is saying it.
       renderChatBar({
-        outerStripShowing: false,
         tile: CHAT_TILE,
         chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
       });
-      expect(chatStrip()).not.toBeNull();
+      expect(screen.queryByTestId("chat-stream-syncing-bar")).toBeNull();
+      expect(screen.queryByTestId("session-connectivity-strip-bar")).toBeNull();
     });
 
-    it("stays silent while the chat's stream is healthy", () => {
+    it("reports a running spell while its own stream is away with content up", () => {
       renderChatBar({
-        outerStripShowing: false,
+        tile: CHAT_TILE,
+        chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
+      });
+      expect(published()?.spell.syncing).toBe(true);
+      expect(published()?.label).toBe("Chat");
+      expect(published()?.rank).toBe(SURFACE_SYNC_RANK.chat);
+    });
+
+    it("reports nothing running while the stream is healthy", () => {
+      renderChatBar({
         tile: CHAT_TILE,
         chat: { status: "open", hasContent: true, wake: chatWakeSpy },
       });
-      expect(chatStrip()).toBeNull();
+      expect(published()?.spell.syncing).toBe(false);
     });
 
-    it("stays silent on a cold chat with nothing on screen yet", () => {
+    it("reports nothing running on a cold chat with nothing on screen", () => {
       renderChatBar({
-        outerStripShowing: false,
         tile: CHAT_TILE,
         chat: { status: "connecting", hasContent: false, wake: chatWakeSpy },
       });
-      expect(chatStrip()).toBeNull();
+      expect(published()?.spell.syncing).toBe(false);
     });
 
-    it("yields while the Epic's strip is showing, even with its own stream away", () => {
-      // An app switch drops every stream in the same tick, so this is the
-      // ordinary case and not an edge one. Two strips saying the same thing
-      // one above the other is the failure being prevented.
+    it("carries the chat's OWN wake, so Retry reaches this chat's socket", () => {
       renderChatBar({
-        outerStripShowing: true,
         tile: CHAT_TILE,
         chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
       });
-      expect(chatStrip()).toBeNull();
+      published()?.wake?.();
+      expect(chatWakeSpy).toHaveBeenCalledTimes(1);
     });
 
-    it("takes over the moment the Epic's strip stops showing", () => {
-      // The hand-off: the Epic's stream returns first (restores are staggered)
-      // while the transcript is still behind, and the chat's strip is what
-      // keeps saying so. Deferring to anything other than the Epic's DECIDED
-      // answer would silence both here.
-      const view = render(
-        <MobileCurrentTileBar
-          epicId="epic-1"
-          tile={CHAT_TILE}
-          outerStripShowing
-        />,
-      );
-      chatSyncMock.current.value = {
-        status: "reconnecting",
-        hasContent: true,
-        wake: chatWakeSpy,
-      };
-      view.rerender(
-        <MobileCurrentTileBar
-          epicId="epic-1"
-          tile={CHAT_TILE}
-          outerStripShowing
-        />,
-      );
-      expect(chatStrip()).toBeNull();
-
-      view.rerender(
-        <MobileCurrentTileBar
-          epicId="epic-1"
-          tile={CHAT_TILE}
-          outerStripShowing={false}
-        />,
-      );
-      expect(chatStrip()).not.toBeNull();
-    });
-
-    it("never asks for a chat stream on a tile that is not a chat", () => {
+    it("never reports a running spell for a tile that is not a chat", () => {
+      // Its stream is either covered by the Epic's report or already narrated
+      // by the tile itself.
       renderChatBar({
-        outerStripShowing: false,
         tile: SPEC_TILE,
         chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
       });
-      expect(chatStrip()).toBeNull();
-      // A `null` host is what makes the hook resolve no session. Passing the
-      // spec's own id with a real host would read a DIFFERENT chat's stream if
-      // the ids ever collided.
+      const { entries } = useSurfaceSyncStore.getState();
+      expect(entries[`chat:${SPEC_TILE.id}`].spell.syncing).toBe(false);
       expect(chatSyncMock.calls.every((call) => call[2] === null)).toBe(true);
     });
 
     it("reads the chat stream on the tile's OWN host, not the app's", () => {
       renderChatBar({
-        outerStripShowing: false,
         tile: CHAT_TILE,
         chat: { status: "open", hasContent: true, wake: chatWakeSpy },
       });
@@ -490,6 +418,17 @@ describe("<MobileCurrentTileBar />", () => {
         CHAT_TILE.id,
         "host-A",
       ]);
+    });
+
+    it("withdraws its report when the tile goes away", () => {
+      // A closed surface is no longer a claim about anything; leaving the entry
+      // behind would hold the indicator open over a stream nobody is watching.
+      const view = render(
+        <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />,
+      );
+      expect(published()).toBeDefined();
+      view.unmount();
+      expect(published()).toBeUndefined();
     });
   });
 });
