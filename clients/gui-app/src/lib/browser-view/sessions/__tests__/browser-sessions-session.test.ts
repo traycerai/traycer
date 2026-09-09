@@ -225,6 +225,7 @@ function fakeHostStreamClient(): {
     isReady: () => true,
     getClosedReason: () => null,
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     getMethodSupport: () => "unsupported",
     subscribeMethodSupport: () => () => undefined,
