@@ -95,6 +95,27 @@ describe("<StreamSyncingBar />", () => {
     expect(screen.getByTestId(TEST_ID).dataset.syncState).toBe("stalled");
   });
 
+  it("stops the travel at escalation instead of animating without end", () => {
+    // The animation is bounded by the escalation, not only by the reader's
+    // motion preference: a resync that never converges would otherwise keep a
+    // CSS animation running for as long as the app is in the foreground, and
+    // this stylesheet has already measured what one always-on indicator costs.
+    vi.useFakeTimers();
+    renderBar({ status: "reconnecting", hasContent: true });
+    const sweep = screen.getByTestId(`${TEST_ID}-sweep`);
+    expect(sweep.classList.contains("stream-syncing-sweep")).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS);
+    });
+    const settled = screen.getByTestId(`${TEST_ID}-sweep`);
+    expect(settled.classList.contains("stream-syncing-sweep")).toBe(false);
+    // Still visible, and now spanning the track - presence rather than travel,
+    // the same still form reduced motion produces.
+    expect(settled.classList.contains("w-full")).toBe(true);
+    expect(settled.classList.contains("w-2/5")).toBe(false);
+  });
+
   it("does not restart the escalation clock when connecting flips to reconnecting", () => {
     // One outage seen twice. A clock keyed on the STATUS rather than on the
     // spell would reset here and never escalate on a link that flaps.

@@ -101,11 +101,27 @@ export function StreamSyncingBar(props: StreamSyncingBarProps): ReactNode {
         <div
           data-testid={`${props.testId}-sweep`}
           className={cn(
-            "h-full w-2/5 bg-primary",
-            // Motion lives in the class, not an inline `animation` style: an
+            "h-full bg-primary",
+            // The travel STOPS at escalation. Two reasons, and the second is
+            // the one that decides it:
+            //
+            //  - By then the word is doing the work. A segment still sweeping
+            //    under "Still syncing…" says "any moment now" about a retry
+            //    that has already been told it is not converging.
+            //  - It bounds the animation. Blink samples every running CSS
+            //    animation once per display frame and recalcs the element's
+            //    style, which against this stylesheet is a few KB of heap
+            //    garbage per frame - the measurement that moved the "working"
+            //    indicator off CSS animation entirely (see `index.css`). A
+            //    resync that never converges would otherwise animate for as
+            //    long as the app is in the foreground; this caps it at the
+            //    escalation threshold.
+            //
+            // Motion lives in a class, not an inline `animation` style: an
             // inline style cannot be overridden by the reduced-motion rule
-            // that ships with it (see `index.css`).
-            "stream-syncing-sweep",
+            // that ships with it, which is why the two host-install bars
+            // honour nothing.
+            escalated ? "w-full opacity-45" : "w-2/5 stream-syncing-sweep",
           )}
         />
       </div>

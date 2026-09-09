@@ -63,7 +63,12 @@
 /* The stream-syncing strip's travelling segment. A CLASS, not the inline
    `animation` style the two install bars use, for one reason: an inline style
    cannot be reached by a `motion-reduce:` variant, so those two do not honour
-   reduced motion at all. This one does, below. */
+   reduced motion at all. This one does, below.
+
+   The strip drops this class entirely once it escalates, falling back to plain
+   `w-full opacity-45` utilities - the same still form the media query produces,
+   reached by an unrelated question. So the animation is bounded twice over: by
+   the reader's motion preference, and by how long one resync may run. */
 .stream-syncing-sweep {
   animation: host-progress-indeterminate 1.4s ease-in-out infinite alternate;
 }
@@ -73,7 +78,10 @@
    translated clean off the track, so the bar would simply be missing. Travel is
    therefore replaced by PRESENCE: a full-width line at low alpha. It reads as
    "this strip is here", not as "finished", because the strip carries no
-   percentage and the "Syncing…" beside it is the actual claim. */
+   percentage and the "Syncing…" beside it is the actual claim.
+
+   `width` is restated here rather than left to the utility: the segment's
+   fractional width only means something while it is travelling. */
 @media (prefers-reduced-motion: reduce) {
   .stream-syncing-sweep {
     animation: none;

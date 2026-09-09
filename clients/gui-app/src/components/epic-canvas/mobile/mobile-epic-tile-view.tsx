@@ -103,7 +103,16 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           the canvas, the tab list and every sidebar panel go stale together
           when it drops, while the tile bar below names one tile. The tile's own
           strip suppresses itself while this one is up (see
-          `MobileCurrentTileBar`), so the two never stack. */}
+          `MobileCurrentTileBar`), so the two never stack.
+
+          Phone-only by PLACEMENT, with no viewport check of its own. This view
+          is mounted from `TileCanvasLive`'s `useIsMobileViewport()` branch, so
+          reaching this line already answers the question - and a second reader
+          of the same media query is a second decider that can drift from the
+          first. It is deliberately not `isMobileApp()`: that names the
+          installed Capacitor build as a PRODUCT (see `lib/mobile-app.ts`),
+          which would drop the strip in a mobile browser, where the relay drops
+          the socket exactly the same way. */}
       <StreamSyncingBar
         status={epicTransportStatus}
         hasContent={epicSnapshotLoaded}
