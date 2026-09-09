@@ -360,9 +360,6 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   if (error.message.startsWith("TARGET_NOT_LOCAL:")) {
     return "This agent runs on another host. Archive it from that host instead.";
   }
-  if (isLocalStoreCreateRefusal(error.message)) {
-    return LOCAL_STORE_CREATE_REFUSAL_MESSAGE;
-  }
   // An optional method the active host predates (declared `degrade:
   // unsupported`). This is a version gap, not a failed operation, so the copy
   // points at the fix rather than restating the operation name.
@@ -379,59 +376,6 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   if (shareRefusal !== null) return shareRefusalMessage(shareRefusal);
   return codeKeyedMessage(error, fallback);
 }
-
-/**
- * Copy for the create refusal - `LocalStoreUnavailableForCreateError`.
- *
- * Says WHERE the fault is, which is the whole gap: "Couldn't create epic."
- * reads as a network or account problem, and users chase the wrong thing. It
- * does not promise a repair route, because there may not be one - the only
- * rebind affordance in this app is on `SnapshotErrorBanner`, reached by
- * OPENING an epic that fails to load, so a user with no local-homed epic to
- * open cannot get to it from here.
- */
-const LOCAL_STORE_CREATE_REFUSAL_MESSAGE =
-  "Couldn't create the epic: the connected device's Traycer host can't open its local store, and every epic is created there first. Nothing was created.";
-
-/**
- * Whether this is the host's local-store create refusal.
- *
- * Matched on a PROSE substring, which is worse than every neighbour above and
- * is a deliberate stopgap, not a pattern to copy.
- *
- * The open path is what this should look like: the host gives it a dedicated
- * `LOCAL_STORE_UNAVAILABLE` code and carries the remedy in its own
- * `SnapshotFetchError.localStoreRemedy` field, so `SnapshotErrorBanner` renders
- * the host's own sentence and a repair button with no string handling at all.
- * `host.rebindLocalStore` and `epic.batchDelete` likewise carry their refusals
- * as RESPONSE data. `epic.create` is the one member of the class that THROWS,
- * and `LocalStoreUnavailableForCreateError` flattens epic id, detail and remedy
- * into one `super()` string with no delimiter - so on this side there is no
- * code to branch on and no way to recover the remedy alone.
- *
- * Passing the flattened text through was the other option and is worse: those
- * strings are operator copy, carrying absolute filesystem paths, device ids and
- * literal API syntax (one remedy tells the reader to call
- * `rebindLocalStore({ confirmOldHostStopped: true })`). Same reason the
- * archive branches above rewrite rather than forward.
- *
- * Degrades safely: if the host's sentence is reworded this stops matching and
- * the caller gets its generic fallback - the behaviour of today, not a wrong
- * message. The real fix is host-side, a dedicated code plus the remedy as a
- * field, exactly as the open path already has.
- */
-function isLocalStoreCreateRefusal(message: string): boolean {
-  return message.includes(LOCAL_STORE_CREATE_REFUSAL_PHRASE);
-}
-
-/**
- * A substring of the host's fixed create-refusal prefix
- * (`local-room-open-errors.ts`, `LocalStoreUnavailableForCreateError`). Chosen
- * from the part BEFORE the interpolated detail and remedy, so nothing
- * host-configuration-dependent is inside the needle.
- */
-const LOCAL_STORE_CREATE_REFUSAL_PHRASE =
-  "every epic is created locally first and this host holds no local room store";
 
 /** The plain `code` switchboard, split out to keep either half readable. */
 function codeKeyedMessage(error: HostRpcError, fallback: string): string {

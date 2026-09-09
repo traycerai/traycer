@@ -14,6 +14,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
+  EpicCreateRefusal,
   ListTasksFacets,
   ListTasksResponse,
   ListTaskLight,
@@ -38,6 +39,8 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { openLocalStoreRepair } from "@/stores/local-store/local-store-repair-store";
+import { toast } from "sonner";
 import {
   Analytics,
   AnalyticsEvent,
@@ -119,6 +122,25 @@ export function useEpicCreateForClient(
         };
       },
       onSuccess: (response, variables, ctx) => {
+        // A REFUSAL arrives here, not in `onError`: `epic.create@1.1` carries
+        // it as an optional key on the ordinary response, because the method
+        // is on `RELEASED_FLOOR_METHOD_NAMES` and a discriminated union would
+        // have cost a new major. So this success path has to ask whether a
+        // success actually happened.
+        //
+        // Refusal is AUTHORITATIVE. The type permits `refusal` beside a
+        // non-null `roomInfo` - the cost of staying additive - and the host
+        // never emits that pair, so reading the refusal first is what keeps a
+        // shape the host cannot produce from being read as a create.
+        if (response.refusal !== undefined) {
+          Analytics.getInstance().track(AnalyticsEvent.TaskCreationFailed, {
+            source: "direct_ui",
+            mode: taskCreationMode(variables.chat),
+            blocker: `refused:${response.refusal.kind}`,
+          });
+          reportEpicCreateRefusal(response.refusal, ctx.hostId);
+          return;
+        }
         Analytics.getInstance().track(AnalyticsEvent.TaskCreated, {
           mode: taskCreationMode(variables.chat),
         });
@@ -151,6 +173,45 @@ export function useEpicCreateForClient(
           blocker: analyticsBlockerFromError(error),
         });
         toastFromHostError(error, "Couldn't create epic.");
+      },
+    },
+  });
+}
+
+/**
+ * Surface a refused create, with the host's own words.
+ *
+ * `message` and `remedy` are rendered VERBATIM. That is the whole point of the
+ * typed arm: before it, the host flattened both into a thrown `RPC_ERROR`
+ * string with the epic id and no delimiter, so this side could recover neither
+ * and showed "Couldn't create epic." - which reads as a network or account
+ * problem and sends people chasing the wrong thing. The schema constrains both
+ * to non-empty strings a host wrote for a person, so passing them through is
+ * now the honest rendering rather than the lossy one.
+ *
+ * `hostId` is the client the create was DISPATCHED on, captured in `onMutate`.
+ * It is the machine whose store refused, and on a pinned composer it is not the
+ * window's effective host - repairing the latter would rebind a healthy store,
+ * report success, and leave the refusing one untouched.
+ *
+ * No `hostId` means no action, not a guessed one. The remedy still renders, and
+ * it is a sentence the user can act on at the machine itself; an affordance
+ * pointed at an unknown host is the one outcome worse than no affordance.
+ */
+function reportEpicCreateRefusal(
+  refusal: EpicCreateRefusal,
+  hostId: string | null,
+): void {
+  if (hostId === null) {
+    toast.error(refusal.message, { description: refusal.remedy });
+    return;
+  }
+  toast.error(refusal.message, {
+    description: refusal.remedy,
+    action: {
+      label: "Repair",
+      onClick: () => {
+        openLocalStoreRepair({ hostId, refusal });
       },
     },
   });
