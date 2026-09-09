@@ -202,9 +202,12 @@ export const usageCostCoverageSchema = z.object({
 /**
  * The `host.usage.summary` request FIELDS, before either line's `.strict()`.
  *
- * Factored out so `@1.1` can grow the request without restating `@1.0`'s
+ * Factored out so `@2.0` can grow the request without restating `@1.0`'s
  * shape - and so the two lines cannot drift, which on a `.strict()` schema
  * is not a cosmetic risk: an unknown key here is REJECTED, not stripped.
+ *
+ * A MAJOR, not a minor, and the `.strict()` above is the whole reason: the
+ * additivity a new minor promises is exactly what a strict object refuses.
  */
 const hostUsageSummaryRequestFields = z
   .object({
@@ -247,7 +250,7 @@ export type HostUsageSummaryRequestV10 = z.infer<
 >;
 
 /**
- * `@1.1`: ask for the LOCAL reader explicitly.
+ * `@2.0`: ask for the LOCAL reader explicitly.
  *
  * `servedBy` on the response says which reader answered, and the host has
  * always chosen - from the account's cloud-sync entitlement, which it learns
@@ -267,9 +270,13 @@ export type HostUsageSummaryRequestV10 = z.infer<
  * THIS LINE'S COMPAT IS NOT THE USUAL STRIP. Every other selector in this
  * program rides a plain `z.object`, so an older peer drops the key and runs
  * its released behaviour. This request is `.strict()`, so a `@1.0` peer
- * REJECTS the whole request with a 400 instead. The client's negotiated-minor
- * gate is therefore load-bearing rather than belt-and-braces: send this to an
- * old host and the usage panel breaks outright rather than degrading.
+ * REJECTS the whole request with a 400 instead. That is what forced a MAJOR
+ * rather than a minor, and it is why the client's negotiated-VERSION gate
+ * (`negotiatedUsageServesLocalOnly`, major >= 2) is load-bearing rather than
+ * belt-and-braces: send this to an old host and the usage panel breaks
+ * outright rather than degrading. For the same reason the `2 -> 1` downgrade
+ * REFUSES a request carrying `plane` instead of dropping it - dropping it
+ * would restore the cloud round trip the caller just asked not to spend.
  */
 export const hostUsageSummaryRequestSchema = hostUsageSummaryRequestFields
   .extend({ plane: z.literal("local-only").optional() })

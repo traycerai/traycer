@@ -494,9 +494,23 @@ export type CreateEpicResponsePre11 = z.infer<
  * An enum rather than a free string because the client BRANCHES on it: the
  * remedy for a local store this host cannot open is a rebind, and offering
  * that action for some future refusal kind would be worse than offering
- * nothing. A client that does not recognise a kind still has `message` and
- * `remedy` to render, so widening this stays safe for the text - only the
- * ACTION is kind-gated.
+ * nothing.
+ *
+ * WHAT THE PARSER ACTUALLY DOES with a kind it does not know: it REFUSES the
+ * payload. `z.enum` rejects the unknown value, that failure propagates out of
+ * the enclosing `refusal` object, and because a present-but-invalid `refusal`
+ * is not the same as an ABSENT one, the whole `epic.create` response fails to
+ * parse. So a client on this line does NOT fall back to rendering `message`
+ * and `remedy` - it gets a parse error instead of a refusal.
+ *
+ * The additivity that makes this line safe is therefore about the KEY, not
+ * about this enum's future values: a peer below `@1.1` strips `refusal`
+ * entirely and keeps its released behaviour, which is the compat this minor
+ * was designed for. Adding a refusal KIND is a separate question and costs
+ * its own minor, since every client already on `@1.1` rejects the new value.
+ * If that becomes the wrong trade, the deliberate fix is to parse `kind` as a
+ * bounded string and expose a `isKnownEpicCreateRefusalKind` guard so an
+ * unrecognised kind degrades to text - a shape change, not a comment change.
  */
 export const epicCreateRefusalKindSchema = z.enum(["local-store-unavailable"]);
 export type EpicCreateRefusalKind = z.infer<typeof epicCreateRefusalKindSchema>;

@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
@@ -50,6 +51,30 @@ const notificationFeedModeSettling = vi.hoisted<{ value: boolean }>(() => ({
   value: false,
 }));
 
+/**
+ * The minor the CONNECTION carrying the next frame reports, per method.
+ *
+ * Separate from `notificationFeedMode` on purpose, because the whole point of
+ * a dispatch-bound floor is that these two can disagree: the render already
+ * settled on `cloud` off one process's handshake, and the frame is written to
+ * whatever process is there a moment later. Lowering an entry between the
+ * render and the gesture is how a test stands in for the process-replacement
+ * gap.
+ *
+ * Keyed by METHOD rather than a single number because the floors are a class,
+ * not one case: a fixture that could only refuse `clearAll` would have let
+ * `markAllRead`'s floor land completely unpinned while every suite stayed
+ * green.
+ */
+const negotiatedMinors = vi.hoisted<{ readonly byMethod: Map<string, number> }>(
+  () => ({ byMethod: new Map<string, number>() }),
+);
+
+/** Every dispatch-bound floor the subject claimed, in order. */
+const floorsRequested = vi.hoisted<{ readonly calls: unknown[] }>(() => ({
+  calls: [],
+}));
+
 interface StubHostClient {
   readonly request: typeof hostRequestMock;
   readonly getActiveHostId: () => string | null;
@@ -61,6 +86,21 @@ interface StubHostClient {
    * subject down at first render rather than failing an assertion.
    */
   readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
+  /**
+   * The dispatch a `requiredHostMethodVersion` takes (`use-host-query.ts`).
+   *
+   * It has to exist here for the same reason the note above gives, and the
+   * reason is not hypothetical: this stub HAD no such method, so the moment
+   * `clearHostAll` began claiming a floor every cloud-mode clear died on
+   * "not a function" and read exactly like a request that was never sent -
+   * an under-provisioned mock wearing the shape of a missing feature.
+   */
+  readonly requestWithSignalRequiringHostMethodVersion: (
+    method: string,
+    params: unknown,
+    signal: AbortSignal | undefined,
+    requirement: { readonly method: string; readonly version: SchemaVersion },
+  ) => Promise<unknown>;
 }
 
 const hostBindingState = vi.hoisted(() => ({
@@ -83,10 +123,22 @@ vi.mock("@/lib/host-error-toast", async (importActual) => {
   };
 });
 
-vi.mock("@/lib/notifications/notification-feed-mode", () => ({
-  useNotificationFeedMode: () => notificationFeedMode.value,
-  useNotificationFeedModeSettling: () => notificationFeedModeSettling.value,
-}));
+// A whole-module factory, so anything the subject imports from here has to be
+// re-exported explicitly: the floor CONSTANT would otherwise arrive as
+// `undefined` and the dispatch floor would silently claim `@1.undefined`.
+// Spread the real module rather than listing values by hand, so the next
+// export added there does not have to be discovered by a failing test.
+vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-feed-mode")
+    >();
+  return {
+    ...actual,
+    useNotificationFeedMode: () => notificationFeedMode.value,
+    useNotificationFeedModeSettling: () => notificationFeedModeSettling.value,
+  };
+});
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () =>
@@ -297,6 +349,33 @@ function bindHostClient(): void {
     request: hostRequestMock,
     getActiveHostId: () => mockLocalHostEntry.hostId,
     createRequesterForHostId: () => hostClient,
+    // Stands in for the transport's own check, which answers the floor from
+    // the handshake of the connection carrying the frame rather than from
+    // anything the render observed. `ws-rpc-client.test.ts` pins that the real
+    // transport enforces it; this pins that the subject CLAIMS it and that a
+    // peer below the floor never receives the frame.
+    requestWithSignalRequiringHostMethodVersion: (
+      method,
+      params,
+      _signal,
+      requirement,
+    ) => {
+      floorsRequested.calls.push(requirement);
+      // An unset method is AT the floor, so a case that says nothing about
+      // versions behaves like a current host; only an explicit entry can
+      // refuse.
+      const negotiated =
+        negotiatedMinors.byMethod.get(requirement.method) ??
+        requirement.version.minor;
+      if (negotiated < requirement.version.minor) {
+        return Promise.reject(
+          new Error(
+            `host does not serve ${requirement.method}@${requirement.version.major}.${requirement.version.minor}`,
+          ),
+        );
+      }
+      return hostRequestMock(method, params);
+    },
   };
   hostBindingState.current = { hostClient };
 }
@@ -384,6 +463,8 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
     notificationFeedModeSettling.value = false;
+    negotiatedMinors.byMethod.clear();
+    floorsRequested.calls.length = 0;
     // The cloud-feed mutations re-read the live verdict at dispatch; a
     // `cloud` feed mode below stands for a session that holds one.
     signInForActions();
@@ -406,6 +487,8 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
     notificationFeedModeSettling.value = false;
+    negotiatedMinors.byMethod.clear();
+    floorsRequested.calls.length = 0;
     useAuthStore.getState().setSignedOut();
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
@@ -634,6 +717,8 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
     notificationFeedModeSettling.value = false;
+    negotiatedMinors.byMethod.clear();
+    floorsRequested.calls.length = 0;
     // The cloud-feed mutations re-read the live verdict at dispatch; a
     // `cloud` feed mode below stands for a session that holds one.
     signInForActions();
@@ -654,6 +739,8 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     hostBindingState.current = null;
     notificationFeedMode.value = "local";
     notificationFeedModeSettling.value = false;
+    negotiatedMinors.byMethod.clear();
+    floorsRequested.calls.length = 0;
     useAuthStore.getState().setSignedOut();
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
@@ -1153,6 +1240,192 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     await waitFor(() => {
       expect(clearAllRawParams()).toMatchObject({ home: "local" });
     });
+  });
+
+  it("refuses a selector-bearing clear at DISPATCH when the process behind a settled render fell below clearAll@1.1", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostDone("dispatch-floor-entry", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // The render has SETTLED on mixed mode - the hold is not what is under
+    // test here, and leaving it armed would make the absence below prove the
+    // hold again rather than the floor.
+    expect(notificationFeedModeSettling.value).toBe(false);
+
+    // The process is replaced between that settled render and the gesture.
+    // Nothing re-renders: this is precisely the window the render guard
+    // cannot see, and on an `@1.0` peer `home` is an optional field that
+    // would be STRIPPED into a whole-origin delete answering 200.
+    negotiatedMinors.byMethod.set("host.notifications.clearAll", 0);
+
+    act(() => {
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      expect(floorsRequested.calls).toHaveLength(1);
+    });
+    expect(floorsRequested.calls[0]).toEqual({
+      method: "host.notifications.clearAll",
+      version: { major: 1, minor: 1 },
+    });
+    // Refused before send: the frame never reached the peer.
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.clearAll",
+      ),
+    ).toBe(false);
+
+    // Non-vacuity: the SAME gesture on the SAME render, with only the
+    // process's negotiated minor restored, does reach the peer and carries
+    // the selector it claimed the floor for.
+    negotiatedMinors.byMethod.clear();
+    act(() => {
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      expect(clearAllRawParams()).toMatchObject({ home: "local" });
+    });
+  });
+
+  it("refuses a selector-bearing mark-all at DISPATCH when the process fell below markAllRead@1.1", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostPrompt("mark-floor-entry", 200, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // Same class as clear-all, one method over: `markAllRead` has an empty
+    // downgrade map, so an older peer STRIPS `home` and marks cloud-home rows
+    // read that this session was never shown.
+    negotiatedMinors.byMethod.set("host.notifications.markAllRead", 0);
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    await waitFor(() => {
+      expect(
+        floorsRequested.calls.some(
+          (call) =>
+            isRecord(call) && call.method === "host.notifications.markAllRead",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.markAllRead",
+      ),
+    ).toBe(false);
+
+    // Non-vacuity: only the negotiated minor moves, and the same gesture lands
+    // carrying the selector it claimed the floor for.
+    negotiatedMinors.byMethod.set("host.notifications.markAllRead", 1);
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.find(
+          (call) => call[0] === "host.notifications.markAllRead",
+        )?.[1],
+      ).toMatchObject({ home: "local" });
+    });
+  });
+
+  it("refuses a selector-bearing page at DISPATCH on a SAME-MAJOR list rollback", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    // Applied directly rather than through `applyHostSnapshot`, which pins
+    // `nextCursor: null` - and `loadMoreHost` returns early with no cursor, so
+    // the helper would have made this case pass by never dispatching at all.
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [hostDone("list-floor-entry", 1, null)],
+        nextCursor: "cursor-1",
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // `@2.1`, NOT a cross-major rollback. This is the case the cross-major
+    // refusing downgrade does not cover and that nearly kept `list` out of
+    // this class: the transport projects the params through the older MINOR's
+    // plain `z.object`, which STRIPS `home` and succeeds, so the peer answers
+    // 200 having merged whole-origin rows into the cloud lane.
+    negotiatedMinors.byMethod.set("host.notifications.list", 1);
+
+    act(() => {
+      result.current.loadMoreHost();
+    });
+    await waitFor(() => {
+      expect(
+        floorsRequested.calls.some(
+          (call) =>
+            isRecord(call) && call.method === "host.notifications.list",
+        ),
+      ).toBe(true);
+    });
+    expect(floorsRequested.calls.at(-1)).toEqual({
+      method: "host.notifications.list",
+      version: { major: 2, minor: 2 },
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.list",
+      ),
+    ).toBe(false);
+
+    // Non-vacuity: only the negotiated minor moves.
+    negotiatedMinors.byMethod.set("host.notifications.list", 2);
+    act(() => {
+      result.current.loadMoreHost();
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.find(
+          (call) => call[0] === "host.notifications.list",
+        )?.[1],
+      ).toMatchObject({ home: "local" });
+    });
+  });
+
+  it("claims no dispatch floor for a whole-origin clear, which every peer serves", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "local";
+    applyHostSnapshot([hostDone("no-floor-entry", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // Below the floor, and it does not matter: local mode sends no `home`, so
+    // there is no selector for an older peer to strip and nothing to refuse.
+    // Claiming a floor here would break clear-all against every host that
+    // never needed the minor.
+    negotiatedMinors.byMethod.set("host.notifications.clearAll", 0);
+
+    act(() => {
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      expect(clearAllRawParams()).toHaveProperty("beforeUpdatedAt");
+    });
+    expect(clearAllRawParams()).not.toHaveProperty("home");
+    expect(floorsRequested.calls).toHaveLength(0);
   });
 
   it("quotes the newest version to clear-all even when the rendered feed did not change", async () => {
