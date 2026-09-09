@@ -349,6 +349,27 @@ afterEach(() => {
 });
 
 describe("<HostReadyGate />", () => {
+  it("removes the branded boot cover on readiness without advancing animation timers", () => {
+    vi.useFakeTimers();
+    try {
+      const gate = renderGate({ kind: "loading-host" }, PRESENTATION);
+      const startTime = Date.now();
+      expect(screen.getByTestId("host-gate-attach-pending")).toBeTruthy();
+      expect(screen.getByTestId("brand-entrance")).toBeTruthy();
+      expect(screen.queryByRole("main")).toBeNull();
+
+      gate.setReadiness({ kind: "ready" }, PRESENTATION);
+
+      expect(Date.now()).toBe(startTime);
+      expect(screen.queryByTestId("host-ready-gate")).toBeNull();
+      expect(screen.queryByTestId("brand-entrance")).toBeNull();
+      expect(screen.getByRole("main").textContent).toBe("app");
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it("renders the app once the default host is ready", () => {
     renderGate({ kind: "ready" }, PRESENTATION);
     expect(screen.getByRole("main")).toBeTruthy();

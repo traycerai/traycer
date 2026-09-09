@@ -3,6 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostRuntimeProvider, hostRpcRegistry } from "@/lib/host";
+import { HostRuntimeBootFallback } from "@/components/host/host-runtime-boot-fallback";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 /**
@@ -71,7 +72,14 @@ function renderProvider(runnerHost: MockRunnerHost): void {
       <QueryClientProvider client={queryClient}>
         <HostRuntimeProvider
           registry={hostRpcRegistry}
-          fallback={<div data-testid="startup-fallback" />}
+          fallback={
+            <div data-testid="startup-fallback">
+              <HostRuntimeBootFallback
+                onConfigureShell={() => undefined}
+                onOpenSettings={() => undefined}
+              />
+            </div>
+          }
           // THE POINT OF THIS SUITE. `null` is what every production shell
           // passes; a factory here would skip the branch under test.
           messengerFactory={null}
@@ -116,5 +124,6 @@ describe("HostRuntimeProvider startup (real messenger path)", () => {
     // children mounted synchronously, the suite above stops proving anything.
     expect(screen.queryByTestId("startup-fallback")).not.toBeNull();
     expect(screen.queryByTestId("startup-complete")).toBeNull();
+    expect(screen.getByTestId("brand-entrance")).toBeTruthy();
   });
 });

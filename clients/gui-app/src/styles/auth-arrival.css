@@ -1,4 +1,4 @@
-@keyframes auth-mark-arrive {
+@keyframes brand-mark-arrive {
   from {
     opacity: 0;
     transform: translate(var(--mark-arrival-x, 0%), var(--mark-arrival-y, 16%));
@@ -9,7 +9,7 @@
   }
 }
 
-@keyframes auth-copy-arrive {
+@keyframes brand-copy-arrive {
   from {
     opacity: 0;
     transform: translateY(0.5rem);
@@ -40,38 +40,54 @@
   }
 }
 
+@keyframes app-ready-arrive {
+  from {
+    opacity: 0.9;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  .auth-arrival-mark g > path {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: auth-mark-arrive 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  .app-ready-arrival {
+    animation: app-ready-arrive 8ms ease-out;
   }
 
-  .auth-arrival-mark g > path:nth-child(1) {
+  .brand-entrance-mark g > path {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: brand-mark-arrive 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .brand-entrance-mark g > path:nth-child(1) {
     --mark-arrival-x: -30%;
     --mark-arrival-y: 30%;
+
     animation-delay: 140ms;
   }
 
-  .auth-arrival-mark g > path:nth-child(2) {
+  .brand-entrance-mark g > path:nth-child(2) {
     --mark-arrival-x: 14%;
     --mark-arrival-y: -14%;
+
     animation-delay: 100ms;
   }
 
-  .auth-arrival-mark g > path:nth-child(3) {
+  .brand-entrance-mark g > path:nth-child(3) {
     --mark-arrival-x: -8%;
     --mark-arrival-y: -8%;
   }
 
-  .auth-arrival-mark g > path:nth-child(4) {
+  .brand-entrance-mark g > path:nth-child(4) {
     --mark-arrival-x: -14%;
     --mark-arrival-y: 14%;
+
     animation-delay: 60ms;
   }
 
-  .auth-arrival-copy {
-    animation: auth-copy-arrive 600ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  .brand-entrance-copy {
+    animation: brand-copy-arrive 600ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .auth-arrival-actions {

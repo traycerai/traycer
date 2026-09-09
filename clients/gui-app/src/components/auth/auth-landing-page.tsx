@@ -1,5 +1,5 @@
-import "@/styles/auth-arrival.css";
-import { BrandMark, PhotoBloom } from "@/components/auth/cinematic-backdrop";
+import { BrandEntrance } from "@/components/auth/brand-entrance";
+import { PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import { cn } from "@/lib/utils";
@@ -28,16 +28,22 @@ export function AuthLandingPage() {
           housing. */}
       <section className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading">
         <div className="flex w-full max-w-[min(88vw,31rem)] flex-col items-center gap-[clamp(1.2rem,2.8vh,2rem)]">
-          <BrandMark className="auth-arrival-mark h-auto w-[clamp(4.5rem,18vw,6.5rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]" />
-          <div className="auth-arrival-copy flex flex-col items-center gap-5">
-            <h1 className="flex flex-col items-center gap-2 font-medium">
-              <span className="text-ui text-white/65">Welcome to</span>
-              <span className="text-[clamp(3.5rem,14vw,5rem)] leading-none tracking-[-0.055em]">
-                traycer
-              </span>
-            </h1>
-            <p className="text-ui text-white/65">Pick up where you left off.</p>
-          </div>
+          <BrandEntrance size="hero">
+            <div className="brand-entrance-copy flex flex-col items-center gap-5">
+              <h1
+                aria-label="Welcome to traycer"
+                className="flex flex-col items-center gap-2 font-medium"
+              >
+                <span className="text-ui text-white/65">Welcome to</span>
+                <span className="text-[clamp(3.5rem,14vw,5rem)] leading-none tracking-[-0.055em]">
+                  traycer
+                </span>
+              </h1>
+              <p className="text-ui text-white/65">
+                Pick up where you left off.
+              </p>
+            </div>
+          </BrandEntrance>
           <div
             className={cn(
               "auth-arrival-actions",
