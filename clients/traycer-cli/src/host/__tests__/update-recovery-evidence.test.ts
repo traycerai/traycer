@@ -199,6 +199,7 @@ function hostStatusResponse(
     // `null` = this fixture's host did not report on-disk store formats,
     // which is what a host predating the field sends.
     storeFormats: null,
+    install: null,
     ...overrides,
   };
 }

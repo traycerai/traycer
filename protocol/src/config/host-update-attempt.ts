@@ -201,12 +201,24 @@ export type HostUpdateAttemptRecoveryRunningLeg = {
  * forward by every park refresh and never recomputed from arguments or from
  * version order: version ordering cannot establish an authorization an earlier
  * actor gave.
+ *
+ * `acceptStoreFormatLoss` is the OTHER consent the claim was made under, on
+ * the same terms: `--accept-store-format-loss` authorizes landing a build that
+ * cannot open a chat store on the machine, and a park's resumption acts on the
+ * authority the park recorded rather than on whatever the resuming actor
+ * passes. The bound `host.update.continue` passes nothing (the host's
+ * dispatcher never carries it), so without this field a downgrade the person
+ * consented to through "Install anyway" parked on a busy host and could not be
+ * finished from the same consent. Absent on a record written before the field
+ * existed, which decodes as `false`: a claim that never recorded the consent
+ * never had it.
  */
 export type HostUpdateAttemptClaimBaseline = {
   readonly installedVersion: string;
   readonly installGeneration: string;
   readonly stageFingerprint: string | null;
   readonly allowDowngrade: boolean;
+  readonly acceptStoreFormatLoss: boolean;
 };
 
 export type HostUpdateAttemptRecord = {
@@ -930,6 +942,13 @@ function parseRecoveryRunningLeg(
  * to record), and anything else must be exactly this shape or the record is
  * corrupt. Best-effort parsing is not an option for a value whose whole job is
  * to authorize a later resume.
+ *
+ * One key inside the shape is itself additive: `acceptStoreFormatLoss` was
+ * added after claims were first written, so a claim WITHOUT it is a claim
+ * that never recorded that consent - `false` - while a claim carrying
+ * anything but a boolean there is corrupt like any other malformed key. That
+ * is not best-effort parsing: absence has exactly one meaning, and it is the
+ * fail-closed one.
  */
 function parseClaimBaseline(
   value: unknown,
@@ -942,11 +961,14 @@ function parseClaimBaseline(
   const installedVersion = nonEmptyString(raw.installedVersion);
   const installGeneration = nonEmptyString(raw.installGeneration);
   const stageFingerprint = nullableNonEmptyString(raw.stageFingerprint);
+  const acceptStoreFormatLoss =
+    raw.acceptStoreFormatLoss === undefined ? false : raw.acceptStoreFormatLoss;
   if (
     installedVersion === null ||
     installGeneration === null ||
     stageFingerprint === "invalid" ||
-    typeof raw.allowDowngrade !== "boolean"
+    typeof raw.allowDowngrade !== "boolean" ||
+    typeof acceptStoreFormatLoss !== "boolean"
   ) {
     return "invalid";
   }
@@ -955,6 +977,7 @@ function parseClaimBaseline(
     installGeneration,
     stageFingerprint,
     allowDowngrade: raw.allowDowngrade,
+    acceptStoreFormatLoss,
   };
 }
 
