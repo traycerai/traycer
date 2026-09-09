@@ -65,6 +65,14 @@ const TILE_PLACEMENT_DEFAULT_LABELS: Record<
   ...TILE_PLACEMENT_LABELS,
   "per-category": "Per tile type",
 };
+/**
+ * A side chat is always placed relative to the chat it was asked from, so
+ * "this pane" would be ambiguous here: the options name the SOURCE chat.
+ */
+const SIDE_CHAT_PLACEMENT_LABELS: Record<TilePlacement, string> = {
+  tab: "As a tab of the source chat",
+  split: "In a split beside the source chat",
+};
 /** Only the browser category can float - the other two have no PiP host. */
 const BROWSER_TILE_PLACEMENT_LABELS: Record<BrowserTilePlacement, string> = {
   ...TILE_PLACEMENT_LABELS,
@@ -239,6 +247,22 @@ export function OpeningBehaviorPanel(): ReactNode {
                       setTilePlacement({ browser });
                     }}
                     ariaLabel="Browsers"
+                  />
+                }
+              />
+              <SettingsRow
+                label="Side chats"
+                description="Asides started with /btw or /side, placed next to the chat they were asked from."
+                control={
+                  <EnumSelect
+                    labels={SIDE_CHAT_PLACEMENT_LABELS}
+                    isValue={isTilePlacement}
+                    value={tilePlacement.sideChat}
+                    onValueChange={(sideChat) => {
+                      trackOpeningBehaviorSetting("tilePlacement");
+                      setTilePlacement({ sideChat });
+                    }}
+                    ariaLabel="Side chats"
                   />
                 }
               />

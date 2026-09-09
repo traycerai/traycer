@@ -74,7 +74,6 @@ import {
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { useSettingsDensity } from "@/providers/settings-density-context";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -122,6 +121,9 @@ import {
   type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
+import { WorktreeAutoCleanupChip } from "@/components/settings/panels/worktree-auto-cleanup-chip";
+import { WorktreeCleanupHistory } from "@/components/settings/panels/worktree-cleanup-history";
+import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
@@ -235,34 +237,53 @@ function useObservedHeight(): {
  */
 export function WorktreesSettingsPanel(): ReactNode {
   const scope = useHostScope();
+  // The panel has two views. The inventory is the default; cleanup history is
+  // reached from the automatic-cleanup popover, or arrived at directly from an
+  // automatic-cleanup notification (which also carries the host, so the run it
+  // names and the host being administered agree).
+  const cleanupView = useWorktreeCleanupViewStore((state) => state.view);
+  const openCleanupHistory = useWorktreeCleanupViewStore(
+    (state) => state.openHistory,
+  );
+  const closeCleanupHistory = useWorktreeCleanupViewStore(
+    (state) => state.closeHistory,
+  );
+  const showCleanupHistory = useCallback(() => {
+    openCleanupHistory(null);
+  }, [openCleanupHistory]);
   // One-shot `worktree.deleteByPath` stream transport: it survives the panel
   // unmounting (a backgrounded delete keeps its socket) but wires no proactive
   // reconnect and no auth revalidation, so an OS wake / host respawn does not
   // silently re-subscribe and re-run the delete pipeline. A dropped socket
   // surfaces the failure instead.
   const openStreamTransport = useWorktreeDeleteStreamTransportFactory();
-  const compact = useSettingsDensity() === "compact";
 
+  // No subtitle, and no card above the list: the automatic-cleanup policy is
+  // one chip in the inventory's own toolbar now, so the list card is the only
+  // child of the fill-height column and gets the whole panel height in both
+  // views.
   return (
     <SettingsPanelShell
       title="Worktrees"
-      description="Traycer-created worktrees on this host."
       fillHeight
       bodyClassName="relative rounded-none border-none bg-transparent"
     >
-      <div
-        className={cn(
-          "flex h-full min-h-0 flex-col",
-          compact ? "gap-2.5" : "gap-3",
-        )}
-      >
+      <div className="flex h-full min-h-0 flex-col">
         <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
-          <WorktreesBody
-            client={scope.client}
-            openStreamTransport={openStreamTransport}
-            hostId={scope.hostId}
-            scope={scope}
-          />
+          {cleanupView === "cleanupHistory" ? (
+            <WorktreeCleanupHistory
+              scope={scope}
+              onBack={closeCleanupHistory}
+            />
+          ) : (
+            <WorktreesBody
+              client={scope.client}
+              openStreamTransport={openStreamTransport}
+              hostId={scope.hostId}
+              scope={scope}
+              onOpenHistory={showCleanupHistory}
+            />
+          )}
         </div>
       </div>
     </SettingsPanelShell>
@@ -274,11 +295,18 @@ function WorktreesToolbar(props: {
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
   readonly lastUpdatedAt: number | null;
+  /**
+   * The leading slot. A SLOT rather than the scope itself, so the toolbar
+   * stays a layout with no opinion on the automatic-cleanup policy - exactly
+   * like `selectionControls` and `filterControls` beside it.
+   */
+  readonly cleanup: ReactNode;
   readonly selectionControls: ReactNode | null;
   readonly filterControls: ReactNode | null;
 }): ReactNode {
   const {
     canRefresh,
+    cleanup,
     filterControls,
     lastUpdatedAt,
     onRefresh,
@@ -297,11 +325,13 @@ function WorktreesToolbar(props: {
   return (
     <div className="flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
       {/* The slot on the left held first a host `<Select>`, then a readout of
-          the scoped host. Both are gone: the sidebar names that host one row
-          away and never scrolls, so this toolbar carries only what it owns. */}
-      <div className="flex items-center justify-end gap-2">
+          the scoped host. Both are gone - the sidebar names that host one row
+          away and never scrolls - and it now carries the automatic-cleanup
+          chip, which wraps onto its own line with the row at narrow widths. */}
+      <div className="flex flex-wrap items-center gap-2">
+        {cleanup}
         <div
-          className="flex shrink-0 items-center gap-2"
+          className="ml-auto flex shrink-0 items-center gap-2"
           data-testid="worktrees-toolbar-actions"
         >
           {selectionControls}
@@ -529,8 +559,9 @@ function WorktreesBody(props: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string | null;
   readonly scope: HostScope;
+  readonly onOpenHistory: () => void;
 }): ReactNode {
-  const { client, openStreamTransport, hostId, scope } = props;
+  const { client, openStreamTransport, hostId, scope, onOpenHistory } = props;
   const reachability = useHostReachability(hostId ?? "");
   // Two reachability opinions used to disagree here. `useHostReachability` is
   // the TAB-binding check and can call a host reachable that this settings
@@ -566,6 +597,12 @@ function WorktreesBody(props: {
     completeEnrichmentRefresh();
   }, [listing, prepareEnrichmentRefresh]);
   const toolbarProps = {
+    // Built HERE, not inside the toolbar, because the toolbar renders in two
+    // places (standalone above the gate, and inside the list) and the chip
+    // must be the same element in both.
+    cleanup: (
+      <WorktreeAutoCleanupChip scope={scope} onOpenHistory={onOpenHistory} />
+    ),
     onRefresh,
     // Only the explicit Refresh mutation locks the button - NOT enrichment.
     // A cold fleet enriches for tens of seconds; gating on that stranded the
@@ -843,6 +880,7 @@ export function WorktreesList(props: {
   readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
+    readonly cleanup: ReactNode;
     readonly onRefresh: () => Promise<unknown>;
     readonly refreshing: boolean;
     readonly canRefresh: boolean;
