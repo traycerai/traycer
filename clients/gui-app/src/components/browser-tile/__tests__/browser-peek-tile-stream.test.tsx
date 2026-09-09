@@ -1,6 +1,6 @@
-import "../../../../../__tests__/test-browser-apis";
+import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
-import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
+import { renderPeekTile } from "@/components/browser-tile/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
@@ -13,7 +13,7 @@ import {
   liveStream as fixtureLiveStream,
   streamAuthRevalidatorModule,
   tabHostIdModule,
-} from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+} from "@/components/browser-tile/__tests__/browser-peek-tile-stream-fixture";
 import { BrowserPeekTile } from "@/components/browser-tile/browser-peek-tile";
 
 const hookState = vi.hoisted(() => ({
