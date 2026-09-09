@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -599,14 +600,14 @@ describe("observeSwapQuiescence", () => {
       // a `readdir` of the temp root, and faking timers around real filesystem
       // work is how an earlier round of this suite deadlocked. One sleep is
       // cheaper than that class of flake.
-      let round = 0;
+      // Busy UNTIL the slot lands, gated on the slot's own existence rather
+      // than on a call count: a round issues one call per label, so a counter
+      // would say "second round" on the second LABEL of the first round and
+      // the wait this test exists to exercise would never happen.
+      const slotC = join(root, "host", "dev-runs", "slot-c");
       mocks.macosServiceMayRespawnMock.mockImplementation(async () => {
-        round += 1;
-        if (round > 1) return false;
-        // Busy on the first round only, and the slot lands while it is busy.
-        await mkdir(join(root, "host", "dev-runs", "slot-c"), {
-          recursive: true,
-        });
+        if (existsSync(slotC)) return false;
+        await mkdir(slotC, { recursive: true });
         return true;
       });
 
@@ -622,6 +623,49 @@ describe("observeSwapQuiescence", () => {
         ),
       );
       expect(probed).toContain("ai.traycer.host.dev.slot-c");
+    });
+
+    it("keeps probing a slot's job after its DIRECTORY is removed mid-wait - deleting a directory neither unloads a job nor kills its child", async () => {
+      // Cold review P2. Records and labels are not symmetric under removal: a
+      // record path names a directory, so when the directory goes the claim
+      // goes with it, but a service job outlives the directory that named it.
+      // Dev cleanup that removes `dev-runs/slot-b` while its host is still
+      // booting would otherwise drop slot-b from the next enumeration and
+      // clear the swap having never been told the job stopped.
+      const slotB = join(root, "host", "dev-runs", "slot-b");
+      await mkdir(slotB, { recursive: true });
+      let removed = false;
+      mocks.macosServiceMayRespawnMock.mockImplementation(
+        async (label: unknown) => {
+          const id = (label as { id: string }).id;
+          if (!removed) {
+            // First round: slot-b's job is loaded, and the slot vanishes
+            // while we wait for it to settle.
+            if (id === "ai.traycer.host.dev.slot-b") {
+              await rm(slotB, { recursive: true, force: true });
+              removed = true;
+              return true;
+            }
+            return false;
+          }
+          return false;
+        },
+      );
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: true });
+      });
+
+      // The clearing round asked about slot-b even though nothing enumerated
+      // it any more; it cleared because the MANAGER said so, not because the
+      // directory was gone.
+      const roundsForSlotB = mocks.macosServiceMayRespawnMock.mock.calls.filter(
+        (call) =>
+          (call[0] as { id: string }).id === "ai.traycer.host.dev.slot-b",
+      );
+      expect(roundsForSlotB.length).toBeGreaterThanOrEqual(2);
     });
 
     it("is NOT established, with reason unseen-writers, when dev-runs cannot be read - and consults no record", async () => {

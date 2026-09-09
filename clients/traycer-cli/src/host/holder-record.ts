@@ -25,12 +25,23 @@ import { createCliLogger, errorFromUnknown } from "../logger";
  * the moment the kernel lock is won, which is what lets `readCurrentIncumbent`
  * corroborate a held dev identity home lock (which never gets a `pid.json`)".
  *
- * So the holder record is the ONLY evidence co-located with the data it
- * protects, and that co-location is the whole point: it answers "is anyone
- * writing THIS root" without needing to know where its writer was launched
- * from. A host may be started with any `--host-data-dir` beneath
- * `~/.traycer/host` (`main-bootstrap.ts`), so no enumeration of home
- * directories can be complete, while this read is complete by construction.
+ * So the holder record is the only evidence CO-LOCATED with the data it
+ * protects, and that co-location is the point: it can answer "is anyone
+ * writing THIS root" without knowing where its writer was launched from. A
+ * host may be started with any `--host-data-dir` beneath `~/.traycer/host`
+ * (`main-bootstrap.ts`), so no enumeration of home directories is complete,
+ * and this read sees writers such an enumeration cannot.
+ *
+ * ## One direction only
+ *
+ * A record read here is evidence that a writer EXISTS. Its absence, or a
+ * record whose process is gone, is NOT evidence that none does. The host
+ * writes this file best-effort and swallows a failed write - its own
+ * `layer0-lock.ts` calls it "a diagnostic only - it never gates anything" -
+ * so a live host that could not write it leaves its dead predecessor's record
+ * standing. Callers must therefore use this to ADD refusals and never to
+ * justify a clearance on its own; `swap-quiescence.ts` documents the whole
+ * asymmetry where it composes the three sources.
  *
  * Never deleted on release, so a stale record outlives its writer - which
  * costs nothing, because liveness is decided the same way `pid.json`'s is:

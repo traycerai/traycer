@@ -188,14 +188,33 @@ export async function observeSwapQuiescence(
  * - `pidPaths` - the SLOT-scoped `pid.json` of every host home this process
  *   can name. Answers "is a published host running there".
  * - `holderPaths` - each SURVEYED root's own `holder.json`. Answers "does
- *   anyone hold THIS data root", and is the only evidence that survives a
- *   host started with an arbitrary `--host-data-dir`: the record sits in the
- *   data being protected rather than in the launcher's home, and a pooled
- *   identity home never gets a `pid.json` at all.
+ *   anyone hold THIS data root" for a host this process cannot otherwise
+ *   name: the record sits in the data being protected rather than in the
+ *   launcher's home, and a pooled identity home never gets a `pid.json` at
+ *   all. Read in ONE direction only - see below.
  * - `serviceLabels` - the job of every enumerated slot. A manager that can
  *   START a writer disqualifies the swap exactly as a running writer does,
  *   and reading only this process's label was the hole that made the widened
  *   walk unsound.
+ *
+ * ## What the holder record is NOT
+ *
+ * It is not proof that a root has no writer, and this walk must never be read
+ * as if it were. The host writes it best-effort on acquire and SWALLOWS a
+ * failed write (`layer0-lock.ts`'s `writeHolderRecord`), where it is called
+ * "a diagnostic only - it never gates anything". So a live host whose holder
+ * write failed - an unwritable `holder.json` in a writable root - leaves the
+ * dead predecessor's record in place, and a host started with an arbitrary
+ * `--host-data-dir` outside `dev-runs` publishes its `pid.json` somewhere
+ * this process never enumerates.
+ *
+ * A present, live holder therefore REFUSES, and an absent or dead one clears
+ * nothing by itself - it only declines to add a refusal the other two sources
+ * may still supply. That asymmetry is the whole contract: this walk detects
+ * strictly more writers than the pid-only walk it replaced, and it closes no
+ * hole on its own. Closing the remaining one needs positive lock evidence
+ * (taking the Layer 0 lock, which needs the host's native addon the CLI does
+ * not carry), not a better reading of a diagnostic.
  */
 interface WriterEvidenceRecords {
   readonly kind: "records";
@@ -234,11 +253,12 @@ type WriterEvidenceSources =
  *   the host STARTED in. It names published hosts in homes this process can
  *   enumerate, and says nothing about a pooled identity home.
  * - `holder.json` sits in the DATA ROOT itself, written the moment the Layer 0
- *   lock is won. It is what makes this walk complete rather than
- *   convention-bound: a host may be started with any `--host-data-dir` beneath
- *   `~/.traycer/host` and can then acquire a pooled identity, so no
- *   enumeration of HOMES can be exhaustive - but the holder record of a root
- *   is written by whoever took that root, wherever they came from.
+ *   lock is won. It is what makes this walk less convention-bound: a host may
+ *   be started with any `--host-data-dir` beneath `~/.traycer/host` and can
+ *   then acquire a pooled identity, so no enumeration of HOMES is exhaustive -
+ *   but the holder record of a root is written by whoever took that root,
+ *   wherever they came from. Best-effort, so it can only ADD a refusal (see
+ *   the source type above).
  * - the SERVICE LABEL of each enumerated slot, because a loaded job with no
  *   live child is precisely the writer the settle wait exists to catch, and
  *   reading only this process's label left every sibling slot unprobed.
@@ -486,24 +506,37 @@ async function quiescenceOnceServiceSettles(
   // slot's can. Holding the label set fixed for the whole window would reopen
   // along the TIME axis the hole the widened walk closed along the slot axis.
   let writers = initialWriters;
+  // Labels ACCUMULATE across rounds; records do not. The asymmetry is the
+  // difference between what the two are made of. A record path is a claim
+  // about a directory, so when the directory goes the claim goes with it. A
+  // service label names a job in the OS's service manager, and removing a slot
+  // directory neither unloads that job nor kills the child it already spawned:
+  // dev cleanup that deletes `dev-runs/<slot>` while its host is still booting
+  // takes the label out of the next enumeration while the writer it can start
+  // is still very much alive. So once a label has been seen in this
+  // observation it stays until a PROBE clears it - which costs nothing when
+  // the job really is gone, since an unloaded label answers "will not
+  // respawn" and the set settles on the next round.
+  const labels = new Map<string, ServiceLabel>(
+    initialWriters.extraServiceLabels.map((label) => [label.id, label]),
+  );
   for (;;) {
     const budget = Math.max(
       1,
       Math.min(SERVICE_PROBE_TIMEOUT_MS, Math.ceil(remainingMs())),
     );
-    // EVERY label this round knows of, CONCURRENT, and one budget for the set
-    // rather than one each: the deadline is shared, so probing N labels in
-    // sequence would let a slow manager eat the whole window before the next
-    // label is asked at all. Any job that could start a writer keeps the whole
-    // set unsettled.
+    // EVERY label seen so far, CONCURRENT, and one budget for the set rather
+    // than one each: the deadline is shared, so probing N labels in sequence
+    // would let a slow manager eat the whole window before the next label is
+    // asked at all. Any job that could start a writer keeps the whole set
+    // unsettled.
+    const probedLabels = [...labels.values()];
     const answers = await Promise.all([
       // This environment's own label through the established seam, so every
       // caller and suite that stubs `serviceManagerMayRespawn` keeps working
       // and the shipped single-label path stays byte-identical to before.
       serviceManagerMayRespawn(environment, budget),
-      ...writers.extraServiceLabels.map((label) =>
-        serviceLabelMayRespawn(label, budget),
-      ),
+      ...probedLabels.map((label) => serviceLabelMayRespawn(label, budget)),
     ]);
     if (!answers.some((mayRespawn) => mayRespawn)) {
       // Re-read the writers before clearing. The probes above are asynchronous
@@ -513,7 +546,7 @@ async function quiescenceOnceServiceSettles(
       return await quiescenceOnceWritersRechecked(
         environment,
         surveyRoots,
-        writers,
+        { records: writers, probedLabelIds: [...labels.keys()] },
         logger,
       );
     }
@@ -543,6 +576,7 @@ async function quiescenceOnceServiceSettles(
       return unseenWriters(environment, surveyRoots, next.cause, logger);
     }
     writers = next;
+    for (const label of next.extraServiceLabels) labels.set(label.id, label);
   }
 }
 
@@ -564,7 +598,7 @@ async function quiescenceOnceServiceSettles(
 async function quiescenceOnceWritersRechecked(
   environment: Environment,
   surveyRoots: ChatStoreSurveyRoots,
-  probed: WriterEvidenceRecords,
+  probed: ProbedSources,
   logger: ILogger,
 ): Promise<SwapQuiescence> {
   const writers = await resolveWriterEvidenceSources(environment, surveyRoots);
@@ -588,23 +622,41 @@ async function quiescenceOnceWritersRechecked(
   return processGap ?? QUIESCED;
 }
 
+/** What the round actually asked about, which is what clearance is measured against. */
+interface ProbedSources {
+  /** The records this round read. */
+  readonly records: WriterEvidenceRecords;
+  /**
+   * Every label probed in this observation, which OUTLIVES the resolution it
+   * came from - see the settle loop for why a label may not be forgotten when
+   * its slot directory is.
+   */
+  readonly probedLabelIds: readonly string[];
+}
+
 /**
- * The sources the re-resolution names that the probed round did not cover.
+ * The sources the re-resolution names that the round did not cover.
  *
- * Growth is the only direction that matters. A source that DISAPPEARED - a run
- * slot removed mid-check - takes a possible writer off the board and can never
- * make a cleared swap unsafe, so the comparison is a subset test rather than an
- * equality one, and a slot torn down during a swap is not turned into a
- * refusal.
+ * Growth is the only direction that matters for RECORDS. A record path that
+ * disappeared named a directory that is gone, so it takes a possible writer
+ * off the board and can never make a cleared swap unsafe - hence a subset test
+ * rather than an equality one, and a root torn down during a swap is not
+ * turned into a refusal.
+ *
+ * Labels are not symmetric with that, which is why they are compared against
+ * everything probed in this observation rather than against the last
+ * resolution: a job survives the deletion of the directory that named it, so
+ * "no longer enumerated" is not "no longer able to start a writer". The settle
+ * loop keeps probing such a label until the manager itself says otherwise.
  */
 function sourcesAppearedSince(
-  probed: WriterEvidenceRecords,
+  probed: ProbedSources,
   resolved: WriterEvidenceRecords,
 ): readonly string[] {
   const covered = new Set<string>([
-    ...probed.pidPaths,
-    ...probed.holderPaths,
-    ...probed.extraServiceLabels.map((label) => label.id),
+    ...probed.records.pidPaths,
+    ...probed.records.holderPaths,
+    ...probed.probedLabelIds,
   ]);
   return [
     ...resolved.pidPaths,

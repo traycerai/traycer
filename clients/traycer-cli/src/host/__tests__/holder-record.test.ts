@@ -69,14 +69,21 @@ describe("readHostHolderEvidenceAt", () => {
   });
 
   it("reads a well-formed record, keeping the start stamp when it is one", async () => {
+    // A REAL token: `isProcessStartIdentity` accepts only a `linux:`/`darwin:`
+    // /`win32:` tag with a non-empty payload, so a made-up string would be
+    // dropped to `null` and this case would silently become the one below it.
     await writeFile(
       path,
-      JSON.stringify({ pid: 4242, processStartIdentity: "start:1:2" }),
+      JSON.stringify({
+        pid: 4242,
+        processStartIdentity: "linux:boot-abc 4242",
+      }),
       "utf8",
     );
-    const evidence = await readHostHolderEvidenceAt(path, "dev");
-    expect(evidence.kind).toBe("read");
-    expect(evidence.kind === "read" ? evidence.holder.pid : null).toBe(4242);
+    await expect(readHostHolderEvidenceAt(path, "dev")).resolves.toEqual({
+      kind: "read",
+      holder: { pid: 4242, processStartIdentity: "linux:boot-abc 4242" },
+    });
   });
 
   it("keeps the record when the start stamp is unusable, rather than dropping the holder", async () => {
