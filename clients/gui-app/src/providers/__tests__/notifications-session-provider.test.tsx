@@ -524,13 +524,45 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     });
   }
 
+  /** Every version a subscribe PINNED, in order; `null` for a plain one. */
+  readonly subscribedVersions: Array<SchemaVersion | null> = [];
+
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     method: Method,
     params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
+    return this.record(method, params, null);
+  }
+
+  /**
+   * MUST be overridden, not inherited.
+   *
+   * This mock subclasses the REAL `WsStreamClient`, so an un-overridden
+   * `subscribeAtVersion` runs the real implementation and dies on the
+   * `webSocketFactory` guard above. The failure then presents as the stream
+   * simply never being subscribed - which is indistinguishable from the
+   * feature being off, and is exactly how a selector-pinning production change
+   * reads as "activity never opens" in five unrelated-looking cases.
+   */
+  override subscribeAtVersion<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    return this.record(method, params, schemaVersion);
+  }
+
+  private record<Method extends keyof HostStreamRpcRegistry & string>(
+    method: Method,
+    params: ParamsOf<HostStreamRpcRegistry, Method>,
+    schemaVersion: SchemaVersion | null,
+  ): IStreamSession {
     const session = new MockStreamSession();
     session.openParams = params;
     this.subscribedMethods.push(method);
+    this.subscribedVersions.push(schemaVersion);
     this.openedSessions.push(session);
     const sessions = this.sessionsByMethod.get(method) ?? [];
     sessions.push(session);
@@ -924,10 +956,16 @@ const NOTIFICATION_HOST_IDS_UNDER_TEST = [
 /**
  * Every UNARY floor mixed mode admits on, staged together.
  *
- * All three, not just the two the mark-read path uses:
- * `useNotificationFeedModeFor` admits on the whole set, so omitting one drops
+ * The WHOLE set, not the subset any one path happens to use:
+ * `useNotificationFeedModeFor` admits on all of them, so omitting one drops
  * these cases into local mode and the failure surfaces as unrelated cloud
  * assertions rather than as a version problem.
+ *
+ * This list grows with the floor. `clearAll@1.1` is the fourth and was added
+ * a release after the first three - a new floor reads `null` here, which
+ * fails closed, so the tell is a suite that quietly stops testing mixed mode
+ * rather than one that reports a missing minor. Add the entry in the same
+ * change as the floor.
  */
 function stageNotificationPartitionFloors(): void {
   for (const hostId of NOTIFICATION_HOST_IDS_UNDER_TEST) {
@@ -935,6 +973,7 @@ function stageNotificationPartitionFloors(): void {
       "host.notifications.list": { major: 2, minor: 2 },
       "host.notifications.markAllRead": { major: 1, minor: 1 },
       "host.notifications.indicatorState": { major: 1, minor: 1 },
+      "host.notifications.clearAll": { major: 1, minor: 1 },
     });
   }
 }

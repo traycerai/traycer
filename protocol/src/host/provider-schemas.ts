@@ -1431,9 +1431,11 @@ export type ProvidersClearProfileApiKeyResponse = z.infer<
  * `ambientDriftNotice` (see that field's comment below). No `profileId`:
  * there is exactly one ambient identity per provider. It rides the same
  * `@2.1` minor as the other actions because
- * `@2.1` itself is unreleased (the released surface, host-v1.0.0, is `@2.0`)
- * - versions exist to protect released peers, so an unreleased minor widens
- * in place instead of minting `@2.2`.
+ * `@2.1` was still unreleased WHEN THIS LANDED (the released surface was then
+ * `@2.0`) - versions exist to protect released peers, so an unreleased minor
+ * widens in place instead of minting `@2.2`. That window has since closed:
+ * `released-baseline-surface.json` now carries this family at canonical
+ * `@2.1`, so the line is frozen and the next field here costs `@2.2`.
  */
 export const providerProfileActionSchema = z.discriminatedUnion("type", [
   z.object({
@@ -2611,10 +2613,12 @@ export type ProvidersAwaitLoginRequestV20 = z.infer<
  * selected for this provider, no profile dir override) - so old clients that
  * predate profiles are unaffected.
  *
- * `createProfile.shareSkillsAndPlugins` is an in-place additive field (this
- * whole surface is still unreleased, so a bare in-place addition rather than
- * a version bump is the established precedent here - see `profileId`/
- * `createProfile` themselves, added the same way onto the v1.0 base). Claude
+ * `createProfile.shareSkillsAndPlugins` was added in place while this surface
+ * was unreleased, which was the established precedent then - see `profileId`/
+ * `createProfile` themselves, added the same way onto the v1.0 base. It is
+ * NOT precedent now: `released-baseline-surface.json` carries
+ * `providers.startLogin` at canonical `@1.1` with this exact field in its
+ * request, so the line is frozen and a further field costs a new minor. Claude
  * profile creation only: dir-symlinks `skills/`/`plugins/` to ambient instead
  * of copying (shadow-home plan §6). Defaults to `false` (copy, today's
  * behavior) so old clients that predate the checkbox are unaffected; every
@@ -2702,10 +2706,13 @@ export const providersAwaitLoginResponseSchema = z.object({
   // the default outcome (a successful re-probe, or nothing was in flight).
   // The GUI uses this to drive its bounded auto-restart (decision log's
   // "Bad-code recovery" row) instead of surfacing a generic failed state.
-  // Bare additive field on the still-unreleased 2.1 line (same precedent as
-  // `providers.startLogin@1.1`'s `createProfile.shareSkillsAndPlugins`):
-  // old hosts never emit it and `.default(false)` keeps old-client parses
-  // byte-identical to today.
+  // Added as a bare additive field while the 2.1 line was unreleased (same
+  // precedent as `providers.startLogin@1.1`'s
+  // `createProfile.shareSkillsAndPlugins`): old hosts never emit it and
+  // `.default(false)` keeps old-client parses byte-identical to today.
+  // `providers.awaitLogin` is now in `released-baseline-surface.json` at
+  // canonical 2.1, so 2.1 is frozen and the next field here costs 2.2 - do
+  // not read this as a standing licence to widen in place.
   codeRejected: z.boolean().default(false),
 });
 export const providersAwaitLoginResponseSchemaV20 = z.object({
@@ -3687,9 +3694,12 @@ export function downgradeProviderCliStateToV10(
   // every provider fails the parse and silently vanishes from the downgraded
   // payload for v1.0 clients.
   // - `availabilityPending` (v2.0+)
-  // - `profiles` (unreleased) — must never reach a v1.0 caller; also keeps
+  // - `profiles` (v4.0+) — must never reach a v1.0 caller; also keeps
   //   profile identity (email, label) off the wire for peers that never
-  //   negotiated profile support.
+  //   negotiated profile support. Labelled "unreleased" until the baseline
+  //   caught up; it is in every released major from 4.0 through the canonical
+  //   8.0, which is exactly why this drop is load-bearing rather than
+  //   defensive.
   // - `nativeCapabilities` (v3.1 / v2.1+) — CRITICAL silent-data-loss trap
   // - `managedInstallState` / `versionVisibility` / `advisory` — the
   //   provider-pack-registry fields.

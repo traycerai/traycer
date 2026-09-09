@@ -1,10 +1,15 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { AGENT_ACTIVITY_LOCAL_ONLY_MINOR } from "@traycer-clients/shared/host-transport/agent-activity-stream-client";
 
 /**
- * The `agent.activity.subscribe` minor whose open request carries
- * `plane: "local-only"`.
+ * Re-exported, not re-declared. The number now lives beside the subscribe that
+ * PINS it (`AgentActivityStreamClient`), because a renderer-side admission that
+ * says "this host understands the selector" and a transport-side pin that says
+ * "refuse unless it does" have to be the same minor or the admission admits a
+ * subscribe the pin then rejects. `shared` cannot import from `gui-app`, so the
+ * declaration goes to the lower layer and the reading stays here.
  */
-export const AGENT_ACTIVITY_LOCAL_ONLY_MINOR = 2;
+export { AGENT_ACTIVITY_LOCAL_ONLY_MINOR };
 
 /**
  * Whether a session holding NO cloud verdict may open the activity stream.

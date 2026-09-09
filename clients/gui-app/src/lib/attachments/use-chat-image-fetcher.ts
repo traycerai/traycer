@@ -201,11 +201,33 @@ async function readChatAttachmentFromHost(
       ? { epicId: scope.epicId, chatId: scope.chatId, hash }
       : { epicId: scope.epicId, chatId: scope.chatId, hash, plane };
   try {
-    const response = await scope.client.requestWithSignal(
-      "epic.readChatAttachment",
-      request,
-      signal,
-    );
+    // A SELECTED request carries its floor to the wire; an unselected one pays
+    // none. The capability read above happens before the send, and the process
+    // it described can be replaced in between - `plane` is an OPTIONAL literal
+    // on the released `@1.0` line, so the replacement STRIPS it and quietly
+    // restores the cloud fallback the selector existed to refuse: a bearer
+    // spent by a session that asked for the disk leg precisely because it may
+    // hold none. Binding the floor to the frame is the only check the
+    // replacement cannot outrun.
+    const response =
+      plane === null
+        ? await scope.client.requestWithSignal(
+            "epic.readChatAttachment",
+            request,
+            signal,
+          )
+        : await scope.client.requestWithSignalRequiringHostMethodVersion(
+            "epic.readChatAttachment",
+            request,
+            signal,
+            {
+              method: "epic.readChatAttachment",
+              version: {
+                major: 1,
+                minor: READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR,
+              },
+            },
+          );
     if (!response.ok) return null;
     const bytes = base64ToBytes(response.bytesBase64);
     if (bytes === null) {
