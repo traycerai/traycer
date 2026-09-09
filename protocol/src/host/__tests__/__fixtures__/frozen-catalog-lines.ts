@@ -9010,6 +9010,30 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                       "default": true,
                       "type": "boolean"
                     },
+                    "apiKey": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "supported": {
+                              "type": "boolean"
+                            },
+                            "configured": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "supported",
+                            "configured"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "launchCommand": {
                       "default": null,
                       "anyOf": [

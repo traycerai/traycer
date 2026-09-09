@@ -84,6 +84,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -186,6 +187,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -222,6 +224,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: "Beta details", preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -232,6 +235,7 @@ describe("InterviewSegment", () => {
                 { label: "Full", description: null, preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -313,6 +317,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: null, preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -396,6 +401,7 @@ describe("InterviewSegment", () => {
       header: null,
       options: [],
       multiSelect: false,
+      allowsCustomAnswer: null,
     };
     const secondQuestion: InterviewQuestion = {
       questionId: "q2",
@@ -403,6 +409,7 @@ describe("InterviewSegment", () => {
       header: null,
       options: [],
       multiSelect: false,
+      allowsCustomAnswer: null,
     };
     const firstAnswer: InterviewAnswer = {
       questionId: "q1",
@@ -474,6 +481,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -535,6 +543,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -594,6 +603,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -645,6 +655,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -652,6 +663,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -722,6 +734,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -729,6 +742,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -775,6 +789,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: "Beta details", preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -831,6 +846,7 @@ describe("InterviewSegment", () => {
                   { label: "Beta", description: "Beta details", preview: null },
                 ],
                 multiSelect: false,
+                allowsCustomAnswer: null,
               },
             ]}
             answers={[]}
@@ -888,6 +904,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -939,6 +956,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
