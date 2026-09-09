@@ -10,9 +10,23 @@ import type { SwapQuiescence } from "../swap-quiescence";
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataEvidenceMock: vi.fn(),
+  readHostHolderEvidenceMock: vi.fn(),
   macosServiceMayRespawnMock: vi.fn(),
   linuxServiceMayRespawnMock: vi.fn(),
 }));
+
+// The holder record is read for every surveyed root, so it is sandboxed for
+// the same reason the pid read is: left real, it touches the operator's own
+// `~/.traycer` AND puts filesystem I/O inside the fake-timer window, where it
+// desynchronizes the settle-loop choreography. Absent by default - the state
+// of a machine whose roots nobody holds.
+vi.mock("../holder-record", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../holder-record")>();
+  return {
+    ...actual,
+    readHostHolderEvidenceAt: mocks.readHostHolderEvidenceMock,
+  };
+});
 
 // The observer reads every record by PATH (`readHostPidMetadataEvidenceAt`),
 // so one mock serves the single-root tests, which never look at the path,
@@ -98,6 +112,7 @@ vi.mock("../../service/platforms/linux", async (importOriginal) => {
 // touching the real platform probes.
 mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
 mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
+mocks.readHostHolderEvidenceMock.mockResolvedValue({ kind: "absent" });
 
 const { observeSwapQuiescence, SERVICE_SETTLE_TIMEOUT_MS } =
   await import("../swap-quiescence");
@@ -341,6 +356,10 @@ describe("observeSwapQuiescence", () => {
       mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
         kind: "absent",
       } satisfies HostPidMetadataEvidence);
+      // Reset alongside the pid mock, or the per-path assertions below inherit
+      // the previous test's calls - this describe reads BOTH kinds of record.
+      mocks.readHostHolderEvidenceMock.mockReset();
+      mocks.readHostHolderEvidenceMock.mockResolvedValue({ kind: "absent" });
     });
     afterEach(async () => {
       sandbox.root = null;
@@ -355,6 +374,23 @@ describe("observeSwapQuiescence", () => {
       return mocks.readHostPidMetadataEvidenceMock.mock.calls.map(
         (call) => call[0] as string,
       );
+    }
+    /**
+     * The DISTINCT records consulted. The walk runs twice on a clearing pass -
+     * once up front, once after the service probes, which are subprocess calls
+     * a host could publish during - so the raw call list has every path twice.
+     */
+    function distinctReadPaths(): string[] {
+      return [...new Set(readPaths())].sort();
+    }
+    function holderPaths(): string[] {
+      return [
+        ...new Set(
+          mocks.readHostHolderEvidenceMock.mock.calls.map(
+            (call) => call[0] as string,
+          ),
+        ),
+      ].sort();
     }
 
     it("reads the unslotted dev home's record and every dev-runs slot's, and is established when each is absent", async () => {
@@ -373,13 +409,22 @@ describe("observeSwapQuiescence", () => {
         observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
       ).resolves.toEqual({ established: true });
 
-      // Sorted, so a refusal's log lists the records in one stable order.
-      expect(readPaths()).toEqual(
+      // The pid records are the SLOT homes: this process's, the unslotted dev
+      // home's, and every `dev-runs` slot's. Surveyed roots are covered by
+      // their holder records instead - a pooled identity home never gets a
+      // pid.json at all.
+      expect(distinctReadPaths()).toEqual(
         [
           recordPath("dev"),
           recordPath("dev-runs", "slot-a"),
           recordPath("dev-runs", "slot-b"),
-          ...SURVEYED_ROOT_RECORDS,
+        ].sort(),
+      );
+      expect(holderPaths()).toEqual(
+        [
+          ...DEV_ROOTS.roots.map((entry) => join(entry.path, "holder.json")),
+          join(root, "host", "dev-runs", "slot-a", "holder.json"),
+          join(root, "host", "dev-runs", "slot-b", "holder.json"),
         ].sort(),
       );
     });
@@ -388,12 +433,8 @@ describe("observeSwapQuiescence", () => {
       await expect(
         observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
       ).resolves.toEqual({ established: true });
-      expect(readPaths()).toEqual(
-        [
-          recordPath("dev"),
-          recordPath("dev-runs", "slot-a"),
-          ...SURVEYED_ROOT_RECORDS,
-        ].sort(),
+      expect(distinctReadPaths()).toEqual(
+        [recordPath("dev"), recordPath("dev-runs", "slot-a")].sort(),
       );
     });
 
@@ -435,6 +476,67 @@ describe("observeSwapQuiescence", () => {
       await expect(
         observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
       ).resolves.toEqual({ established: false, reason: "writer-unknown" });
+    });
+
+    it("is NOT established when a SURVEYED ROOT's holder record names a live process, whatever slot launched it", async () => {
+      // The finding this closes: a host may be started with any
+      // `--host-data-dir` beneath `~/.traycer/host` and then acquire a pooled
+      // identity, so its pid lands in a home no enumeration can be sure to
+      // list - while the identity home it writes gets no pid.json at all. The
+      // holder record sits in the root itself, so it answers regardless.
+      const identityRoot = DEV_ROOTS.roots[1]?.path ?? "";
+      mocks.readHostHolderEvidenceMock.mockImplementation(
+        async (path: string) =>
+          path === join(identityRoot, "holder.json")
+            ? {
+                kind: "read",
+                holder: { pid: process.pid, processStartIdentity: null },
+              }
+            : { kind: "absent" },
+      );
+
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({
+        established: false,
+        reason: "writer-still-running",
+      });
+    });
+
+    it("is NOT established, with reason writer-unknown, when a surveyed root's holder record cannot be read", async () => {
+      mocks.readHostHolderEvidenceMock.mockResolvedValue({
+        kind: "unreadable",
+        cause: "not valid JSON",
+      });
+
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({ established: false, reason: "writer-unknown" });
+    });
+
+    it("probes EVERY enumerated slot's service job, not just this process's label", async () => {
+      // The other half of the same finding: the pid walk covered slot B while
+      // the settle probe only ever asked about slot A's label, so a sibling
+      // job inside its relaunch window cleared the swap.
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: true });
+      });
+
+      const probed = new Set(
+        mocks.macosServiceMayRespawnMock.mock.calls.map(
+          (call) => (call[0] as { id: string }).id,
+        ),
+      );
+      expect(probed).toContain("ai.traycer.host.dev.slot-a");
+      expect(probed).toContain("ai.traycer.host.dev.slot-b");
+      expect(probed).toContain("ai.traycer.host.dev");
     });
 
     it("is NOT established, with reason unseen-writers, when dev-runs cannot be read - and consults no record", async () => {
@@ -665,7 +767,10 @@ describe("observeSwapQuiescence", () => {
         ).resolves.toEqual({ established: true });
       });
       expect(vi.getTimerCount()).toBe(0);
-      expect(mocks.readHostPidMetadataEvidenceMock).toHaveBeenCalledTimes(1);
+      // TWICE, not once: the probe is a subprocess call, so a host that
+      // published while it ran is invisible to the read that preceded it.
+      // This early return used to skip the re-read the post-wait path does.
+      expect(mocks.readHostPidMetadataEvidenceMock).toHaveBeenCalledTimes(2);
     });
 
     it("a second supervisor whose child is still booting never settles -> service-may-respawn once the window is spent, and not before (the competing-registration shape)", async () => {
