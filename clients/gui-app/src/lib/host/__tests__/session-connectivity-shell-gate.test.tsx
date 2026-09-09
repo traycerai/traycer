@@ -142,9 +142,13 @@ describe("the strip across one interruption on a browser shell", () => {
     ready.setReady(false);
     advance(PAST_ANNOUNCE_MS);
     expect(stripIsShown()).toBe(true);
-    expect(
-      screen.getByTestId("session-connectivity-strip").textContent,
-    ).toContain("Connection interrupted - reconnecting…");
+    const strip = screen.getByTestId("session-connectivity-strip");
+    expect(strip.textContent).toContain("Reconnecting…");
+    // The accessible name still names the CONNECTION, which is what a screen
+    // reader gets: the visible line is deliberately the calmer half.
+    expect(strip.getAttribute("aria-label")).toBe(
+      "Connection interrupted - reconnecting",
+    );
 
     // Dismissed by the bound session's own ready edge and nothing else: an
     // announcement that outlived the outage would train people to ignore it.
