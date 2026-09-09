@@ -110,6 +110,7 @@ function applyFromState(): void {
     root.style.setProperty(`--${token}`, color);
   }
   root.style.setProperty("--glass-opacity", String(library.glassOpacity / 100));
+  root.toggleAttribute("data-glass-enabled", library.glassOpacity < 100);
   root.style.setProperty(
     "--traycer-font-prompt",
     library.promptFontFamily === null

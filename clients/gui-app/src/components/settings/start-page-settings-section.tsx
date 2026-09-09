@@ -153,7 +153,6 @@ export function StartPageSettingsSection() {
       {wallpaper === null ? null : (
         <SettingsRow
           label="Style"
-          description="Dither takes its tint from the repo color when the start page is for a repo that has one."
           control={
             <div className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5">
               {STYLES.map((style) => (
@@ -183,7 +182,6 @@ export function StartPageSettingsSection() {
       {wallpaper === null || wallpaper.style === "photo" ? null : (
         <SettingsRow
           label="Intensity"
-          description="How far the style departs from the photo."
           control={
             <input
               type="range"
@@ -206,8 +204,7 @@ export function StartPageSettingsSection() {
 
       {wallpaper === null || wallpaper.style !== "dither" ? null : (
         <SettingsRow
-          label="Tint with accent colour"
-          description="Off keeps the image's own colours."
+          label="Use accent color"
           control={
             <Switch
               checked={wallpaper.tintWithAccent}
@@ -215,15 +212,14 @@ export function StartPageSettingsSection() {
                 trackSettingChanged("appearance", "startPageWallpaperTint");
                 setWallpaper({ ...wallpaper, tintWithAccent: next });
               }}
-              aria-label="Tint with accent colour"
+              aria-label="Use accent color"
             />
           }
         />
       )}
 
       <SettingsRow
-        label="Greeting"
-        description="Show the greeting above the composer."
+        label="Show greeting"
         control={
           <Switch
             checked={showGreeting}
@@ -231,13 +227,12 @@ export function StartPageSettingsSection() {
               trackSettingChanged("appearance", "showGreeting");
               setShowGreeting(next);
             }}
-            aria-label="Greeting"
+            aria-label="Show greeting"
           />
         }
       />
       <SettingsRow
-        label="Recent tasks"
-        description="List your recent tasks below the composer."
+        label="Show recent tasks"
         control={
           <Switch
             checked={showRecentHistory}
@@ -245,7 +240,7 @@ export function StartPageSettingsSection() {
               trackSettingChanged("appearance", "showRecentHistory");
               setShowRecentHistory(next);
             }}
-            aria-label="Recent tasks"
+            aria-label="Show recent tasks"
           />
         }
       />

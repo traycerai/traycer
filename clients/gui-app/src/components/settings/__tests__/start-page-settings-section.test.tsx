@@ -49,7 +49,11 @@ describe("StartPageSettingsSection", () => {
 
   it("hides Style and Intensity until a wallpaper is set", () => {
     render(<StartPageSettingsSection />);
-    expect(rowLabels()).toEqual(["Wallpaper", "Greeting", "Recent tasks"]);
+    expect(rowLabels()).toEqual([
+      "Wallpaper",
+      "Show greeting",
+      "Show recent tasks",
+    ]);
     expect(screen.getByText("None")).not.toBeNull();
   });
 
@@ -67,13 +71,13 @@ describe("StartPageSettingsSection", () => {
       "Wallpaper",
       "Style",
       "Intensity",
-      "Tint with accent colour",
-      "Greeting",
-      "Recent tasks",
+      "Use accent color",
+      "Show greeting",
+      "Show recent tasks",
     ]);
     expect(
       screen
-        .getByRole("switch", { name: "Tint with accent colour" })
+        .getByRole("switch", { name: "Use accent color" })
         .getAttribute("aria-checked"),
     ).toBe("true");
     expect(screen.getByText("ridge.png")).not.toBeNull();
@@ -95,8 +99,8 @@ describe("StartPageSettingsSection", () => {
     expect(rowLabels()).toEqual([
       "Wallpaper",
       "Style",
-      "Greeting",
-      "Recent tasks",
+      "Show greeting",
+      "Show recent tasks",
     ]);
   });
 
@@ -114,8 +118,8 @@ describe("StartPageSettingsSection", () => {
       "Wallpaper",
       "Style",
       "Intensity",
-      "Greeting",
-      "Recent tasks",
+      "Show greeting",
+      "Show recent tasks",
     ]);
   });
 
@@ -174,7 +178,11 @@ describe("StartPageSettingsSection", () => {
         .matches(":disabled"),
     ).toBe(false);
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
-    expect(rowLabels()).toEqual(["Wallpaper", "Greeting", "Recent tasks"]);
+    expect(rowLabels()).toEqual([
+      "Wallpaper",
+      "Show greeting",
+      "Show recent tasks",
+    ]);
     choose.resolve();
   });
 

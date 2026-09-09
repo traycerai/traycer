@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { TabLeadingIcon } from "../tab-leading-icon";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
-import type { HeaderTabRepositoryIdentity } from "@/stores/tabs/types";
+import type { HeaderTabRepositoryIdentity, TabIcon } from "@/stores/tabs/types";
 
 const mocks = vi.hoisted(() => ({
   useAppearanceAsset: vi.fn(),
@@ -74,6 +74,10 @@ function identityWithEmoji(): HeaderTabRepositoryIdentity {
     iconRejected: false,
   };
 }
+
+const DefaultTabIcon: TabIcon = (props) => (
+  <svg className={props.className} data-testid="default-tab-icon" />
+);
 
 beforeEach(() => {
   mocks.useSurfaceNotificationIndicatorState.mockReturnValue(idleState());
@@ -160,6 +164,71 @@ describe("TabLeadingIcon: missing logo falls back to a neutral icon", () => {
 });
 
 describe("TabLeadingIcon: identity and status coexist and update independently", () => {
+  it("keeps the status slot first and the readable project icon second", () => {
+    render(
+      <TabLeadingIcon
+        icon={null}
+        identity={identityWithEmoji()}
+        titleGenerationPending={false}
+        activityStatus="idle"
+        tabId="tab-order"
+        epicId="epic-order"
+      />,
+    );
+
+    const status = document.querySelector('[data-slot="tab-status-icon"]');
+    const repository = document.querySelector(
+      '[data-slot="tab-repository-icon"]',
+    );
+    expect(status).not.toBeNull();
+    expect(repository).not.toBeNull();
+    if (status === null || repository === null)
+      throw new Error("expected leading icon slots");
+    expect(
+      Boolean(
+        status.compareDocumentPosition(repository) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+    expect(repository.className).toContain("size-5");
+    expect(repository.className).toContain("shrink-0");
+  });
+
+  it("keeps the status slot mounted while idle content changes from loading to the default icon", () => {
+    const { rerender } = render(
+      <TabLeadingIcon
+        icon={DefaultTabIcon}
+        identity={undefined}
+        titleGenerationPending
+        activityStatus="idle"
+        tabId="tab-status"
+        epicId="epic-status"
+      />,
+    );
+
+    const status = document.querySelector('[data-slot="tab-status-icon"]');
+    expect(status).not.toBeNull();
+    expect(
+      screen.getByTestId("header-tab-title-generating-tab-status"),
+    ).toBeTruthy();
+
+    rerender(
+      <TabLeadingIcon
+        icon={DefaultTabIcon}
+        identity={undefined}
+        titleGenerationPending={false}
+        activityStatus="idle"
+        tabId="tab-status"
+        epicId="epic-status"
+      />,
+    );
+
+    expect(document.querySelector('[data-slot="tab-status-icon"]')).toBe(
+      status,
+    );
+    expect(screen.getByTestId("default-tab-icon")).toBeTruthy();
+  });
+
   it("renders the identity icon alongside a running-activity status, and clearing activity leaves identity untouched", () => {
     const { rerender } = render(
       <TabLeadingIcon

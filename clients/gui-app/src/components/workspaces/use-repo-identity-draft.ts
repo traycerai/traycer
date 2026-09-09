@@ -15,9 +15,8 @@ import { bytesToBase64 } from "@/lib/composer/image-base64";
 export type RepositoryIcon = NonNullable<WorkspaceAppearance["icon"]>;
 
 /**
- * The curated palette offered in the UI. The schema still accepts any
- * `#rrggbb`, so a hand-edited file keeps whatever colour it names - it simply
- * shows as "no swatch selected" here.
+ * Preset swatches alongside the custom color picker. The schema accepts any
+ * `#rrggbb` color.
  */
 export const REPOSITORY_IDENTITY_COLORS: readonly string[] = [
   "#e5484d",

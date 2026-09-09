@@ -32,22 +32,37 @@ export function TabLeadingIcon(props: {
     defaultIcon = <Icon className="size-3.5 shrink-0" />;
   }
   return (
-    <>
-      {identity !== null ? (
-        <RepositoryIdentityIcon identity={identity} fallbackIcon={props.icon} />
+    <span className="inline-flex shrink-0 items-center gap-1.5">
+      <span
+        data-slot="tab-status-icon"
+        className="inline-flex size-3.5 shrink-0 items-center justify-center"
+      >
+        <NotificationIndicatorIcon
+          state={indicatorState}
+          running={
+            props.activityStatus === "idle" ? false : props.activityStatus
+          }
+          subjectId={props.tabId}
+          testIdPrefix="header-tab"
+          className="text-muted-foreground"
+          style={undefined}
+          runningTitle="Task activity in progress"
+          defaultIcon={defaultIcon}
+          statusPresentation="message"
+          agentSurface="gui"
+        />
+      </span>
+      {identity !== null && identity.icon !== null ? (
+        <span
+          data-slot="tab-repository-icon"
+          className="inline-flex size-5 shrink-0 items-center justify-center"
+        >
+          <RepositoryIdentityIcon
+            identity={identity}
+            fallbackIcon={props.icon}
+          />
+        </span>
       ) : null}
-      <NotificationIndicatorIcon
-        state={indicatorState}
-        running={props.activityStatus === "idle" ? false : props.activityStatus}
-        subjectId={props.tabId}
-        testIdPrefix="header-tab"
-        className="text-muted-foreground"
-        style={undefined}
-        runningTitle="Task activity in progress"
-        defaultIcon={defaultIcon}
-        statusPresentation="message"
-        agentSurface="gui"
-      />
-    </>
+    </span>
   );
 }

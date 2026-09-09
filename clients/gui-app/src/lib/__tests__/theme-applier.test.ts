@@ -81,6 +81,16 @@ describe("theme applier", () => {
     ).toBe(builtins["term-ansi-red"]);
   });
 
+  it("marks glass-enabled state only below fully opaque glass", () => {
+    const root = document.documentElement;
+
+    expect(root.hasAttribute("data-glass-enabled")).toBe(false);
+    expect(useThemeLibraryStore.getState().setGlassOpacity(50)).toBe(true);
+    expect(root.hasAttribute("data-glass-enabled")).toBe(true);
+    expect(useThemeLibraryStore.getState().setGlassOpacity(100)).toBe(true);
+    expect(root.hasAttribute("data-glass-enabled")).toBe(false);
+  });
+
   it("repairs collapsed legacy imported surfaces only in rendered colors", () => {
     const base = createThemeFromPreset("neutral", "light");
     const legacy = {

@@ -7,8 +7,7 @@
   color: var(--sidebar-foreground);
 }
 
-/* One glass layer per floating surface. Custom Floating UI/Tiptap surfaces
-   join the same contract as the Radix wrappers through their stable markers. */
+/* Floating surfaces share the glass setting. */
 [data-slot="dialog-content"],
 [data-slot="alert-dialog-content"],
 [data-slot="popover-content"],
@@ -27,10 +26,12 @@
 [data-slot="thread-hover-popover"],
 [data-slot="mention-suggestion"],
 [data-slot="quote-selection-popover"],
+[data-slot="office-legend-popover"],
 [data-profile-usage-sidecar],
 [data-minimap-list-card],
 .tc-editor-bubble-menu,
-.tc-node-block-toolbar {
+.tc-node-block-toolbar,
+.glass-with-insets::before {
   /* An embedded command list must not paint another, opaque panel over glass. */
   --command-surface-background: transparent;
   background-color: color-mix(
@@ -39,6 +40,35 @@
     transparent
   );
   backdrop-filter: blur(16px);
+}
+.glass-inset {
+  background-color: var(--popover);
+  backdrop-filter: none;
+}
+/* Blur scrolling content without applying a second layer of tint. */
+:root[data-glass-enabled] .glass-inset {
+  background-color: transparent;
+  backdrop-filter: blur(16px);
+}
+/* Keep outer blur off content so nested overlays and sticky insets can sample the backdrop. */
+:is(
+  [data-slot="popover-content"],
+  [data-slot="dialog-content"]
+).glass-with-insets {
+  isolation: isolate;
+  background-color: transparent;
+  backdrop-filter: none;
+}
+[data-slot="popover-content"].glass-with-insets {
+  position: relative;
+}
+.glass-with-insets::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
 }
 [data-composer-shell] {
   background-color: color-mix(
@@ -58,32 +88,67 @@ code,
 .cm-editor {
   font-variant-ligatures: var(--appearance-ligatures, normal);
 }
-:root[data-reduce-panel-motion]
-  :is(
-    [data-slot="dialog-content"],
-    [data-slot="sheet-content"],
-    [data-slot="sidebar-gap"],
-    [data-slot="sidebar-container"],
-    [data-slot="popover-content"],
-    [data-slot="dropdown-menu-content"],
-    [data-slot="select-content"]
-  ) {
-  animation-duration: 0s;
-  transition-duration: 0s;
+/* Shared wrappers own panel timing, including their portals and backdrops. */
+:root {
+  --panel-motion-duration: var(--panel-animation-duration, 100ms);
 }
-
-:root:not([data-reduce-panel-motion])
+:root[data-reduce-panel-motion] {
+  --panel-motion-duration: 0ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --panel-motion-duration: 0ms;
+  }
+}
+:root
   :is(
     [data-slot="dialog-content"],
+    [data-slot="dialog-overlay"],
+    [data-slot="alert-dialog-content"],
+    [data-slot="alert-dialog-overlay"],
     [data-slot="sheet-content"],
-    [data-slot="sidebar-gap"],
-    [data-slot="sidebar-container"],
+    [data-slot="sheet-overlay"],
+    [data-slot="drawer-content"],
+    [data-slot="drawer-overlay"],
     [data-slot="popover-content"],
     [data-slot="dropdown-menu-content"],
-    [data-slot="select-content"]
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="context-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="hover-card-content"],
+    [data-slot="tooltip-content"],
+    [data-slot="collapsible-content"],
+    [data-slot="tabs-content"],
+    [data-slot="sidebar-gap"],
+    [data-slot="sidebar-container"],
+    [data-slot="sidebar-rail"],
+    [data-slot="sidebar-group-label"],
+    [data-slot="sidebar-group-action"],
+    [data-slot="sidebar-menu-button"],
+    [data-slot="sidebar-menu-action"],
+    [data-slot="composer-menu"],
+    [data-slot="mention-preview-panel"],
+    [data-slot="artifact-link-popover"],
+    [data-slot="floating-draft-popover"],
+    [data-slot="thread-hover-popover"],
+    [data-slot="mention-suggestion"],
+    [data-slot="quote-selection-popover"],
+    [data-slot="office-legend-popover"],
+    [data-slot="collapsible-trigger"] svg,
+    [data-profile-usage-sidecar],
+    [data-minimap-list-card],
+    [data-landing-terminal-panel],
+    .tc-editor-bubble-menu,
+    .tc-node-block-toolbar
   ) {
-  animation-duration: var(--panel-animation-duration, 100ms);
-  transition-duration: var(--panel-animation-duration, 100ms);
+  animation-duration: var(--panel-motion-duration);
+  transition-duration: var(--panel-motion-duration);
+}
+/* Vaul writes inline settle durations; preserve its transition-property: none while dragging. */
+:root :is([data-slot="drawer-content"], [data-slot="drawer-overlay"]) {
+  animation-duration: var(--panel-motion-duration) !important;
+  transition-duration: var(--panel-motion-duration) !important;
 }
 
 :root[data-theme-sidebar-artwork]

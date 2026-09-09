@@ -2,12 +2,12 @@ import {
   ArrowLeftRight,
   CopyPlus,
   ExternalLink,
+  FolderCog,
   Maximize2,
   PanelLeftClose,
   PanelRightClose,
   Pencil,
   Pin,
-  Settings2,
   SplitSquareHorizontal,
   X,
 } from "lucide-react";
@@ -366,7 +366,7 @@ function RepositorySettingsItem(props: {
       onSelect={props.settings.onSelect}
       data-testid={`tab-repository-settings-${props.tabId}`}
     >
-      <Settings2 />
+      <FolderCog aria-hidden />
       Repository settings…
     </ContextMenuItem>
   );

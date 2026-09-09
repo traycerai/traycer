@@ -14,7 +14,7 @@ export function RepositoryIdentityIcon(props: {
   return (
     <span
       aria-hidden="true"
-      className="inline-flex size-3.5 shrink-0 items-center justify-center text-sm leading-none"
+      className="inline-flex size-5 shrink-0 items-center justify-center text-lg leading-none"
     >
       {icon.value}
     </span>
@@ -35,13 +35,13 @@ function RepositoryLogo(props: {
   });
   if (asset.url === null) {
     const Icon = props.fallbackIcon ?? Folder;
-    return <Icon className="size-3.5 shrink-0" />;
+    return <Icon className="size-5 shrink-0" />;
   }
   return (
     <img
       src={asset.url}
       alt=""
-      className="size-3.5 shrink-0 object-contain"
+      className="size-5 shrink-0 object-contain"
       onError={asset.reportDecodeFailure}
     />
   );

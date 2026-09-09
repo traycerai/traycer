@@ -226,7 +226,7 @@ export function NotificationsBell() {
       </TooltipWrapper>
       <PopoverContent
         align="end"
-        className="w-auto overflow-hidden p-0"
+        className="glass-with-insets w-auto overflow-hidden p-0"
         onOpenAutoFocus={lifecycle.onContentOpenAutoFocus}
         onEscapeKeyDown={lifecycle.onContentEscapeKeyDown}
         onCloseAutoFocus={lifecycle.onContentCloseAutoFocus}

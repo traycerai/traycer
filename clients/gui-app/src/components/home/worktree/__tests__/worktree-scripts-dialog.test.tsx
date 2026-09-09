@@ -72,6 +72,7 @@ const mocks = vi.hoisted(() => ({
   appearanceStatus: {
     current: "present",
   },
+  appearanceColor: { current: null as string | null },
   appearanceIcon: {
     current: null as { kind: "image"; path: string } | null,
   },
@@ -90,6 +91,9 @@ vi.mock("@/hooks/appearance/use-workspace-appearance", () => ({
       status: mocks.appearanceStatus.current,
       appearance: {
         version: 1 as const,
+        ...(mocks.appearanceColor.current === null
+          ? {}
+          : { color: mocks.appearanceColor.current }),
         ...(mocks.appearanceIcon.current === null
           ? {}
           : { icon: mocks.appearanceIcon.current }),
@@ -420,6 +424,7 @@ describe("<WorktreeScriptsDialog />", () => {
     mocks.setAppearanceMutate.mockReset();
     mocks.appearanceCanEdit.current = true;
     mocks.appearanceStatus.current = "present";
+    mocks.appearanceColor.current = null;
     mocks.appearanceIcon.current = null;
     mocks.appearanceAssetUrl.current = null;
   });
@@ -453,6 +458,57 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(mocks.setRepoScriptsMutate).not.toHaveBeenCalled();
   });
 
+  it("saves a custom tab color and leaves preset swatches unselected", async () => {
+    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
+
+    const customColor = screen.getByLabelText("Custom tab color");
+    fireEvent.change(customColor, { target: { value: "#123abc" } });
+
+    expect(customColor).toHaveProperty("value", "#123abc");
+    expect(
+      screen
+        .getByRole("button", { name: "No color" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("button", { name: "Color #7c6cf0" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(saveScriptsButton());
+      await Promise.resolve();
+    });
+
+    expect(mocks.setAppearanceMutate).toHaveBeenCalledWith({
+      epicId: "",
+      workspacePath: SOURCE_ROOT,
+      patch: { color: "#123abc" },
+      upload: null,
+    });
+  });
+
+  it("hydrates a saved nonpreset tab color without selecting a preset", () => {
+    mocks.appearanceColor.current = "#123abc";
+    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
+
+    expect(screen.getByLabelText("Custom tab color")).toHaveProperty(
+      "value",
+      "#123abc",
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "No color" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("button", { name: "Color #7c6cf0" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
   it("keeps an existing image through emoji editing and a cancelled replacement", () => {
     mocks.appearanceIcon.current = {
       kind: "image",
@@ -473,7 +529,7 @@ describe("<WorktreeScriptsDialog />", () => {
 
     const tileBeforeChooser =
       screen.getByTestId("repo-identity-tile").innerHTML;
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji instead" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
     const emoji = screen.getByLabelText("Emoji");
     fireEvent.change(emoji, { target: { value: "not an emoji" } });
     expect(screen.getByRole("alert").textContent).toBe("Enter one emoji.");
@@ -490,7 +546,7 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(screen.queryByLabelText("Emoji")).toBeNull();
     expect(screen.getByText("Uploaded image")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji instead" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
     const cancelledEmoji = screen.getByLabelText("Emoji");
     fireEvent.change(cancelledEmoji, { target: { value: "🧭" } });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -498,14 +554,12 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(screen.getByText("Uploaded image")).toBeTruthy();
     expect(mocks.setAppearanceMutate).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji instead" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
     const appliedEmoji = screen.getByLabelText("Emoji");
     fireEvent.change(appliedEmoji, { target: { value: "🧭" } });
     fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
     expect(screen.queryByText("Uploaded image")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Upload image instead" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Upload image" })).toBeTruthy();
     expect(mocks.setAppearanceMutate).not.toHaveBeenCalled();
   });
 

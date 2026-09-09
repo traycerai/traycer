@@ -1,7 +1,7 @@
 import {
   CircleMinus,
-  FileSliders,
   Folder,
+  FolderCog,
   Pin,
   Trash2,
   TriangleAlert,
@@ -355,7 +355,7 @@ function EnvironmentButton(props: {
         // hover-revealed row actions were not discoverable.
         className="text-muted-foreground opacity-[var(--fc-opacity,0.7)] transition-opacity hover:bg-accent/50 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
       >
-        <FileSliders className="size-4" />
+        <FolderCog className="size-4" aria-hidden />
       </Button>
     </TooltipWrapper>
   );

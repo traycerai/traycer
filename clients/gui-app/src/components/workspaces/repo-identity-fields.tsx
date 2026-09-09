@@ -1,9 +1,10 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { appearanceIconSchema } from "@traycer/protocol/host/workspace/appearance-schemas";
-import { Folder, Upload } from "lucide-react";
+import { Folder, Pipette, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppearanceAsset } from "@/hooks/appearance/use-appearance-assets";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import {
   REPOSITORY_IDENTITY_COLORS,
@@ -110,8 +111,11 @@ export function RepoIdentityFields(props: {
             className="flex flex-wrap items-center gap-1.5"
           >
             <ColorSwatch draft={draft} color={null} />
-            {REPOSITORY_IDENTITY_COLORS.map((color) => (
-              <ColorSwatch key={color} draft={draft} color={color} />
+            {REPOSITORY_IDENTITY_COLORS.map((color, index) => (
+              <Fragment key={color}>
+                <ColorSwatch draft={draft} color={color} />
+                {index === 0 ? <CustomColorSwatch draft={draft} /> : null}
+              </Fragment>
             ))}
           </div>
         </div>
@@ -135,11 +139,11 @@ const ICON_LABELS = {
   image: {
     status: "Uploaded image",
     upload: "Replace image",
-    emoji: "Use emoji instead",
+    emoji: "Use emoji",
   },
   emoji: {
     status: "Emoji icon",
-    upload: "Upload image instead",
+    upload: "Upload image",
     emoji: "Change emoji",
   },
   default: {
@@ -255,6 +259,48 @@ function IdentityTileGlyph(props: {
     );
   if (icon?.kind === "emoji") return <span aria-hidden>{icon.value}</span>;
   return <Folder className="size-5 text-muted-foreground" aria-hidden />;
+}
+
+function CustomColorSwatch({ draft }: { readonly draft: RepoIdentityDraft }) {
+  const color = draft.values.color;
+  const selected =
+    color !== null && !REPOSITORY_IDENTITY_COLORS.includes(color);
+  return (
+    <TooltipWrapper
+      label="Custom tab color"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <label
+        className={cn(
+          "relative flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 bg-clip-padding focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-popover",
+          selected
+            ? "border-popover ring-2 ring-foreground"
+            : "border-transparent",
+          draft.disabled && "opacity-50",
+        )}
+        style={
+          selected
+            ? { backgroundColor: color }
+            : {
+                backgroundImage:
+                  "conic-gradient(#e5484d, #f5b000, #46a758, #0090ff, #7c6cf0, #e5484d)",
+              }
+        }
+      >
+        <Pipette className="size-3 text-white drop-shadow-sm" aria-hidden />
+        <input
+          type="color"
+          aria-label="Custom tab color"
+          value={color ?? "#0090ff"}
+          disabled={draft.disabled}
+          onChange={(event) => draft.setColor(event.currentTarget.value)}
+          className="absolute inset-0 size-full min-w-0 cursor-pointer appearance-none rounded-full border-0 p-0 opacity-0 disabled:cursor-not-allowed"
+        />
+      </label>
+    </TooltipWrapper>
+  );
 }
 
 function ColorSwatch(props: {

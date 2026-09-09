@@ -420,6 +420,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("landing draftId flip preserves Environment branch-prefix edit", () => {
+  it("opens the landing workspace picker below its trigger", async () => {
+    renderLandingLikeHarness(null);
+
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const popover = await screen.findByTestId("home-workspace-rows-popover");
+    expect(popover.getAttribute("data-side")).toBe("bottom");
+  });
+
   it("keeps an in-progress prefix edit and confirmed branch across null → uuid", async () => {
     const { rerenderWithDraftId } = renderLandingLikeHarness(null);
 
