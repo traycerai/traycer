@@ -2683,24 +2683,33 @@ export class RemoteSession<
     this.noProgressUnauthorizedReconnects = 0;
     this.restoredStreamIds.clear();
 
-    for (const stream of this.subscriptions.values()) {
-      this.openSubscription(connection, stream);
-    }
-    // RECONCILE THE VERDICT, now that `phase === "ready"` lets the push through.
-    // A verdict that moved during the handshake had its notification dropped by
-    // that same gate, and the `open` payload carried the pre-change value - so
-    // without this the host keeps the stale verdict for the life of the
-    // session. Placed after `phase = "ready"` (the gate) and after the
-    // subscriptions are re-opened, so the correction rides the same connection
-    // the streams were just restored on.
+    // RECONCILE THE VERDICT BEFORE THE SUBSCRIPTIONS ARE RE-OPENED.
+    //
+    // An earlier cut put this after the loop below and argued the correction
+    // should "ride the same connection the streams were just restored on".
+    // That is backwards: re-opening a subscription is what makes the host
+    // construct and start a resolver, and it does so under the verdict the
+    // `open` payload asserted. A correction sent afterwards arrives after the
+    // work it was supposed to govern has begun - and on this carrier that is
+    // every multiplexed stream at once, not one.
+    //
+    // `phase` became `ready` immediately above, which is the gate
+    // `notifyCloudVerdictChanged` checks, so the push goes out from here.
+    // A verdict that moved during the handshake had its own notification
+    // dropped by that same gate while the payload already sent carried the
+    // pre-change value.
     if (
       connection.cloudVerdictUpdateSupported &&
       this.options.cloudAuthorized !== undefined
     ) {
       const current = this.options.cloudAuthorized();
       if (current !== this.openFrameCloudAuthorized) {
+        this.openFrameCloudAuthorized = current;
         this.notifyCloudVerdictChanged();
       }
+    }
+    for (const stream of this.subscriptions.values()) {
+      this.openSubscription(connection, stream);
     }
     this.startReauthLoop();
     this.armStandingTimer();

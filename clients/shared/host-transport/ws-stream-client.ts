@@ -1962,9 +1962,25 @@ class StreamSession<
     if (socket === null) {
       return;
     }
+    this.sendCloudVerdictFrame(socket, read());
+  }
+
+  /**
+   * Writes the verdict frame on `socket`, with no phase gate.
+   *
+   * Split out for the handshake, which has to correct a stale open-frame
+   * verdict BEFORE the subscribe frame goes out - and at that moment the phase
+   * is not yet `subscribed`, so the public push above would refuse. Every other
+   * caller goes through that gate; this one is reached only while holding the
+   * socket the handshake is running on.
+   */
+  private sendCloudVerdictFrame(
+    socket: StreamWebSocketLike,
+    cloudAuthorized: boolean,
+  ): void {
     const frame: ClientStreamCloudVerdictUpdateFrame = {
       kind: "cloudVerdictUpdate",
-      cloudAuthorized: read(),
+      cloudAuthorized,
     };
     if (!this.sendControlText(socket, frame)) {
       this.onSendFailure(socket);
@@ -2475,6 +2491,24 @@ class StreamSession<
       schemaVersion: prepared.onWireVersion,
       params: prepared.onWirePayload,
     };
+    // RECONCILE THE VERDICT BEFORE THE SUBSCRIBE FRAME, not after the
+    // handshake completes. The host may construct and start a resolver the
+    // moment it reads `subscribe`, and it does so under whatever verdict the
+    // OPEN frame asserted - so a correction that lands after this write is
+    // already too late for the work it was supposed to govern. A verdict that
+    // moved during the handshake had its `notifyCloudVerdictChanged` dropped
+    // by the phase gate (we are not `subscribed` yet, which is also why this
+    // writes the frame directly rather than going through the public push).
+    //
+    // Needed separately from the bearer reconciliation further down for the
+    // reason that one cannot cover: a verdict moves without the bearer moving.
+    if (this.supportsCloudVerdictUpdate) {
+      const current = this.config.cloudAuthorized?.();
+      if (current !== undefined && current !== this.openFrameCloudAuthorized) {
+        this.sendCloudVerdictFrame(socket, current);
+        this.openFrameCloudAuthorized = current;
+      }
+    }
     if (!this.sendControlText(socket, subscribeFrame)) {
       this.onSendFailure(socket);
       return;
@@ -2532,19 +2566,16 @@ class StreamSession<
     ) {
       this.pushCredentialUpdate();
     }
-    // THE SAME RECONCILIATION FOR THE VERDICT, and it is needed for a reason
-    // the bearer arm is not: a verdict changes without the bearer moving, so
-    // the arm above cannot stand in for this one. If the verdict moved DURING
-    // the handshake, that change's `notifyCloudVerdictChanged` was dropped by
-    // the phase gate and the open frame carried the old value - which for a
-    // true -> false transition leaves the host authorizing a session the client
-    // has already demoted, for the life of the connection.
-    //
-    // Safe to reach `pushCloudVerdictUpdate` here only because `phase` became
-    // `subscribed` above; the same ordering the bearer arm depends on.
+    // A SECOND VERDICT RECONCILIATION, covering only the window this method
+    // itself opens: the frames and callbacks above (`announceSession`, the
+    // status transition, the recovery edge) can re-enter and move the verdict
+    // again. The pre-subscribe correction is the one that matters for the
+    // resolver; this one keeps the host from finishing the handshake on a
+    // value that changed while it was being completed.
     if (this.supportsCloudVerdictUpdate) {
       const current = this.config.cloudAuthorized?.();
       if (current !== undefined && current !== this.openFrameCloudAuthorized) {
+        this.openFrameCloudAuthorized = current;
         this.pushCloudVerdictUpdate();
       }
     }
