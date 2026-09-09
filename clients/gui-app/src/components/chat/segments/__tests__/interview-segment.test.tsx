@@ -289,6 +289,13 @@ describe("InterviewSegment", () => {
     expect(screen.queryByRole("button", { name: "Beta" })).toBeNull();
     expect(screen.getByRole("button", { name: "Beta details" })).toBeTruthy();
 
+    // The historical/resolved card's `?` (`StaticOptionRow`) is the same
+    // disclosure affordance as the live card's: clicking it reveals the
+    // option's description inline, below the row.
+    expect(screen.queryByText("Beta details")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Beta details" }));
+    expect(screen.getByText("Beta details")).toBeTruthy();
+
     fireEvent.click(screen.getByRole("button", { name: "Next question" }));
 
     expect(screen.getByText("Rollout")).toBeTruthy();

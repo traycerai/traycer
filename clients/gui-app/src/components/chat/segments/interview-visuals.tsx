@@ -5,7 +5,7 @@ import {
   CircleHelp,
   Pencil,
 } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
 import type {
   InterviewQuestion,
   InterviewQuestionOption,
@@ -123,29 +123,67 @@ export function InterviewQuestionPager(props: {
   );
 }
 
+export interface InterviewOptionDetailsDisclosure {
+  readonly regionId: string;
+  readonly expanded: boolean;
+  readonly toggle: () => void;
+}
+
+/**
+ * Per-option disclosure state for the `?` affordance, owned by whichever row
+ * component renders it.
+ *
+ * A Radix tooltip is hover/focus-only BY CONSTRUCTION, so a finger could never
+ * reach these strings: the trigger's `pointerMove` returns early on
+ * `pointerType === "touch"` - the only open-from-pointer path there is - and
+ * the tap's own `pointerdown` sets the flag that suppresses the focus
+ * fallback. The `?` had no `onClick` either, so on a phone it was a dead hole
+ * in the row that swallowed the tap without selecting the option (it sits at
+ * `z-20` over the row's own `absolute inset-0` toggle).
+ *
+ * So the `?` doubles as a disclosure. This is deliberately NOT gated on
+ * `useCoarsePointer()`: hover still previews on a fine pointer, and a click
+ * pins the same text inline under the row where it survives a scroll - which
+ * is an improvement on a mouse too, and one branch less to keep true.
+ */
+export function useInterviewOptionDetailsDisclosure(): InterviewOptionDetailsDisclosure {
+  const regionId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((open) => !open), []);
+  return { regionId, expanded, toggle };
+}
+
+// Hit-slop only - the `?` stays visually 20px while its tap target grows to
+// 32px. Deliberately short of the 44px guideline: the row's own select target
+// is underneath and the next option is 6px away, so a 44px box would steal
+// taps from the two things a finger is far more likely to be aiming at.
+const DETAILS_BUTTON_CLASS =
+  "relative inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors after:absolute after:-inset-1.5 after:content-[''] hover:bg-foreground/8 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40";
+
 export function InterviewOptionDetailsButton(props: {
   readonly label: string;
   readonly option: InterviewQuestionOption;
   readonly className: string | null;
   /** Inline search-pinned detail owns the accessible description. */
   readonly pinnedDetailRegionId: string | null;
+  readonly disclosure: InterviewOptionDetailsDisclosure;
 }) {
   const details = optionDetails(props.option);
   if (details.length === 0) return null;
-  const button = (
-    <button
-      type="button"
-      aria-label={`${props.label} details`}
-      aria-describedby={props.pinnedDetailRegionId ?? undefined}
-      className={cn(
-        "inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
-        props.className,
-      )}
-    >
-      <CircleHelp className="size-3.5" aria-hidden />
-    </button>
-  );
-  if (props.pinnedDetailRegionId !== null) return button;
+  // Search pinned the detail open above us: it is already on screen and owns
+  // the accessible description, so there is nothing here to disclose.
+  if (props.pinnedDetailRegionId !== null) {
+    return (
+      <button
+        type="button"
+        aria-label={`${props.label} details`}
+        aria-describedby={props.pinnedDetailRegionId}
+        className={cn(DETAILS_BUTTON_CLASS, props.className)}
+      >
+        <CircleHelp className="size-3.5" aria-hidden />
+      </button>
+    );
+  }
   return (
     <TooltipWrapper
       label={<OptionDetailsTooltip details={details} />}
@@ -153,8 +191,39 @@ export function InterviewOptionDetailsButton(props: {
       sideOffset={6}
       align="center"
     >
-      {button}
+      <button
+        type="button"
+        aria-label={`${props.label} details`}
+        aria-expanded={props.disclosure.expanded}
+        aria-controls={
+          props.disclosure.expanded ? props.disclosure.regionId : undefined
+        }
+        onClick={props.disclosure.toggle}
+        className={cn(DETAILS_BUTTON_CLASS, props.className)}
+      >
+        <CircleHelp className="size-3.5" aria-hidden />
+      </button>
     </TooltipWrapper>
+  );
+}
+
+/**
+ * The disclosed half of the `?`, rendered by the row UNDER its own row box so
+ * the text wraps at full width instead of inside the row's flex line.
+ */
+export function InterviewOptionDetailsRegion(props: {
+  readonly option: InterviewQuestionOption;
+  readonly disclosure: InterviewOptionDetailsDisclosure;
+}) {
+  const details = optionDetails(props.option);
+  if (!props.disclosure.expanded || details.length === 0) return null;
+  return (
+    <InlineOptionDetails
+      details={details}
+      descriptionFindUnitId={null}
+      previewFindUnitId={null}
+      regionId={props.disclosure.regionId}
+    />
   );
 }
 
@@ -241,36 +310,46 @@ function StaticOptionRow(props: {
   readonly pinnedDetailRegionId: string | null;
   readonly children: ReactNode;
 }) {
+  const disclosure = useInterviewOptionDetailsDisclosure();
   return (
-    <div
-      className={cn(
-        "flex w-full items-center gap-2 rounded-md border border-transparent bg-foreground/3 px-2 py-1.5",
-        props.selected
-          ? "border-border bg-foreground/6 text-foreground shadow-sm"
-          : "text-muted-foreground",
-      )}
-    >
-      {/* Historical option labels intentionally wrap while live rows truncate for review readability. */}
-      <span
-        data-chat-find-unit={props.labelFindUnitId ?? undefined}
-        className="min-w-0 flex-1 break-words font-medium text-foreground/90"
+    <div className="flex w-full flex-col gap-1.5">
+      <div
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md border border-transparent bg-foreground/3 px-2 py-1.5",
+          props.selected
+            ? "border-border bg-foreground/6 text-foreground shadow-sm"
+            : "text-muted-foreground",
+        )}
       >
-        {props.label}
-      </span>
+        {/* Historical option labels intentionally wrap while live rows truncate for review readability. */}
+        <span
+          data-chat-find-unit={props.labelFindUnitId ?? undefined}
+          className="min-w-0 flex-1 break-words font-medium text-foreground/90"
+        >
+          {props.label}
+        </span>
+        {props.option === null ? null : (
+          <InterviewOptionDetailsButton
+            label={props.label}
+            option={props.option}
+            className={null}
+            pinnedDetailRegionId={props.pinnedDetailRegionId}
+            disclosure={disclosure}
+          />
+        )}
+        {props.children}
+        <OptionBadge
+          index={props.index}
+          selected={props.selected}
+          custom={props.custom}
+        />
+      </div>
       {props.option === null ? null : (
-        <InterviewOptionDetailsButton
-          label={props.label}
+        <InterviewOptionDetailsRegion
           option={props.option}
-          className={null}
-          pinnedDetailRegionId={props.pinnedDetailRegionId}
+          disclosure={disclosure}
         />
       )}
-      {props.children}
-      <OptionBadge
-        index={props.index}
-        selected={props.selected}
-        custom={props.custom}
-      />
     </div>
   );
 }
