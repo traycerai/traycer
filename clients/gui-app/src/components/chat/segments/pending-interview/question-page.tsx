@@ -308,10 +308,7 @@ function OptionRow(props: OptionRowProps) {
         {badge}
       </div>
       {option === null ? null : (
-        <InterviewOptionDetailsRegion
-          option={option}
-          disclosure={disclosure}
-        />
+        <InterviewOptionDetailsRegion option={option} disclosure={disclosure} />
       )}
     </m.div>
   );
