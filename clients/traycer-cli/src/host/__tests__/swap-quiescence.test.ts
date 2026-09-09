@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,9 +11,23 @@ import type { SwapQuiescence } from "../swap-quiescence";
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataEvidenceMock: vi.fn(),
+  readHostHolderEvidenceMock: vi.fn(),
   macosServiceMayRespawnMock: vi.fn(),
   linuxServiceMayRespawnMock: vi.fn(),
 }));
+
+// The holder record is read for every surveyed root, so it is sandboxed for
+// the same reason the pid read is: left real, it touches the operator's own
+// `~/.traycer` AND puts filesystem I/O inside the fake-timer window, where it
+// desynchronizes the settle-loop choreography. Absent by default - the state
+// of a machine whose roots nobody holds.
+vi.mock("../holder-record", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../holder-record")>();
+  return {
+    ...actual,
+    readHostHolderEvidenceAt: mocks.readHostHolderEvidenceMock,
+  };
+});
 
 // The observer reads every record by PATH (`readHostPidMetadataEvidenceAt`),
 // so one mock serves the single-root tests, which never look at the path,
@@ -98,6 +113,7 @@ vi.mock("../../service/platforms/linux", async (importOriginal) => {
 // touching the real platform probes.
 mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
 mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
+mocks.readHostHolderEvidenceMock.mockResolvedValue({ kind: "absent" });
 
 const { observeSwapQuiescence, SERVICE_SETTLE_TIMEOUT_MS } =
   await import("../swap-quiescence");
@@ -341,6 +357,16 @@ describe("observeSwapQuiescence", () => {
       mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
         kind: "absent",
       } satisfies HostPidMetadataEvidence);
+      // Reset alongside the pid mock, or the per-path assertions below inherit
+      // the previous test's calls - this describe reads BOTH kinds of record.
+      mocks.readHostHolderEvidenceMock.mockReset();
+      mocks.readHostHolderEvidenceMock.mockResolvedValue({ kind: "absent" });
+      // And the service probe, for the same reason twice over: tests here
+      // assert WHICH labels were probed, and some install an implementation
+      // that must not outlive them. Restored to the file-level default, so a
+      // later describe still starts from "will not respawn".
+      mocks.macosServiceMayRespawnMock.mockReset();
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
     });
     afterEach(async () => {
       sandbox.root = null;
@@ -355,6 +381,23 @@ describe("observeSwapQuiescence", () => {
       return mocks.readHostPidMetadataEvidenceMock.mock.calls.map(
         (call) => call[0] as string,
       );
+    }
+    /**
+     * The DISTINCT records consulted. The walk runs twice on a clearing pass -
+     * once up front, once after the service probes, which are subprocess calls
+     * a host could publish during - so the raw call list has every path twice.
+     */
+    function distinctReadPaths(): string[] {
+      return [...new Set(readPaths())].sort();
+    }
+    function holderPaths(): string[] {
+      return [
+        ...new Set(
+          mocks.readHostHolderEvidenceMock.mock.calls.map(
+            (call) => call[0] as string,
+          ),
+        ),
+      ].sort();
     }
 
     it("reads the unslotted dev home's record and every dev-runs slot's, and is established when each is absent", async () => {
@@ -373,13 +416,22 @@ describe("observeSwapQuiescence", () => {
         observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
       ).resolves.toEqual({ established: true });
 
-      // Sorted, so a refusal's log lists the records in one stable order.
-      expect(readPaths()).toEqual(
+      // The pid records are the SLOT homes: this process's, the unslotted dev
+      // home's, and every `dev-runs` slot's. Surveyed roots are covered by
+      // their holder records instead - a pooled identity home never gets a
+      // pid.json at all.
+      expect(distinctReadPaths()).toEqual(
         [
           recordPath("dev"),
           recordPath("dev-runs", "slot-a"),
           recordPath("dev-runs", "slot-b"),
-          ...SURVEYED_ROOT_RECORDS,
+        ].sort(),
+      );
+      expect(holderPaths()).toEqual(
+        [
+          ...DEV_ROOTS.roots.map((entry) => join(entry.path, "holder.json")),
+          join(root, "host", "dev-runs", "slot-a", "holder.json"),
+          join(root, "host", "dev-runs", "slot-b", "holder.json"),
         ].sort(),
       );
     });
@@ -388,12 +440,8 @@ describe("observeSwapQuiescence", () => {
       await expect(
         observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
       ).resolves.toEqual({ established: true });
-      expect(readPaths()).toEqual(
-        [
-          recordPath("dev"),
-          recordPath("dev-runs", "slot-a"),
-          ...SURVEYED_ROOT_RECORDS,
-        ].sort(),
+      expect(distinctReadPaths()).toEqual(
+        [recordPath("dev"), recordPath("dev-runs", "slot-a")].sort(),
       );
     });
 
@@ -435,6 +483,189 @@ describe("observeSwapQuiescence", () => {
       await expect(
         observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
       ).resolves.toEqual({ established: false, reason: "writer-unknown" });
+    });
+
+    it("is NOT established when a SURVEYED ROOT's holder record names a live process, whatever slot launched it", async () => {
+      // The finding this closes: a host may be started with any
+      // `--host-data-dir` beneath `~/.traycer/host` and then acquire a pooled
+      // identity, so its pid lands in a home no enumeration can be sure to
+      // list - while the identity home it writes gets no pid.json at all. The
+      // holder record sits in the root itself, so it answers regardless.
+      const identityRoot = DEV_ROOTS.roots[1]?.path ?? "";
+      mocks.readHostHolderEvidenceMock.mockImplementation(
+        async (path: string) =>
+          path === join(identityRoot, "holder.json")
+            ? {
+                kind: "read",
+                holder: { pid: process.pid, processStartIdentity: null },
+              }
+            : { kind: "absent" },
+      );
+
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({
+        established: false,
+        reason: "writer-still-running",
+      });
+    });
+
+    it("is NOT established, with reason writer-unknown, when a surveyed root's holder record cannot be read", async () => {
+      mocks.readHostHolderEvidenceMock.mockResolvedValue({
+        kind: "unreadable",
+        cause: "not valid JSON",
+      });
+
+      await expect(
+        observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+      ).resolves.toEqual({ established: false, reason: "writer-unknown" });
+    });
+
+    it("probes EVERY enumerated slot's service job, not just this process's label", async () => {
+      // The other half of the same finding: the pid walk covered slot B while
+      // the settle probe only ever asked about slot A's label, so a sibling
+      // job inside its relaunch window cleared the swap.
+      //
+      // Both slots are created HERE rather than leaned on from the first test
+      // in this describe: that one runs unwrapped, so it reaches the macOS
+      // probe only on a macOS developer's machine, and this assertion passed
+      // on darwin off its leaked calls while failing on CI's Linux. The
+      // `beforeEach` reset makes the set below this test's OWN probes, and
+      // creating both slots makes every label it asserts one it actually put
+      // on disk - the own label is `serviceLabelFor`'s, which reads an ambient
+      // `DEV_DESKTOP_SLOT` this suite must not inherit an answer from.
+      await mkdir(join(root, "host", "dev-runs", "slot-a"), {
+        recursive: true,
+      });
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: true });
+      });
+
+      const probed = new Set(
+        mocks.macosServiceMayRespawnMock.mock.calls.map(
+          (call) => (call[0] as { id: string }).id,
+        ),
+      );
+      expect(probed).toContain("ai.traycer.host.dev.slot-a");
+      expect(probed).toContain("ai.traycer.host.dev.slot-b");
+      expect(probed).toContain("ai.traycer.host.dev");
+    });
+
+    it("does NOT clear when a run slot appears while the service manager is being probed - its records are re-read, but its job never was", async () => {
+      // The backstop for the finding above, along the TIME axis. The probes
+      // are subprocess calls; a slot created while they run is named by the
+      // re-resolution that follows them, and clearing on that re-read would
+      // clear on a job nothing ever asked about - exactly the writer this wait
+      // exists to catch.
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+      mocks.macosServiceMayRespawnMock.mockImplementation(async () => {
+        await mkdir(join(root, "host", "dev-runs", "slot-c"), {
+          recursive: true,
+        });
+        return false;
+      });
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: false, reason: "unseen-writers" });
+      });
+
+      const probed = new Set(
+        mocks.macosServiceMayRespawnMock.mock.calls.map(
+          (call) => (call[0] as { id: string }).id,
+        ),
+      );
+      expect(probed).not.toContain("ai.traycer.host.dev.slot-c");
+    });
+
+    it("probes a run slot that appears DURING the settle wait, and clears once its job is proven too", async () => {
+      // The other side of the same coin: the label set is re-resolved after
+      // every sleep, so a slot created mid-wait is probed by the next round
+      // rather than only noticed by the final re-read. Without that the swap
+      // could never clear while a slot appeared - the backstop above would
+      // refuse forever - so this is the half that keeps the wait USEFUL.
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+      // REAL timers, and so one real 500 ms poll: the loop's re-resolution is
+      // a `readdir` of the temp root, and faking timers around real filesystem
+      // work is how an earlier round of this suite deadlocked. One sleep is
+      // cheaper than that class of flake.
+      // Busy UNTIL the slot lands, gated on the slot's own existence rather
+      // than on a call count: a round issues one call per label, so a counter
+      // would say "second round" on the second LABEL of the first round and
+      // the wait this test exists to exercise would never happen.
+      const slotC = join(root, "host", "dev-runs", "slot-c");
+      mocks.macosServiceMayRespawnMock.mockImplementation(async () => {
+        if (existsSync(slotC)) return false;
+        await mkdir(slotC, { recursive: true });
+        return true;
+      });
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: true });
+      });
+
+      const probed = new Set(
+        mocks.macosServiceMayRespawnMock.mock.calls.map(
+          (call) => (call[0] as { id: string }).id,
+        ),
+      );
+      expect(probed).toContain("ai.traycer.host.dev.slot-c");
+    });
+
+    it("keeps probing a slot's job after its DIRECTORY is removed mid-wait - deleting a directory neither unloads a job nor kills its child", async () => {
+      // Cold review P2. Records and labels are not symmetric under removal: a
+      // record path names a directory, so when the directory goes the claim
+      // goes with it, but a service job outlives the directory that named it.
+      // Dev cleanup that removes `dev-runs/slot-b` while its host is still
+      // booting would otherwise drop slot-b from the next enumeration and
+      // clear the swap having never been told the job stopped.
+      const slotB = join(root, "host", "dev-runs", "slot-b");
+      await mkdir(slotB, { recursive: true });
+      let removed = false;
+      mocks.macosServiceMayRespawnMock.mockImplementation(
+        async (label: unknown) => {
+          const id = (label as { id: string }).id;
+          if (!removed) {
+            // First round: slot-b's job is loaded, and the slot vanishes
+            // while we wait for it to settle.
+            if (id === "ai.traycer.host.dev.slot-b") {
+              await rm(slotB, { recursive: true, force: true });
+              removed = true;
+              return true;
+            }
+            return false;
+          }
+          return false;
+        },
+      );
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: true });
+      });
+
+      // The clearing round asked about slot-b even though nothing enumerated
+      // it any more; it cleared because the MANAGER said so, not because the
+      // directory was gone.
+      const roundsForSlotB = mocks.macosServiceMayRespawnMock.mock.calls.filter(
+        (call) =>
+          (call[0] as { id: string }).id === "ai.traycer.host.dev.slot-b",
+      );
+      expect(roundsForSlotB.length).toBeGreaterThanOrEqual(2);
     });
 
     it("is NOT established, with reason unseen-writers, when dev-runs cannot be read - and consults no record", async () => {
@@ -665,7 +896,10 @@ describe("observeSwapQuiescence", () => {
         ).resolves.toEqual({ established: true });
       });
       expect(vi.getTimerCount()).toBe(0);
-      expect(mocks.readHostPidMetadataEvidenceMock).toHaveBeenCalledTimes(1);
+      // TWICE, not once: the probe is a subprocess call, so a host that
+      // published while it ran is invisible to the read that preceded it.
+      // This early return used to skip the re-read the post-wait path does.
+      expect(mocks.readHostPidMetadataEvidenceMock).toHaveBeenCalledTimes(2);
     });
 
     it("a second supervisor whose child is still booting never settles -> service-may-respawn once the window is spent, and not before (the competing-registration shape)", async () => {
