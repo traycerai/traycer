@@ -8,6 +8,22 @@
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
+ * What the copy on screen is doing about a NEWER publication, once the record
+ * head has moved past the one rendered.
+ *
+ * `idle` is the ordinary state - the copy is the latest head this tile knows
+ * of. The other three describe a re-read for a newer head while the previous
+ * transcript stays on screen: the surface never drops back to a load gate or a
+ * refusal notice for a chat it has already shown, so the footer is where the
+ * state is said.
+ */
+export type PublishedCopyRefresh =
+  | { readonly kind: "idle" }
+  | { readonly kind: "loading" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "refused"; readonly title: string };
+
+/**
  * The locked composer's reason, in one sentence a reader can act on.
  *
  * It names three things because a reader needs all three to know what to do:
@@ -17,12 +33,11 @@ import { formatAbsoluteDateTime } from "@/lib/relative-time";
  * a turn that finished after the host went away).
  *
  * The copy's AGE follows, when the row carries it: "Published <date>." is
- * passive and unconditional - it never alarms, and it is the one fact about
- * freshness this tile can state without cross-checking anything. It is
- * deliberately NOT paired with a "behind"/"current" verdict: proving staleness
- * would mean comparing a publication watermark against a record head that
- * arrives by a different route, and this tile does not hold both in one unit.
- * A date the reader can weigh for themselves is what the evidence supports.
+ * passive and unconditional - it never alarms, and it reads the head that
+ * produced the RENDERED transcript, not any later record head. The record head
+ * is a signal to re-read, and while that re-read is in flight (or has failed)
+ * the `refresh` arm says so in this same footer; the date stays the date of
+ * what is on screen until the newer copy is applied.
  *
  * A fidelity gap is appended rather than shown as a separate banner: it is the
  * same sentence's subject - what you are looking at - and a second notice
@@ -60,11 +75,15 @@ export function publishedChatLockReason(input: {
   readonly fidelityNotice: string | null;
   /** When the copy on screen was published. `null` when the row omits it. */
   readonly publishedAt: number | null;
+  /** What is happening about a newer publication, if anything. */
+  readonly refresh: PublishedCopyRefresh;
 }): string {
   const parts = [publishedCopySentence(input)];
   if (input.publishedAt !== null) {
     parts.push(`Published ${formatAbsoluteDateTime(input.publishedAt)}.`);
   }
+  const refresh = refreshSentence(input.refresh);
+  if (refresh !== null) parts.push(refresh);
   // The pre-existing tail, unchanged: a fidelity gap is reported only when
   // nothing unreadable already claimed the slot.
   if (input.unreadableCount > 0) {
@@ -73,6 +92,35 @@ export function publishedChatLockReason(input: {
     parts.push(input.fidelityNotice);
   }
   return parts.join(" ");
+}
+
+/**
+ * The re-read's state, or nothing in the ordinary case.
+ *
+ * `failed` names the two things that will retry it - the next publication
+ * and a reopen - because nothing else will: the read is keyed on the record
+ * head and never polls. `refused` carries the refusal's own title so the
+ * reader hears the same words the notice would have used had there been no
+ * transcript to keep.
+ */
+function refreshSentence(refresh: PublishedCopyRefresh): string | null {
+  switch (refresh.kind) {
+    case "idle":
+      return null;
+    case "loading":
+      return "A newer copy is being fetched.";
+    case "failed":
+      return "A newer copy could not be fetched; it will be retried on the next publication or when this agent is reopened.";
+    case "refused":
+      return `A newer copy could not be read: ${refusalClause(refresh.title)}`;
+  }
+}
+
+/** A refusal title as a clause: lower-cased lead, one terminal period. */
+function refusalClause(title: string): string {
+  const trimmed = title.trim().replace(/[.!]+$/u, "");
+  if (trimmed.length === 0) return "the copy was refused.";
+  return `${trimmed.charAt(0).toLowerCase()}${trimmed.slice(1)}.`;
 }
 
 /**

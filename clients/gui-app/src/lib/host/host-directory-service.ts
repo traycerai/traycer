@@ -189,6 +189,42 @@ export class HostDirectoryService implements IHostDirectoryService {
    * listing delivered are cleared by the same outcome.
    */
   private hasObservedRemoteListing = false;
+  /**
+   * True once an ATTEMPT to read the registry has finished under the current
+   * identity - whatever it said. The strictly weaker sibling of
+   * `hasObservedRemoteListing`, and the difference is the `failed` outcome:
+   * that arm commits nothing and leaves the listing flag false, correctly,
+   * because the registry's contents really are still unknown.
+   *
+   * The two answer different questions, and a caller that wants "has anyone
+   * finished asking" must not use the listing flag for it. A registry that
+   * cannot be reached at all never delivers, so `hasSettledFleet()` stays false
+   * for as long as the outage lasts, and a surface that WAITS on it waits just
+   * as long. This ends the wait at the first conclusion, which is what lets the
+   * failure be narrated at all.
+   *
+   * `signed-out` clears it with the listing flag, for that flag's own reason:
+   * the fetcher is reporting it had no bearer to ask WITH, so nothing was
+   * asked and no attempt concluded. A `failed` fetch is the opposite - the
+   * question was put and did not come back - which is why it sets this.
+   */
+  private hasConcludedRemoteAttempt = false;
+  /**
+   * The identity {@link hasConcludedRemoteAttempt} was set under, or null when
+   * nothing has concluded.
+   *
+   * Read WITH the flag by {@link hasConcludedDiscovery}, never separately,
+   * because the flag alone cannot survive an account switch honestly. This
+   * service outlives the identity and nothing clears state on the switch
+   * itself, so a `true` set under account A would otherwise stand until account
+   * B's first outcome commits - telling B an attempt had concluded when nothing
+   * had asked on its behalf, in exactly the window where the authority has
+   * wiped its fleet.
+   *
+   * Scoped to this flag only. {@link hasObservedRemoteListing} keeps its own
+   * identity lifecycle because `getCardinality()` reads it.
+   */
+  private concludedUnderIdentity: string | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
   /**
    * Refresh-liveness subscribers, kept OFF the main `listeners` fan-out on
@@ -347,6 +383,8 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
     this.started = true;
     this.hasObservedRemoteListing = false;
+    this.hasConcludedRemoteAttempt = false;
+    this.concludedUnderIdentity = null;
     // BEFORE the first refresh: the very first launch after the upgrade that
     // introduced the persisted key has nothing stored, and that launch is
     // exactly the reinstall this guard exists for - the host is down, so no
@@ -658,6 +696,35 @@ export class HostDirectoryService implements IHostDirectoryService {
     return this.hasObservedRemoteListing;
   }
 
+  /**
+   * Whether an attempt to read the registry has FINISHED under the current
+   * identity, whatever it said - see {@link hasConcludedRemoteAttempt}.
+   *
+   * The identity half is enforced here rather than assumed: the flag and the
+   * identity it was set under are read together (see
+   * {@link concludedUnderIdentity}), so an account switch re-arms the answer
+   * immediately instead of letting the previous account's conclusion stand
+   * until the new one's first outcome lands.
+   *
+   * The question a surface asks before it stands aside for a start in
+   * progress, and deliberately NOT {@link hasSettledFleet}. That one is about
+   * the fleet's CONTENTS, so it stays false for the whole of an outage the
+   * registry is never reached in, and a wait gated on it lasts as long as the
+   * outage. This ends the wait at the first conclusion; what happens after is
+   * the caller's own verdict to narrate.
+   *
+   * Like its sibling, this is for decisions a stale answer merely DELAYS. It
+   * is a weaker claim than `hasSettledFleet()` in every state (a delivered
+   * listing is also a concluded attempt), never a stronger one, so no caller
+   * can read membership out of it.
+   */
+  hasConcludedDiscovery(): boolean {
+    return (
+      this.hasConcludedRemoteAttempt &&
+      this.concludedUnderIdentity === this.authContextId()
+    );
+  }
+
   onChange(listener: HostDirectoryListener): Disposable {
     this.listeners.add(listener);
     return {
@@ -932,8 +999,29 @@ export class HostDirectoryService implements IHostDirectoryService {
     // own no hosts" - the same lie the unknown state exists to prevent, just
     // reached from the other side.
     const observedBefore = this.hasObservedRemoteListing;
+    // Captured THROUGH the scoping, like the failed arm's: an identity switch
+    // re-arms the answer without any outcome committing, so the raw flag can
+    // sit at `true` across a transition this commit is the conclusion of.
+    const concludedBefore = this.hasConcludedDiscovery();
     this.hasObservedRemoteListing = outcome.kind === "hosts";
+    // Tracked with the listing flag and cleared by the same outcome: a
+    // `signed-out` is the fetcher saying it had no bearer to ask WITH, so
+    // nothing was asked and nothing concluded. Only the `failed` arm below
+    // makes the two disagree.
+    this.hasConcludedRemoteAttempt = outcome.kind === "hosts";
+    this.concludedUnderIdentity = this.hasConcludedRemoteAttempt
+      ? era.identity
+      : null;
     const observedChanged = observedBefore !== this.hasObservedRemoteListing;
+    // The conclusion flag crosses on its own schedule, and the snapshot compare
+    // cannot see it. Two empty listings either side of an account switch are
+    // byte-identical rows with an identical observed flag, while the SCOPED
+    // answer goes false -> true because the new identity's own attempt has now
+    // concluded - so the compared emit would swallow the one notification its
+    // subscribers exist to receive. Same rule and same reason as the failed
+    // arm's emit: a flag nobody is told about is a flag no subscriber can act
+    // on.
+    const concludedChanged = concludedBefore !== this.hasConcludedDiscovery();
     // A host registered late - from the CLI, or from another machine - reaches
     // this directory through its own poll, while the selection authority's
     // fleet (desktop main) stays stale. Activate on it then refuses
@@ -958,7 +1046,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       requestFleetRefresh(this.runnerHost);
     }
     await this.reseedLocalHostIdIfUnknown();
-    if (observedChanged) {
+    if (observedChanged || concludedChanged) {
       // Crossing between "unknown" and "zero" changes `getCardinality()`'s
       // answer while an EMPTY directory stays byte-for-byte identical either
       // way - so the snapshot compare below would swallow the one emit that
@@ -1007,6 +1095,20 @@ export class HostDirectoryService implements IHostDirectoryService {
     // empty listing, so there is nothing to drop and the branch never ran,
     // and its observation went on answering `zero` for the next account. The
     // condition is therefore identity plus EITHER residue.
+    // A FAILED FETCH IS STILL A CONCLUSION, and this is the one place the two
+    // flags part company. The era fence above has already proven `era.identity`
+    // is the current identity, so the attempt that just failed was made under
+    // it: the question was put and did not come back. The registry's CONTENTS
+    // stay unknown (`hasObservedRemoteListing` is untouched below, in both
+    // branches), but "has anyone finished asking" is now yes - which is what
+    // lets a surface stop waiting and narrate the failure instead of holding a
+    // start-in-progress over an outage that may never end.
+    // Compared THROUGH the scoping, not against the raw flag: a `true` left
+    // standing by a previous account is not a conclusion this identity has
+    // seen, so the crossing it would otherwise swallow is a real one.
+    const concludedBefore = this.hasConcludedDiscovery();
+    this.hasConcludedRemoteAttempt = true;
+    this.concludedUnderIdentity = era.identity;
     const foreignIdentity = this.lastCommitIdentity !== era.identity;
     const foreignObservedListing =
       foreignIdentity && this.hasObservedRemoteListing;
@@ -1028,11 +1130,28 @@ export class HostDirectoryService implements IHostDirectoryService {
       // answers over a directory that is empty EITHER WAY, so the snapshot
       // compare would swallow the one emit that redraws the readiness gate -
       // the same reason the commit path emits unconditionally when the flag
-      // flips. Dropping rows always changes the snapshot, so that half can
-      // still take the compared emit.
-      if (foreignObservedListing) {
+      // flips.
+      //
+      // `concludedBefore` is DOCUMENTARY here, not load-bearing, and a mutation
+      // probe proved it: removing it leaves the suite green. `remoteEntries` is
+      // written in exactly two places and the committing one sets
+      // `hasObservedRemoteListing` from the same outcome, so non-empty rows
+      // imply an observed listing - and the outer condition's other disjunct IS
+      // `foreignObservedListing`, which makes the unconditional arm the only
+      // reachable one. This branch therefore always announces the conclusion
+      // crossing it makes, today, by implication.
+      //
+      // It stays because an implication drawn from two distant assignments is
+      // not a rule a future edit can see. The rule this surface's subscribers
+      // depend on is the one the arm below states: a flag nobody is told about
+      // is a flag no subscriber can act on. Same convention as the `hosts`
+      // check further up - stated so an edit has to keep it, with no test
+      // pinning it, because no mutation of it can go red.
+      if (foreignObservedListing || !concludedBefore) {
         this.emit();
       } else {
+        // Dropping rows always changes the snapshot, so this half can still
+        // take the compared emit.
         this.emitIfSnapshotChanged();
       }
       return this.snapshot();
@@ -1041,6 +1160,15 @@ export class HostDirectoryService implements IHostDirectoryService {
       "[host-directory] refresh failed, retaining last-known remote entries",
       { remoteCount: this.remoteEntries.length },
     );
+    // The retain path changes no row by construction, so the compared emit
+    // would swallow the one crossing that matters: a first attempt concluding
+    // in failure. Same reasoning as the commit path's unconditional emit on the
+    // observed flip - and gated on the FLIP, never on the outcome, because
+    // every later poll tick lands here too and an unconditional emit would fan
+    // a failed 60s poll out to every consumer of the snapshot.
+    if (!concludedBefore) {
+      this.emit();
+    }
     return this.snapshot();
   }
 

@@ -49,12 +49,18 @@ const exceptionsPath = join(
 );
 
 describe("released baseline surface (newest release) is wire-compatible", () => {
-  it("keeps unreleased browser.screencast out of the released fixture", () => {
-    const baseline = protocolSurfaceSchema.parse(
-      JSON.parse(readFileSync(fixturePath, "utf8")),
-    );
-    expect(baseline.stream["browser.screencast"]).toBeUndefined();
-  });
+  // A `keeps unreleased browser.screencast out of the released fixture` case
+  // stood here and asserted `baseline.stream["browser.screencast"]` was
+  // undefined. It was a guard against regenerating the fixture off an
+  // UNRELEASED tree - true only while screencast was unreleased. `cli-v1.3.0` /
+  // `host-v1.3.0` ship it, so the assertion now fails on a fixture that is
+  // exactly right, and re-pointing it at the next unreleased method would just
+  // reschedule the same failure for that method's release.
+  //
+  // The property it was reaching for is already enforced where it cannot go
+  // stale: `snapshot-released-baseline.ts` renders the fixture from a released
+  // TAG, and the `protocol-compat` workflow re-derives every baseline from the
+  // immutable tag rather than from anything a PR can edit.
 
   it("live registries have no blocking findings against the committed baseline", () => {
     const theirs = protocolSurfaceSchema.parse(
