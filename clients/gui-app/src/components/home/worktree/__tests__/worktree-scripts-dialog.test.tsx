@@ -116,7 +116,7 @@ vi.mock("@/hooks/appearance/use-workspace-appearance", () => ({
 vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
   useAppearanceAsset: () => ({
     url: mocks.appearanceAssetUrl.current,
-    status: "empty",
+    status: mocks.appearanceAssetUrl.current === null ? "empty" : "ready",
     reason: null,
     reportDecodeFailure: () => {},
   }),

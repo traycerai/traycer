@@ -224,6 +224,26 @@ export function deriveThemeColors(
  * Traycer. Returns only the tokens it had to fix up, rather than mutating
  * `colors` in place, so a caller decides when and how to merge them.
  */
+// culori's `wcagContrast` computes relative luminance from RGB channels only
+// and ignores alpha (verified against culori 4.0.2 - `wcagContrast` on a 5%-
+// opaque white over black returns 21, identical to fully opaque white). A VS
+// Code border token can be genuinely translucent (`normalizeThemeColor`
+// preserves alpha), so judging it unmodified reports full contrast for a
+// border that is nearly invisible once actually composited onto its surface.
+// Composite first so the check measures the same pixel the page renders.
+function compositeOverSurface(color: string, surface: string): string {
+  const fg = rgb(parse(color));
+  const bg = rgb(parse(surface));
+  if (!fg || !bg) return color;
+  const alpha = fg.alpha ?? 1;
+  return formatHex8({
+    mode: "rgb",
+    r: fg.r * alpha + bg.r * (1 - alpha),
+    g: fg.g * alpha + bg.g * (1 - alpha),
+    b: fg.b * alpha + bg.b * (1 - alpha),
+  });
+}
+
 export function ensureVisibleThemeBorders(
   colors: ThemeDefinition["colors"],
 ): Partial<Record<ThemeToken, string>> {
@@ -238,8 +258,16 @@ export function ensureVisibleThemeBorders(
     if (!original || surfaces.length === 0) continue;
     // Loop-invariant across every step below: the surfaces a candidate is
     // judged against, and the minimum contrast a color reaches over them.
+    // A candidate this loop generates is already opaque (the interpolation
+    // below omits alpha, and `formatHex8` defaults a missing alpha to fully
+    // opaque), so compositing it over a surface is a no-op; only `original`
+    // can carry the translucency this guards against.
     const minSurfaceContrast = (color: string) =>
-      Math.min(...surfaces.map((surface) => wcagContrast(color, surface)));
+      Math.min(
+        ...surfaces.map((surface) =>
+          wcagContrast(compositeOverSurface(color, surface), surface),
+        ),
+      );
     const visible = (color: string) => minSurfaceContrast(color) >= 1.3;
     if (visible(original)) continue;
     const source = rgb(parse(original));

@@ -8,7 +8,7 @@
  * stamp/repoint sequence through one live `renderHook` instance instead.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import {
   getOpenEpicRegistry,
   handleHostIds,
@@ -60,7 +60,10 @@ function resetStores(): void {
   getOpenEpicRegistry().disposeAll();
 }
 
-afterEach(resetStores);
+afterEach(() => {
+  cleanup();
+  resetStores();
+});
 
 describe("useHeaderTabForRef: live session-host subscription", () => {
   it("re-renders on its own when a session is stamped, then again when it repoints - no other input changes", () => {

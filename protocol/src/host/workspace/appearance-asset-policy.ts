@@ -29,10 +29,10 @@ export function assertAppearanceAssetPolicy(asset: {
   readonly width: number | null;
   readonly height: number | null;
 }): void {
-  if (
-    asset.bytes.length === 0 ||
-    asset.bytes.length > MAX_APPEARANCE_ICON_BYTES
-  ) {
+  if (asset.bytes.length === 0) {
+    throw new Error("Appearance icon is empty.");
+  }
+  if (asset.bytes.length > MAX_APPEARANCE_ICON_BYTES) {
     throw new Error("Appearance icon exceeds its byte limit.");
   }
   if (!isAppearanceAssetMediaType(asset.mediaType)) {

@@ -222,6 +222,40 @@ describe("theme customization contract", () => {
     }
   });
 
+  it("repairs a border whose RGB channels contrast well but whose alpha renders it invisible", () => {
+    // `wcagContrast` (culori) computes luminance from RGB only and ignores
+    // alpha, so raw white-on-black measures 21:1 contrast even at 2% opacity
+    // - nearly invisible once actually composited onto the canvas. The
+    // import path must composite before judging, or this border would be
+    // (wrongly) treated as already visible and left untouched.
+    const [theme] = importThemeText(
+      JSON.stringify({
+        name: "Translucent Border",
+        type: "dark",
+        colors: {
+          "editor.background": "#000000",
+          "editorGroup.border": "#ffffff05",
+          "panel.border": "#3b4252",
+          "menu.background": "#3b4252",
+          "sideBar.background": "#3b4252",
+          "editorWidget.background": "#3b4252",
+        },
+      }),
+      "fallback",
+    );
+    // The repaired color is opaque (verified separately), so a plain
+    // (uncomposited) contrast check against its surface is accurate here.
+    expect(
+      wcagContrast(
+        theme.colors["canvas-border"] ?? "#000000",
+        theme.colors.canvas ?? "#000000",
+      ),
+    ).toBeGreaterThanOrEqual(1.3);
+    expect(normalizeThemeColor(theme.colors["canvas-border"] ?? "")).toMatch(
+      /ff$/,
+    );
+  });
+
   it("resolves real VSIX includes and keeps collection identity", async () => {
     const bytes = pack({
       "extension/package.json": manifest("themes/child.json"),

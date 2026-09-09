@@ -193,7 +193,12 @@ export function useAppearanceAsset(args: {
         return;
       // Never expose the generic stream URL: only this admitted blob gets a display lease.
       setRetained({ identity, sourceUrl: liveUrl, blob });
-      await writeAppearanceBlob(scope, accessiblePath, blob);
+      // Persistence is a cache optimization on top of an already-admitted
+      // blob: `cachedFetcher` above serves `retained.blob` straight from
+      // memory, so a failure to write it to IndexedDB must not fall into the
+      // outer catch and mark this same URL rejected - that would report
+      // `status: "unavailable"` for a blob the hook is still displaying.
+      await writeAppearanceBlob(scope, accessiblePath, blob).catch(() => {});
     };
     void accept().catch(() => {
       if (!controller.signal.aborted) setRejectedUrl(liveUrl);

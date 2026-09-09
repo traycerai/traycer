@@ -143,7 +143,19 @@ export async function validateAppearanceImage(blob: Blob): Promise<void> {
   // Bounds pixel count from the declared header BEFORE `createImageBitmap`
   // allocates anything, so a decompression-bomb image is rejected without
   // ever being decoded.
-  const dimensions = imageSize(new Uint8Array(await blob.arrayBuffer()));
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let dimensions: { readonly width: number; readonly height: number };
+  try {
+    // The signature sniff above only reads the first 12 bytes: a truncated
+    // or otherwise corrupt file can still pass it, and `imageSize` throws
+    // its own library error text for that case rather than returning
+    // dimensions for `validateDimensions` to reject on the user's terms.
+    dimensions = imageSize(bytes);
+  } catch {
+    throw new Error(
+      "Choose an image with valid dimensions, no larger than 50 megapixels.",
+    );
+  }
   validateDimensions(dimensions);
 }
 

@@ -63,8 +63,22 @@ export async function chooseStartPageWallpaper(
   try {
     await writeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY, processed.blob);
     await pinGlobalAppearanceBlob(START_PAGE_WALLPAPER_KEY);
-  } finally {
+  } catch (error) {
+    // The blob write may have already committed even though pinning
+    // failed - roll it back so a reader never sees bytes with no matching
+    // settings row.
+    await removeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY).catch(
+      () => undefined,
+    );
     invalidateStartPageWallpaper();
+    throw error;
+  }
+  if (signal.aborted) {
+    // Canceled (e.g. Remove was clicked mid-write): the settings row must
+    // not be resurrected out from under a concurrent removal. Whichever
+    // action wins the race owns the final invalidate.
+    invalidateStartPageWallpaper();
+    return;
   }
   const current = useSettingsStore.getState().startPageWallpaper;
   useSettingsStore.getState().setStartPageWallpaper({
@@ -73,6 +87,7 @@ export async function chooseStartPageWallpaper(
     tintWithAccent: current?.tintWithAccent ?? true,
     name: file.name,
   });
+  invalidateStartPageWallpaper();
 }
 
 /** Clears both the settings row and the stored bytes. */

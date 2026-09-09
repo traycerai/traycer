@@ -187,9 +187,44 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     { epicId: tabEpicId ?? tab.id },
     null,
   );
+  // `selectNotificationIndicatorState` returns a fresh object on every render
+  // once any field is set, so a memo that closed over `indicatorState` itself
+  // would recompute - and cascade into the draggable's `data` - on every
+  // unrelated re-render. Destructured to locals here so the memo below closes
+  // over the primitives it actually depends on, which is the same thing
+  // `exhaustive-deps` then verifies rather than something it has to be told.
+  const {
+    unreadFailure,
+    unreadNonTerminalFailure,
+    unreadTerminalFailure,
+    pendingFork,
+    pendingApproval,
+    pendingInterview,
+    unreadDone,
+  } = indicatorState;
   const dragGhost = useMemo<HeaderTabDragGhost>(
-    () => ({ repositoryIdentity, indicatorState }),
-    [repositoryIdentity, indicatorState],
+    () => ({
+      repositoryIdentity,
+      indicatorState: {
+        unreadFailure,
+        unreadNonTerminalFailure,
+        unreadTerminalFailure,
+        pendingFork,
+        pendingApproval,
+        pendingInterview,
+        unreadDone,
+      },
+    }),
+    [
+      repositoryIdentity,
+      unreadFailure,
+      unreadNonTerminalFailure,
+      unreadTerminalFailure,
+      pendingFork,
+      pendingApproval,
+      pendingInterview,
+      unreadDone,
+    ],
   );
   const {
     ref: dndRef,

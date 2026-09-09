@@ -160,6 +160,7 @@ export function useRepoIdentityDraft(args: {
     setBusy(true);
     void prepareAppearanceImage(file, controller.signal)
       .then((prepared) => {
+        if (controller.signal.aborted) return;
         setLogo({
           path: prepared.path,
           url: URL.createObjectURL(prepared.blob),

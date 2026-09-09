@@ -163,6 +163,11 @@ describe("useAppearanceHeaderStripItem: a real duplicate view resolves to an equ
     if (duplicated === null)
       throw new Error("expected duplicateEpicTab to succeed");
     expect(duplicated.epicId).toBe(epicId);
+    // `seedSplit` accepts identical ids and the appearance hook would then
+    // resolve both members to the same identity regardless, so a regression
+    // that made `duplicateEpicTab` return `originalTabId` would still pass
+    // both color assertions below unless this is checked directly.
+    expect(duplicated.tabId).not.toBe(originalTabId);
     const splitId = seedSplit(originalTabId, duplicated.tabId);
 
     const { result } = renderHook(() => useAppearanceHeaderStripItem(splitId));

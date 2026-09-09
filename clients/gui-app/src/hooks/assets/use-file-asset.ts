@@ -191,7 +191,7 @@ function locationFor(request: FileAssetRequest): string {
 }
 
 /**
- * Composite key for `imageBlobCache`: `hostId`/`source`/location/`filePath`/
+ * Composite key for `imageBlobCache`: `hostScopeKey`/`source`/location/`filePath`/
  * `contentIdentity` (image-preview decision log, decision #11), as a JSON
  * array - not delimiter-joined, since any of those fields can legally
  * contain the delimiter and alias two different files onto the same key.
@@ -209,14 +209,16 @@ function locationFor(request: FileAssetRequest): string {
 const FILE_ASSET_SCOPE_KEY = "file-asset";
 
 function buildFileAssetCacheKey(parts: {
-  readonly hostId: string;
+  // Account-scoped (see `assetHostScope`), not a bare host id: a caller that
+  // ever passed one would collide across accounts.
+  readonly hostScopeKey: string;
   readonly source: FileAssetSource;
   readonly location: string;
   readonly filePath: string;
   readonly contentIdentity: string;
 }): string {
   return JSON.stringify([
-    parts.hostId,
+    parts.hostScopeKey,
     parts.source,
     parts.location,
     parts.filePath,
@@ -249,7 +251,7 @@ function requestKeyFor(request: FileAssetRequest): string {
 
 /**
  * The pre-header shared-subscription coalescing map's key (sol re-review) -
- * `hostId` + `requestKeyFor` + a git request's `coalesceRevision` (absent
+ * `hostScopeKey` + `requestKeyFor` + a git request's `coalesceRevision` (absent
  * for a workspace request, which has no revision concept) + this hook's
  * current `focusRefreshGeneration`. Deliberately WIDER than `requestKeyFor`
  * alone: two requests that are otherwise identical but at different git
@@ -285,12 +287,12 @@ function requestKeyFor(request: FileAssetRequest): string {
  * concurrent-first-mount coalescing for every non-worktree request.
  */
 function sharedSubscriptionKeyFor(
-  hostId: string,
+  hostScopeKey: string,
   request: FileAssetRequest,
   focusRefreshGeneration: number,
 ): string {
   return JSON.stringify([
-    hostId,
+    hostScopeKey,
     requestKeyFor(request),
     request.method === "git" ? request.coalesceRevision : null,
     isWorktreeBackedRequest(request) ? focusRefreshGeneration : 0,
@@ -751,7 +753,7 @@ export function useHostFileAsset(args: {
         });
 
         const key = buildFileAssetCacheKey({
-          hostId: assetHostScope,
+          hostScopeKey: assetHostScope,
           source: assetSourceFor(normalizedRequest),
           location: locationFor(normalizedRequest),
           filePath: normalizedRequest.filePath,
@@ -793,7 +795,7 @@ export function useHostFileAsset(args: {
           key,
           header.mediaType,
           // `key` is already the fully-scoped identity for this asset - it
-          // encodes hostId, source, location and path - so the namespace is
+          // encodes hostScopeKey, source, location and path - so the namespace is
           // all this adds, keeping asset entries disjoint from attachment
           // ones. The fetcher ignores its subject argument entirely: it reads
           // from the subscription opened above, not from a hash.

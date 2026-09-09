@@ -6,7 +6,7 @@
  * layer here to isolate the source-selection and assembly wiring itself.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
 import {
   EMPTY_LANDING_DRAFT_CONTENT,
@@ -167,6 +167,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   vi.clearAllMocks();
   clearSessionCreatedEpics();
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
