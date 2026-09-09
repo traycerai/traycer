@@ -360,6 +360,24 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     });
   }, [wsStreamClient, hostClient]);
 
+  // On an in-place cloud-verdict change (a same-user demotion, or the promotion
+  // back), push the new verdict onto the app-wide stream client's open sessions
+  // so the host stops - or resumes - spending on this session's behalf without
+  // a reconnect.
+  //
+  // A SEPARATE EFFECT from the rotation forward above, not an addition to it.
+  // The demotion path rotates as it withdraws, so folding the two would look
+  // like it worked; the promotion path asserts a verdict on a bearer that did
+  // not move, and would be silently lost.
+  useEffect(() => {
+    if (wsStreamClient === null || hostClient === null) {
+      return;
+    }
+    return hostClient.onCloudVerdictChanged(() => {
+      wsStreamClient.notifyCloudVerdictChanged();
+    });
+  }, [wsStreamClient, hostClient]);
+
   // The app-wide stream heartbeats against the effective host continuously, so
   // its recovery evidence (session re-open after a drop, pong after a
   // stall-length gap) un-strands every host-scoped query left in a terminal

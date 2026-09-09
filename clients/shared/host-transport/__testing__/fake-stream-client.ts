@@ -169,6 +169,26 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     }
   }
 
+  /**
+   * The verdict counterpart of {@link notifyBearerRotated}: push a
+   * `cloudVerdictUpdate` onto every open session, so a test can observe that a
+   * verdict transition reached the wire rather than only the store.
+   *
+   * A DISTINCT frame kind from `credentialUpdate`, matching production. A fake
+   * that emitted one kind for both would make the two indistinguishable to any
+   * test asserting on what was sent - which is precisely the property the
+   * sibling-frame design exists to give, so collapsing it here would hide the
+   * thing under test.
+   */
+  notifyCloudVerdictChanged(): void {
+    for (const session of this.sessions) {
+      session.sendClientFrame(
+        { kind: "cloudVerdictUpdate", hasBinaryPayload: false },
+        null,
+      );
+    }
+  }
+
   reconnectAll(): void {}
 
   isReady(): boolean {

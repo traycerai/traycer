@@ -314,6 +314,15 @@ export function buildHostStreamClient(params: {
 
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
+    // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
+    // leg too. It was previously consulted only for the remote attach-grant
+    // mint, which made "local, and therefore indifferent to cloud
+    // authorization" true of the transport and false of the host behind it: the
+    // host registers this connection's context as live, and its background
+    // workers spend on that context for work no client asked for. So the local
+    // socket asserts the verdict on its open frame and pushes changes through
+    // `cloudVerdictUpdate`, exactly as the remote session does.
+    cloudAuthorized: params.cloudAuthorized,
     // Named, so this client can seed its stream-method support from what an
     // earlier handshake with the SAME host already computed instead of probing
     // for it again. The Epic's client is minted per session, so before this the
@@ -608,6 +617,20 @@ export function useHostStreamClientBindingFor(
     }
     return globalClient.onBearerRotated(() => {
       client.notifyBearerRotated();
+    });
+  }, [client, globalClient]);
+
+  // The same push for an in-place CLOUD-VERDICT change, on its own signal. A
+  // per-surface client is exactly where the gap shows: a demotion neither
+  // rebuilds it (the transport key does not move - same user, same host, same
+  // endpoint) nor rotates anything the host reads as a verdict, so without this
+  // its open sessions keep the authorization they handshook with.
+  useEffect(() => {
+    if (client === null) {
+      return;
+    }
+    return globalClient.onCloudVerdictChanged(() => {
+      client.notifyCloudVerdictChanged();
     });
   }, [client, globalClient]);
 

@@ -633,6 +633,7 @@ export function acquireRemoteSession<
     subscribeWithParamsProvider: (method, paramsProvider) =>
       session.subscribeWithParamsProvider(method, paramsProvider),
     notifyBearerRotated: () => session.notifyBearerRotated(),
+    notifyCloudVerdictChanged: () => session.notifyCloudVerdictChanged(),
     wake: (reason, probe) => {
       // Only a LIVE reference may accelerate a session. A view whose `close()`
       // already ran is a stale callback - a discarded render, a disposed

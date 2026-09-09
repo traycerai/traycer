@@ -74,6 +74,12 @@ export interface IHostStreamClient<
   readonly instanceId: string;
   notifyBearerRotated(): void;
   /**
+   * Pushes the current cloud verdict onto every open session, in place. Called
+   * on a verdict transition in either direction; see
+   * `WsStreamClient.notifyCloudVerdictChanged`.
+   */
+  notifyCloudVerdictChanged(): void;
+  /**
    * Nudges every open session to reconnect immediately (skip backoff) - used
    * when a LOCAL host respawns at a new `websocketUrl` under the same
    * identity, and by the OS/app wake path (`subscribeWakeSignals`). A remote

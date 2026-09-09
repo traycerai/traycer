@@ -34,6 +34,24 @@ export interface HostRequestAuthority {
   readonly endpoint: HostTransportEndpoint;
   readonly bearer: OpenFrameBearerSource;
   readonly abortSignal: AbortSignal;
+  /**
+   * Whether the session behind `bearer` may spend a CLOUD CAPABILITY, carried
+   * to the host on this request's `open` frame so a context the host registers
+   * as live inherits the verdict instead of defaulting to authorized.
+   *
+   * That registration is the reason a one-request socket needs a verdict at
+   * all. The request itself is the small half: the host registers this
+   * connection's context in its live-context registry, where background workers
+   * select it for work no client asked for - so a `/rpc` call from an
+   * unverified session would otherwise hand the host an authorized context to
+   * spend on that user's account.
+   *
+   * OPTIONAL, and the absence is meaningful rather than a default: an authority
+   * that does not carry a verdict is one built before this existed, and the
+   * host reads its silence as authorized - the same "presence is the
+   * declaration" rule the wire field itself follows.
+   */
+  readonly cloudAuthorized?: boolean;
 }
 
 /**

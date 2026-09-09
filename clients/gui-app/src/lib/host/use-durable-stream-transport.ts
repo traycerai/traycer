@@ -59,6 +59,8 @@ export function useDurableStreamTransportFactory(): (
       runnerHost: liveRef.current.runnerHost,
       subscribeBearerRotation: (onRotation) =>
         liveRef.current.globalClient.onBearerRotated(onRotation),
+      subscribeCloudVerdictChange: (onChange) =>
+        liveRef.current.globalClient.onCloudVerdictChanged(onChange),
       // Fires on any directory change; `openDurableStreamTransport` filters it
       // down to a genuine endpoint MOVE for THIS `hostId` before re-dialing,
       // so a host restart / re-provision reconnects the session at once

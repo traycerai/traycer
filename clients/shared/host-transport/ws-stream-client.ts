@@ -42,9 +42,11 @@ import {
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
+  STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
   STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE,
   type ClientStreamOpenFrame,
+  type ClientStreamCloudVerdictUpdateFrame,
   type ClientStreamSubscribeFrame,
   type ClientStreamFatalErrorFrame,
   type ClientStreamCredentialUpdateFrame,
@@ -102,6 +104,25 @@ export interface WsStreamClientOptions<
   readonly hostId: string | null;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  /**
+   * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
+   * asserted to the host on every `open` frame and updated in place through
+   * `cloudVerdictUpdate`.
+   *
+   * A LIVE READ rather than a captured boolean, for the same reason `bearer` is
+   * a provider: this client outlives any one verdict, and every redial must
+   * carry the verdict as it stands at that moment, not as it stood when the
+   * client was built.
+   *
+   * OMITTED means this client does not speak verdicts - it leaves the
+   * open-frame field absent and never sends the control frame, which is exactly
+   * how a released client behaves and is the right answer for the CLI, the
+   * desktop browser-session transport and any dev shell with no
+   * admission/authorization split to report. Absence is a complete and
+   * permanently-supported state here, not a default standing in for one, which
+   * is why this is an optional property rather than a required nullable.
+   */
+  readonly cloudAuthorized?: () => boolean;
   /**
    * Auth recovery hook invoked when the host rejects an open frame with
    * `UNAUTHORIZED` (the overnight-wake case: the bearer expired during sleep).
@@ -484,6 +505,7 @@ export class WsStreamClient<
       registry: this.options.registry,
       endpoint: this.options.endpoint,
       bearer: this.options.bearer,
+      cloudAuthorized: this.options.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
       evidence: this.options.evidence,
@@ -760,6 +782,29 @@ export class WsStreamClient<
     }
     for (const session of Array.from(this.ownedSessions)) {
       session.pushCredentialUpdate();
+    }
+  }
+
+  /**
+   * Pushes the current cloud verdict onto every open session so each host
+   * connection updates what its credential may BUY, in place, with no
+   * reconnect. Called by the owner on a verdict transition in EITHER direction.
+   *
+   * Both directions, deliberately. A demotion is the urgent one - it is what
+   * stops host-side background work spending on a refused account - but the
+   * regain matters too: without it a session demoted and then verified again
+   * stays refused on the host until something unrelated forces a redial.
+   *
+   * Sessions mid-reconnect, and hosts that did not advertise the capability,
+   * simply skip; their next open frame carries the verdict. No-op on a closed
+   * client.
+   */
+  notifyCloudVerdictChanged(): void {
+    if (this.closed) {
+      return;
+    }
+    for (const session of Array.from(this.ownedSessions)) {
+      session.pushCloudVerdictUpdate();
     }
   }
 
@@ -1386,6 +1431,8 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly registry: Registry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  /** See `WsStreamClientOptions.cloudAuthorized`. */
+  readonly cloudAuthorized: (() => boolean) | undefined;
   readonly auth: StreamAuthRevalidator | null;
   /** See `WsStreamClientOptions.clock`. */
   readonly clock: ServerClockSkewSignal | null;
@@ -1599,6 +1646,8 @@ class StreamSession<
   private supportsCredentialUpdate = false;
   /** Same contract as `supportsCredentialUpdate`, for the provision frame. */
   private supportsHostCredentialProvision = false;
+  /** Same contract again, for the cloud-verdict frame. */
+  private supportsCloudVerdictUpdate = false;
   private phase: SessionPhase = "idle";
   private pendingBinaryEnvelope: StreamFrameEnvelope | null = null;
   private dialTimer: TimerHandle | null = null;
@@ -1862,6 +1911,46 @@ class StreamSession<
   }
 
   /**
+   * Pushes the current cloud verdict onto this open connection so the host
+   * updates every request context bound to it in place - no reconnect, and no
+   * bearer rotation. Called by `WsStreamClient.notifyCloudVerdictChanged`.
+   *
+   * GATED ON THE HOST'S TAG, like its two siblings, and here that gate is what
+   * keeps a newer client from tripping an older host's unknown-frame guard -
+   * which on `/stream` is fatal to the connection.
+   *
+   * A session that is not `subscribed` sends nothing and needs nothing: it is
+   * mid-reconnect, and its next `open` frame reads the verdict afresh at dial
+   * time. That is the same reasoning `pushCredentialUpdate` relies on, and it
+   * holds here only because the open frame carries the verdict too - a client
+   * that pushed the frame but omitted the open-frame field would lose every
+   * verdict change that landed while it was reconnecting.
+   */
+  pushCloudVerdictUpdate(): void {
+    if (this.disposed) {
+      return;
+    }
+    if (this.phase !== "subscribed" || !this.supportsCloudVerdictUpdate) {
+      return;
+    }
+    const read = this.config.cloudAuthorized;
+    if (read === undefined) {
+      return;
+    }
+    const socket = this.activeSocket;
+    if (socket === null) {
+      return;
+    }
+    const frame: ClientStreamCloudVerdictUpdateFrame = {
+      kind: "cloudVerdictUpdate",
+      cloudAuthorized: read(),
+    };
+    if (!this.sendControlText(socket, frame)) {
+      this.onSendFailure(socket);
+    }
+  }
+
+  /**
    * Hands a minted credential to the host on the other end of THIS connection.
    * Returns whether the frame actually went out, so the owning client can keep
    * the credential pending and try the next session instead of dropping it.
@@ -2075,6 +2164,13 @@ class StreamSession<
       token,
       manifest,
       clientIdentity: this.config.clientIdentity,
+      // READ AT DIAL TIME, per redial, not captured at construction: a session
+      // that reconnects after a demotion must assert the verdict it holds NOW,
+      // otherwise every reconnect would silently re-authorize it. Sending
+      // `undefined` (a client with no verdict source) omits the key, which an
+      // older host strips anyway and a newer host reads as "does not speak
+      // verdicts" - the same answer from both ends.
+      cloudAuthorized: this.config.cloudAuthorized?.(),
     };
     if (!this.sendControlText(socket, openFrame)) {
       this.onSendFailure(socket);
@@ -2261,6 +2357,9 @@ class StreamSession<
     );
     this.supportsHostCredentialProvision = ackParse.data.capabilities.includes(
       STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
+    );
+    this.supportsCloudVerdictUpdate = ackParse.data.capabilities.includes(
+      STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
     );
     const hostCredentialState = ackParse.data.hostCredentialState;
 
