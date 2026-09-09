@@ -16,6 +16,10 @@ import {
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { tabItemId } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
@@ -160,13 +164,18 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", async (importOriginal) => {
 
 /**
  * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
- * outside a `<HostRuntimeProvider>` - absent everywhere in this file. Fixed
- * at `false`: every pin-related case here predates lane 9 item 5 and pins
- * the pre-`@1.1` reading (`local-home` permanently unavailable), which this
- * file's own `EPIC_A` pin fixture (`home: "local"`) still exercises.
+ * outside a `<HostRuntimeProvider>` - absent everywhere in this file.
+ * Defaults to `false` (reset every test): every legacy pin case in this file
+ * predates lane 9 item 5 and pins the pre-`@1.1` reading (`local-home`
+ * permanently unavailable). The §3.2 cases (lane 9 evidence artifact) flip
+ * this to `true` for the duration of one test to exercise the negotiated
+ * `@1.1` local-home pin path through the tab strip's two dispatch edges.
  */
+const pinLocalHomeSupportedTestState = vi.hoisted(
+  (): { supported: boolean } => ({ supported: false }),
+);
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
-  useEpicPinLocalHomeSupported: () => false,
+  useEpicPinLocalHomeSupported: () => pinLocalHomeSupportedTestState.supported,
 }));
 
 /**
@@ -639,6 +648,7 @@ describe("<TabStrip />", () => {
     notificationIndicatorTestState.request = null;
     __resetAppLocalNotificationsStoreForTests();
     resetStores();
+    pinLocalHomeSupportedTestState.supported = false;
     // The tab History pin is a cloud CAPABILITY, and the store defaults to
     // `signed-out` - under which the menu item is disabled and every pin
     // assertion below would pass without exercising anything.
@@ -654,6 +664,7 @@ describe("<TabStrip />", () => {
     resetAgentActivity();
     __resetAppLocalNotificationsStoreForTests();
     resetStores();
+    resetNegotiatedManifests();
   });
 
   it("renders one tab per open epic", async () => {
@@ -1517,6 +1528,115 @@ describe("<TabStrip />", () => {
     // pin that never happened.
     expect(pinTestState.mutate).not.toHaveBeenCalled();
     expect(toastTestState.messages).toEqual([]);
+  });
+
+  /**
+   * `06641bf75` - the `unverified` local-home carve-out's tab-strip half
+   * (lane 9 evidence artifact, §3.2). The desktop-History/mobile-tray half
+   * is `use-epic-set-pinned-mutation.test.tsx`'s "refuses at dispatch"
+   * case; this pins the tab strip's own two entry points into the SAME
+   * `epicPinDispatchAdmitted` gate - the menu select and the toast's Undo
+   * action - under an `unverified` session on a host that has negotiated
+   * `epic.setPinned@1.1`.
+   */
+  describe("unverified local-home pin carve-out (06641bf75)", () => {
+    beforeEach(() => {
+      recordNegotiatedHostManifest(hostClientTestState.activeHostId ?? "", {
+        "epic.setPinned": { major: 1, minor: 1 },
+      });
+      useAuthStore.setState({ status: "unverified" });
+      pinLocalHomeSupportedTestState.supported = true;
+    });
+
+    it("dispatches the menu pin for a local-homed tab", async () => {
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: "local",
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      const item = await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+      expect(item.getAttribute("aria-disabled")).toBeNull();
+      fireEvent.click(item);
+
+      expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
+      expect(pinTestState.mutate.mock.calls[0]?.[0]).toEqual({
+        epicId: EPIC_A.id,
+        pinned: true,
+        isLocalHome: true,
+      });
+
+      toastTestState.undo?.();
+
+      expect(pinTestState.mutate).toHaveBeenNthCalledWith(2, {
+        epicId: EPIC_A.id,
+        pinned: false,
+        isLocalHome: true,
+      });
+    });
+
+    it("does neither for a cloud-homed tab - no mutate, no toast", async () => {
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: undefined,
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      const item = await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+      // The menu's own gate (`tabPinUnavailableReason`) refuses first, before
+      // `onSetTaskPinned` - and therefore `epicPinDispatchAdmitted` - is ever
+      // reached: the item states WHY rather than firing and doing nothing.
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      expect(item.textContent).toContain(
+        "Pin Task in History — sign-in not confirmed",
+      );
+
+      fireEvent.click(item);
+
+      expect(pinTestState.mutate).not.toHaveBeenCalled();
+      expect(toastTestState.messages).toEqual([]);
+    });
+
+    it("makes Undo a no-op once the host rolls back to @1.0 between the click and the Undo", async () => {
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: "local",
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      fireEvent.click(await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`));
+
+      expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
+      expect(toastTestState.undo).not.toBeNull();
+
+      // The toast outlives the click: the host the client is bound to rolls
+      // back to the pre-local-home line before Undo is pressed.
+      recordNegotiatedHostManifest(hostClientTestState.activeHostId ?? "", {
+        "epic.setPinned": { major: 1, minor: 0 },
+      });
+
+      toastTestState.undo?.();
+
+      // Still one call - the Undo dispatch re-read the live negotiation, saw
+      // it no longer serves a local-home write with no cloud verdict, and
+      // silently declined rather than sending an unverified bearer's write.
+      expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not expose the task-history pin action on system tabs", async () => {
