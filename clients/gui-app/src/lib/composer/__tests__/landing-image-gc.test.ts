@@ -6,6 +6,13 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 // string hash; the store argument is ignored. The Map is hoisted so tests can
 // reinstall a working `set` after a rejecting override without losing the body.
 const idbData = vi.hoisted(() => new Map<string, unknown>());
+const recoveryData = vi.hoisted(() => new Map<string, unknown>());
+const imageStoreToken = vi.hoisted(() => ({}));
+const recoveryStoreToken = vi.hoisted(() => ({}));
+
+function dataForStore(store: unknown): Map<string, unknown> {
+  return store === recoveryStoreToken ? recoveryData : idbData;
+}
 
 function idbStringKey(key: IDBValidKey): string {
   if (typeof key !== "string") {
@@ -15,19 +22,27 @@ function idbStringKey(key: IDBValidKey): string {
 }
 
 vi.mock("idb-keyval", () => {
-  const dummyStore = () => Promise.reject(new Error("unused"));
   return {
-    createStore: vi.fn(() => dummyStore),
-    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
-    set: vi.fn((key: string, value: unknown) => {
-      idbData.set(key, value);
+    createStore: vi.fn((name: string) =>
+      name.endsWith(":landing-images") ? imageStoreToken : recoveryStoreToken,
+    ),
+    get: vi.fn((key: string, store: unknown) =>
+      Promise.resolve(dataForStore(store).get(key)),
+    ),
+    set: vi.fn((key: string, value: unknown, store: unknown) => {
+      dataForStore(store).set(key, value);
       return Promise.resolve();
     }),
-    del: vi.fn((key: string) => {
-      idbData.delete(key);
+    del: vi.fn((key: string, store: unknown) => {
+      dataForStore(store).delete(key);
       return Promise.resolve();
     }),
-    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
+    keys: vi.fn((store: unknown) =>
+      Promise.resolve(Array.from(dataForStore(store).keys())),
+    ),
+    entries: vi.fn((store: unknown) =>
+      Promise.resolve(Array.from(dataForStore(store).entries())),
+    ),
   };
 });
 
@@ -91,9 +106,13 @@ type Modules = {
 
 async function loadModules(opts: {
   readonly desktop: boolean;
+  readonly clearData?: boolean;
 }): Promise<Modules> {
   vi.resetModules();
-  idbData.clear();
+  if (opts.clearData !== false) {
+    idbData.clear();
+    recoveryData.clear();
+  }
   if (opts.desktop) {
     Reflect.set(globalThis, "runnerHost", {
       windows: { windowId: "win-test" },
@@ -104,19 +123,22 @@ async function loadModules(opts: {
   const idb = await import("idb-keyval");
   // Always reinstall a working set after reset - prior tests may have left a
   // rejecting mockImplementation on the shared idb-keyval mock module.
-  vi.mocked(idb.set).mockImplementation((key, value) => {
-    idbData.set(idbStringKey(key), value);
+  vi.mocked(idb.set).mockImplementation((key, value, store) => {
+    dataForStore(store).set(idbStringKey(key), value);
     return Promise.resolve();
   });
-  vi.mocked(idb.get).mockImplementation((key) =>
-    Promise.resolve(idbData.get(idbStringKey(key))),
+  vi.mocked(idb.get).mockImplementation((key, store) =>
+    Promise.resolve(dataForStore(store).get(idbStringKey(key))),
   );
-  vi.mocked(idb.del).mockImplementation((key) => {
-    idbData.delete(idbStringKey(key));
+  vi.mocked(idb.del).mockImplementation((key, store) => {
+    dataForStore(store).delete(idbStringKey(key));
     return Promise.resolve();
   });
-  vi.mocked(idb.keys).mockImplementation(() =>
-    Promise.resolve(Array.from(idbData.keys())),
+  vi.mocked(idb.keys).mockImplementation((store) =>
+    Promise.resolve(Array.from(dataForStore(store).keys())),
+  );
+  vi.mocked(idb.entries).mockImplementation((store) =>
+    Promise.resolve(Array.from(dataForStore(store).entries())),
   );
   const store = await import("@/lib/composer/landing-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
@@ -300,6 +322,39 @@ describe("landing-image-gc", () => {
     await m.gc.reconcile();
     await flush();
     expect(await m.store.imageHashKeys()).not.toContain(hash);
+  });
+
+  it("preserves recovery images for an inactive account after a switch and reload", async () => {
+    const first = await loadModules({ desktop: true });
+    const hash = "account-a-recovery-image";
+    await first.idb.set(hash, bytesOf([16, 17, 18]), first.store.imageStore());
+    await first.recovery.configureTabRecoveryHistory("account-a");
+    first.recovery.recordClosedHeaderTab({
+      kind: "draft",
+      draft: makeDraft(first, {
+        id: "account-a-draft",
+        content: docWithImages(imageNode(hash, 3)),
+        lastTouchedAt: 1,
+      }),
+      index: 0,
+    });
+    await first.recovery.flushTabRecoveryHistory();
+
+    // The active account changes, so the in-memory recovery list no longer
+    // includes A's draft. Its persisted bucket remains a root for this window.
+    await first.recovery.configureTabRecoveryHistory("account-b");
+    expect(first.recovery.useTabRecoveryHistory.getState().entries).toEqual([]);
+
+    // A renderer reload drops the in-memory history and image session cache,
+    // while the two IndexedDB stores survive.
+    const reloaded = await loadModules({ desktop: true, clearData: false });
+    await reloaded.recovery.configureTabRecoveryHistory("account-b");
+    reloaded.gc.markLandingEditorMounted();
+    reloaded.gc.markLandingDraftsReady();
+    await reloaded.gc.reconcile();
+    await flush();
+
+    expect(await reloaded.store.imageHashKeys()).toContain(hash);
   });
 
   it("[C2] a just-pasted hash in the live editor survives a reconcile from an unrelated close", async () => {

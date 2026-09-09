@@ -51,10 +51,19 @@ function connect(webSocketDebuggerUrl) {
       for (const request of pending.values()) request.reject(error);
       pending.clear();
     };
+    const connectTimeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const error = new Error("Timed out connecting to CDP after 10 seconds");
+      failPending(error);
+      reject(error);
+      socket.close();
+    }, 10_000);
     socket.addEventListener("error", () => {
       const error = new Error("CDP WebSocket failed");
       failPending(error);
       if (!settled) {
+        clearTimeout(connectTimeout);
         settled = true;
         reject(error);
       }
@@ -62,6 +71,7 @@ function connect(webSocketDebuggerUrl) {
     socket.addEventListener("close", (event) => {
       failPending(new Error(`CDP WebSocket closed (${event.code})`));
       if (!settled) {
+        clearTimeout(connectTimeout);
         settled = true;
         reject(new Error("CDP socket closed before connection settled"));
       }
@@ -85,6 +95,7 @@ function connect(webSocketDebuggerUrl) {
           socket.send(JSON.stringify({ id, method, params: params ?? {} }));
         });
       if (!settled) {
+        clearTimeout(connectTimeout);
         settled = true;
         resolve({ send, close: () => socket.close() });
       }
@@ -386,6 +397,11 @@ try {
   await waitForRecoveryConsumed(client, "duplicate guard recovery");
   const afterFirstReopen = await callBridge(client, "snapshot", []);
   await clickSelector(client, '[data-testid="recovery-reopen"]');
+  await waitFor(
+    client,
+    "empty-history reopen completion",
+    `window.__traycerTabRecovery?.snapshot().completedReopens > ${afterFirstReopen.completedReopens}`,
+  );
   const afterSecondReopen = await callBridge(client, "snapshot", []);
   assert(
     JSON.stringify(afterSecondReopen.headerTabs) ===

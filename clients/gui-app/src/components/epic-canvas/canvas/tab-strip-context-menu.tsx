@@ -156,7 +156,10 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
       <ContextMenuSeparator />
       <ContextMenuItem
         disabled={!recovery.available}
-        onSelect={recovery.reopen}
+        data-testid="canvas-tab-reopen-closed"
+        onSelect={() => {
+          void recovery.reopen();
+        }}
       >
         Reopen Closed Tab
       </ContextMenuItem>

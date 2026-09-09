@@ -41,6 +41,7 @@ function resetStores(): void {
     items: [],
     activeItemId: null,
     stripOrder: [],
+    activationHistory: [],
     systemTabs: { history: null, settings: null },
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -60,6 +61,7 @@ function seedStrip(refs: ReadonlyArray<TabRef>, active: TabRef): void {
     })),
     activeItemId: tabItemId(active),
     systemTabs: { history: null, settings: null },
+    activationHistory: [],
   };
   useTabsStore.setState({
     ...layout,
@@ -123,6 +125,37 @@ describe("tab recovery through the command coordinator", () => {
     ]);
     expect(useTabsStore.getState().activeItemId).toBe(tabItemId(refB));
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(taskA);
+  });
+
+  it("captures an empty canvas when a confirmed task close has no canvas entry", () => {
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-missing-canvas", "Missing canvas");
+    const taskRef: TabRef = { kind: "epic", id: taskId };
+    useEpicCanvasStore.setState((state) => {
+      const canvasByTabId = { ...state.canvasByTabId };
+      delete canvasByTabId[taskId];
+      return { canvasByTabId };
+    });
+    seedStrip([taskRef], taskRef);
+
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(taskRef)).toBe(true);
+
+    const recovery = useTabRecoveryHistory.getState().entries.at(0);
+    if (recovery === undefined || recovery.kind !== "header") {
+      throw new Error("expected the closed task recovery entry");
+    }
+    expect(recovery.items).toHaveLength(1);
+    expect(recovery.items[0]).toMatchObject({
+      kind: "epic",
+      tab: { tabId: taskId, epicId: "epic-missing-canvas" },
+      canvas: {
+        root: null,
+        activePaneId: null,
+        tilesByInstanceId: {},
+        sizesByGroupId: {},
+      },
+    });
   });
 
   it("groups a task and draft close, then restores both while preserving the surviving focus", () => {
@@ -372,6 +405,7 @@ describe("tab recovery through the command coordinator", () => {
       throw new Error("expected the bulk task recovery entry");
     }
     const focusedBeforeRestore = useTabsStore.getState().activeItemId;
+    useTabsStore.setState({ activationHistory: [survivorRef] });
 
     tabCommandCoordinator.restoreClosedHeaderTabs(recovery.items, null);
 
@@ -380,6 +414,11 @@ describe("tab recovery through the command coordinator", () => {
       tabRefKey(refA),
       tabRefKey(refB),
       tabRefKey(survivorRef),
+    ]);
+    expect(useTabsStore.getState().activationHistory).toEqual([
+      refB,
+      refA,
+      survivorRef,
     ]);
   });
 });

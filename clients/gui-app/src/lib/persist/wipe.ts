@@ -21,7 +21,7 @@ import { resetTabRecoveryHistory } from "@/lib/tab-recovery/history";
 //   4. Reload last             — re-hydrate from the now-cleared storage / host
 //      state without racing a pending write.
 
-import { PERSIST_PREFIX } from "@/lib/persist/keys";
+import { PERSIST_PREFIX, persistKey } from "@/lib/persist/keys";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -142,7 +142,7 @@ async function deleteRendererDatabases(): Promise<boolean> {
   const enumerated = await enumeratedRendererDatabaseNames(factory);
   const names = new Set(enumerated);
   names.add(PROMPT_STASH_DB_NAME);
-  names.add(`${PERSIST_PREFIX}:tab-recovery`);
+  names.add(persistKey("tab-recovery"));
   // Best-effort per partition: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
   // real recovery and tears down every connection anyway. The bytes are
@@ -204,7 +204,11 @@ export async function clearAllPersistedStores(args: {
     appLogger.info("[persist] host-side state clear unavailable", {});
   }
 
-  await resetTabRecoveryHistory();
+  await resetTabRecoveryHistory().catch((error: unknown) => {
+    appLogger.warn("[persist] recovery history reset failed", {
+      error: describeLogError(error),
+    });
+  });
 
   // Stop edit timers before deleting their journal (step 3 below). Deferred
   // until after the failure-prone host clear above: if `hostClear` rejects,

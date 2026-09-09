@@ -263,9 +263,13 @@ export function TabContextMenuContent(
       <ContextMenuSeparator />
       <ContextMenuItem
         disabled={!recovery.available}
-        onSelect={recovery.reopen}
+        data-testid="tab-reopen-closed"
+        onSelect={() => {
+          void recovery.reopen();
+        }}
       >
         Reopen Closed Tab
+        <ShortcutHint>⌘⇧T</ShortcutHint>
       </ContextMenuItem>
     </ContextMenuContent>
   );

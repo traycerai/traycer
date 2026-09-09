@@ -241,6 +241,7 @@ function landingDesktopContent(text: string): DesktopJsonValue {
 
 describe("<WindowsBridgeProvider />", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     resetStores();
   });
 
@@ -266,8 +267,17 @@ describe("<WindowsBridgeProvider />", () => {
               tab.tabId,
               {
                 ...tab,
-                canvas: { root: null, activeGroupId: null },
-                lastSeenAt: 1,
+              },
+            ]),
+          ),
+          canvasByTabId: Object.fromEntries(
+            accountTabs.map((tab) => [
+              tab.tabId,
+              {
+                root: null,
+                activePaneId: null,
+                tilesByInstanceId: {},
+                sizesByGroupId: {},
               },
             ]),
           ),
@@ -284,8 +294,10 @@ describe("<WindowsBridgeProvider />", () => {
       }),
     );
 
+    // Model the pre-auth startup state: the lifecycle bridge mounts beneath
+    // auth.start(), so its initial signed-out hydration effect must wait.
     useAuthStore.setState({
-      status: "signed-out",
+      status: "signing-in",
       profile: null,
       contextMetadata: null,
     });

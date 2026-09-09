@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   closeTab,
+  closePane,
   dropOnTabStrip,
   openTile,
   resizeSplit,
@@ -152,28 +153,23 @@ describe("restoreClosedCanvas", () => {
   });
 
   it("restores an explicitly closed empty split without adding a blank tile", () => {
-    const before = canvas(
-      group("g1", "horizontal", [
-        pane("p1", [A.instanceId]),
-        pane("p2", [B.instanceId]),
-      ]),
-      [A, B],
-      "p1",
-      { g1: [0.4, 0.6] },
-    );
-    const after = closeTab(before, "p2", B.instanceId);
+    const initial = canvas(pane("p1", [A.instanceId]), [A], "p1", {});
+    const before = splitPaneEmpty(initial, "p1", "horizontal");
+    const emptyPaneId = before.activePaneId;
+    if (emptyPaneId === null) throw new Error("expected empty split pane");
+    const after = closePane(before, emptyPaneId);
 
     const restored = restoreClosedCanvas(after, before, after, {
       instanceIds: [],
-      paneIds: ["p2"],
+      paneIds: [emptyPaneId],
       focus: false,
     });
 
     expect(paneTabIds(restored, "p1")).toEqual([A.instanceId]);
-    expect(paneTabIds(restored, "p2")).toEqual([]);
+    expect(paneTabIds(restored, emptyPaneId)).toEqual([]);
     expect(restored.tilesByInstanceId[B.instanceId]).toBeUndefined();
     expect(restored.activePaneId).toBe("p1");
-    expect(restored.sizesByGroupId.g1).toEqual([0.4, 0.6]);
+    expect(restored.sizesByGroupId).toEqual(before.sizesByGroupId);
   });
 
   it("preserves a surviving sibling tab and resize while inserting at the old position", () => {

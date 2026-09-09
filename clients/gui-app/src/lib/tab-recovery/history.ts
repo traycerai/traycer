@@ -1,7 +1,13 @@
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { create } from "zustand";
-import { createStore, get, set, del } from "idb-keyval";
+import {
+  createStore,
+  get,
+  set,
+  del,
+  entries as databaseEntries,
+} from "idb-keyval";
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
@@ -86,7 +92,7 @@ const entrySchema = z.discriminatedUnion("kind", [
     before: canvasSchema,
     after: canvasSchema,
     instanceIds: z.array(z.string()),
-    paneIds: z.array(z.string()).default([]),
+    paneIds: z.array(z.string()).optional(),
     bulk: z.boolean(),
   }),
 ]);
@@ -151,7 +157,9 @@ function meaningfulEntry(entry: TabRecoveryEntry): TabRecoveryEntry[] {
       (item) =>
         item.kind === "epic" || !isEmptyLandingDraftContent(item.draft.content),
     );
-    return items.length === 0 ? [] : [{ ...entry, items }];
+    return items.length === 0
+      ? []
+      : [items.length === entry.items.length ? entry : { ...entry, items }];
   }
   const instanceIds = entry.instanceIds.filter((id) => {
     const tile = entry.before.tilesByInstanceId[id];
@@ -164,7 +172,21 @@ function meaningfulEntry(entry: TabRecoveryEntry): TabRecoveryEntry[] {
   );
   return instanceIds.length === 0 && paneIds.length === 0
     ? []
-    : [{ ...entry, instanceIds, paneIds }];
+    : [
+        instanceIds.length === entry.instanceIds.length &&
+        paneIds.length === (entry.paneIds ?? []).length
+          ? entry
+          : { ...entry, instanceIds, paneIds },
+      ];
+}
+
+const entryBytes = new WeakMap<TabRecoveryEntry, number>();
+function measuredEntryBytes(entry: TabRecoveryEntry): number {
+  const cached = entryBytes.get(entry);
+  if (cached !== undefined) return cached;
+  const bytes = JSON.stringify(entry).length * 2;
+  entryBytes.set(entry, bytes);
+  return bytes;
 }
 
 function bounded(
@@ -176,7 +198,7 @@ function bounded(
     .flatMap(meaningfulEntry)
     .slice(-MAX_RECOVERY_ACTIONS)
     .toReversed()) {
-    bytes += JSON.stringify(entry).length * 2;
+    bytes += measuredEntryBytes(entry);
     if (bytes > MAX_RECOVERY_BYTES && kept.length > 0) break;
     kept.push(entry);
   }
@@ -366,7 +388,12 @@ export function pruneRecoveryEpics(epicIds: readonly string[]): void {
   const ids = new Set(epicIds);
   if (!useTabRecoveryHistory.getState().ready)
     epicIds.forEach((id) => pendingEpicPrunes.add(id));
-  if (!recoveryEpicIds().some((id) => ids.has(id))) return;
+  if (
+    !recoveryEpicIds(useTabRecoveryHistory.getState().entries).some((id) =>
+      ids.has(id),
+    )
+  )
+    return;
   replaceEntries(
     useTabRecoveryHistory
       .getState()
@@ -441,18 +468,18 @@ export function pruneRecoveryTiles(
       }),
   );
 }
-export function recoveryEpicIds(): readonly string[] {
+export function recoveryEpicIds(
+  entries: readonly TabRecoveryEntry[],
+): readonly string[] {
   return [
     ...new Set(
-      useTabRecoveryHistory
-        .getState()
-        .entries.flatMap((entry) =>
-          entry.kind === "canvas"
-            ? [entry.tab.epicId]
-            : entry.items.flatMap((item) =>
-                item.kind === "epic" ? [item.tab.epicId] : [],
-              ),
-        ),
+      entries.flatMap((entry) =>
+        entry.kind === "canvas"
+          ? [entry.tab.epicId]
+          : entry.items.flatMap((item) =>
+              item.kind === "epic" ? [item.tab.epicId] : [],
+            ),
+      ),
     ),
   ];
 }
@@ -467,6 +494,44 @@ export function recoveryDrafts(): readonly LandingDraftTab[] {
         : [],
     );
 }
+function recoveryEntryImageHashes(entry: TabRecoveryEntry): readonly string[] {
+  if (entry.kind !== "header") return [];
+  return entry.items.flatMap((item) =>
+    item.kind === "draft"
+      ? collectImageAtoms(item.draft.content).flatMap((atom) =>
+          atom.hash === null ? [] : [atom.hash],
+        )
+      : [],
+  );
+}
+
+/** Image bytes are window-scoped, so inactive accounts remain deletion roots.
+ * Read from disk on each sweep to cover a fresh renderer as well as account switches.
+ * A failed read must reject: collecting with an incomplete root set loses drafts.
+ */
+export async function persistedRecoveryImageRootHashes(): Promise<
+  readonly string[]
+> {
+  await writes;
+  const records = await databaseEntries<IDBValidKey, unknown>(database());
+  const suffix = `:${landingImagePartition()}`;
+  const hashes = new Set<string>();
+  for (const [key, raw] of records) {
+    if (typeof key !== "string" || !key.endsWith(suffix)) continue;
+    const envelope = z
+      .object({ version: z.literal(1), entries: z.array(z.unknown()) })
+      .safeParse(raw);
+    if (!envelope.success) continue;
+    for (const value of envelope.data.entries) {
+      const parsed = entrySchema.safeParse(value);
+      if (!parsed.success || parsed.data.kind !== "header") continue;
+      for (const hash of recoveryEntryImageHashes(parsed.data))
+        hashes.add(hash);
+    }
+  }
+  return [...hashes];
+}
+
 registerExtraImageRootSource({
   hashes: () =>
     recoveryDrafts().flatMap((draft) =>

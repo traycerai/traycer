@@ -19,7 +19,12 @@ import {
 import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  landingTabRefKey,
+  landingTerminalPendingKills,
+  useLandingPanelStore,
+  type LandingPanelTabIdentity,
+} from "@/stores/home/landing-panel-store";
 
 export interface LandingTerminalKillVariables {
   readonly hostId: string;
@@ -76,18 +81,23 @@ export function useLandingTerminalKill(): UseMutationResult<
         // that landed and exited first. The recovery bridge owns the bound
         // (`PENDING_CREATE_KILL_ANSWER_BUDGET`) and retires the record once the
         // host has answered "no such session" for the whole attempt ladder.
-        const stillPendingCreate = useLandingTerminalStore
-          .getState()
-          .pendingKills.some(
-            (pending) =>
-              pending.hostId === variables.hostId &&
-              pending.sessionId === variables.sessionId &&
-              pending.pendingCreate,
-          );
+        //
+        // `terminal.kill` is a terminal RPC, so only a terminal tombstone can
+        // be the record this answer is about.
+        const identity: LandingPanelTabIdentity = {
+          kind: "terminal",
+          hostId: variables.hostId,
+          sessionId: variables.sessionId,
+        };
+        const key = landingTabRefKey(identity);
+        const stillPendingCreate = landingTerminalPendingKills(
+          useLandingPanelStore.getState().pendingKills,
+        ).some(
+          (pending) =>
+            landingTabRefKey(pending) === key && pending.pendingCreate,
+        );
         if (!(!response.killed && stillPendingCreate)) {
-          useLandingTerminalStore
-            .getState()
-            .clearPendingKill(variables.hostId, variables.sessionId);
+          useLandingPanelStore.getState().clearPendingKill(identity);
         }
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(

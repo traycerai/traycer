@@ -21,6 +21,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   EMPTY_SCREENCAST_NAV_STATE,
@@ -54,6 +55,10 @@ import {
 } from "@/lib/browser-view/sessions/video-plane-session";
 import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
 import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
+import {
+  handoffTokenFor,
+  onHandoffTokenRecorded,
+} from "@/lib/browser-view/sessions/screencast-handoff-tokens";
 import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import {
   acquireBrowserMediaEntry,
@@ -188,7 +193,12 @@ type ScreencastStatePatch =
 
 export interface ScreencastSessionOptions {
   readonly client: ScreencastHostClient | null;
-  readonly epicId: string;
+  /**
+   * The subscription's authorization scope: the epic whose canvas this tab is
+   * on, or the device's `independent` inventory for a Start Page tile. May be
+   * built inline - {@link useStableScope} takes the identity hazard out.
+   */
+  readonly scope: HostResourceScope;
   /** Identity half of the video plane's media key (with session + tab). */
   readonly hostId: string;
   readonly sessionId: string;
@@ -208,6 +218,57 @@ export interface ScreencastSessionOptions {
     video: HTMLVideoElement,
     wasActivePlane: boolean,
   ) => void;
+  /**
+   * What `mod+t` means on the surface hosting this tile, or `null` where it
+   * means nothing and the chord belongs to the remote page. See
+   * `readRequestNewTab` in `createScreencastController` for why a streamed
+   * tile has to claim it itself.
+   */
+  readonly onRequestNewTab: (() => void) | null;
+  /**
+   * What `mod+w` means on the surface hosting this tile, or `null` where the
+   * chord belongs to the remote page. Non-null only for a surface that owns
+   * its row's close - see `readRequestCloseTab` in the controller.
+   */
+  readonly onRequestCloseTab: (() => void) | null;
+}
+
+/**
+ * One referentially stable scope, so the subscribe effect below can depend on
+ * it directly.
+ *
+ * A scope is an object, and every caller builds it from an epic id it already
+ * holds - inline, because there is nothing else to build it from. Depending on
+ * that object would tear the stream down and rebuild it on every render of the
+ * tile. The epic id (or its absence) is the whole of the value, so memoizing on
+ * that primitive is exact rather than merely convenient.
+ */
+function useStableScope(scope: HostResourceScope): HostResourceScope {
+  const epicId = scopeEpicId(scope);
+  return useMemo(
+    () =>
+      epicId === null ? { kind: "independent" } : { kind: "epic", epicId },
+    [epicId],
+  );
+}
+
+/**
+ * The one primitive a scope reduces to. Exhaustive on `kind`, so a third
+ * scope variant fails to compile here rather than being rebuilt as
+ * `independent` - which would silently change the authorization scope the
+ * subscription is opened under.
+ */
+function scopeEpicId(scope: HostResourceScope): string | null {
+  switch (scope.kind) {
+    case "epic":
+      return scope.epicId;
+    case "independent":
+      return null;
+    default: {
+      const unhandled: never = scope;
+      return unhandled;
+    }
+  }
 }
 
 /**
@@ -240,7 +301,8 @@ export function screencastRoleForShell(
 export function useScreencastSession(
   options: ScreencastSessionOptions,
 ): ScreencastSession {
-  const { client, epicId, hostId, sessionId, tabId, visible } = options;
+  const { client, hostId, sessionId, tabId, visible } = options;
+  const scope = useStableScope(options.scope);
   // A module constant chosen by the shell this bundle booted into, so the
   // reference is stable across renders and safe to depend on below.
   const profile = screencastProfile();
@@ -290,6 +352,14 @@ export function useScreencastSession(
    */
   const clientRef = useRef(client);
   const captureDormantSnapshotRef = useRef(options.captureDormantSnapshot);
+  /**
+   * The surface's `mod+t` answer, read by the controller's key handler rather
+   * than captured, so a re-render that hands over a fresh closure reaches a
+   * controller built once for the life of the tile.
+   */
+  const requestNewTabRef = useRef(options.onRequestNewTab);
+  /** The surface's `mod+w` answer, read the same way and for the same reason. */
+  const requestCloseTabRef = useRef(options.onRequestCloseTab);
   const tileRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const overlayButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -349,6 +419,21 @@ export function useScreencastSession(
     frameSize: null,
     navState: EMPTY_SCREENCAST_NAV_STATE,
   }));
+  // Bumped when a handoff token is recorded for this tab AFTER a stream is
+  // already open on it, which is the one order the token registry cannot
+  // absorb on its own: the device's inventory can list a tab this client just
+  // opened before the open's own answer arrives, so the tile mounted from that
+  // inventory subscribed presenting `null`. The subscribe effect below holds
+  // this in its deps and re-subscribes with the token; in the common order the
+  // token is recorded before the tile exists and nothing fires here.
+  const [handoffTokenGeneration, setHandoffTokenGeneration] = useState(0);
+  useEffect(
+    () =>
+      onHandoffTokenRecorded({ hostId, sessionId, tabId }, () => {
+        setHandoffTokenGeneration((current) => current + 1);
+      }),
+    [hostId, sessionId, tabId],
+  );
 
   const refs = useMemo<ScreencastSessionRefs>(
     () => ({
@@ -377,6 +462,8 @@ export function useScreencastSession(
       // The same latest-value ref the dormant snapshot reads, synced by the
       // passive effect below: pointer events always land after that commit.
       readVideoPainting: () => videoActiveRef.current,
+      readRequestNewTab: () => requestNewTabRef.current,
+      readRequestCloseTab: () => requestCloseTabRef.current,
       listeners: {
         // Control, not the arm epoch, is what a render shows: a hover pre-arm
         // holds the epoch at the host but drives nothing.
@@ -649,7 +736,7 @@ export function useScreencastSession(
 
     stream = new BrowserScreencastStreamClient({
       wsStreamClient: client,
-      epicId,
+      scope,
       sessionId,
       tabId,
       maxWidth: profile.maxWidth,
@@ -657,6 +744,13 @@ export function useScreencastSession(
       quality: profile.quality,
       format: "jpeg",
       role,
+      // Read at subscribe time rather than held as a value: in the common
+      // order the open that minted it resolved before this tile could mount.
+      // `handoffTokenGeneration` in the deps covers the other order - a token
+      // recorded after this stream opened re-runs the effect, so the opener
+      // presents it instead of leaving the host's claim held until some
+      // unrelated re-subscribe. A spent token presented again is inert there.
+      handoffToken: handoffTokenFor({ hostId, sessionId, tabId }),
       callbacks: { onServerFrame, onConnectionStatus },
     });
     streamRef.current = stream;
@@ -682,7 +776,8 @@ export function useScreencastSession(
   }, [
     client,
     controller,
-    epicId,
+    scope,
+    handoffTokenGeneration,
     hostId,
     patchStreamState,
     profile,
@@ -726,6 +821,8 @@ export function useScreencastSession(
     clientRef.current = client;
     presentedImageRef.current = planeView.image;
     captureDormantSnapshotRef.current = options.captureDormantSnapshot;
+    requestNewTabRef.current = options.onRequestNewTab;
+    requestCloseTabRef.current = options.onRequestCloseTab;
     videoStatsRef.current = videoStats;
   });
 

@@ -44,13 +44,15 @@ tabs and duplicate picker tabs without removing their panes or changing splits.
 The journal retains at most 50 closing actions with a 32 MiB approximate JSON
 budget (the newest action is always kept). Old closed image-bearing drafts can
 also expire under the existing landing-image byte budget. Recovery references
-protect image bytes from collection; inline pending-paste bytes are retained
+protect image bytes from collection, including persisted histories of inactive
+accounts in the same window; inline pending-paste bytes are retained
 and stored by hash before the draft reopens. Shutdown drains queued journal
 writes; resetting local application state clears the journal too.
 
 Browser startup waits for the account-scoped canvas to hydrate before resolving
 saved tab routes or reconciling the strip. The initial empty anonymous canvas
-must not remove or reorder the account's saved tabs.
+must not remove or reorder the account's saved tabs. Signed-out startup and
+failed local storage access also settle the hydration gate.
 
 ## Regression checks
 

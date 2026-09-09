@@ -58,6 +58,7 @@ export const ACTION_IDS = [
   "app.palette.open",
   "app.terminal.toggle",
   "app.terminal.new",
+  "app.browser.new",
   "app.terminal.maximize",
   "app.zoom.in",
   "app.zoom.out",
@@ -211,7 +212,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
   },
   "tab.reopen": {
     id: "tab.reopen",
-    label: "Reopen Closed Tab",
+    label: "Reopen closed tab",
     description:
       "Restore the last closed task, draft, inner tab, or group of tabs in this window.",
     category: "tabs",
@@ -610,6 +611,26 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+shift+j",
     secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+  },
+  "app.browser.new": {
+    id: "app.browser.new",
+    label: "New browser tab",
+    description:
+      "Open a new browser tab in the start page's panel, on the selected device.",
+    category: "app",
+    kind: "chord",
+    // ⌘⌥B: B for browser, in the ⌘⌥ family the panel already uses (⌘⌥J
+    // above). Not ⌘⇧B - that is the notification center's
+    // (`app.notifications.open`), and `findActionMatchForChord` answers the
+    // first action in `ACTION_IDS` bound to a chord, so a shared default
+    // leaves the later one unreachable.
+    defaultChord: "mod+alt+b",
+    secondaryChord: undefined,
+    // `app`, like its terminal twin: the chord has to reach the panel from
+    // inside a focused terminal, which is the whole point of opening a second
+    // kind of tab beside one.
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
   },

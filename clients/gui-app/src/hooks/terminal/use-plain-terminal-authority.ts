@@ -73,9 +73,10 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import {
-  useLandingTerminalStore,
+  landingTerminalTabs,
+  useLandingPanelStore,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 
 interface ActivePlainTerminalStream {
   readonly hostId: string;
@@ -212,8 +213,11 @@ function useRetainedPlainTerminalTombstoneReconciliation(args: {
   const epicToken = useEpicCanvasStore((state) =>
     epicTombstonePresentationTokenForHost(tombstonedIdentities, state),
   );
-  const landingToken = useLandingTerminalStore((state) =>
-    landingTombstonePresentationTokenForHost(tombstonedIdentities, state.tabs),
+  const landingToken = useLandingPanelStore((state) =>
+    landingTombstonePresentationTokenForHost(
+      tombstonedIdentities,
+      landingTerminalTabs(state.tabs),
+    ),
   );
   useEffect(() => {
     reconcileRetainedPlainTerminalTombstones({

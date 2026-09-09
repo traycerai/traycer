@@ -121,7 +121,7 @@ function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
   const visibleEpicIds = useVisibleEpicIds();
   const recoveryReady = useTabRecoveryHistory((state) => state.ready);
   const closedEpicIds = useTabRecoveryHistory(
-    useShallow(() => recoveryEpicIds()),
+    useShallow((state) => recoveryEpicIds(state.entries)),
   );
   const openEpicIds = useMemo(
     () => [...new Set([...visibleEpicIds, ...closedEpicIds])],

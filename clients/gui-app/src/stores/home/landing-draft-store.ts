@@ -103,9 +103,10 @@ interface LandingDraftStoreState {
    * and default settings; non-null settings are an explicit caller override.
    */
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
+  /** Restore a closed draft with its original identity and content. */
+  restoreDraftForRecovery: (draft: LandingDraftTab) => void;
   /** Remove a draft by id. If it was the active draft, clears `activeDraftId`;
    *  strip-neighbor navigation in the close-flow handles where the user lands. */
-  restoreDraftForRecovery: (draft: LandingDraftTab) => void;
   closeDraft: (id: string) => void;
   /** Set the active draft without creating a new one. No-op if id not found. */
   setActiveDraft: (id: string) => void;

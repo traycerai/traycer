@@ -1,3 +1,4 @@
+import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import {
   recordClosedHeaderTab,
   pruneRecoveryEpics,
@@ -1362,7 +1363,7 @@ export class TabCommandCoordinator {
         return {
           ...layout,
           activeItemId: survivingActiveItemId ?? layout.activeItemId,
-          activationHistory: previousLayout.activationHistory,
+          activationHistory: layout.activationHistory,
         };
       },
       reservedAdditions: refs,
@@ -1409,9 +1410,8 @@ export class TabCommandCoordinator {
     } else if (ref.kind === "epic") {
       const state = useEpicCanvasStore.getState();
       const tab = state.tabsById[ref.id];
-      const canvas = state.canvasByTabId[ref.id];
-      if (tab !== undefined && canvas !== undefined)
-        recovery = { kind: "epic", tab, canvas, index };
+      const canvas = state.canvasByTabId[ref.id] ?? EMPTY_CANVAS;
+      if (tab !== undefined) recovery = { kind: "epic", tab, canvas, index };
     }
     this.execute({
       layout: next,

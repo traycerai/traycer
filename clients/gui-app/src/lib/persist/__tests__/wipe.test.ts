@@ -11,6 +11,9 @@ const drainDesktopTabsPersistence = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
 const publishPromptStashReset = vi.fn<() => void>();
+const resetTabRecoveryHistory = vi.fn<() => Promise<void>>(() =>
+  Promise.resolve(),
+);
 vi.mock("@/lib/windows/per-window-projection-debounce", () => ({
   flushActiveDesktopPerWindowProjection: () =>
     flushActiveDesktopPerWindowProjection(),
@@ -20,6 +23,9 @@ vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
 }));
 vi.mock("@/lib/composer/prompt-stash-channel", () => ({
   publishPromptStashReset: () => publishPromptStashReset(),
+}));
+vi.mock("@/lib/tab-recovery/history", () => ({
+  resetTabRecoveryHistory: () => resetTabRecoveryHistory(),
 }));
 
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
@@ -107,6 +113,8 @@ beforeEach(() => {
   flushActiveDesktopPerWindowProjection.mockClear();
   drainDesktopTabsPersistence.mockClear();
   publishPromptStashReset.mockClear();
+  resetTabRecoveryHistory.mockReset();
+  resetTabRecoveryHistory.mockResolvedValue(undefined);
 
   localStorageMock = createMockStorage(LOCAL_SEED);
   sessionStorageMock = createMockStorage(SESSION_SEED);
@@ -266,6 +274,20 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     const sweepIndex = order.indexOf("local:removeItem");
     expect(hostClearIndex).toBeLessThan(teardownIndex);
     expect(teardownIndex).toBeLessThan(sweepIndex);
+  });
+
+  it("continues the wipe when tab-recovery reset fails", async () => {
+    resetTabRecoveryHistory.mockRejectedValueOnce(
+      new Error("tab recovery reset failed"),
+    );
+
+    await expect(
+      clearAllPersistedStores({ hostClear: null }),
+    ).resolves.toBeUndefined();
+
+    expect(resetTabRecoveryHistory).toHaveBeenCalledTimes(1);
+    expect(localStorageMock.getItem("traycer-gui-app:settings")).toBeNull();
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 });
 

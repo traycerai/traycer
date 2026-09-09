@@ -80,6 +80,12 @@ function createWsStreamClient(
   return {
     subscribe: () => fakeStreamSession(),
     subscribeWithParamsProvider: () => fakeStreamSession(),
+    // Present, not omitted: the method is optional on the seam, so a consumer
+    // that pins a major (`browser.sessions` / `browser.screencast` for the
+    // device's `independent` inventory) degrades to a negotiated subscribe when
+    // a transport lacks it - and a double that omits it would quietly move
+    // every such test onto that fallback instead of the path production takes.
+    subscribeAtVersion: () => fakeStreamSession(),
     close: (reason) => {
       if (closed) return;
       closed = true;

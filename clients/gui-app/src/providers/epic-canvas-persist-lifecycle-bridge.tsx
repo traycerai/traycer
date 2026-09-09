@@ -1,7 +1,11 @@
-import { markBrowserCanvasHydrated } from "@/lib/tab-sync/browser-canvas-hydration";
+import { appLogger, describeLogError } from "@/lib/logger";
+import {
+  markBrowserCanvasHydrated,
+  isBrowserCanvasHydrated,
+} from "@/lib/tab-sync/browser-canvas-hydration";
 import { configureTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { epicCanvasKey } from "@/lib/persist";
@@ -39,29 +43,53 @@ export function EpicCanvasPersistLifecycleBridge(
         transition.kind === "signedOut" ? null : transition.userId,
       ).then(scheduleLandingImageReconcile);
       if (windowsBridge !== null) return;
-      if (
-        transition.kind === "signedIn" ||
-        transition.kind === "userSwitched"
-      ) {
-        retargetPersistedStore({
-          store: useEpicCanvasStore,
-          name: epicCanvasKey(transition.userId),
-          // Never the anonymous bucket: a null email must not adopt shared state into an account.
-          legacyName: legacyEmail === null ? null : epicCanvasKey(legacyEmail),
-        });
-        markBrowserCanvasHydrated();
-        return;
-      }
-      // signedOut: wipe the current user's bucket and reset to anonymous.
-      clearAndResetPersistedStore({
-        store: useEpicCanvasStore,
-        anonymousName: epicCanvasKey(null),
-      });
+      hydrateBrowserCanvas(transition, legacyEmail);
     },
     [windowsBridge, legacyEmail],
   );
 
   useAuthIdentityTransition(status, userId, onTransition);
 
+  useEffect(() => {
+    // This bridge mounts after HostRuntimeProvider awaits auth.start(). An
+    // initially signed-out session emits no identity transition, but still
+    // completes hydration. Do not treat a later held sign-in failure as logout.
+    if (
+      windowsBridge !== null ||
+      status !== "signed-out" ||
+      isBrowserCanvasHydrated()
+    )
+      return;
+    void configureTabRecoveryHistory(null).then(scheduleLandingImageReconcile);
+    markBrowserCanvasHydrated();
+  }, [status, windowsBridge]);
+
   return <>{props.children}</>;
+}
+
+function hydrateBrowserCanvas(
+  transition: AuthIdentityTransition,
+  legacyEmail: string | null,
+): void {
+  try {
+    if (transition.kind === "signedIn" || transition.kind === "userSwitched") {
+      retargetPersistedStore({
+        store: useEpicCanvasStore,
+        name: epicCanvasKey(transition.userId),
+        // Never adopt shared anonymous state into an account.
+        legacyName: legacyEmail === null ? null : epicCanvasKey(legacyEmail),
+      });
+    } else {
+      clearAndResetPersistedStore({
+        store: useEpicCanvasStore,
+        anonymousName: epicCanvasKey(null),
+      });
+    }
+  } catch (error) {
+    appLogger.warn("[epic-canvas] browser hydration failed", {
+      error: describeLogError(error),
+    });
+  } finally {
+    markBrowserCanvasHydrated();
+  }
 }

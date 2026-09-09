@@ -1,4 +1,9 @@
-import { useEffect, type ReactElement, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { DndContext } from "@dnd-kit/core";
@@ -211,10 +216,13 @@ function entrySummary() {
   }));
 }
 
+let completedReopens = 0;
+
 function snapshot() {
   const canvas = useEpicCanvasStore.getState();
   const drafts = useLandingDraftStore.getState();
   return {
+    completedReopens,
     ready: useTabRecoveryHistory.getState().ready,
     entries: entrySummary(),
     headerTabs: getHeaderTabs().map((tab) => ({
@@ -248,7 +256,7 @@ function snapshot() {
   };
 }
 
-function installBridge(reopen: () => void): void {
+function installBridge(reopen: () => Promise<void>): void {
   const bridge = {
     reset: async () => {
       await configureTabRecoveryHistory(null);
@@ -313,8 +321,7 @@ function installBridge(reopen: () => void): void {
       useEpicCanvasStore.getState().closeCanvasPane(tabId, paneId);
     },
     reopen: async () => {
-      reopen();
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await reopen();
       await flushTabRecoveryHistory();
     },
     flush: () => flushTabRecoveryHistory(),
@@ -324,7 +331,11 @@ function installBridge(reopen: () => void): void {
 }
 
 export function RecoverySurface(): ReactElement {
-  const { reopen } = useTabRecovery();
+  const { reopen: performReopen } = useTabRecovery();
+  const reopen = useCallback(async () => {
+    await performReopen();
+    completedReopens += 1;
+  }, [performReopen]);
   const recoveryReady = useTabRecoveryHistory((state) => state.ready);
   const recoveryCount = useTabRecoveryHistory((state) => state.entries.length);
 
@@ -363,7 +374,9 @@ export function RecoverySurface(): ReactElement {
           <button
             data-testid="recovery-reopen"
             type="button"
-            onClick={() => reopen()}
+            onClick={() => {
+              void reopen();
+            }}
           >
             Reopen closed tab
           </button>
@@ -388,11 +401,13 @@ function buildRunnerHost(): MockRunnerHost {
   });
 }
 
+const fixtureRunnerHost = buildRunnerHost();
+
 function buildRouter() {
   const rootRoute = createRootRoute({
     component: () => (
       <QueryClientProvider client={queryClient}>
-        <RunnerHostProvider runnerHost={buildRunnerHost()}>
+        <RunnerHostProvider runnerHost={fixtureRunnerHost}>
           <HostRuntimeProvider
             registry={hostRpcRegistry}
             messengerFactory={fixtureMessengerFactory}

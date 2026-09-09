@@ -10,7 +10,7 @@ export function useTabRecovery() {
     (state) => state.ready && state.entries.length > 0,
   );
   const reopen = useCallback(() => {
-    void reopenClosedTab(routerAdapterFor(router));
+    return reopenClosedTab(routerAdapterFor(router));
   }, [router]);
   return { available, reopen };
 }

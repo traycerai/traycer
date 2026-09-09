@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => {
             readonly before: EpicCanvasState;
             readonly after: EpicCanvasState;
             readonly instanceIds: readonly string[];
+            readonly paneIds: readonly string[];
             readonly focus: boolean;
           },
         ) => void
