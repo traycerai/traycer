@@ -7,6 +7,8 @@ import {
 } from "@/lib/keybindings/platform";
 import {
   formatChord,
+  isBareModifierCode,
+  normalizeCode,
   parseChordString,
   type ChordKey,
   type ChordParts,
@@ -34,71 +36,14 @@ import {
  * `KeyboardEvent` or platform display labels stays here.
  */
 export type { ChordKey, ChordParts, ChordString };
-export { formatChord, parseChordString };
-
-/** Physical keys we never want to treat as a primary chord key. */
-const BARE_MODIFIER_CODES = new Set<string>([
-  "MetaLeft",
-  "MetaRight",
-  "ControlLeft",
-  "ControlRight",
-  "ShiftLeft",
-  "ShiftRight",
-  "AltLeft",
-  "AltRight",
-  "OSLeft",
-  "OSRight",
-]);
-
-const CODE_TO_KEY: Readonly<Record<string, string>> = {
-  Comma: ",",
-  Period: ".",
-  Slash: "/",
-  Semicolon: ";",
-  Quote: "'",
-  Backquote: "`",
-  Minus: "-",
-  Equal: "=",
-  BracketLeft: "[",
-  BracketRight: "]",
-  Backslash: "\\",
-  Space: "space",
-  Enter: "enter",
-  Escape: "escape",
-  Tab: "tab",
-  Backspace: "backspace",
-  Delete: "delete",
-  ArrowUp: "arrowup",
-  ArrowDown: "arrowdown",
-  ArrowLeft: "arrowleft",
-  ArrowRight: "arrowright",
-  Home: "home",
-  End: "end",
-  PageUp: "pageup",
-  PageDown: "pagedown",
-};
-
-/** Normalize `KeyboardEvent.code` to our canonical key token. */
-export function normalizeCode(code: string): ChordKey | null {
-  if (BARE_MODIFIER_CODES.has(code)) return null;
-  if (code.startsWith("Key") && code.length === 4) {
-    return code.slice(3).toLowerCase();
-  }
-  if (code.startsWith("Digit") && code.length === 6) {
-    return code.slice(5);
-  }
-  if (code.startsWith("Numpad") && code.length === 7) {
-    const tail = code.slice(6);
-    if (/^\d$/.test(tail)) return tail;
-  }
-  if (Object.hasOwn(CODE_TO_KEY, code)) return CODE_TO_KEY[code];
-  if (/^F\d{1,2}$/.test(code)) return code.toLowerCase();
-  return null;
-}
+// `normalizeCode` moved to the shared core so the Electron main process derives
+// a chord key from an event the SAME way this renderer does - see its doc
+// there. Re-exported because every call site in this package reads it here.
+export { formatChord, normalizeCode, parseChordString };
 
 /** Detect whether a keydown is bare modifier (no other key). */
 export function isBareModifierEvent(event: KeyboardEvent): boolean {
-  return BARE_MODIFIER_CODES.has(event.code);
+  return isBareModifierCode(event.code);
 }
 
 /** Cmd+Home/End on macOS, Ctrl+Home/End on Windows/Linux. */

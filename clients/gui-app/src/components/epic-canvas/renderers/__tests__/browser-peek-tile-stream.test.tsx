@@ -13,9 +13,8 @@ import {
   liveStream as fixtureLiveStream,
   streamAuthRevalidatorModule,
   tabHostIdModule,
-  tileBodyVisibleModule,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
-import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import { BrowserPeekTile } from "@/components/browser-tile/browser-peek-tile";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -31,10 +30,6 @@ vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
-);
-
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
-  tileBodyVisibleModule(hookState),
 );
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
@@ -156,9 +151,11 @@ describe("BrowserPeekTile", () => {
 
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -175,9 +172,11 @@ describe("BrowserPeekTile", () => {
   it("renders JPEG frames and acks on arrival, before the image is presented", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -239,9 +238,11 @@ describe("BrowserPeekTile", () => {
   it("renders a terminal screencast frame", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -270,9 +271,11 @@ describe("BrowserPeekTile", () => {
     // `browserPeekCompleteMeaning`).
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="native-handoff"
       />,
@@ -303,9 +306,11 @@ describe("BrowserPeekTile", () => {
     // not dead, it is just unreachable from this client).
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="native-elsewhere"
       />,
@@ -335,9 +340,11 @@ describe("BrowserPeekTile", () => {
   it("ignores callbacks from a replaced screencast subscription", () => {
     const rendered = renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -346,9 +353,11 @@ describe("BrowserPeekTile", () => {
     hookState.visible = false;
     rendered.rerender(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -356,9 +365,11 @@ describe("BrowserPeekTile", () => {
     hookState.visible = true;
     rendered.rerender(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -387,9 +398,11 @@ describe("BrowserPeekTile", () => {
   it("pre-arms on hover and stops re-claiming once the host denies it", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -431,9 +444,11 @@ describe("BrowserPeekTile", () => {
   it("shows no control chrome for a hover pre-arm and lights it on the click", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -474,9 +489,11 @@ describe("BrowserPeekTile", () => {
   it("ignores an armed ack that arrives after an explicit Release", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -521,9 +538,11 @@ describe("BrowserPeekTile", () => {
   it("renders an alert overlay and responds with its generation", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -562,9 +581,11 @@ describe("BrowserPeekTile", () => {
   it("renders confirm and prompt overlays with dismiss and prompt responses", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -628,9 +649,11 @@ describe("BrowserPeekTile", () => {
   it("drops stale dialog generations before presenting or responding", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -682,9 +705,11 @@ describe("BrowserPeekTile", () => {
   it("clears only the matching text-free dialog settlement", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -730,9 +755,11 @@ describe("BrowserPeekTile", () => {
   it("resets control state on reconnect, re-arms with a fresh epoch, and accepts a low dialog generation", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -843,9 +870,11 @@ describe("BrowserPeekTile", () => {
   it("sends one insertText frame for a local CJK composition and shows its indicator", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -885,9 +914,11 @@ describe("BrowserPeekTile", () => {
   it("does not keep a screencast subscription while the tile is hidden", () => {
     const { rerender } = renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -897,9 +928,11 @@ describe("BrowserPeekTile", () => {
     hookState.visible = false;
     rerender(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -914,9 +947,11 @@ describe("BrowserPeekTile", () => {
     try {
       renderPeekTile(
         <BrowserPeekTile
-          viewTabId="view-tab-1"
-          paneId="pane-1"
-          epicId="epic-1"
+          scope={{ kind: "epic", epicId: "epic-1" }}
+          visible={hookState.visible}
+          onConvertToPip={() => {}}
+          onRequestNewTab={null}
+          onRequestCloseTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />,
@@ -968,9 +1003,11 @@ describe("BrowserPeekTile", () => {
       hookState.streamClient = new FakeStreamClient(false);
       renderPeekTile(
         <BrowserPeekTile
-          viewTabId="view-tab-1"
-          paneId="pane-1"
-          epicId="epic-1"
+          scope={{ kind: "epic", epicId: "epic-1" }}
+          visible={hookState.visible}
+          onConvertToPip={() => {}}
+          onRequestNewTab={null}
+          onRequestCloseTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />,
@@ -1029,9 +1066,11 @@ describe("BrowserPeekTile rttProbe handling", () => {
   it("answers an rttProbe with exactly one rttProbeAck carrying the same probeId", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1058,9 +1097,11 @@ describe("BrowserPeekTile rttProbe handling", () => {
   it("does not disturb other frame handling on the same subscription", () => {
     renderPeekTile(
       <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,

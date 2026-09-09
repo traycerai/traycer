@@ -58,9 +58,11 @@ import {
 } from "../ws-rpc-client";
 import {
   prepareStreamSubscribeRequest,
+  selectStreamSubscribeVersion,
   type ParamsOf,
   type StreamMethodSupport,
 } from "../ws-stream-client";
+import type { StreamParamsProvider } from "../i-stream-client";
 import type { WakeProbeTuning } from "../host-stream-client";
 import { jitteredBackoffFor } from "../backoff";
 import {
@@ -419,7 +421,7 @@ export interface IRemoteSession<
   ): IStreamSession;
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    paramsProvider: StreamParamsProvider<StreamRegistry, Method>,
   ): IStreamSession;
   notifyBearerRotated(): void;
   /**
@@ -1488,7 +1490,7 @@ export class RemoteSession<
    */
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    paramsProvider: StreamParamsProvider<StreamRegistry, Method>,
   ): IStreamSession {
     return this.subscribeWithParamsProviderInternal(
       method,
@@ -1501,7 +1503,7 @@ export class RemoteSession<
     Method extends keyof StreamRegistry & string,
   >(
     method: Method,
-    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    paramsProvider: StreamParamsProvider<StreamRegistry, Method>,
     requiredSchemaVersion: SchemaVersion | null,
   ): IStreamSession {
     this.start();
@@ -2825,12 +2827,18 @@ export class RemoteSession<
     // re-keys its stream to a FRESH id at the verdict, which is what keeps
     // every id this method subscribes un-tombstoned by construction - every
     // other terminal path removes its stream from `subscriptions` outright.
+    // Decided before the params are read, so a method served on more than one
+    // major shapes its open request for the negotiated one - the same ordering
+    // the local transport uses, and the same shared derivation, so a provider
+    // is never told one version while its payload is declared at another.
     const prepared = prepareStreamSubscribeRequest(
       this.options.streamRegistry,
       stream.method,
       clientCanonical,
       hostCanonical,
-      stream.readParams(),
+      stream.readParams(
+        selectStreamSubscribeVersion(clientCanonical, hostCanonical),
+      ),
     );
     stream.updateSchemaVersion(prepared.onWireVersion);
     this.enqueueMessage(connection, {
