@@ -263,6 +263,7 @@ describe("agent activity stream epoch handoff", () => {
       reconnectEngine,
       firstClient,
       null,
+      null,
     );
 
     driveToOpenAndConnected(firstSession);
@@ -281,7 +282,7 @@ describe("agent activity stream epoch handoff", () => {
     // The new epoch is opened, but its session is never driven - no frame,
     // no status change. Without the fix the store would still be reading
     // `open` / `connected` from the torn-down first session.
-    openAgentActivityStream(HOST_ID, reconnectEngine, secondClient, null);
+    openAgentActivityStream(HOST_ID, reconnectEngine, secondClient, null, null);
 
     expect(hostSlice(HOST_ID).connectionStatus).toBe("connecting");
     expect(hostSlice(HOST_ID).cloudSyncStatus).toBeNull();
@@ -296,6 +297,7 @@ describe("agent activity stream epoch handoff", () => {
       HOST_ID,
       reconnectEngine,
       client,
+      null,
       null,
     );
 
@@ -320,6 +322,7 @@ describe("agent activity stream epoch handoff", () => {
       reconnectEngine,
       firstClient,
       null,
+      null,
     );
     driveToOpenAndConnected(firstSession);
     expect(agentActivityPlaneAnswers()).toBe(true);
@@ -331,7 +334,7 @@ describe("agent activity stream epoch handoff", () => {
       secondSession,
       "host-stream-2",
     );
-    openAgentActivityStream("host-a", reconnectEngine, secondClient, null);
+    openAgentActivityStream("host-a", reconnectEngine, secondClient, null, null);
     // The window this pins: a raw transport open with no frame behind it. The
     // per-user union and its `servedBy` are still the FIRST epoch's, by
     // design, so a plane predicate that read `servedBy !== null` would vouch
@@ -359,7 +362,7 @@ describe("agent activity stream epoch handoff", () => {
     const client = new StubHostStreamClient(session, "host-stream-1");
     const reconnectEngine = createStubReconnectEngine();
 
-    openAgentActivityStream("host-a", reconnectEngine, client, null);
+    openAgentActivityStream("host-a", reconnectEngine, client, null, null);
     driveToOpenAndConnected(session);
     expect(agentActivityPlaneAnswers()).toBe(true);
 
@@ -414,6 +417,7 @@ describe("agent activity stream epoch handoff", () => {
       reconnectEngine,
       firstClient,
       null,
+      null,
     );
     // Set at open, ahead of any frame - `agentActivityPlaneCoversHost` is
     // still false here because `agentActivityPlaneAnswers` gates it first,
@@ -433,7 +437,7 @@ describe("agent activity stream epoch handoff", () => {
     // A different host now serves the union - the exact swap a host failover
     // performs, with the registry potentially still holding a session bound
     // to `host-a` from before it.
-    openAgentActivityStream("host-b", reconnectEngine, secondClient, null);
+    openAgentActivityStream("host-b", reconnectEngine, secondClient, null, null);
     driveOpenWithNarrowFrame(secondSession);
     expect(agentActivityPlaneCoversHost("host-b")).toBe(true);
     expect(agentActivityPlaneCoversHost("host-a")).toBe(false);
@@ -461,7 +465,7 @@ describe("agent activity stream epoch handoff", () => {
     const session = new StubSession();
     const client = new StubHostStreamClient(session, "host-stream-1");
 
-    openAgentActivityStream("host-a", reconnectEngine, client, null);
+    openAgentActivityStream("host-a", reconnectEngine, client, null, null);
     driveOpenWithNarrowFrame(session);
     expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
 
@@ -497,6 +501,7 @@ describe("agent activity stream epoch handoff", () => {
       reconnectEngine,
       firstClient,
       null,
+      null,
     );
 
     driveToOpenAndConnected(firstSession);
@@ -512,7 +517,7 @@ describe("agent activity stream epoch handoff", () => {
       secondSession,
       "host-stream-2",
     );
-    openAgentActivityStream(HOST_ID, reconnectEngine, secondClient, null);
+    openAgentActivityStream(HOST_ID, reconnectEngine, secondClient, null, null);
 
     // `byEpic` is per-user, not per-stream-epoch: a host switch does not
     // clear it, only the health of the stream that reported it.

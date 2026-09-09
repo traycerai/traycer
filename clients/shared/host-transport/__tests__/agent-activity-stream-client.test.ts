@@ -86,9 +86,13 @@ describe("AgentActivityStreamClient", () => {
     const onConnectionStatus = vi.fn();
     const client = new AgentActivityStreamClient({
       wsStreamClient,
+      plane: null,
       callbacks: { onState, onConnectionStatus },
     });
 
+    // `null` leaves the plane to the host, and must put NO key on the wire:
+    // `plane` is an optional enum, so a literal `null` would fail the host's
+    // parse rather than read as "no preference".
     expect(wsStreamClient.subscribe).toHaveBeenCalledWith(
       "agent.activity.subscribe",
       {},

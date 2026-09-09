@@ -43,7 +43,11 @@ import {
   useNotificationFeedModeFor,
   type NotificationFeedMode,
 } from "@/lib/notifications/notification-feed-mode";
-import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
+import {
+  useStreamMethodSchemaVersionFor,
+  useStreamMethodSupportFor,
+} from "@/lib/host/stream-runtime-context";
+import { negotiatedActivityServesLocalOnly } from "@/lib/agent-activity-plane-admission";
 import {
   NotificationFeedModeContext,
   NotificationFeedModeSettlingContext,
@@ -283,6 +287,17 @@ function NotificationsSessionBody(
   // app-wide effective host can still be unresolved when this stream opens.
   const servingHostClient = useHostClientFor(servingHostEntry);
   const servingHostId = servingHostEntry?.hostId ?? null;
+  // Whether THIS connection can be asked for the local activity plane. Read
+  // from the stream client's own manifest prediction rather than from any
+  // frame, because the decision is made before a frame exists (see
+  // `negotiatedActivityServesLocalOnly`).
+  const activityStreamVersion = useStreamMethodSchemaVersionFor(
+    servingStreamClient,
+    "agent.activity.subscribe",
+  );
+  const activityServesLocalOnly = negotiatedActivityServesLocalOnly(
+    activityStreamVersion,
+  );
   const queryClient = useQueryClient();
   const authService = useAuthService();
   const showNotification = useNotificationShow();
@@ -316,6 +331,11 @@ function NotificationsSessionBody(
   // Start unset so an initially cloud-capable session also clears the legacy
   // local sources before opening its first relay stream.
   const previousFeedModeRef = useRef<NotificationFeedMode | null>(null);
+  // The activity-plane admission this provider last OPENED under. `null` until
+  // the first pass, for the same reason as the feed mode above: the initial
+  // read is not a change, and treating it as one would tear down a session
+  // that has opened nothing yet.
+  const previousActivityLocalOnlyRef = useRef<boolean | null>(null);
   const [fallbackWindowId] = useState(createFallbackNotificationsWindowId);
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
   const markEntityReadMutation =
@@ -619,11 +639,18 @@ function NotificationsSessionBody(
   }, []);
 
   // The CLOUD-AUTHORIZED lanes: the per-user Notifications room
-  // (collaboration), the cloud feed relay, and the agent-activity stream. All
-  // three carry the account's server-side data - activity is served from the
-  // cloud union in current host wiring (`openForCurrentUser`'s doc) - so all
-  // three are a cloud CAPABILITY and may only run while a `/api/v3/user`
-  // verdict is held.
+  // (collaboration), the cloud feed relay, and the agent-activity stream as it
+  // was OPENED. All three carry the account's server-side data, so all three
+  // are a cloud CAPABILITY and may only run while a `/api/v3/user` verdict is
+  // held.
+  //
+  // Activity's membership is a property of the SUBSCRIPTION, not of the
+  // method: a stream opened with `plane: "local-only"` reads this machine's
+  // own tracker and is not in this set at all. Every stream this function can
+  // find was opened by a verdict holder (that is the only cohort that opens
+  // one with the plane left to the host), so closing it unconditionally is
+  // right - but see `settleCloudVerdictEdge` for the reopen that has to
+  // follow on a connection that can be asked for the local plane.
   //
   // The host notification lane (`hostDisposerRef`) is deliberately untouched.
   // It is this machine's own notifications - local-plane truth an unverified
@@ -659,6 +686,75 @@ function NotificationsSessionBody(
       useAgentActivityStore.getState().resetHost(activityHostId);
     }
   }, []);
+
+  /**
+   * Same recovery contract as `EpicSessionProvider`: an `UNAUTHORIZED`
+   * terminal close means the host could not accept the current context
+   * bearer, so re-validate against AuthnV3 and let the cascade either rotate
+   * the credentials (transient) or tear the session down via sign-out.
+   *
+   * Hoisted to the component so the activity lane's two openers hand the
+   * stream the SAME handler; it was previously local to the session opener,
+   * which is the only place that needed it.
+   */
+  const onStreamAuthError = useCallback((): void => {
+    void authService.revalidateCurrentContext();
+  }, [authService]);
+
+  /**
+   * THE place the agent-activity lane is opened. Two callers reach it - the
+   * session opener below and the cloud-verdict LOSS edge - and it exists as
+   * one function because "which plane may this session ask for" is exactly
+   * the decision that must not be made twice.
+   *
+   * Two admissions, and they are different facts:
+   *  - a verdict holder opens on the released line with the plane left to the
+   *    host, exactly as before this selector existed;
+   *  - a session with no verdict opens ONLY where this connection negotiated
+   *    `agent.activity.subscribe@1.2`, and then asks for `local-only`, so the
+   *    host reads its own tracker and acquires no cloud room.
+   *
+   * The plane is derived from the SAME `cloudAuthorized` the admission is, so
+   * there is no path that admits an unverified session and then opens it with
+   * the plane left to the host.
+   *
+   * Idempotent on the lane's own ref: the loss edge runs inside an effect that
+   * also reaches the opener, and a second open would leave the first session
+   * unreferenced and unclosable.
+   */
+  const openActivityLane = useCallback(
+    (cloudAuthorized: boolean): void => {
+      if (activityDisposerRef.current !== null) return;
+      // BOTH admissions, in the opener rather than at its call sites. The
+      // cloud-verdict loss edge calls this from the top of the reopen effect,
+      // ABOVE that effect's own `admitsLocalPlane` guard - so without this
+      // line a `signing-in` session (which holds no plane at all, and whose
+      // verdict is also `false`) opened a lane for the instant before the
+      // guard below tore it down again. Caught by the suspension test, which
+      // counts subscriptions rather than final state.
+      if (!admitsLocalPlane(status)) return;
+      if (!cloudAuthorized && !activityServesLocalOnly) return;
+      const lease = hostConnectionRef.current;
+      const streamHostId = servingHostId;
+      if (lease === null || servingStreamClient === null) return;
+      if (streamHostId === null) return;
+      activityDisposerRef.current = openAgentActivityStream(
+        streamHostId,
+        lease.reconnect,
+        servingStreamClient,
+        onStreamAuthError,
+        cloudAuthorized ? null : "local-only",
+      );
+      activityStreamHostIdRef.current = streamHostId;
+    },
+    [
+      activityServesLocalOnly,
+      servingHostId,
+      servingStreamClient,
+      onStreamAuthError,
+      status,
+    ],
+  );
 
   // The relay session's rows and its view-consumption bookkeeping are one
   // unit of ownership: the driver holds an in-flight claim and a retry timer
@@ -764,13 +860,28 @@ function NotificationsSessionBody(
         cloudLanesClosedByVerdictLossRef.current = true;
         tearDownCloudLanes();
         resetCloudRelaySession();
+        // The lane set to CLOSE is unchanged: the open activity stream was
+        // opened by a verdict holder with the plane left to the host, so it is
+        // a cloud lane and it goes. What is new is that something may take its
+        // place - on a connection that negotiated the `local-only` selector,
+        // the same lane reopens reading this machine's own tracker.
+        //
+        // Reopened HERE and not by the effect's `anyStreamOpen` gate, which
+        // this transition cannot reach: the host notification lane
+        // deliberately survives a verdict loss, so "no lane is open" is false
+        // and the gate calls nothing. Routed through the one activity opener
+        // so this does not become a second place that decides the plane, and
+        // deliberately touching NOTHING else - the local lane must come
+        // through a demotion with no close and no re-subscription, which is
+        // the invariant this provider's tests pin most explicitly.
+        openActivityLane(false);
         return;
       }
       if (!cloudLanesClosedByVerdictLossRef.current) return;
       cloudLanesClosedByVerdictLossRef.current = false;
       tearDown();
     },
-    [tearDown, tearDownCloudLanes, resetCloudRelaySession],
+    [tearDown, tearDownCloudLanes, resetCloudRelaySession, openActivityLane],
   );
 
   // A disconnect (IPC drop / host restart) is not a truth reset: rendered
@@ -872,14 +983,24 @@ function NotificationsSessionBody(
    * its host notifications must open while its account-backed lanes stay
    * shut.
    *
-   * Agent activity is in the cloud set on the wire's word, not the lane's
-   * name: `agent.activity.subscribe` is served from the cloud union
-   * everywhere in current production wiring (`registry.ts`, "local remains
-   * dormant until an explicit host mode exists"), and the host connection
-   * carries no renderer verdict, so an open stream would keep reading
-   * cross-host activity on the retained bearer after the verdict was
-   * withdrawn. A negotiated local-only activity mode is what would move it
-   * back to the local set.
+   * Agent activity is the one lane in that set whose membership is now
+   * NEGOTIATED rather than fixed. `agent.activity.subscribe` lets the host
+   * pick the plane, and when it picks the cloud union the host acquires a
+   * per-user Notifications room on the retained bearer - so on a host that
+   * cannot be told otherwise, an unverified session still opens nothing.
+   *
+   * `@1.2` is what lets it be told otherwise: the open request carries
+   * `plane: "local-only"`, the host serves its own tracker, no cloud room is
+   * acquired, and the unverified cohort gets back the activity of the agents
+   * running on the very machine it is talking to.
+   *
+   * The gate is the NEGOTIATED minor, not the host's own plane selection.
+   * Those are different facts: a host may well serve local by default (the
+   * host tree has since moved to exactly that), but nothing on the wire says
+   * so, and `servedBy` reports the choice only after the room it was gating
+   * has already been acquired. This comment previously asserted the host
+   * selection itself - it had gone stale, and the stale sentence was the
+   * stated reason for withholding the lane.
    */
   const openForCurrentUser = useCallback(
     (settledFeedMode: NotificationFeedMode, cloudAuthorized: boolean): void => {
@@ -889,13 +1010,9 @@ function NotificationsSessionBody(
       ) {
         return;
       }
-      // Same recovery contract as EpicSessionProvider: an `UNAUTHORIZED`
-      // terminal close means the host couldn't accept the current context
-      // bearer. Re-validate against AuthnV3 so the cascade either rotates the
-      // context credentials (transient) or tears the session down via sign-out.
-      const onAuthError = (): void => {
-        void authService.revalidateCurrentContext();
-      };
+      // The shared recovery contract, hoisted to `onStreamAuthError` so the
+      // activity lane's two openers hand their stream the same handler.
+      const onAuthError = onStreamAuthError;
       const onEntitlementDenied = (): void => {
         // Dormant defense for a future server-side entitlement gate: preserve a
         // defined unavailable wall and revalidate auth instead of leaving the
@@ -949,17 +1066,11 @@ function NotificationsSessionBody(
       // reads `byHost.values()` and merges per EPIC, never reporting an agent
       // as belonging to the bucket's host.
       //
-      // Gated on the cloud verdict like the two lanes below (see the doc on
-      // this callback): the host serves this stream from the cloud union.
-      if (servingStreamClient !== null && cloudAuthorized) {
-        activityDisposerRef.current = openAgentActivityStream(
-          streamHostId,
-          reconnect,
-          servingStreamClient,
-          onAuthError,
-        );
-        activityStreamHostIdRef.current = streamHostId;
-      }
+      // Both admissions and the plane they imply live in `openActivityLane`,
+      // which the cloud-verdict loss edge also calls. Reached here with the
+      // host connection lease already stored on `hostConnectionRef`, which is
+      // what that opener reads for its reconnect policy.
+      openActivityLane(cloudAuthorized);
       // Both cloud-lane bail-outs below are `if` bodies rather than early
       // returns from `openForCurrentUser`, and that is the whole point: the
       // HOST feed is opened at the bottom of this function, so returning from
@@ -1074,6 +1185,7 @@ function NotificationsSessionBody(
       onFeedFrame,
       onPresenceChanged,
       onHostStreamOpened,
+      activityServesLocalOnly,
     ],
   );
 
@@ -1243,7 +1355,19 @@ function NotificationsSessionBody(
     }
     if (!anyStreamOpen(openStreams)) {
       openForCurrentUser(settledFeedMode, isSignedIn);
+      return;
     }
+    // The activity-plane admission settles on the stream client's FIRST
+    // handshake, later than every other input to this effect. A session that
+    // starts unverified has its host lane open by then, so the gate above is
+    // false and the session opener is never reached again - the local
+    // activity lane would stay shut for the life of that session, on exactly
+    // the cohort the selector exists for.
+    //
+    // The lane's own opener is idempotent and admission-checked, so this is a
+    // no-op on every pass but the one where the admission arrives, and on a
+    // verdict holder (whose lane is already open) it does nothing at all.
+    openActivityLane(isSignedIn);
   }, [
     servingHostId,
     status,

@@ -6,6 +6,7 @@ import {
 import {
   batchDeleteRequestSchema,
   batchDeleteResponseSchema,
+  batchDeleteResponseSchemaPre11,
   batchUpdateEpicRolesRequestSchema,
   batchUpdateEpicRolesResponseSchema,
   createArtifactRequestSchema,
@@ -160,6 +161,7 @@ import {
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   readChatAttachmentRequestSchema,
+  readChatAttachmentRequestSchemaPre11,
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
 import {
@@ -515,7 +517,35 @@ export const epicBatchDeleteV10 = defineRpcContract({
   method: "epic.batchDelete",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: batchDeleteRequestSchema,
+  responseSchema: batchDeleteResponseSchemaPre11,
+});
+
+// `@1.1` states the durability `home` each deletion landed in, per id. The
+// request is unchanged. See `unary-schemas.ts` for why the tombstone SCOPE is
+// unanswerable without it, and why a batch needs the marker per row rather
+// than per response.
+export const epicBatchDeleteV11 = defineRpcContract({
+  method: "epic.batchDelete",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: batchDeleteRequestSchema,
   responseSchema: batchDeleteResponseSchema,
+});
+
+export const epicBatchDeleteUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicBatchDeleteV10,
+  typeof epicBatchDeleteV11
+>({
+  from: epicBatchDeleteV10.schemaVersion,
+  to: epicBatchDeleteV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // `home` stays ABSENT on every upgraded row. The marker licenses an
+  // ACCOUNT-WIDE tombstone, which is the destructive direction, and a `@1.0`
+  // host produced no evidence for it - so absence must keep meaning "scope
+  // this to the host that issued the delete", exactly as a released client
+  // already reads it.
+  upgradeResponse: (response) => ({
+    results: response.results.map((result) => ({ ...result })),
+  }),
 });
 
 export const epicRemoveRepoV10 = defineRpcContract({
@@ -1122,8 +1152,33 @@ export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
 export const epicReadChatAttachmentV10 = defineRpcContract({
   method: "epic.readChatAttachment",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readChatAttachmentRequestSchemaPre11,
+  responseSchema: readChatAttachmentResponseSchema,
+});
+
+// `@1.1` adds the `plane: "local-only"` request selector so a caller holding
+// no cloud verdict can ask for the DISK leg alone instead of having to skip
+// the whole read. Response is unchanged: a disk miss is already `missing`,
+// and that is the truthful answer for "not obtainable on the plane you asked
+// about" as much as for "not obtainable at all".
+export const epicReadChatAttachmentV11 = defineRpcContract({
+  method: "epic.readChatAttachment",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: readChatAttachmentRequestSchema,
   responseSchema: readChatAttachmentResponseSchema,
+});
+
+export const epicReadChatAttachmentUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicReadChatAttachmentV10,
+  typeof epicReadChatAttachmentV11
+>({
+  from: epicReadChatAttachmentV10.schemaVersion,
+  to: epicReadChatAttachmentV11.schemaVersion,
+  // No synthesized `plane`. An upgraded `@1.0` request asked for the released
+  // two-leg chain, and narrowing it here would silently withhold the cloud
+  // leg from a caller entitled to it - a blank image where one used to load.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // Artifact attachment bytes remain canonical in the root document during the

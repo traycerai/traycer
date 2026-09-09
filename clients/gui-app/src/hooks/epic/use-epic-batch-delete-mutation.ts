@@ -130,11 +130,41 @@ export function useEpicBatchDelete(): UseMutationResult<
         useComposerRunSettingsStore.getState().clearEpicRunSettings(deletedIds);
         tabCommandCoordinator.handleEpicAccessLoss(deletedIds);
         if (ctx.userId !== null) {
-          removeDeletedEpicsFromCloudTaskCaches(
-            queryClient,
-            { hostId: ctx.hostId, userId: ctx.userId },
-            deletedIds,
+          // Tombstone each success in the scope its deletion actually had.
+          //
+          // A cloud-homed epic is deleted from the ACCOUNT, so every host
+          // scope must stop showing it - `hostId: null` is the store's
+          // account-wide bucket, which `deletedEpicIdsForScope` unions into
+          // every host's read. A local-homed one exists on the machine that
+          // held it, and an account-wide tombstone there would hide a row a
+          // sibling host can still serve.
+          //
+          // `home` is `@1.1`; an older host omits it, and absence keeps the
+          // released host-scoped behaviour rather than being read as
+          // `"cloud"`. That asymmetry is deliberate: account-wide is the
+          // destructive direction, and an old host is exactly the peer that
+          // produced no evidence for it.
+          const userId = ctx.userId;
+          const accountWideIds = data.results.flatMap((result) =>
+            result.success && result.home === "cloud" ? [result.taskId] : [],
           );
+          const hostScopedIds = deletedIds.filter(
+            (id) => !accountWideIds.includes(id),
+          );
+          if (hostScopedIds.length > 0) {
+            removeDeletedEpicsFromCloudTaskCaches(
+              queryClient,
+              { hostId: ctx.hostId, userId },
+              hostScopedIds,
+            );
+          }
+          if (accountWideIds.length > 0) {
+            removeDeletedEpicsFromCloudTaskCaches(
+              queryClient,
+              { hostId: null, userId },
+              accountWideIds,
+            );
+          }
         }
         if (navigationTarget !== undefined) {
           if (navigationTarget === null) {

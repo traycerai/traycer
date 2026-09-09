@@ -431,6 +431,15 @@ class MockStreamSession implements IStreamSession {
   readonly clientFrames: HostNotificationsSubscribeClientFrame[] = [];
   closeCount = 0;
   requestReconnectCount = 0;
+  /**
+   * The `open` request this session was subscribed with - set by
+   * `MockWsStreamClient.subscribe` right after construction. Lets a case
+   * assert the PLANE a lane actually opened with (`{}` vs
+   * `{ plane: "local-only" }`), not just that its method name appears in
+   * `subscribedMethods` - the method name alone cannot distinguish a
+   * local-only open from one that left the plane to the host.
+   */
+  openParams: unknown = undefined;
 
   sendClientFrame(envelope: StreamFrameEnvelope): void {
     this.clientFrames.push(
@@ -517,9 +526,10 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     method: Method,
-    _params: ParamsOf<HostStreamRpcRegistry, Method>,
+    params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
     const session = new MockStreamSession();
+    session.openParams = params;
     this.subscribedMethods.push(method);
     this.openedSessions.push(session);
     const sessions = this.sessionsByMethod.get(method) ?? [];
@@ -540,6 +550,18 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       throw new Error(`No stream session is open for ${method}`);
     }
     return session;
+  }
+
+  /**
+   * Every session opened for `method`, oldest first. `sessionFor` above only
+   * ever answers "the newest one" - insufficient for a lane that closes and
+   * reopens under a NEW plane within one test (the unverified<->signed-in
+   * demotion/regain edges), where a case needs to pin the OLD session's
+   * close count independently of the new session that immediately replaces
+   * it in `sessionsByMethod`'s tail slot.
+   */
+  sessionsFor(method: keyof HostStreamRpcRegistry & string): MockStreamSession[] {
+    return this.sessionsByMethod.get(method) ?? [];
   }
 }
 
@@ -3952,7 +3974,32 @@ describe("<NotificationsSessionProvider />", () => {
     // meanwhile, so a retained "working" would spin indefinitely. The whole
     // slice goes, not only the epic's bucket.
     expect(getEpicAgentActivity("epic-1").working.size).toBe(0);
-    expect(useAgentActivityStore.getState().byHost.size).toBe(0);
+    // `byHost` is NOT empty here: this connection negotiated `@1.2`, so
+    // `openActivityLane(false)` reopens the lane immediately as local-only
+    // (item 1), and that reopen's own `retireHostEpochHealthClaim` writes a
+    // fresh, empty placeholder entry for this host. Distinguish the fresh
+    // placeholder from the stale cloud reading it replaced: `connecting`,
+    // no frame attested yet, and (checked above) no working agents.
+    expect(useAgentActivityStore.getState().byHost.size).toBe(1);
+    expect(
+      useAgentActivityStore.getState().byHost.get(mockLocalHostEntry.hostId),
+    ).toEqual({
+      servedBy: null,
+      connectionStatus: "connecting",
+      cloudSyncStatus: null,
+      byEpic: new Map(),
+      stateFrameSeenThisEpoch: false,
+    });
+    const reopenedLocalActivitySession = streamClient.sessionFor(
+      "agent.activity.subscribe",
+    );
+    expect(reopenedLocalActivitySession).not.toBe(activitySession);
+    // The plane is the fact that matters, not just that the method reopened:
+    // this is the assertion that would fail if the reopen quietly left the
+    // plane to the host again instead of asking for `local-only`.
+    expect(reopenedLocalActivitySession.openParams).toEqual({
+      plane: "local-only",
+    });
 
     // Re-promotion: the same account regains the verdict.
     act(() => {
@@ -3985,12 +4032,19 @@ describe("<NotificationsSessionProvider />", () => {
           (method) => method === "notifications.subscribe",
         ),
       ).toHaveLength(2);
+      // THREE, not two like its siblings above: activity has an extra open in
+      // the middle of this test that the other two cloud lanes never get - the
+      // demotion's local-only reopen (`reopenedLocalActivitySession` above).
+      // Cloud, then local-only, then cloud again on re-promotion.
       expect(
         streamClient.subscribedMethods.filter(
           (method) => method === "agent.activity.subscribe",
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
     });
+    expect(
+      streamClient.sessionFor("agent.activity.subscribe").openParams,
+    ).toEqual({});
   });
 
   // ---------------------------------------------------------------------
@@ -4553,7 +4607,7 @@ describe("<NotificationsSessionProvider />", () => {
   });
 
   describe("unverified session admission (#4764)", () => {
-    it("a cold start at unverified opens only the local lane in LOCAL feed mode", async () => {
+    it("a cold start at unverified opens the local lanes: the host feed and local-only activity, in LOCAL feed mode", async () => {
       const queryClient = new QueryClient();
       const streamClient = new MockWsStreamClient();
       hostState.id = mockLocalHostEntry.hostId;
@@ -4575,16 +4629,21 @@ describe("<NotificationsSessionProvider />", () => {
       // Exact equality, not `toContain`: the bug this guards against left
       // the local lane shut for the whole unverified period (an early return
       // before it could open), so a `toContain` here would still pass on the
-      // broken behavior. Agent activity is NOT in this set: the host serves
-      // it from the cloud union, so it is withheld with the other cloud lanes.
+      // broken behavior. Agent activity IS now in this set (item 1): this
+      // connection negotiated `@1.2`, so the unverified cohort is admitted to
+      // the LOCAL-ONLY plane rather than withheld with the other cloud lanes.
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
           "host.notifications.feed.subscribe",
         ]);
       });
-      expect(streamClient.subscribedMethods).not.toContain(
-        "agent.activity.subscribe",
-      );
+      // The plane is the fact this admission is actually about - the method
+      // name alone cannot distinguish this from the withheld-cloud-union
+      // open that item 1 exists to prevent.
+      expect(
+        streamClient.sessionFor("agent.activity.subscribe").openParams,
+      ).toEqual({ plane: "local-only" });
       expect(streamClient.subscribedMethods).not.toContain(
         "notifications.subscribe",
       );
@@ -4593,7 +4652,49 @@ describe("<NotificationsSessionProvider />", () => {
       );
     });
 
-    it("a cold start at unverified opens only the local lane in CLOUD feed mode", async () => {
+    it("an unverified session on a connection that has not negotiated agent.activity.subscribe@1.2 still opens no activity lane", async () => {
+      // The gate itself: without it, this whole describe block would stay
+      // green if `negotiatedActivityServesLocalOnly` were replaced by
+      // `() => true`, because every other case here runs on a mock that
+      // reports `@1.2` by default (see the `@/lib/host/stream-runtime-context`
+      // mock above).
+      const queryClient = new QueryClient();
+      const streamClient = new MockWsStreamClient();
+      hostState.id = mockLocalHostEntry.hostId;
+      streamState.client = streamClient;
+      streamState.cloudFeedSupport = "unsupported";
+      streamState.useClientSupport = true;
+      vi.spyOn(streamClient, "getMethodSupport").mockReturnValue("unsupported");
+      vi.spyOn(streamClient, "getMethodSchemaVersion").mockImplementation(
+        (method: string) =>
+          method === "agent.activity.subscribe"
+            ? { major: 1, minor: 1 }
+            : { major: 1, minor: 2 },
+      );
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuthUnverified("alice@example.com", "alice@example.com");
+      });
+
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toEqual([
+          "host.notifications.feed.subscribe",
+        ]);
+      });
+      expect(streamClient.subscribedMethods).not.toContain(
+        "agent.activity.subscribe",
+      );
+    });
+
+    it("a cold start at unverified opens the local lanes: the host feed and local-only activity, in CLOUD feed mode", async () => {
       // Same admission edge as above, but negotiated into the cloud branch of
       // `openForCurrentUser` - a different `if` withholds the cloud-authorized
       // pair there than in local mode, so both branches need direct coverage.
@@ -4617,12 +4718,13 @@ describe("<NotificationsSessionProvider />", () => {
 
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
           "host.notifications.feed.subscribe",
         ]);
       });
-      expect(streamClient.subscribedMethods).not.toContain(
-        "agent.activity.subscribe",
-      );
+      expect(
+        streamClient.sessionFor("agent.activity.subscribe").openParams,
+      ).toEqual({ plane: "local-only" });
       expect(streamClient.subscribedMethods).not.toContain(
         "notifications.subscribe",
       );
@@ -4736,6 +4838,14 @@ describe("<NotificationsSessionProvider />", () => {
           "host.notifications.feed.subscribe",
         ]);
       });
+      // The cloud-opened session, captured by reference: `sessionFor` answers
+      // "the newest session for this method", and item 1's demotion reopens a
+      // SECOND session for the same method - so a check made after the
+      // demotion via `sessionFor` would be reading the wrong one.
+      const cloudActivitySession = streamClient.sessionFor(
+        "agent.activity.subscribe",
+      );
+      expect(cloudActivitySession.openParams).toEqual({});
 
       act(() => {
         resetAuthUnverified("alice@example.com", "alice@example.com");
@@ -4749,13 +4859,22 @@ describe("<NotificationsSessionProvider />", () => {
           streamClient.sessionFor("host.notifications.cloudFeed.subscribe")
             .closeCount,
         ).toBe(1);
-        // Agent activity is cloud-served on the wire, so it closes with the
-        // other cloud lanes.
-        expect(
-          streamClient.sessionFor("agent.activity.subscribe").closeCount,
-        ).toBe(1);
+        // Agent activity is cloud-served on the wire, so the cloud-opened
+        // session closes with the other cloud lanes...
+        expect(cloudActivitySession.closeCount).toBe(1);
       });
-      // The local lane is untouched by the demotion: no close, and no
+      // ...and item 1 immediately reopens it as a SECOND, local-only session -
+      // it is a lane an unverified session may still hold, just under a
+      // narrower plane. `sessionFor` now answers this new session.
+      const localOnlyActivitySession = streamClient.sessionFor(
+        "agent.activity.subscribe",
+      );
+      expect(localOnlyActivitySession).not.toBe(cloudActivitySession);
+      expect(localOnlyActivitySession.closeCount).toBe(0);
+      expect(localOnlyActivitySession.openParams).toEqual({
+        plane: "local-only",
+      });
+      // The HOST lane is untouched by the demotion: no close, and no
       // duplicate re-subscription anywhere in the method log.
       expect(
         streamClient.sessionFor("host.notifications.feed.subscribe").closeCount,
@@ -4765,6 +4884,7 @@ describe("<NotificationsSessionProvider />", () => {
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
         "host.notifications.feed.subscribe",
+        "agent.activity.subscribe",
       ]);
     });
 
@@ -4788,26 +4908,35 @@ describe("<NotificationsSessionProvider />", () => {
       });
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
           "host.notifications.feed.subscribe",
         ]);
       });
       const priorHostFeedSession = streamClient.sessionFor(
         "host.notifications.feed.subscribe",
       );
+      const priorLocalActivitySession = streamClient.sessionFor(
+        "agent.activity.subscribe",
+      );
 
       act(() => {
         resetAuth("signed-in", "alice@example.com", "alice@example.com");
       });
 
-      // The regain path is a full `tearDown()` + reopen (§ comment on
-      // `settleCloudVerdictEdge`), not a partial reopen of just the cloud
-      // set - so the local lane blips for one pass rather than staying open
-      // underneath a second, concurrent subscription for the same lane.
-      // Exact equality catches either failure: a missing cloud lane (agent
-      // activity included, since it is withheld while unverified), or a
-      // local lane left open twice.
+      // The regain path is a full `tearDown()` + reopen, driven by the
+      // feed-mode change this promotion causes (unverified negotiates
+      // "local", signed-in negotiates "cloud" - the
+      // `previousFeedModeRef.current !== settledFeedMode` branch), not a
+      // partial reopen of just the cloud set - so BOTH local lanes blip for
+      // one pass, including the activity lane item 1 had already opened
+      // local-only, rather than either staying open underneath a second,
+      // concurrent subscription for the same lane. Exact equality catches
+      // any of: a missing cloud lane, a local lane left open twice, or the
+      // local-only activity session surviving instead of being replaced by a
+      // cloud-plane one.
       await waitFor(() => {
         expect(streamClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
           "host.notifications.feed.subscribe",
           "agent.activity.subscribe",
           "notifications.subscribe",
@@ -4816,6 +4945,15 @@ describe("<NotificationsSessionProvider />", () => {
         ]);
       });
       expect(priorHostFeedSession.closeCount).toBe(1);
+      expect(priorLocalActivitySession.closeCount).toBe(1);
+      const reopenedCloudActivitySession = streamClient.sessionFor(
+        "agent.activity.subscribe",
+      );
+      expect(reopenedCloudActivitySession).not.toBe(priorLocalActivitySession);
+      // The regained session leaves the plane to the host - the released
+      // behaviour a verdict holder always got, not a narrowed one left over
+      // from the unverified period.
+      expect(reopenedCloudActivitySession.openParams).toEqual({});
     });
 
     it("does not repeatedly reset the cloud relay session while the verdict stays lost across a re-run of the effect", async () => {
