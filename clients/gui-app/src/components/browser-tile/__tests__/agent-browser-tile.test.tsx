@@ -1,4 +1,4 @@
-import "../../../../../__tests__/test-browser-apis";
+import "../../../../__tests__/test-browser-apis";
 import type { ComponentProps, ReactElement } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
