@@ -3474,9 +3474,12 @@ export const providersCancelModelProviderAuthV10 = defineRpcContract({
 });
 
 /**
- * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` - this
- * whole code-paste surface is unreleased), registered below with
- * `degrade: { kind: "unsupported" }`: an old host simply lacks it, and
+ * Optional v1.0 method, off `RELEASED_FLOOR_METHOD_NAMES` because it is
+ * optional - NOT because it is unreleased. `providers.submitLoginCode` and
+ * `providers.touchLogin` are both in `released-baseline-surface.json`, so
+ * their `@1.0` lines are frozen. (This said "this whole code-paste surface is
+ * unreleased" until the release that captured the baseline.) Registered below
+ * with `degrade: { kind: "unsupported" }`: an old host simply lacks it, and
  * callers get per-call upgrade guidance instead of a fatal handshake
  * mismatch (see `agent/profiles.ts`'s note on the same pattern).
  */
@@ -3638,8 +3641,11 @@ export const providersSetEnabledUpgradeV1ToV2 = defineUpgradePath<
 // the CLI-path (`setSelection`/`addCustomPath`), credential
 // (`setApiKey`/`clearApiKey`), and login-lifecycle (`startLogin`/
 // `awaitLogin`/`cancelLogin`) methods all have narrower, unrelated
-// semantics. `recolor` rides the same unreleased profile-management surface
-// because profile colors are host-owned profile metadata. `profileAction:
+// semantics. `recolor` rides the same profile-management surface because
+// profile colors are host-owned profile metadata. That surface is no longer
+// unreleased - `providers.setEnabled` and `providers.setProfileEnabled` are
+// both in `released-baseline-surface.json` - so it grows by new minors,
+// never in place. `profileAction:
 // null` is byte-identical to today's plain enable/disable request, so a v2.0
 // client is unaffected.
 export const providersSetEnabledV21 = defineRpcContract({
@@ -4414,9 +4420,12 @@ export const epicCreateTuiAgentUpgradeV10ToV11 = defineUpgradePath<
 const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "browser.savedLoginSites": {
     // Settings > Browser's "Sites with saved logins" list (keychain refactor
-    // ticket 10). Brand-new v1.0 and not part of `RELEASED_FLOOR_METHOD_NAMES`
-    // - the whole saved-logins surface is unreleased - so it rides the
-    // optional-capability channel: a host that predates it advertises nothing,
+    // ticket 10). Off `RELEASED_FLOOR_METHOD_NAMES` because it is OPTIONAL,
+    // not because it is unreleased: `browser.savedLoginSites` is in
+    // `released-baseline-surface.json`, so `@1.0` is frozen. (This said "the
+    // whole saved-logins surface is unreleased" until that release.) It rides
+    // the optional-capability channel: a host that predates it advertises
+    // nothing,
     // and the client renders the group without the list rather than failing the
     // connection. Read-only and names-only; the clearing half is the
     // `clearSite` frame on `browser.sessions`, which needs the elected-desktop
@@ -4927,11 +4936,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
   },
   "host.usage.summary": {
-    // Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` -
-    // this whole usage-summary surface is unreleased), registered like
+    // Off `RELEASED_FLOOR_METHOD_NAMES` because it is OPTIONAL, not because
+    // it is unreleased: `host.usage.summary` is in
+    // `released-baseline-surface.json`, so `@1.0` is frozen. (This said
+    // "brand-new v1.0 method ... this whole usage-summary surface is
+    // unreleased" until `@2.0` needed the truth.) Registered like
     // `snapshots.getLocalStorageSize` above: an old host simply lacks it,
     // and the client feature-detects at handshake and hides the usage
     // surface instead of hitting a fatal mismatch.
+    //
+    // Two majors, because `@1.0`'s request is `.strict()` and could not grow
+    // the `plane` selector within its line - see `usage-analytics/contracts.ts`
+    // and the refusing `2 -> 1` downgrade registered below.
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,

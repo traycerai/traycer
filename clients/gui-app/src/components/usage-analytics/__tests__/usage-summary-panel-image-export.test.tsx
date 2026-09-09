@@ -224,6 +224,7 @@ function renderPanel(
       client={client}
       hostNames={new Map()}
       currentHostId={mockLocalHostEntry.hostId}
+      plane={null}
     />,
     { wrapper },
   );

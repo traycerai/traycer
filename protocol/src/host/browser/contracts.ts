@@ -1138,7 +1138,12 @@ export type BrowserSessionsUxClientFrame = Extract<
   }
 >;
 
-/** Unreleased browser stream baseline. */
+/**
+ * The browser stream baseline. RELEASED, despite what this comment claimed
+ * until the baseline sweep: `browser.sessions` is in
+ * `released-baseline-surface.json`, so `@1.0` is frozen and grows by new
+ * minors.
+ */
 export const browserSessionsV1 = defineStreamRpcContract({
   method: "browser.sessions",
   schemaVersion: { major: 1, minor: 0 } as const,

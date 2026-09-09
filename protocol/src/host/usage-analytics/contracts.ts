@@ -11,8 +11,13 @@ import {
 
 /**
  * `host.usage.summary` - the usage analytics read path (see the
- * replication-and-read-path artifact). Brand-new v1.0 method, unreleased and
- * therefore not on `RELEASED_FLOOR_METHOD_NAMES`; registered in
+ * replication-and-read-path artifact). Off `RELEASED_FLOOR_METHOD_NAMES`
+ * because it is OPTIONAL, not because it is new: `@1.0` is RELEASED and
+ * frozen (it is in `released-baseline-surface.json` under `optionalUnary`).
+ * This comment said "brand-new, unreleased" until `@2.0`; the sentence was
+ * true when written and silently became a licence to edit a shipped line.
+ * Check the baseline before believing any such claim, including this one.
+ * Registered in
  * `registry.ts` with `degrade: { kind: "unsupported" }` like
  * `snapshots.getLocalStorageSize` above it. A host that predates this
  * capability simply lacks the method; the client feature-detects at
