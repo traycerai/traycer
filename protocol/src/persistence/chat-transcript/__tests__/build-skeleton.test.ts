@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   chatEventSchema,
@@ -10,14 +10,19 @@ import {
 } from "@traycer/protocol/persistence/epic/messages";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/senders";
+import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   buildRowSkeleton,
   type TranscriptPreviewProjection,
 } from "@traycer/protocol/persistence/chat-transcript/build-skeleton";
-import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import {
+  recordByteLength,
+  RecordFingerprintMemo,
+} from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   ROW_SKELETON_PREVIEW_MAX_CHARS,
   rowSkeletonEntrySchema,
+  type RowSkeletonEntry,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 
 /**
@@ -1007,5 +1012,450 @@ describe("image resolutions in the body fingerprint", () => {
     expect(sliceEntryWithResolutions([resolved]).byteLength).toBe(
       sliceEntryWithResolutions([pending]).byteLength,
     );
+  });
+});
+
+/**
+ * # A warm `RecordFingerprintMemo` pays for the changed record, not the chat
+ *
+ * The whole point of `record-bytes.ts`'s `RecordFingerprintMemo`: a record
+ * that is the identical OBJECT on the next rebuild answers from the map, and
+ * only a record that was never in the map - because it is a new object a
+ * copy-on-write fold produced - costs an encoding pass. This is the property
+ * that turns a live chat's per-commit rebuild from O(transcript) into
+ * O(what changed).
+ */
+describe("rebuild cost with a warm RecordFingerprintMemo", () => {
+  const BLOCKS_PER_ASSISTANT_TURN = 3;
+  const TURN_COUNT = 4;
+
+  function assistantTurnMessage(fields: {
+    messageId: string;
+    timestamp: number;
+    turnId: string;
+    blockTexts: readonly string[];
+    imageResolutions: ReadonlyArray<Record<string, unknown>>;
+  }): Message {
+    return messageSchema.parse({
+      role: "assistant",
+      messageId: fields.messageId,
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "agent-1",
+        displayName: null,
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: fields.blockTexts.map((text, blockIndex) => ({
+        blockId: `b-${fields.messageId}-${blockIndex}`,
+        status: "completed",
+        timestamp: fields.timestamp,
+        type: "text",
+        text,
+        providerNotice: null,
+      })),
+      startedAt: fields.timestamp,
+      timestamp: fields.timestamp,
+      turnId: fields.turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: fields.imageResolutions,
+    });
+  }
+
+  function blockTextsFor(turnNumber: number, marker: string): string[] {
+    return Array.from(
+      { length: BLOCKS_PER_ASSISTANT_TURN },
+      (_, blockIndex) => `${marker} turn ${turnNumber} block ${blockIndex}`,
+    );
+  }
+
+  function transcriptTurn(turnNumber: number, marker: string): Message[] {
+    return [
+      humanUserMessage({
+        messageId: `m-user-${turnNumber}`,
+        timestamp: turnNumber * 10,
+        text: `question ${turnNumber}`,
+      }),
+      assistantTurnMessage({
+        messageId: `m-assistant-${turnNumber}`,
+        timestamp: turnNumber * 10 + 1,
+        turnId: `t-${turnNumber}`,
+        blockTexts: blockTextsFor(turnNumber, marker),
+        imageResolutions: [],
+      }),
+    ];
+  }
+
+  it("recomputes only the replaced record's own blocks and imageResolutions, not the transcript", () => {
+    const messages = Array.from({ length: TURN_COUNT }, (_, i) =>
+      transcriptTurn(i + 1, "original"),
+    ).flat();
+
+    const memo = new RecordFingerprintMemo();
+    const first = buildRowSkeleton(
+      { messages, events: [], activeTurnId: null, chatId: "chat-1" },
+      previewText,
+      memo,
+    );
+
+    // Every OTHER record - every other message, block, and imageResolutions
+    // array - stays the identical object it was for `first`. Only this one
+    // turn's assistant record is replaced, by a fresh object a copy-on-write
+    // fold would have produced for an edited turn.
+    const targetTurnNumber = 2;
+    const replacedMessageId = `m-assistant-${targetTurnNumber}`;
+    const replaced = assistantTurnMessage({
+      messageId: replacedMessageId,
+      timestamp: targetTurnNumber * 10 + 1,
+      turnId: `t-${targetTurnNumber}`,
+      blockTexts: blockTextsFor(targetTurnNumber, "edited"),
+      imageResolutions: [],
+    });
+    const rebuiltMessages = messages.map((message) =>
+      message.messageId === replacedMessageId ? replaced : message,
+    );
+
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    let second: readonly RowSkeletonEntry[];
+    let stringifyCallCount: number;
+    try {
+      second = buildRowSkeleton(
+        {
+          messages: rebuiltMessages,
+          events: [],
+          activeTurnId: null,
+          chatId: "chat-1",
+        },
+        previewText,
+        memo,
+      );
+      // Read before `mockRestore`, which clears the recorded call history
+      // along with the mocked implementation.
+      stringifyCallCount = stringifySpy.mock.calls.length;
+    } finally {
+      stringifySpy.mockRestore();
+    }
+
+    // One `fingerprintRecord` encoding per block the replaced record carries,
+    // plus one for its `imageResolutions` array - see `RecordFingerprintMemo`'s
+    // doc in `record-bytes.ts`. Nothing else in the transcript is a new object,
+    // so the memo answers every other contribution - every other message, every
+    // other block, the shared row context - from cache, without a single
+    // `JSON.stringify` call.
+    expect(stringifyCallCount).toBe(BLOCKS_PER_ASSISTANT_TURN + 1);
+
+    const targetRowIndex = second.findIndex(
+      (entry) => entry.rowId === `assistant:t-${targetTurnNumber}`,
+    );
+    expect(targetRowIndex).toBeGreaterThanOrEqual(0);
+    expect(second[targetRowIndex]?.bodyDigest).not.toBe(
+      first[targetRowIndex]?.bodyDigest,
+    );
+    // Everything else is byte-for-byte the same skeleton it was before -
+    // the memo decides what is RECOMPUTED, never what is computed.
+    second.forEach((entry, index) => {
+      if (index === targetRowIndex) return;
+      expect(entry).toEqual(first[index]);
+    });
+  });
+});
+
+/**
+ * # A shared record moves every row that folds it, not just one
+ *
+ * Rows and records are many-to-many (`row-skeleton.ts`, "No record
+ * identity"): a steer block splits one assistant turn into several rows, and
+ * every one of them shares the turn's `messageIds` - so an
+ * `image_resolution.updated` on that record has to invalidate every slice it
+ * decorates, not only the one that happens to hold the changed block. Getting
+ * this wrong the other way - keying the memo on a ROW instead of a record -
+ * is exactly what the class's own doc calls out as the failure this shape
+ * exists to catch.
+ */
+describe("a record shared by several rows moves all of them", () => {
+  function steerSplitTurn(fields: {
+    messageId: string;
+    timestamp: number;
+    turnId: string;
+    steeredMessageId: string;
+    imageResolutions: ReadonlyArray<Record<string, unknown>>;
+  }): Message {
+    return messageSchema.parse({
+      role: "assistant",
+      messageId: fields.messageId,
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "agent-1",
+        displayName: null,
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          blockId: `b-${fields.messageId}-0`,
+          status: "completed",
+          timestamp: fields.timestamp,
+          type: "text",
+          text: "before the steer",
+          providerNotice: null,
+        },
+        {
+          blockId: `b-${fields.messageId}-steer`,
+          status: "completed",
+          timestamp: fields.timestamp,
+          type: "steer",
+          queueItemId: `q-${fields.messageId}`,
+          messageId: fields.steeredMessageId,
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+        {
+          blockId: `b-${fields.messageId}-1`,
+          status: "completed",
+          timestamp: fields.timestamp,
+          type: "text",
+          text: "after the steer",
+          providerNotice: null,
+        },
+      ],
+      startedAt: fields.timestamp,
+      timestamp: fields.timestamp,
+      turnId: fields.turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: fields.imageResolutions,
+    });
+  }
+
+  it("moves BOTH slices of a steer-split turn when the shared record's imageResolutions changes", () => {
+    const steered = humanUserMessage({
+      messageId: "m-steer",
+      timestamp: 5,
+      text: "steer content",
+    });
+    const before = steerSplitTurn({
+      messageId: "m-turn",
+      timestamp: 10,
+      turnId: "t-1",
+      steeredMessageId: "m-steer",
+      imageResolutions: [],
+    });
+
+    const memo = new RecordFingerprintMemo();
+    const firstEntries = buildRowSkeleton(
+      {
+        messages: [steered, before],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+      memo,
+    );
+    const beforeSlices = firstEntries.filter((entry) =>
+      entry.rowId.startsWith("assistant:t-1:part:"),
+    );
+    // Sanity: the steer really did split the turn into two slices sharing one
+    // record, which is the shape this test needs.
+    expect(beforeSlices).toHaveLength(2);
+
+    // The SAME record - identical messageId, turnId and blocks - except its
+    // `imageResolutions` resolved. `absorbImageResolutions` reads this off
+    // `source.messageIds`, which every slice of a turn shares, so this is the
+    // one change that should reach both parts without touching either slice's
+    // own `blockIds`.
+    const after = steerSplitTurn({
+      messageId: "m-turn",
+      timestamp: 10,
+      turnId: "t-1",
+      steeredMessageId: "m-steer",
+      imageResolutions: [
+        {
+          source: "https://example.test/i.png",
+          canonicalSource: "https://example.test/i.png",
+          width: 640,
+          height: 480,
+          state: "resolved",
+          attachmentHash: "a".repeat(64),
+          mediaType: "image/png",
+        },
+      ],
+    });
+
+    const secondEntries = buildRowSkeleton(
+      {
+        messages: [steered, after],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+      memo,
+    );
+    const afterSlices = secondEntries.filter((entry) =>
+      entry.rowId.startsWith("assistant:t-1:part:"),
+    );
+    expect(afterSlices).toHaveLength(2);
+
+    expect(afterSlices[0]?.bodyDigest).not.toBe(beforeSlices[0]?.bodyDigest);
+    expect(afterSlices[1]?.bodyDigest).not.toBe(beforeSlices[1]?.bodyDigest);
+  });
+});
+
+/**
+ * # The combine is order-sensitive
+ *
+ * `rowBodyFingerprint` folds each contributing record's fingerprint through
+ * `pushContentFingerprint`, delimited by `CONTRIBUTION_SEPARATOR` - see
+ * `build-skeleton.ts`'s doc on that constant. A combine that concatenated the
+ * VARIABLE-width per-record digests without a delimiter would let two
+ * different orderings collide whenever their digests happened to concatenate
+ * to the same string; this pins that the combine actually depends on order,
+ * which is the only thing standing between a reordered turn and a stale
+ * `bodyDigest`.
+ */
+describe("the body digest is order-sensitive", () => {
+  function singleRecordTurn(fields: {
+    messageId: string;
+    turnId: string;
+    timestamp: number;
+    blocks: readonly ContentBlock[];
+  }): Message {
+    return messageSchema.parse({
+      role: "assistant",
+      messageId: fields.messageId,
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "agent-1",
+        displayName: null,
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: fields.blocks,
+      startedAt: fields.timestamp,
+      timestamp: fields.timestamp,
+      turnId: fields.turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    });
+  }
+
+  it("fingerprints the same two blocks differently depending on their order", () => {
+    const blockA: ContentBlock = {
+      blockId: "b-a",
+      status: "completed",
+      timestamp: 1,
+      type: "text",
+      text: "hello",
+      providerNotice: null,
+    };
+    const blockB: ContentBlock = {
+      blockId: "b-b",
+      status: "completed",
+      timestamp: 1,
+      type: "text",
+      text: "world",
+      providerNotice: null,
+    };
+
+    const forward = singleRecordTurn({
+      messageId: "m-1",
+      turnId: "t-1",
+      timestamp: 1,
+      blocks: [blockA, blockB],
+    });
+    const backward = singleRecordTurn({
+      messageId: "m-1",
+      turnId: "t-1",
+      timestamp: 1,
+      blocks: [blockB, blockA],
+    });
+
+    const [forwardEntry] = buildRowSkeleton(
+      { messages: [forward], events: [], activeTurnId: null, chatId: "chat-1" },
+      previewText,
+      null,
+    );
+    const [backwardEntry] = buildRowSkeleton(
+      {
+        messages: [backward],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+      null,
+    );
+
+    // Sanity: same row, same set of bytes underneath - only the order they
+    // were absorbed in differs.
+    expect(forwardEntry?.rowId).toBe(backwardEntry?.rowId);
+    expect(forwardEntry?.byteLength).toBe(backwardEntry?.byteLength);
+
+    expect(forwardEntry?.bodyDigest).not.toBe(backwardEntry?.bodyDigest);
+  });
+});
+
+/**
+ * # A memo decides what is recomputed, never what is computed
+ *
+ * `buildRowSkeleton`'s own doc states this as the property that lets the
+ * publisher pass `null`: an unmemoized build, a cold-memo build and a
+ * warm-memo build of the SAME input must be the identical skeleton. If they
+ * were not, the live host (which always holds a memo) and the publisher
+ * (which never does) would disagree about a chat's digests depending on which
+ * one wrote them.
+ */
+describe("a memo never changes what is computed, only what is recomputed", () => {
+  it("produces identical skeletons unmemoized, memo-cold, and memo-warm", () => {
+    const human = humanUserMessage({
+      messageId: "m-1",
+      timestamp: 1,
+      text: "hi",
+    });
+    const a2a = a2aUserMessage({ messageId: "m-2", timestamp: 2 });
+    const assistant = assistantMessage({
+      messageId: "m-3",
+      timestamp: 3,
+      text: "reply",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+    const forked = forkedChatEvent({ eventId: "e-1", timestamp: 4 });
+    const steeredSource = humanUserMessage({
+      messageId: "m-steer",
+      timestamp: 5,
+      text: "steer",
+    });
+    const steerTurn = steeredTurn({
+      messageId: "m-turn",
+      timestamp: 6,
+      steeredMessageId: "m-steer",
+      sender: null,
+    });
+
+    const input = {
+      messages: [human, a2a, assistant, steeredSource, steerTurn],
+      events: [forked],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+
+    const unmemoized = buildRowSkeleton(input, previewText, null);
+
+    const memo = new RecordFingerprintMemo();
+    const memoCold = buildRowSkeleton(input, previewText, memo);
+    const memoWarm = buildRowSkeleton(input, previewText, memo);
+
+    expect(memoCold).toEqual(unmemoized);
+    expect(memoWarm).toEqual(unmemoized);
   });
 });
