@@ -3,6 +3,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { createStore, useStore } from "zustand";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -29,6 +30,7 @@ import {
   type PublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
 import { ChatDeadTileBannerContainer, ChatTileSessionView } from "./chat-tile";
+import { unreachableHostBannerReason } from "./unreachable-host-banner-reason";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
@@ -226,16 +228,15 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   );
 
   // The same Clone offer the LIVE tile's dead-tile banner makes, on the copy.
-  // Gated (inside the child) on the SAME two signals the lock sentence below
-  // reads - the owner's reachability and `ownerIsThisHost` - so the banner and
-  // the sentence can never describe one host two ways.
+  // Gated (inside the child) on the SAME reachability the lock sentence below
+  // reads, so the banner and the sentence can never describe one host two ways.
   const deadTileBanner = (
     <PublishedChatDeadTileBanner
       node={node}
       epicId={props.epicId}
       tabId={props.viewTabId}
       ownerStatus={ownerReachability.status}
-      ownerIsThisHost={ownerIsThisHost}
+      ownerUnavailability={ownerReachability.unavailability}
       ownerLabel={ownerLabel}
     />
   );
@@ -590,22 +591,25 @@ function publishedCopyRefresh(
 /**
  * The clone banner an unreachable owner earns on the copy, or nothing.
  *
- * Reachable owner: the row offers the live tab, no clone needed. Owner IS the
- * serving host: that is the canvas substitution arm, whose banner
- * `tab-group-view` already mounts above this tile - a second one here would
- * double it. The ref carries the owner (`ownerUserId`), so it is threaded
- * through rather than re-resolved from the cloud list, which a post-restart
- * host with swept registry facts cannot answer.
+ * Reachable owner: the row offers the live tab, no clone needed. This tile
+ * OWNS the unreachable-owner banner wherever it is mounted - opened directly
+ * from a sidebar row, or substituted by the canvas for a live tab whose bound
+ * host went away. The canvas (`tab-group-view`) mounts a banner above this
+ * tile only for the reasons it alone can know, a REACHABLE host answering
+ * that it has no such chat, so the two never both draw one. The ref carries
+ * the owner (`ownerUserId`), so it is threaded through rather than
+ * re-resolved from the cloud list, which a post-restart host with swept
+ * registry facts cannot answer.
  */
 function PublishedChatDeadTileBanner(props: {
   readonly node: PublishedChatTileRef;
   readonly epicId: string;
   readonly tabId: string;
   readonly ownerStatus: HostReachabilityStatus;
-  readonly ownerIsThisHost: boolean;
+  readonly ownerUnavailability: HostUnavailability | null;
   readonly ownerLabel: string;
 }): ReactNode {
-  if (props.ownerStatus !== "unreachable" || props.ownerIsThisHost) {
+  if (props.ownerStatus !== "unreachable") {
     return null;
   }
   return (
@@ -615,7 +619,7 @@ function PublishedChatDeadTileBanner(props: {
       chatId={props.node.chatId}
       sourceHostId={props.node.ownerHostId}
       hostLabel={props.ownerLabel}
-      reason="host-offline"
+      reason={unreachableHostBannerReason(props.ownerUnavailability)}
       showsPublishedCopy
       testId={`published-chat-dead-tile-${props.node.chatId}`}
       sourceOwnerUserId={props.node.ownerUserId}
