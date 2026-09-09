@@ -10,6 +10,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   AgentActivityByEpic,
   AgentActivityCloudSyncStatus,
+  AgentActivityPlaneSelector,
   AgentActivityServedBy,
 } from "@traycer/protocol/host/agent/activity";
 import {
@@ -231,6 +232,17 @@ export function openAgentActivityStream(
   reconnectEngine: HostReconnectEngine,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
+  /**
+   * The plane this session may ask for. `"local-only"` is for a session with
+   * no cloud verdict; `null` leaves the choice to the host, which is what the
+   * verified cohort does.
+   *
+   * Captured once and reused by every REOPEN below - a reconnect must not
+   * quietly widen a local-only subscription back to the host's own choice.
+   * The caller closes and reopens the stream on a verdict change, so a cohort
+   * move is a new stream rather than a mutation of this one.
+   */
+  plane: AgentActivityPlaneSelector | null,
 ): () => void {
   // A new stream epoch makes NO health claim until its own session speaks.
   //
@@ -263,6 +275,7 @@ export function openAgentActivityStream(
     let client: AgentActivityStreamClient | null = null;
     client = new AgentActivityStreamClient({
       wsStreamClient,
+      plane,
       callbacks: {
         onState: (servedBy, byEpic, cloudSyncStatus) => {
           if (currentClient !== client) return;

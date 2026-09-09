@@ -199,7 +199,14 @@ export const usageCostCoverageSchema = z.object({
   unpricedTokenCount: nonNegativeIntSchema,
 });
 
-export const hostUsageSummaryRequestSchemaV10 = z
+/**
+ * The `host.usage.summary` request FIELDS, before either line's `.strict()`.
+ *
+ * Factored out so `@1.1` can grow the request without restating `@1.0`'s
+ * shape - and so the two lines cannot drift, which on a `.strict()` schema
+ * is not a cosmetic risk: an unknown key here is REJECTED, not stripped.
+ */
+const hostUsageSummaryRequestFields = z
   .object({
     timezone: z.string().min(1).max(100),
     windowDays: z.number().int().positive(),
@@ -230,10 +237,45 @@ export const hostUsageSummaryRequestSchemaV10 = z
      * than that host's own simply matches zero facts.
      */
     hostId: z.string().min(1).max(36).nullable().optional(),
-  })
-  .strict();
+  });
+
+// `host.usage.summary@1.0` request - FROZEN.
+export const hostUsageSummaryRequestSchemaV10 =
+  hostUsageSummaryRequestFields.strict();
 export type HostUsageSummaryRequestV10 = z.infer<
   typeof hostUsageSummaryRequestSchemaV10
+>;
+
+/**
+ * `@1.1`: ask for the LOCAL reader explicitly.
+ *
+ * `servedBy` on the response says which reader answered, and the host has
+ * always chosen - from the account's cloud-sync entitlement, which it learns
+ * by making the cloud call. That is the problem for a session holding no
+ * cloud verdict: the only way to reach the local reader on `@1.0` is to make
+ * a cloud request first and be refused in the one specific way
+ * (`FREE_TIER_NO_CLOUD_SYNC`) that licenses the fallback. Every other refusal
+ * - including the expired bearer an unverified session has - is a retriable
+ * 503, so that cohort gets no usage panel at all while sitting on facts its
+ * own host recorded locally.
+ *
+ * `local-only` says "do not make the cloud call"; the local reader answers and
+ * the response is stamped `servedBy: "local"`, a value the released line
+ * already carries. Narrowing only: it can reach nothing the released request
+ * could not.
+ *
+ * THIS LINE'S COMPAT IS NOT THE USUAL STRIP. Every other selector in this
+ * program rides a plain `z.object`, so an older peer drops the key and runs
+ * its released behaviour. This request is `.strict()`, so a `@1.0` peer
+ * REJECTS the whole request with a 400 instead. The client's negotiated-minor
+ * gate is therefore load-bearing rather than belt-and-braces: send this to an
+ * old host and the usage panel breaks outright rather than degrading.
+ */
+export const hostUsageSummaryRequestSchema = hostUsageSummaryRequestFields
+  .extend({ plane: z.literal("local-only").optional() })
+  .strict();
+export type HostUsageSummaryRequest = z.infer<
+  typeof hostUsageSummaryRequestSchema
 >;
 
 /**

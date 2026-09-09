@@ -79,6 +79,21 @@ export interface UsageSummaryPanelProps {
    * resolved host yet.
    */
   readonly currentHostId: string | null;
+  /**
+   * Which reader this panel is allowed to ask for, applied to EVERY read it
+   * makes (the window query, the activity year, and the activity fallback).
+   *
+   * `null` = the host picks, the released behavior. `"local-only"` = the
+   * caller admitted a session with no cloud verdict, so the panel must not
+   * make a cloud call on any of its three reads - one unselected read would
+   * 503 on that cohort's expired bearer and surface as a broken section next
+   * to two that worked.
+   *
+   * The caller sets it, not this panel: admission is a `@2.0` negotiation
+   * question about the ACTIVE host plus the auth verdict, and both live above
+   * this placement-agnostic surface.
+   */
+  readonly plane: "local-only" | null;
 }
 
 type UsageSummaryQueryResult = UseQueryResult<
@@ -108,9 +123,10 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   // switching hosts is a normal query-key change, not a remount.
   const [hostId, setHostId] = useState<string | null>(null);
 
+  const plane = props.plane;
   const request = useMemo(
-    () => buildUsageSummaryRequest({ windowDays, epicId: null, hostId }),
-    [windowDays, hostId],
+    () => buildUsageSummaryRequest({ windowDays, epicId: null, hostId, plane }),
+    [windowDays, hostId, plane],
   );
   // The activity heatmap's own fixed-year read (ticket 15) - independent of
   // the 7/30/90 picker (an activity calendar over one month is all padding)
@@ -122,16 +138,20 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         windowDays: USAGE_ACTIVITY_WINDOW_DAYS,
         epicId: null,
         hostId,
+        plane,
       }),
-    [hostId],
+    [hostId, plane],
   );
   // Enabled unconditionally: this panel only mounts once its caller has
-  // already confirmed `host.usage.summary` is supported AND the session
-  // holds a cloud verdict (see `UsageSettingsPanelBody`'s early returns - the
-  // host picks the reader, so without a verdict the whole panel is withheld
-  // rather than this one fetch). No polling here - unlike the
-  // ambient epic cost badge, this is an actively-viewed screen with its own
-  // refetch triggers (window/metric change, manual Retry).
+  // already confirmed `host.usage.summary` is supported AND settled the
+  // reader question - either the session holds a cloud verdict, or the host
+  // negotiated `@2.0` and `props.plane` is `"local-only"` (see
+  // `UsageSettingsPanelBody`'s early returns). Until `@2.0` the host alone
+  // picked the reader and there was no third answer, so a verdict-less
+  // session had the whole panel withheld rather than this one fetch. No
+  // polling here - unlike the ambient epic cost badge, this is an
+  // actively-viewed screen with its own refetch triggers (window/metric
+  // change, manual Retry).
   const query = useUsageSummaryForClient(props.client, request, true, false);
   const activityQuery = useUsageSummaryForClient(
     props.client,
@@ -150,8 +170,9 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         windowDays: USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS,
         epicId: null,
         hostId,
+        plane,
       }),
-    [hostId],
+    [hostId, plane],
   );
   const activityFallbackQuery = useUsageSummaryForClient(
     props.client,

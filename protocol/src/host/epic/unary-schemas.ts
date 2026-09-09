@@ -328,6 +328,27 @@ export type DeleteEpicRequest = z.infer<typeof deleteEpicRequestSchema>;
 export const deleteEpicResponseSchema = z.object({ success: z.boolean() });
 export type DeleteEpicResponse = z.infer<typeof deleteEpicResponseSchema>;
 
+/**
+ * Durable home for an epic as known by the host local-room registry.
+ * Optional wherever it appears, so released clients and older hosts ignore
+ * absence - and absence is always "this host cannot say", never a default.
+ *
+ * - `local`: unpromoted / mid-promotion; synthesized from the home registry
+ * - `cloud`: the epic's durable copy is the account's
+ *
+ * Support-facing fact: unpromoted (`home: "local"`) epics exist only on this
+ * device's host. Cloud tooling (platform UI, support reports, server
+ * listTasks) cannot see them until promotion flips home to cloud.
+ *
+ * Declared HERE, well above its first use, because three surfaces now carry
+ * it and the earliest (`epic.batchDelete@1.1`'s row) is declared above where
+ * this used to sit - a const referenced before its initializer is a
+ * module-load throw, not a type error. One vocabulary for one fact: do not
+ * spell a second `z.enum(["local","cloud"])` anywhere in this file.
+ */
+export const epicListHomeSchema = z.enum(["local", "cloud"]);
+export type EpicListHome = z.infer<typeof epicListHomeSchema>;
+
 // ─── Batch delete (epic.batchDelete@1.0 wire shape) ──────────────────────────
 // Defined here so hostRpcRegistry["epic.batchDelete"] and
 // cloudDataClient.batchDelete resolve to the same zod instances.
@@ -337,12 +358,49 @@ export const batchDeleteRequestSchema = z.object({
 });
 export type BatchDeleteRequest = z.infer<typeof batchDeleteRequestSchema>;
 
-export const batchDeleteItemResultSchema = z.object({
+// `epic.batchDelete@1.0` row - FROZEN. Its own literal object; the live row
+// below extends it.
+export const batchDeleteItemResultSchemaPre11 = z.object({
   taskId: z.string(),
   success: z.boolean(),
   errorMessage: z.string().optional(),
 });
+export type BatchDeleteItemResultPre11 = z.infer<
+  typeof batchDeleteItemResultSchemaPre11
+>;
+
+/**
+ * Latest row: `@1.1` states the durability `home` each deletion landed in.
+ *
+ * A delete's TOMBSTONE has to be scoped to whatever the deletion was scoped
+ * to, and only the host knows which that was. A cloud-homed epic is deleted
+ * from the account, so every host scope must stop showing it; a local-homed
+ * one exists on one machine, and tombstoning it account-wide would hide a row
+ * that is still there for a sibling host to serve. A `@1.0` response says only
+ * `success`, so the client had no choice but to tombstone in the scope that
+ * ISSUED the delete - correct for local, too narrow for cloud, and the
+ * cloud-homed epic reappears on every other host until its own cache turns
+ * over.
+ *
+ * Optional, per row rather than per response: a batch can mix homes, and the
+ * whole point is to tell them apart. Absence keeps the released reading -
+ * "this host cannot say" - and must not be read as `"cloud"`, because the
+ * account-wide tombstone is the DESTRUCTIVE direction and an old host is
+ * exactly the peer with no evidence to license it.
+ */
+export const batchDeleteItemResultSchema =
+  batchDeleteItemResultSchemaPre11.extend({
+    home: epicListHomeSchema.optional(),
+  });
 export type BatchDeleteItemResult = z.infer<typeof batchDeleteItemResultSchema>;
+
+// `epic.batchDelete@1.0` response - FROZEN over the frozen row above.
+export const batchDeleteResponseSchemaPre11 = z.object({
+  results: z.array(batchDeleteItemResultSchemaPre11),
+});
+export type BatchDeleteResponsePre11 = z.infer<
+  typeof batchDeleteResponseSchemaPre11
+>;
 
 export const batchDeleteResponseSchema = z.object({
   results: z.array(batchDeleteItemResultSchema),
@@ -546,20 +604,6 @@ export const listTaskLightSchemaPre14 = listTaskLightSchemaPre13.extend({
 });
 export type ListTaskLightPre14 = z.infer<typeof listTaskLightSchemaPre14>;
 
-/**
- * Durable home for an epic as known by the host local-room registry.
- * Present only on host-merged `epic.listTasks` rows (never on pure cloud
- * payloads). Optional so released clients and older hosts ignore absence.
- *
- * - `local`: unpromoted / mid-promotion; synthesized from the home registry
- * - `cloud`: reserved for future host-side tagging of cloud-homed rows
- *
- * Support-facing fact: unpromoted (`home: "local"`) epics exist only on this
- * device's host. Cloud tooling (platform UI, support reports, server
- * listTasks) cannot see them until promotion flips home to cloud.
- */
-export const epicListHomeSchema = z.enum(["local", "cloud"]);
-export type EpicListHome = z.infer<typeof epicListHomeSchema>;
 
 // `epic.listTasks@1.4` list row: @1.3's chat-host dimension plus the optional
 // durability home.

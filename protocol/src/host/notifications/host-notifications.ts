@@ -694,6 +694,30 @@ export type HostNotificationsClearAllRequest = z.infer<
   typeof hostNotificationsClearAllRequestSchema
 >;
 
+/**
+ * `@1.1`: restrict the destructive bulk CLEAR to the local durable-home
+ * partition - the same selector, spelled the same way, as
+ * `markAllRead@1.1` directly above.
+ *
+ * The two shipped apart, and that gap is the defect: a mixed-plane renderer
+ * already sends `home: "local"` on `list@2.2`, `markAllRead@1.1` and
+ * `indicatorState@1.1`, so the feed it is LOOKING AT is the local partition -
+ * while `clearAll` could only say `beforeUpdatedAt` and cleared the whole
+ * origin. Clear is the least recoverable of the four, and it was the only one
+ * that could not name what it meant.
+ *
+ * `z.literal("local")` rather than a two-value enum, matching `markAllRead`:
+ * absence already means "the whole origin", which is the released behaviour
+ * and the only other thing a caller can want.
+ */
+export const hostNotificationsClearAllRequestSchemaV11 =
+  hostNotificationsClearAllRequestSchema.extend({
+    home: z.literal("local").optional(),
+  });
+export type HostNotificationsClearAllRequestV11 = z.infer<
+  typeof hostNotificationsClearAllRequestSchemaV11
+>;
+
 export const hostNotificationsClearAllResponseSchema = z.object({});
 export type HostNotificationsClearAllResponse = z.infer<
   typeof hostNotificationsClearAllResponseSchema
@@ -1412,6 +1436,28 @@ export const hostNotificationsClearAll = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsClearAllRequestSchema,
   responseSchema: hostNotificationsClearAllResponseSchema,
+});
+
+export const hostNotificationsClearAllV11 = defineRpcContract({
+  method: "host.notifications.clearAll",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostNotificationsClearAllRequestSchemaV11,
+  responseSchema: hostNotificationsClearAllResponseSchema,
+});
+
+export const hostNotificationsClearAllUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostNotificationsClearAll,
+  typeof hostNotificationsClearAllV11
+>({
+  from: hostNotificationsClearAll.schemaVersion,
+  to: hostNotificationsClearAllV11.schemaVersion,
+  // An upgraded `@1.0` request carries no `home`, and must not acquire one.
+  // Absence is the released meaning - "the whole origin" - and synthesizing
+  // `"local"` here would silently NARROW a clear the caller asked to be
+  // total, which is the one direction of this mistake that loses nothing
+  // visibly and is therefore the one that would survive review.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const hostNotificationsSubscribeV10 = defineStreamRpcContract({

@@ -2,7 +2,9 @@ import {
   agentActivitySubscribeServerFrameSchema,
   type AgentActivityByEpic,
   type AgentActivityCloudSyncStatus,
+  type AgentActivityPlaneSelector,
   type AgentActivityServedBy,
+  type AgentActivitySubscribeOpenRequest,
 } from "@traycer/protocol/host/agent/activity";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -37,6 +39,17 @@ export interface AgentActivityStreamClientOptions {
   // on the concrete type because that branch had no remote transport yet.
   readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly callbacks: AgentActivityStreamCallbacks;
+  /**
+   * `"local-only"` asks a `@1.2` host to serve this subscription from its own
+   * tracker and acquire no cloud room; `null` leaves the plane to the host,
+   * which is what every caller did before the selector existed.
+   *
+   * Required rather than optional so a new call site has to state which cohort
+   * it is opening for. The decision belongs to whoever knows the session's
+   * cloud verdict, and a defaulted `null` would let that caller forget to make
+   * it - silently restoring the behaviour this option exists to change.
+   */
+  readonly plane: AgentActivityPlaneSelector | null;
 }
 
 /** Typed client for the host-selected local/cloud activity stream. */
@@ -45,9 +58,14 @@ export class AgentActivityStreamClient {
   private closed = false;
 
   constructor(private readonly options: AgentActivityStreamClientOptions) {
+    // `{}` rather than `{ plane: null }`: `plane` is an OPTIONAL enum on the
+    // wire, so a literal `null` fails the host's parse rather than reading as
+    // "no preference".
+    const openRequest: AgentActivitySubscribeOpenRequest =
+      options.plane === null ? {} : { plane: options.plane };
     this.session = options.wsStreamClient.subscribe(
       "agent.activity.subscribe",
-      {},
+      openRequest,
     );
     this.session.onServerFrame((envelope) => {
       this.handleServerFrame(envelope);
