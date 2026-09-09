@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  epicStatusSubscribeServerFrameSchemaV10,
+  epicStatusSubscribeServerFrameSchemaV11,
   type EpicStatusDurabilityLegs,
 } from "@traycer/protocol/host/epic/status-subscribe";
 import type {
@@ -67,7 +67,7 @@ interface SnapshotOverrides {
 }
 
 function snapshotFrame(overrides: SnapshotOverrides): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     authorityEpoch: overrides.authorityEpoch ?? "epoch-1",
     securityEpoch: overrides.securityEpoch ?? 0,
@@ -97,7 +97,7 @@ function permissionChangedFrame(
   securityEpoch: number,
   permissionRole: "owner" | "editor" | "viewer" | null,
 ): EpicStatusTransitionFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "permissionChanged",
     authorityEpoch,
     securityEpoch,
@@ -112,7 +112,7 @@ function dirtyChangedFrame(
   authorityEpoch: string,
   dirty: boolean,
 ): EpicStatusTransitionFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "dirtyChanged",
     authorityEpoch,
     dirty,
@@ -123,7 +123,7 @@ function dirtyChangedFrame(
 }
 
 function epicDeletedFrame(authorityEpoch: string): EpicStatusTransitionFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "epicDeleted",
     authorityEpoch,
     attribution: { deletedByDisplayName: "Ada", deletedByTraycerUserId: "u-1" },
@@ -136,7 +136,7 @@ function epicDeletedFrame(authorityEpoch: string): EpicStatusTransitionFrame {
 function migrationStartedFrame(
   authorityEpoch: string,
 ): EpicStatusTransitionFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "migrationStarted",
     authorityEpoch,
     hasBinaryPayload: false,
@@ -148,7 +148,7 @@ function migrationStartedFrame(
 function migrationProgressFrame(
   authorityEpoch: string,
 ): EpicStatusTransitionFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "migrationProgress",
     authorityEpoch,
     phase: "upload",
@@ -163,7 +163,7 @@ function migrationProgressFrame(
 function migrationFailedFrame(
   authorityEpoch: string,
 ): EpicStatusTransitionFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "migrationFailed",
     authorityEpoch,
     reason: "disk full",
@@ -176,7 +176,7 @@ function migrationFailedFrame(
 function migrationNotAllowedFrame(
   authorityEpoch: string,
 ): EpicStatusTransitionFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "migrationNotAllowed",
     authorityEpoch,
     hasBinaryPayload: false,
@@ -189,7 +189,7 @@ function cloudSyncStatusFrame(
   authorityEpoch: string,
   status: "connected" | "reconnecting" | "disconnected",
 ): EpicStatusTransitionFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "cloudSyncStatus",
     authorityEpoch,
     status,
@@ -339,7 +339,7 @@ describe("createEpicStatusLaneAdapter - the false-clean dirty guard", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ dirty: null }));
+    latest().callbacks.onSnapshot(snapshotFrame({ dirty: null }), true);
 
     const dirtyEvents = emittedEvents(log).filter(
       (event) => event.kind === "aggregate-dirty",
@@ -355,8 +355,8 @@ describe("createEpicStatusLaneAdapter - the false-clean dirty guard", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ dirty: null }));
-    latest().callbacks.onTransition(dirtyChangedFrame("epoch-1", true));
+    latest().callbacks.onSnapshot(snapshotFrame({ dirty: null }), true);
+    latest().callbacks.onTransition(dirtyChangedFrame("epoch-1", true), true);
 
     const dirtyEvents = emittedEvents(log).filter(
       (event) => event.kind === "aggregate-dirty",
@@ -372,7 +372,7 @@ describe("createEpicStatusLaneAdapter - the false-clean dirty guard", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ dirty: false }));
+    latest().callbacks.onSnapshot(snapshotFrame({ dirty: false }), true);
 
     const dirtyEvents = emittedEvents(log).filter(
       (event) => event.kind === "aggregate-dirty",
@@ -406,6 +406,7 @@ describe("createEpicStatusLaneAdapter - snapshot emission order", () => {
           },
         },
       }),
+      true,
     );
 
     expect(emittedEvents(log).map((event) => event.kind)).toEqual([
@@ -443,9 +444,11 @@ describe("createEpicStatusLaneAdapter - deletion projection", () => {
 
     latest().callbacks.onSnapshot(
       snapshotFrame({ deletion: { state: "unknown" } }),
+      true,
     );
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-2", deletion: { state: "none" } }),
+      true,
     );
 
     expect(
@@ -471,6 +474,7 @@ describe("createEpicStatusLaneAdapter - deletion projection", () => {
           },
         },
       }),
+      true,
     );
 
     const deletedEvents = emittedEvents(log).filter(
@@ -493,8 +497,8 @@ describe("createEpicStatusLaneAdapter - deletion projection", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({}));
-    latest().callbacks.onTransition(epicDeletedFrame("epoch-1"));
+    latest().callbacks.onSnapshot(snapshotFrame({}), true);
+    latest().callbacks.onTransition(epicDeletedFrame("epoch-1"), true);
 
     const deletedEvents = emittedEvents(log).filter(
       (event) => event.kind === "epic-deleted",
@@ -525,7 +529,10 @@ describe("createEpicStatusLaneAdapter - canWrite", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ permissionRole: role }));
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ permissionRole: role }),
+      true,
+    );
 
     const permissionEvent = emittedEvents(log).find(
       (event) => event.kind === "permission-changed",
@@ -555,7 +562,10 @@ describe("createEpicStatusLaneAdapter - observedAuthorityEpoch", () => {
     adapter.attach(host);
     expect(adapter.observedAuthorityEpoch()).toBeNull();
 
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-9" }));
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-9" }),
+      true,
+    );
     expect(adapter.observedAuthorityEpoch()).toBe("epoch-9");
 
     adapter.detach("disposed");
@@ -574,7 +584,10 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-1" }));
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1" }),
+      true,
+    );
 
     expect(replacementReasons(log)).toEqual([]);
   });
@@ -592,8 +605,12 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
         authorityEpoch: "epoch-1",
         migration: { state: "running", progress: null },
       }),
+      true,
     );
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-2" }));
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-2" }),
+      true,
+    );
 
     expect(replacementReasons(log)).toEqual(["migration-completed"]);
   });
@@ -606,8 +623,14 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-1" }));
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-2" }));
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1" }),
+      true,
+    );
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-2" }),
+      true,
+    );
 
     expect(replacementReasons(log)).toEqual(["authority-epoch-changed"]);
   });
@@ -620,10 +643,16 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-1" }));
-    latest().callbacks.onTransition(migrationStartedFrame("epoch-1"));
-    latest().callbacks.onTransition(migrationProgressFrame("epoch-1"));
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-2" }));
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1" }),
+      true,
+    );
+    latest().callbacks.onTransition(migrationStartedFrame("epoch-1"), true);
+    latest().callbacks.onTransition(migrationProgressFrame("epoch-1"), true);
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-2" }),
+      true,
+    );
 
     expect(replacementReasons(log)).toEqual(["migration-completed"]);
   });
@@ -636,10 +665,16 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-1" }));
-    latest().callbacks.onTransition(migrationStartedFrame("epoch-1"));
-    latest().callbacks.onTransition(migrationFailedFrame("epoch-1"));
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-2" }));
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1" }),
+      true,
+    );
+    latest().callbacks.onTransition(migrationStartedFrame("epoch-1"), true);
+    latest().callbacks.onTransition(migrationFailedFrame("epoch-1"), true);
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-2" }),
+      true,
+    );
 
     expect(replacementReasons(log)).toEqual(["authority-epoch-changed"]);
   });
@@ -652,10 +687,16 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-1" }));
-    latest().callbacks.onTransition(migrationStartedFrame("epoch-1"));
-    latest().callbacks.onTransition(migrationNotAllowedFrame("epoch-1"));
-    latest().callbacks.onSnapshot(snapshotFrame({ authorityEpoch: "epoch-2" }));
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1" }),
+      true,
+    );
+    latest().callbacks.onTransition(migrationStartedFrame("epoch-1"), true);
+    latest().callbacks.onTransition(migrationNotAllowedFrame("epoch-1"), true);
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-2" }),
+      true,
+    );
 
     expect(replacementReasons(log)).toEqual(["authority-epoch-changed"]);
   });
@@ -672,7 +713,7 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    latest().callbacks.onSnapshot(snapshotFrame({ securityEpoch: 3 }));
+    latest().callbacks.onSnapshot(snapshotFrame({ securityEpoch: 3 }), true);
 
     expect(replacementReasons(log)).toEqual([]);
   });
@@ -687,9 +728,11 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
 
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 3 }),
+      true,
     );
     latest().callbacks.onTransition(
       permissionChangedFrame("epoch-1", 4, "viewer"),
+      true,
     );
 
     expect(replacementReasons(log)).toEqual(["security-epoch-changed"]);
@@ -705,12 +748,15 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
 
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 3 }),
+      true,
     );
     latest().callbacks.onTransition(
       permissionChangedFrame("epoch-1", 3, "viewer"),
+      true,
     );
     latest().callbacks.onTransition(
       permissionChangedFrame("epoch-1", 2, "viewer"),
+      true,
     );
 
     expect(replacementReasons(log)).toEqual([]);
@@ -726,9 +772,11 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
 
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 10 }),
+      true,
     );
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-2", securityEpoch: 999 }),
+      true,
     );
 
     // Only the authority-epoch-changed replacement fires; the huge
@@ -752,12 +800,14 @@ describe("createEpicStatusLaneAdapter - security-epoch replacement lands before 
     // First observation of both epochs: establishes them, requests nothing.
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 1 }),
+      true,
     );
 
     // Same authority epoch, a strictly higher securityEpoch - the ONLY thing
     // that changed is what `foldSecurityEpoch` folds.
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 2 }),
+      true,
     );
 
     expect(timeline(log)).toEqual([
@@ -793,6 +843,7 @@ describe("createEpicStatusLaneAdapter - security-epoch replacement lands before 
     // client learning where it stands, not authorization moving underneath it.
     latest().callbacks.onSnapshot(
       snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 1 }),
+      true,
     );
 
     // The transition an upgrade produces: same authority epoch, a strictly
@@ -802,6 +853,7 @@ describe("createEpicStatusLaneAdapter - security-epoch replacement lands before 
     // stays open owing nothing further, so nothing ever re-emits it.
     latest().callbacks.onTransition(
       permissionChangedFrame("epoch-1", 2, "editor"),
+      true,
     );
 
     expect(timeline(log)).toEqual([
@@ -832,6 +884,7 @@ describe("createEpicStatusLaneAdapter - migration mapping", () => {
 
     latest().callbacks.onSnapshot(
       snapshotFrame({ migration: { state: "running", progress: null } }),
+      true,
     );
 
     const migrationEvent = emittedEvents(log).find(
@@ -858,6 +911,7 @@ describe("createEpicStatusLaneAdapter - migration mapping", () => {
           progress: { phase: "upload", chunksDone: 2, chunksTotal: 5 },
         },
       }),
+      true,
     );
 
     const migrationEvent = emittedEvents(log).find(
@@ -884,6 +938,7 @@ describe("createEpicStatusLaneAdapter - migration mapping", () => {
 
     latest().callbacks.onSnapshot(
       snapshotFrame({ migration: { state: "failed", reason: "disk full" } }),
+      true,
     );
 
     const migrationEvent = emittedEvents(log).find(
@@ -905,6 +960,7 @@ describe("createEpicStatusLaneAdapter - migration mapping", () => {
 
     latest().callbacks.onSnapshot(
       snapshotFrame({ migration: { state: "notAllowed" } }),
+      true,
     );
 
     const migrationEvent = emittedEvents(log).find(
@@ -931,7 +987,7 @@ describe("createEpicStatusLaneAdapter - resumeOffer", () => {
     expect(adapter.resumeOffer()).toBeNull();
     adapter.attach(host);
     expect(adapter.resumeOffer()).toBeNull();
-    latest().callbacks.onSnapshot(snapshotFrame({}));
+    latest().callbacks.onSnapshot(snapshotFrame({}), true);
     expect(adapter.resumeOffer()).toBeNull();
   });
 });
@@ -950,8 +1006,8 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
     const stale = latest().callbacks;
     adapter.detach("disposed");
 
-    stale.onSnapshot(snapshotFrame({}));
-    stale.onTransition(cloudSyncStatusFrame("epoch-1", "connected"));
+    stale.onSnapshot(snapshotFrame({}), true);
+    stale.onTransition(cloudSyncStatusFrame("epoch-1", "connected"), true);
     stale.onConnectionStatus("closed", { kind: "caller" });
 
     expect(log).toEqual([]);
@@ -967,12 +1023,12 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
 
     const stale = latest().callbacks;
     adapter.closeTransport();
-    stale.onSnapshot(snapshotFrame({}));
+    stale.onSnapshot(snapshotFrame({}), true);
     expect(log).toEqual([]);
 
     adapter.openTransport();
     expect(handles()).toHaveLength(2);
-    latest().callbacks.onSnapshot(snapshotFrame({}));
+    latest().callbacks.onSnapshot(snapshotFrame({}), true);
     expect(emittedEvents(log).length).toBeGreaterThan(0);
   });
 
@@ -986,7 +1042,7 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
     adapter.attach(host);
 
     disposed = true;
-    latest().callbacks.onSnapshot(snapshotFrame({}));
+    latest().callbacks.onSnapshot(snapshotFrame({}), true);
 
     expect(log).toEqual([]);
   });
@@ -1001,6 +1057,7 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
 
     latest().callbacks.onTransition(
       cloudSyncStatusFrame("epoch-1", "reconnecting"),
+      true,
     );
 
     expect(emittedEvents(log)).toEqual([
@@ -1030,7 +1087,7 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    const transition = epicStatusSubscribeServerFrameSchemaV10.parse({
+    const transition = epicStatusSubscribeServerFrameSchemaV11.parse({
       kind: "cloudSyncStatus",
       authorityEpoch: "epoch-1",
       status: "disconnected",
@@ -1039,7 +1096,7 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
       hasBinaryPayload: false,
     });
     if (transition.kind !== "cloudSyncStatus") throw new Error("fixture drift");
-    latest().callbacks.onTransition(transition);
+    latest().callbacks.onTransition(transition, true);
     latest().callbacks.onSnapshot(
       snapshotFrame({
         cloudSyncStatus: "connected",
@@ -1051,6 +1108,7 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
           state: "current",
         },
       }),
+      true,
     );
 
     const cloudSync = emittedEvents(log).filter(
@@ -1088,5 +1146,80 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
         },
       },
     ]);
+  });
+
+  /**
+   * The `@1.0` arm, which has no other coverage: cli-v1.3.0 shipped this lane
+   * without the legs, so a new client on such a host negotiates `@1.0` and
+   * every leg is absent - not because the host has nothing to say, but because
+   * it was never asked. `peerSpeaksDurabilityLegs` is the only thing that can
+   * carry that distinction, since the absence itself looks identical to an
+   * `@1.1` host answering UNKNOWN.
+   */
+  it("reports a pre-legs peer as such rather than as a peer answering unknown", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ cloudSyncStatus: "connected" }),
+      false,
+    );
+    latest().callbacks.onTransition(
+      cloudSyncStatusFrame("epoch-1", "reconnecting"),
+      false,
+    );
+
+    const cloudSync = emittedEvents(log).filter(
+      (event) => event.kind === "cloud-sync-status",
+    );
+    expect(cloudSync.map((event) => event.durability)).toEqual([
+      {
+        durability: undefined,
+        pauseReason: undefined,
+        promotionState: undefined,
+        localProtection: undefined,
+        freshness: undefined,
+        peerSpeaksDurabilityLegs: false,
+      },
+      {
+        durability: undefined,
+        pauseReason: undefined,
+        promotionState: undefined,
+        localProtection: undefined,
+        freshness: undefined,
+        peerSpeaksDurabilityLegs: false,
+      },
+    ]);
+  });
+
+  /**
+   * The non-vacuity control for the case above: the SAME adapter, the same
+   * absent legs, differing only in the negotiated flag, must reach the
+   * opposite verdict. Without this, a `peerSpeaksDurabilityLegs` wired to a
+   * constant `false` would pass the test above.
+   */
+  it("reads the same absent legs as UNKNOWN once the peer serves them", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ cloudSyncStatus: "connected" }),
+      true,
+    );
+
+    const cloudSync = emittedEvents(log).filter(
+      (event) => event.kind === "cloud-sync-status",
+    );
+    expect(
+      cloudSync.map((event) => event.durability.peerSpeaksDurabilityLegs),
+    ).toEqual([true]);
   });
 });

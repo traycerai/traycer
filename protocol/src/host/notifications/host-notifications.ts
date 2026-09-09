@@ -924,20 +924,19 @@ export type HostNotificationsSubscribeServerFrameV11 = z.infer<
 >;
 
 /**
- * Feed `@1.2` server frames. Like `list@2.2` this minor carries BOTH of the
- * bumps that landed on it independently: every entry-carrying slot widens to
- * `hostNotificationEntrySchemaV22`, and the `partitionSnapshot` frame joins
- * the union (legal only because `@1.2` is itself the unreleased new minor -
- * see the `@2.2` entry-union note).
+ * Feed `@1.2` server frames: every entry-carrying slot widens to
+ * `hostNotificationEntrySchemaV22`.
  *
- * `partitionSnapshot` selects the local durable-home partition. Its inherited
- * attention/recent pages, summaries and cursors are all exact for that lane;
- * `partition` is a selected snapshot variant that supplies the
- * protocol-defined order while retaining every other frame verbatim.
+ * `partitionSnapshot` USED to join this union, on the reasoning that `@1.2`
+ * was itself the unreleased new minor and could still grow. cli-v1.3.0 shipped
+ * `@1.2`, which retired that premise: a released client strict-decodes this
+ * union and rejects a frame kind it has never heard of. The variant therefore
+ * lives at `@1.3` now (below), and this union is frozen at the shape 1.3.0
+ * published.
  *
- * Written out in full for the same reason `@1.1` is: `@1.1` has now shipped and
- * must stay byte-identical forever, so it cannot be a base a later edit
- * silently rewrites.
+ * Written out in full for the same reason `@1.1` is: a shipped minor must stay
+ * byte-identical forever, so it cannot be a base a later edit silently
+ * rewrites.
  */
 const hostNotificationsSnapshotSchemaV12 = z.object({
   kind: z.literal("snapshot"),
@@ -952,14 +951,8 @@ const hostNotificationsSnapshotSchemaV12 = z.object({
   }),
   summary: hostNotificationsSummarySchema,
 });
-const hostNotificationsLocalPartitionSnapshotSchemaV12 =
-  hostNotificationsSnapshotSchemaV12.extend({
-    kind: z.literal("partitionSnapshot"),
-    partition: hostNotificationsLocalPartitionSchema,
-  });
 export const hostNotificationsSubscribeServerFrameSchemaV12 =
   z.discriminatedUnion("kind", [
-    hostNotificationsLocalPartitionSnapshotSchemaV12,
     hostNotificationsSnapshotSchemaV12,
     z.object({
       kind: z.literal("upserted"),
@@ -1007,6 +1000,55 @@ export const hostNotificationsSubscribeServerFrameSchemaV12 =
   ]);
 export type HostNotificationsSubscribeServerFrameV12 = z.infer<
   typeof hostNotificationsSubscribeServerFrameSchemaV12
+>;
+
+/**
+ * Feed `@1.3` server frames: `@1.2` plus the `partitionSnapshot` frame.
+ *
+ * `partitionSnapshot` selects the local durable-home partition. Its inherited
+ * attention/recent pages, summaries and cursors are all exact for that lane;
+ * `partition` is a selected snapshot variant that supplies the
+ * protocol-defined order while retaining every other frame verbatim.
+ *
+ * This is the SECOND home this variant has had - it was minted on `@1.2` while
+ * that minor was still unreleased, and moved up when cli-v1.3.0 shipped `@1.2`.
+ * A frame kind is the one growth a released peer cannot absorb: it
+ * strict-decodes the union and fails closed on an unknown `kind`, so no
+ * amount of optionality on the payload makes adding one to a shipped minor
+ * safe. Emitting it is gated on the negotiated minor host-side
+ * (`cloud-notification-feed-stream-resolver.ts`), and that gate's floor moves
+ * with this number - the two are one fact written twice.
+ *
+ * Composed from `@1.2`'s options rather than restated: `@1.2` is frozen, so
+ * the only direction the coupling can carry a change is the safe one, and
+ * "`@1.3` is `@1.2` plus one variant" is then true by construction rather
+ * than by review.
+ */
+/**
+ * The first `host.notifications.feed.subscribe` minor whose server union
+ * carries `partitionSnapshot`, and therefore the floor the host must clear
+ * before emitting one.
+ *
+ * Exported because the schema and the emission gate are ONE fact, and this
+ * variant has now moved minors twice - each time, a gate left behind would
+ * have kept emitting the frame to peers whose union no longer had it. Read
+ * this rather than restating the number
+ * (`local-notifications-view-resolver.ts`).
+ */
+export const HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR = 3;
+
+const hostNotificationsLocalPartitionSnapshotSchemaV13 =
+  hostNotificationsSnapshotSchemaV12.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsLocalPartitionSchema,
+  });
+export const hostNotificationsSubscribeServerFrameSchemaV13 =
+  z.discriminatedUnion("kind", [
+    hostNotificationsLocalPartitionSnapshotSchemaV13,
+    ...hostNotificationsSubscribeServerFrameSchemaV12.options,
+  ]);
+export type HostNotificationsSubscribeServerFrameV13 = z.infer<
+  typeof hostNotificationsSubscribeServerFrameSchemaV13
 >;
 
 export const hostNotificationsSubscribeClientFrameSchema = z.discriminatedUnion(
@@ -1734,14 +1776,23 @@ export const hostNotificationsFeedSubscribeV11 = defineStreamRpcContract({
   clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
 });
 
-/** Additive minor: same open request and client frames; the widened entry
- * union and the `partitionSnapshot` frame both land here (the union is
- * defined beside `@1.1`'s, above). */
+/** Additive minor: same open request and client frames, widened entry union.
+ * Shipped in cli-v1.3.0 and frozen there. */
 export const hostNotificationsFeedSubscribeV12 = defineStreamRpcContract({
   method: "host.notifications.feed.subscribe",
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
   serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV12,
+  clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
+});
+
+/** Additive minor: same open request and client frames; adds the
+ * `partitionSnapshot` server frame, which cannot live on the shipped `@1.2`. */
+export const hostNotificationsFeedSubscribeV13 = defineStreamRpcContract({
+  method: "host.notifications.feed.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
+  serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV13,
   clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
 });
 

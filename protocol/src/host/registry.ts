@@ -514,7 +514,10 @@ import {
   epicListTuiAgentsV12,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import { epicStateSubscribeV10 } from "@traycer/protocol/host/epic/state-subscribe";
-import { epicStatusSubscribeV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import {
+  epicStatusSubscribeV10,
+  epicStatusSubscribeV11,
+} from "@traycer/protocol/host/epic/status-subscribe";
 import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
   epicGetWorkspaceContextV10,
@@ -640,6 +643,7 @@ import {
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
+  hostNotificationsFeedSubscribeV13,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV12,
@@ -9650,12 +9654,19 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // `@1.0` shipped in cli-v1.3.0 and is frozen there. The durability legs this
+  // branch carries on `snapshot` / `cloudSyncStatus` therefore live at `@1.1`;
+  // the host gates them on the negotiated minor
+  // (`EPIC_STATUS_DURABILITY_LEGS_MINOR`).
   "epic.status.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicStatusSubscribeV10,
+        },
+        1: {
+          contract: epicStatusSubscribeV11,
         },
       },
     },
@@ -9702,9 +9713,14 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // `@1.2` shipped in cli-v1.3.0 and is frozen there. The `partitionSnapshot`
+  // frame this branch adds therefore lives at `@1.3`: a frame KIND is the one
+  // growth a released peer cannot absorb, since it strict-decodes the server
+  // union and fails closed on a kind it does not know. The host gates emission
+  // on the negotiated minor rather than assuming tolerance.
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
@@ -9714,6 +9730,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: hostNotificationsFeedSubscribeV12,
+        },
+        3: {
+          contract: hostNotificationsFeedSubscribeV13,
         },
       },
     },
