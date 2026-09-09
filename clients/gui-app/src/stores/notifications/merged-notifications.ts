@@ -1373,6 +1373,17 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       },
       clearAll: () => {
         if (feedMode === "upgrade-required") return;
+        // The same hold `markAllAsRead` takes above, and clear-all needs it
+        // for the same reason plus a sharper one. `useHeldNotificationFeedMode`
+        // deliberately keeps reporting `cloud` through a same-host
+        // renegotiation, so a dispatch inside that window can land on a host
+        // that has just rolled back below `clearAll@1.1` - which STRIPS the
+        // `home` selector `mapVariables` attaches and turns this into a
+        // whole-origin clear, defeating the sixth floor at the one moment the
+        // floor cannot see. Mark-all's version of this reaches cloud-home rows;
+        // this one DELETES them. The whole gesture waits rather than half of it
+        // landing. Found by review.
+        if (feedModeSettling) return;
         // The confirmation this sits behind promises "every notification
         // currently visible in this feed", and in mixed mode the feed renders
         // four lanes, not one. So the fan-out is the same shape mark-all
