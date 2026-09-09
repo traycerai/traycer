@@ -156,11 +156,15 @@ function qosForStreamMethod(method: string): QosClassValue {
  *   mint fresh grant → dial relay(?grant) → attach_ack{sid}
  *     → Noise-NK handshake (msg0 → msg1)
  *     → open{bearer, manifest, authz:null, resume:null}  (re-presents bearer, A2)
- *     → openAck{manifest, capabilities}  → compat mirror
- *     → re-subscribe every live stream → ready
+ *     → openAck{manifest, capabilities}  → compat mirror → ready
+ *     → re-subscribe every live stream
+ *
+ * Ready is the host's ack, not the fan-out that follows it: the re-subscribes
+ * go out from a session that is already carrying traffic, and what each stream
+ * then has to say is its own status rather than the connection's.
  *
  * Backoff resets ONLY after a connection SURVIVES: the ready boundary
- * (transport open · E2E handshake · session open · subscriptions restored) must
+ * (transport open · E2E handshake · session open · host attached) must
  * be reached AND held for `RECONNECT_STABLE_RESET_MS`. Never on socket-open,
  * never on the boundary alone, and never on a wake — a connection that opens
  * and dies repeatedly must escalate, not present itself as a first failure
@@ -478,9 +482,9 @@ export interface IRemoteSession<
   terminalFatal(): FatalErrorDetails | null;
   /**
    * Subscribes to positive evidence that the session just reached its ready
-   * boundary (full attach + accepted restore evidence for every live
-   * stream; completed delivery stays each stream's own status) - EVERY boundary,
-   * including the clean first open. The remote analog of the recovery
+   * boundary (full attach through the host's own `openAck`, with the host
+   * still attached at the relay; what each stream then delivers stays that
+   * stream's own status) - EVERY boundary, including the clean first open. The remote analog of the recovery
    * evidence `WsStreamClient` surfaces via `subscribeAvailabilityRecovered`,
    * consumed to un-strand errored host-scoped queries.
    *
