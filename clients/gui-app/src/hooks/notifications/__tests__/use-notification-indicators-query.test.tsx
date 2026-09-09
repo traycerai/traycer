@@ -10,6 +10,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsEntityRef,
+  HostNotificationsIndicatorStateRequestV11,
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -93,6 +94,7 @@ vi.mock("@/lib/host/runtime", async (importActual) => {
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => feedMode.value,
+  useNotificationFeedModeSettling: () => false,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -106,6 +108,18 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 // missing method.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => mockLocalHostEntry.hostId,
+}));
+
+// The notification centre reads its host from `useNotificationResolveHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => mockLocalHostEntry.hostId,
+  useNotificationResolveHost: () => ({
+    hostId: mockLocalHostEntry.hostId,
+    client: requireHostClient(),
+  }),
 }));
 
 vi.mock("sonner", () => ({
@@ -126,6 +140,7 @@ const ENTITY: HostNotificationsEntityRef = {
 interface HostIndicatorStub {
   readonly response: HostNotificationsIndicatorStateResponse;
   readonly requestCount: { value: number };
+  readonly requests: HostNotificationsIndicatorStateRequestV11[];
 }
 
 interface CloudMarkReadStub {
@@ -148,6 +163,7 @@ function createHarness(
     mutations: { retry: false },
   });
   const requestCount = { value: 0 };
+  const requests: HostNotificationsIndicatorStateRequestV11[] = [];
   const cloudMarkRead: CloudMarkReadStub = { calls: [], mode: "applied" };
   let requestId = 0;
   const spine = new HostClient<HostRpcRegistry>({
@@ -162,8 +178,9 @@ function createHarness(
         return `request-${String(requestId)}`;
       },
       handlers: {
-        "host.notifications.indicatorState": () => {
+        "host.notifications.indicatorState": (params) => {
           requestCount.value += 1;
+          requests.push(params);
           return hostResponse;
         },
         "host.notifications.cloudFeed.markRead": (params) => {
@@ -182,12 +199,16 @@ function createHarness(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
   hostClientRef.current = spine.createRequester(mockLocalHostEntry);
+  // A session holding a cloud verdict: the cloud-feed mark-read this harness
+  // drives re-reads the live verdict at dispatch, so the presumed `cloud`
+  // feed mode has to be backed by the status that authorizes it.
   useAuthStore.setState({
+    status: "signed-in",
     contextMetadata: { userId: "user-a", username: "user-a" },
   });
   return {
     queryClient,
-    hostIndicators: { response: hostResponse, requestCount },
+    hostIndicators: { response: hostResponse, requestCount, requests },
     cloudMarkRead,
   };
 }
@@ -387,6 +408,25 @@ function indicatorText(testId: string): string {
   return screen.getByTestId(testId).textContent;
 }
 
+async function expectSingleLocalIndicatorRequest(
+  harness: Harness,
+  input: {
+    readonly epicIds: ReadonlyArray<string>;
+    readonly chatIds: ReadonlyArray<string>;
+  },
+): Promise<void> {
+  await waitFor(() => {
+    expect(harness.hostIndicators.requestCount.value).toBe(1);
+    expect(harness.hostIndicators.requests).toEqual([
+      {
+        epicIds: input.epicIds,
+        chatIds: input.chatIds,
+        home: "local",
+      },
+    ]);
+  });
+}
+
 /** An unread app-local failure on the entity. Client-side state that belongs
  * to neither feed, so it must contribute in both modes. */
 function seedAppLocalFailure(): void {
@@ -412,7 +452,7 @@ afterEach(() => {
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
-describe("cloud-derived notification indicators", () => {
+describe("mixed-plane notification indicators", () => {
   it("lights a chat indicator for an entry produced on another host", async () => {
     const harness = createHarness(EMPTY_HOST_RESPONSE);
     applyCloudSnapshot(
@@ -435,10 +475,16 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("unreadDone");
     });
-    // The entry never entered this host's SQLite, so the v1 path could not
-    // have produced this. Cloud mode consults the host only for pendingFork.
+    // The foreign row still lights the indicator even though the exact local
+    // partition is empty: the entry never entered this host's SQLite, so the
+    // local partition could not have produced it. That partition is queried
+    // precisely once, and the cloud frame stays the sole source for this
+    // foreign entry.
     expect(OTHER_HOST_ID).not.toBe(CONNECTED_HOST_ID);
-    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+    });
   });
 
   it("does not decorate a host-bound tab with another host's same-id feed row", async () => {
@@ -504,7 +550,10 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("epic")).toBe("pendingApproval");
     });
-    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [EPIC_ID],
+      chatIds: [],
+    });
   });
 
   it("keeps a task approval glyph lit after the notification is marked read", async () => {
@@ -616,6 +665,10 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("unreadDone");
     });
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+    });
 
     screen.getByRole("button", { name: "Mark read" }).click();
 
@@ -624,7 +677,9 @@ describe("cloud-derived notification indicators", () => {
     });
     expect(indicatorText("row-read")).toBe("read");
     expect(harness.cloudMarkRead.calls).toEqual(["entry-b"]);
-    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
+    // Marking a cloud row changes neither the local partition nor its query;
+    // an optimistic cloud mutation must not trigger a duplicate local read.
+    expect(harness.hostIndicators.requestCount.value).toBe(1);
   });
 
   it("keeps a host-derived pending fork lit when its cloud row is marked read", async () => {
@@ -760,7 +815,10 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("unreadFailure");
     });
-    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+    });
   });
 });
 

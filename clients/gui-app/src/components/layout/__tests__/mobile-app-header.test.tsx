@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   epicTabRightActionsKey,
@@ -62,6 +63,10 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
 vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicPermissionRole: () => headerTitleState.role,
   useRegisteredEpicTitle: () => headerTitleState.liveTitle,
+  // Cloud-homed throughout: the title's editability then follows the cloud
+  // verdict, which `beforeEach` grants. The local-home exemption and the
+  // unverified refusals are pinned in `epic-mobile-header-actions.test.tsx`.
+  useRegisteredEpicLocalHome: () => false,
 }));
 
 function renderAt(path: string) {
@@ -184,12 +189,16 @@ describe("MobileAppHeader", () => {
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     presentNoTab();
     useSettingsStore.setState({ showGlobalResourceMonitor: false });
+    // A cloud-homed epic's rename follows the live cloud verdict; the store
+    // is module-scope Zustand defaulting to `signed-out`.
+    useAuthStore.setState({ status: "signed-in" });
     headerTitleState.role = "owner";
     headerTitleState.liveTitle = null;
     updateTitleMutateSpy.mockClear();
   });
   afterEach(() => {
     cleanup();
+    useAuthStore.setState({ status: "signed-out" });
     useMobileNavStore.setState({ open: false });
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     presentNoTab();

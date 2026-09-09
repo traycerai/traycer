@@ -16,6 +16,7 @@ import {
   HostRpcError,
   toHostRpcError,
   type RequestOfMethod,
+  type RequiredHostMethodVersion,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
@@ -82,6 +83,16 @@ export interface UseHostQueryWithResponseMapOptions<
   readonly options: HostQueryTanstackOptions<Method, TData> | null;
   /** Captures cache-side ordering state immediately before request dispatch. */
   readonly captureRequestContext?: () => TRequestContext;
+  /**
+   * Runs inside the queryFn immediately before the request goes out, and a
+   * throw refuses THIS dispatch as a `HostRpcError` (normalized by the
+   * boundary) with no request sent. For a condition `enabled` cannot enforce:
+   * `enabled` stops the NEXT fetch, not a `refetch()` override nor the retry
+   * episode already running when the condition changed - so a verdict
+   * withdrawn mid-retry must be re-read here or the retries keep dispatching
+   * on the retained host credential.
+   */
+  readonly preflight?: () => void;
   /**
    * Transforms the raw RPC response into what TanStack caches/returns for
    * this query. Runs inside the queryFn, so its return value - not the raw
@@ -212,6 +223,7 @@ export function useHostQueryWithResponseMap<
       if (client === null) {
         return Promise.reject<TData>(hostClientUnavailableError(method));
       }
+      args.preflight?.();
       const requestContext = args.captureRequestContext?.();
       const response = await client.requestWithSignal(method, params, signal);
       return mapResponse({
@@ -288,6 +300,36 @@ export interface UseHostMutationOptions<
     response: ResponseOfMethod<Registry, Method>,
     variables: TVariables,
   ) => void;
+  /**
+   * A version floor this mutation's DISPATCH must clear, evaluated at dispatch
+   * so it can read live state (an auth verdict that only some sessions gate
+   * on), and enforced against the handshake of the connection carrying the
+   * frame - see `HostRequestOptions.requiredHostMethodVersion`.
+   *
+   * There used to be an async `preflight` option here, and this replaced its
+   * only user rather than joining it. A pre-flight probe runs on its OWN
+   * connection, so it establishes a fact about a host process that can be
+   * replaced before the mutation is written - for a floor that exists to stop
+   * a write from landing on an older resolver, that is the entire failure
+   * mode, and an option shaped to invite it is worth not having. Returning
+   * `null` dispatches with no floor.
+   */
+  readonly requiredHostMethodVersion?: (
+    variables: TVariables,
+  ) => RequiredHostMethodVersion | null;
+  /**
+   * Re-shapes an error thrown by the DISPATCH before the boundary normalizes
+   * it. Scoped to the dispatch on purpose: a `mapVariables` throw is already
+   * the caller's own error and needs no translation.
+   *
+   * The case it exists for is a refusal whose CONDITION a surface already has
+   * copy for, decided one layer lower than that copy lives - a
+   * `requiredHostMethodVersion` refusal is the same "this host cannot serve an
+   * unverified create" the composer states inline, and the user should read
+   * the same sentence wherever it is decided. Returning `cause` unchanged is
+   * the identity, and omitting the option is the same thing.
+   */
+  readonly mapDispatchError?: (cause: unknown) => unknown;
 }
 
 /**
@@ -328,10 +370,23 @@ export function useHostMutation<
             hostClientUnavailableError(args.method),
           );
         }
-        const response = await client.request(
-          args.method,
-          args.mapVariables(variables),
-        );
+        const params = args.mapVariables(variables);
+        const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
+        const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> =>
+          requirement === null
+            ? client.request(args.method, params)
+            : client.requestWithSignalRequiringHostMethodVersion(
+                args.method,
+                params,
+                undefined,
+                requirement,
+              );
+        const mapDispatchError = args.mapDispatchError;
+        const response = await (mapDispatchError === undefined
+          ? dispatch()
+          : dispatch().catch((cause: unknown) => {
+              throw mapDispatchError(cause);
+            }));
         args.onResponse?.(response, variables);
         return response;
       }),

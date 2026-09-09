@@ -451,6 +451,18 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // Explicit, state-changing local-store repair. Unusually for this table the
+  // cross-queue caveat does not apply: the request is
+  // `{ confirmOldHostStopped: true }` and nothing else (`local-store/schemas.ts`),
+  // so every confirmation click on one host shares all four key components and
+  // they really are one queue. `fifo` is what that queue needs — under `latest`
+  // a second click arriving while the first is still QUEUED folds into it, and
+  // two deliberate confirmations of a destructive repair reach the host as one.
+  "host.rebindLocalStore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
   // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch

@@ -3,9 +3,13 @@ import {
   type QueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   RequestOfMethod,
+  RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -24,6 +28,12 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { LIST_TASKS_LOCAL_FIRST_MINOR } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
@@ -94,6 +104,8 @@ export function useEpicCreateForClient(
       }
       return variables;
     },
+    requiredHostMethodVersion: () => createRequiresLocalFirstHost(),
+    mapDispatchError: asCreateWithoutCloudVerdictError,
     options: {
       onMutate: (variables) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskCreationStarted, {
@@ -672,4 +684,50 @@ function liveOpenEpicTitle(epicId: string): string | null {
   if (handle === null) return null;
   const title = handle.store.getState().epic.title.trim();
   return title.length > 0 ? title : null;
+}
+
+/**
+ * The submit-time gate (`refuseCreateWithoutCloudVerdict`), re-asked at the
+ * dispatch itself rather than before it.
+ *
+ * The composer's gate reads the negotiated-manifest registry, which remembers
+ * a host's last handshake until traffic replaces it. A host that advertised
+ * the local-first line and then restarted or rolled back under the same id
+ * therefore still admits an unverified create from the moment it went away
+ * until this very request's handshake lands - and `epic.create@1.0` on the
+ * older process is the cloud-backed create, on the retained credential.
+ *
+ * This used to force its own handshake with a probe RPC and decide on what
+ * that wrote, which narrowed the window without closing it: the probe and the
+ * create are two connections, and the host can be replaced between them. So
+ * the floor now rides on the create's own request and the transport answers it
+ * from the connection carrying the frame ({@link HostRequestOptions}).
+ *
+ * `epic.create` advertises no version of its own, so the subject is the
+ * `epic.listTasks` line - a host on the local-first list line is the host on
+ * the local-first create line. `null` for a `signed-in` session: it may spend
+ * the capability whatever the peer's minor is, and pays no floor.
+ */
+function createRequiresLocalFirstHost(): RequiredHostMethodVersion | null {
+  if (authorizesCloudCapability(useAuthStore.getState().status)) return null;
+  return {
+    method: "epic.listTasks",
+    version: { major: 1, minor: LIST_TASKS_LOCAL_FIRST_MINOR },
+  };
+}
+
+/**
+ * Re-shapes the transport's pre-send refusal into the copy the composer
+ * already shows inline for this condition, so where the refusal is DECIDED
+ * moved but what the user reads did not.
+ */
+function asCreateWithoutCloudVerdictError(cause: unknown): unknown {
+  if (!(cause instanceof HostMethodVersionUnsatisfiedError)) return cause;
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message: createWithoutCloudVerdictMessage("this device"),
+    requestId: cause.requestId,
+    method: "epic.create",
+    fatalDetails: null,
+  });
 }

@@ -168,31 +168,19 @@ export class RemoteStreamClient<
     return this.session.subscribeAvailabilityRecovered(listener);
   }
 
-  /**
-   * Always `"unknown"` (see {@link IHostStreamClient.getMethodSupport}): the
-   * mux session resolves an incompatible method as a fatal error on that
-   * stream's subscribe attempt, not a queryable pre-check, so there is no
-   * learned-support cache to report here yet.
-   */
   getMethodSupport<Method extends keyof StreamRegistry & string>(
-    _method: Method,
+    method: Method,
   ): StreamMethodSupport {
-    return "unknown";
+    return this.session.getMethodSupport(method);
   }
 
-  /** No-op: {@link getMethodSupport} never changes, so nothing to notify. */
-  subscribeMethodSupport(_listener: () => void): () => void {
-    return () => {};
+  subscribeMethodSupport(listener: () => void): () => void {
+    return this.session.subscribeMethodSupport(listener);
   }
 
-  /**
-   * Always `null` (see {@link IHostStreamClient.getMethodSchemaVersion}): the
-   * mux session has no learned-schema-version cache to report, mirroring
-   * {@link getMethodSupport}'s degrade-quietly treatment for remote hosts.
-   */
   getMethodSchemaVersion<Method extends keyof StreamRegistry & string>(
-    _method: Method,
+    method: Method,
   ): SchemaVersion | null {
-    return null;
+    return this.session.getMethodSchemaVersion(method);
   }
 }

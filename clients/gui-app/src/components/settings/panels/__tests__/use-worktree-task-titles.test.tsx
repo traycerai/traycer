@@ -189,7 +189,7 @@ describe("useWorktreeTaskTitles", () => {
     ];
 
     const { result } = renderHook(
-      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, true),
       { wrapper: makeWrapper(queryClient) },
     );
 
@@ -202,6 +202,46 @@ describe("useWorktreeTaskTitles", () => {
       "epic.getTaskContexts",
       { taskIds: ["epic-unresolved"] },
       expect.any(AbortSignal),
+    );
+  });
+
+  it("does not dispatch tier 2 while the session holds no cloud verdict", async () => {
+    // `epic.getTaskContexts` can consult the cloud for ids the host cannot
+    // resolve locally, so an `unverified` session must not reach it just by
+    // opening the Worktrees panel. RED before the fix: tier 2 was enabled on
+    // `currentUserId` alone.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const tier1Tasks = [listTaskLight("epic-cached", "From cache")];
+    seedTier1Cache(queryClient, tier1Tasks);
+    mockHostClient.request.mockImplementation((method: string) => {
+      if (method === "epic.listTasks") {
+        return Promise.resolve({ tasks: tier1Tasks, hasMore: false });
+      }
+      return Promise.reject(new Error(`unexpected method: ${method}`));
+    });
+
+    const worktrees = [
+      worktreeWithOwners("/wt/a", ["epic-cached"]),
+      worktreeWithOwners("/wt/b", ["epic-unresolved"]),
+    ];
+
+    const { result } = renderHook(
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, false),
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    // Tier 1 still answers from the cache it already holds...
+    await waitFor(() => {
+      expect(result.current.get("epic-cached")).toBe("From cache");
+    });
+    // ...and the unresolved id stays unresolved rather than costing a spend.
+    expect(result.current.has("epic-unresolved")).toBe(false);
+    expect(mockHostClient.requestWithSignal).not.toHaveBeenCalledWith(
+      "epic.getTaskContexts",
+      expect.anything(),
+      expect.anything(),
     );
   });
 
@@ -227,7 +267,7 @@ describe("useWorktreeTaskTitles", () => {
 
     const worktrees = [worktreeWithOwners("/wt/a", ["epic-gone"])];
     const { result } = renderHook(
-      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, true),
       { wrapper: makeWrapper(queryClient) },
     );
 
@@ -274,7 +314,7 @@ describe("useWorktreeTaskTitles", () => {
     ];
 
     const { result } = renderHook(
-      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, true),
       { wrapper: makeWrapper(queryClient) },
     );
 
@@ -324,7 +364,7 @@ describe("useWorktreeTaskTitles", () => {
 
     const worktrees = [worktreeWithOwners("/wt/many", epicIds)];
     const { result } = renderHook(
-      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, true),
       { wrapper: makeWrapper(queryClient) },
     );
 
@@ -364,7 +404,7 @@ describe("useWorktreeTaskTitles", () => {
 
     const worktrees = [worktreeWithOwners("/wt/a", ["epic-x"])];
     const first = renderHook(
-      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, true),
       { wrapper: makeWrapper(queryClient) },
     );
     await waitFor(() => {
@@ -374,7 +414,7 @@ describe("useWorktreeTaskTitles", () => {
 
     first.unmount();
     const second = renderHook(
-      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, true),
       { wrapper: makeWrapper(queryClient) },
     );
     await waitFor(() => {
@@ -408,7 +448,7 @@ describe("useWorktreeTaskTitles", () => {
 
     const worktrees = [worktreeWithOwners("/wt/a", ["epic-x"])];
     const { result } = renderHook(
-      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, true),
       { wrapper: makeWrapper(queryClient) },
     );
 

@@ -37,11 +37,17 @@ import {
 import { cn } from "@/lib/utils";
 import { DropLine } from "@/components/ui/drop-line";
 import {
+  useRegisteredEpicLocalHome,
   useRegisteredEpicPermissionRole,
   useRegisteredEpicTitle,
   useRegisteredEpicTitleGenerating,
 } from "@/lib/epic-selectors";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { displayTitle } from "@/lib/display-title";
+import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getAppHostClientSnapshot } from "@/lib/host/runtime";
@@ -71,7 +77,11 @@ import {
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
-import { useTabRepositorySettings } from "@/components/layout/tabs/tab-repository-settings";
+import {
+  useTabRepositorySettings,
+  type TabRepositorySettings,
+} from "@/components/layout/tabs/tab-repository-settings";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
@@ -112,7 +122,7 @@ interface TabItemProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinned: boolean | null;
+  readonly taskPinnedState: TaskPinnedState | null;
   readonly isTaskPinPending: boolean;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -155,6 +165,37 @@ function epicRenameClient(
   return buildDialableHostClient(appClient, entry);
 }
 
+/**
+ * A cloud-homed epic's rename is a CLOUD write sent over the local-host
+ * connection, which does not carry the renderer's verdict - so the role
+ * alone is not admission once the session is `unverified`. A local-homed
+ * epic renames on this machine's own disk and stays editable. Same rule and
+ * exemption as the History rows and the mobile header.
+ */
+function canEditEpicTabTitle(input: {
+  readonly isEpicTab: boolean;
+  readonly permissionRole: PermissionRole | null;
+  readonly localHome: boolean;
+  readonly cloudAuthorized: boolean;
+}): boolean {
+  return (
+    input.isEpicTab &&
+    isEditableRole(input.permissionRole) &&
+    (input.localHome || input.cloudAuthorized)
+  );
+}
+
+function repositorySettingsMenuProp(
+  repositorySettings: TabRepositorySettings,
+  permissionRole: PermissionRole | null,
+): { readonly onSelect: () => void; readonly disabled: boolean } | null {
+  if (repositorySettings.onOpen === null) return null;
+  return {
+    onSelect: repositorySettings.onOpen,
+    disabled: !isEditableRole(permissionRole),
+  };
+}
+
 export const TabItem = memo(function TabItem(props: TabItemProps) {
   const {
     tab,
@@ -173,12 +214,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     onOpenInNewWindow,
     canOpenInNewWindow,
     onSplitCommand,
-    taskPinned,
+    taskPinnedState,
     isTaskPinPending,
     onSetTaskPinned,
   } = props;
   const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
   const repositoryIdentity = tabRepositoryIdentity(tab);
+  const repositoryColor = repositoryIdentity?.color ?? null;
   // Read once here rather than inside `TabLeadingIcon`, so the SAME resolved
   // value can also ride the drag payload below - the strip item is the drag
   // source, and at the moment a drag starts it already holds everything the
@@ -247,12 +289,25 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const modifier = useTabLeaderModifierForIndex(index);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const liveEpicTitle = useRegisteredEpicTitle(tabEpicId);
-  const titleGenerationPending = useRegisteredEpicTitleGenerating(tabEpicId);
-  const activityStatus = useEpicActivityStatus(tabEpicId);
-  const permissionRole = useRegisteredEpicPermissionRole(tabEpicId);
+  // Every registry read below is keyed by the epic, or by nothing for the
+  // other tab kinds; resolve that once rather than per hook.
+  const registeredEpicId = tab.kind === "epic" ? tab.epicId : null;
+  const liveEpicTitle = useRegisteredEpicTitle(registeredEpicId);
+  const titleGenerationPending =
+    useRegisteredEpicTitleGenerating(registeredEpicId);
+  const activityStatus = useEpicActivityStatus(registeredEpicId);
+  const permissionRole = useRegisteredEpicPermissionRole(registeredEpicId);
   const repositorySettings = useTabRepositorySettings(tab);
-  const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
+  const localHome = useRegisteredEpicLocalHome(registeredEpicId);
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canEditTitle = canEditEpicTabTitle({
+    isEpicTab: tab.kind === "epic",
+    permissionRole,
+    localHome,
+    cloudAuthorized,
+  });
   const canClose = tab.kind !== "epic" || tab.canClose;
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
   // back to "Untitled task". Other kinds render their name verbatim.
@@ -274,6 +329,14 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const commitEpicTitle = useCallback(
     async (next: string) => {
       if (tab.kind !== "epic") return;
+      // Re-checked at COMMIT: an edit opened before a demotion must not land
+      // on the retained credential afterwards.
+      if (
+        !localHome &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       const epicId = tab.epicId;
       const tabHostId = tab.hostId;
       const handle = getOpenEpicRegistry().peek(epicId);
@@ -368,7 +431,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     // `resolvedTabName` is gone from here with the capture/rollback pair that
     // read it - the overlay reveals the authoritative title on failure rather
     // than restoring a captured one, so this callback no longer depends on it.
-    [queryClient, tab],
+    [localHome, queryClient, tab],
   );
   const rename = useInlineRename({
     // Bind to the RAW title, not `displayName` - editing must never seed the
@@ -479,12 +542,9 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             side="left"
           />
           {chrome === "own" ? (
-            <TabChrome isActive={isActive} color={repositoryIdentity?.color} />
+            <TabChrome isActive={isActive} color={repositoryColor} />
           ) : (
-            <SplitMemberChrome
-              focused={isActive}
-              color={repositoryIdentity?.color}
-            />
+            <SplitMemberChrome focused={isActive} color={repositoryColor} />
           )}
           <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
           <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
@@ -541,15 +601,11 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         canCloseOtherTabs={canCloseOtherTabs}
         canOpenInNewWindow={canOpenInNewWindow}
         canEditTitle={canEditTitle}
-        repositorySettings={
-          repositorySettings.onOpen === null
-            ? null
-            : {
-                onSelect: repositorySettings.onOpen,
-                disabled: !isEditableRole(permissionRole),
-              }
-        }
-        taskPinned={taskPinned}
+        repositorySettings={repositorySettingsMenuProp(
+          repositorySettings,
+          permissionRole,
+        )}
+        taskPinnedState={taskPinnedState}
         isTaskPinPending={isTaskPinPending}
         onCloseOtherTabs={onCloseOtherTabs}
         onDuplicateTab={onDuplicateTab}
@@ -824,12 +880,12 @@ export function HeaderTabSeparator(props: { readonly visible: boolean }) {
 
 export function TabChrome(props: {
   readonly isActive: boolean;
-  readonly color?: string | null;
+  readonly color: string | null;
 }) {
   if (!props.isActive) {
     return (
       <>
-        {props.color !== undefined && props.color !== null ? (
+        {props.color !== null ? (
           <span
             aria-hidden
             className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md"
@@ -888,7 +944,7 @@ function StripPairPreview(props: {
  */
 export function SplitMemberChrome(props: {
   readonly focused: boolean;
-  readonly color?: string | null;
+  readonly color: string | null;
 }) {
   if (props.focused) {
     return (
@@ -902,7 +958,7 @@ export function SplitMemberChrome(props: {
 
   return (
     <>
-      {props.color !== undefined && props.color !== null ? (
+      {props.color !== null ? (
         <span
           aria-hidden
           className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm"

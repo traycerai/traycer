@@ -57,7 +57,7 @@
  * | Frame kind            | Projection on `snapshot`      |
  * | --------------------- | ----------------------------- |
  * | `permissionChanged`   | `permissionRole`, `securityEpoch` |
- * | `cloudSyncStatus`     | `cloudSyncStatus`             |
+ * | `cloudSyncStatus`     | `cloudSyncStatus` + the durability legs |
  * | `dirtyChanged`        | `dirty`                       |
  * | `epicDeleted`         | `deletion`                    |
  * | `migrationStarted`    | `migration.state === "running"` |
@@ -159,6 +159,35 @@
  * lane deliberately does not do it: the other inputs stay separate fields and
  * separate lanes.
  *
+ * ## The durability legs ride on this lane, not on a sibling
+ *
+ * `epic.subscribe@1.4`-`@1.6` grew five optional keys on its `cloudSyncStatus`
+ * frame - `durability`, `pauseReason`, `promotionState`, `localProtection`,
+ * `freshness` - and the lanes shipped their first cut WITHOUT them. A GUI on
+ * the lane arm therefore had no durability wire at all: the store read
+ * `{kind: "legacy"}` for every epic, the durability badge rendered nothing,
+ * and an unpromoted local-homed epic with the cloud down was indistinguishable
+ * from a healthy cloud-homed one. Measured on the local-first E2E run
+ * (2026-09-05), and the exact silence-as-reassurance defect the `@1.6` minor
+ * was minted to end.
+ *
+ * The same five keys, the SAME schemas (imported, never restated), on the same
+ * two frames the monolith carries them on: the `snapshot` - because a client
+ * reconnecting mid-promotion must learn where its bytes are from the one frame
+ * it is guaranteed - and `cloudSyncStatus`, because the host re-emits that
+ * frame when a leg moves with the connection status unchanged (a promotion
+ * finishing, a WAL arm being refused, a mirror converging to `current`).
+ *
+ * ABSENCE RULE, inherited verbatim from `@1.6`: an absent `durability` or
+ * `localProtection` key means UNKNOWN, never synced and never protected. The
+ * keys are optional so a host build that cannot answer (no store, a registry
+ * read that timed out) can say nothing rather than something false; a client
+ * reads that silence conservatively, exactly as it reads a `@1.6` peer's.
+ *
+ * Added to `@1.0` in place rather than as `@1.1`, on the same terms the
+ * three-state `deletion` was redefined: no released host or client speaks
+ * this lane yet, so there is no peer to stay additive for.
+ *
  * ## The security epoch, scoped honestly
  *
  * `securityEpoch` is HOST-LOCAL at `@1.0`. The host increments it when IT
@@ -194,8 +223,13 @@ import {
 // lane needs a value the monolith never shipped, fork a `...V11` copy HERE and
 // leave the shared const alone.
 import {
+  epicCloudFreshnessSchema,
   epicCloudSyncStatusSchema,
+  epicDurabilityPauseReasonSchemaV15,
+  epicDurabilityStatusSchemaV15,
+  epicLocalProtectionSchema,
   epicMigrationPhaseSchema,
+  epicPromotionStateSchema,
 } from "@traycer/protocol/host/epic/subscribe";
 
 const permissionRoleSchema = getRecordSchema(
@@ -348,6 +382,26 @@ export const epicSecurityEpochSchema = z.number().int().nonnegative();
 export type EpicSecurityEpoch = z.infer<typeof epicSecurityEpochSchema>;
 
 /**
+ * The durability legs, carried on the `snapshot` and `cloudSyncStatus` frames.
+ * See the module doc: the schemas are `epic.subscribe@1.6`'s own, every key is
+ * optional, and an absent `durability` / `localProtection` means UNKNOWN.
+ */
+export const epicStatusDurabilityLegFields = {
+  durability: epicDurabilityStatusSchemaV15.optional(),
+  /** Meaningful only beside `durability: "paused"`. */
+  pauseReason: epicDurabilityPauseReasonSchemaV15.optional(),
+  /** Meaningful only beside `durability: "promoting"`. */
+  promotionState: epicPromotionStateSchema.optional(),
+  localProtection: epicLocalProtectionSchema.optional(),
+  freshness: epicCloudFreshnessSchema.optional(),
+} as const;
+
+const epicStatusDurabilityLegsSchema = z.object(epicStatusDurabilityLegFields);
+export type EpicStatusDurabilityLegs = z.infer<
+  typeof epicStatusDurabilityLegsSchema
+>;
+
+/**
  * The open request. `epicId` and nothing else - see the module doc for why
  * there is no resume cursor at `@1.0`.
  */
@@ -456,22 +510,28 @@ const epicStatusSubscribePermissionChangedFrameSchemaV10 = z.object({
   ...epicLaneTextFrameFields,
 });
 
+/**
+ * Host-observed cloud room connection state. The client's own transport to
+ * the host can be healthy while this is `disconnected`, which is exactly
+ * why the pill cannot derive cloud freshness from its own socket.
+ */
+const epicStatusSubscribeCloudSyncStatusFrameSchemaV10 = z.object({
+  kind: z.literal("cloudSyncStatus"),
+  ...epicLaneEpochFrameFields,
+  status: epicCloudSyncStatusSchema,
+  ...epicLaneTextFrameFields,
+});
+
 export const epicStatusSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
   "kind",
   [
+    // These two lead the tuple because `@1.1` below rebuilds the union from
+    // it: the leg-carrying variants are replaced by position, and every other
+    // variant is shared by reference so the two minors cannot drift apart in
+    // any way except the legs.
     epicStatusSubscribeSnapshotFrameSchemaV10,
+    epicStatusSubscribeCloudSyncStatusFrameSchemaV10,
     epicStatusSubscribePermissionChangedFrameSchemaV10,
-    /**
-     * Host-observed cloud room connection state. The client's own transport to
-     * the host can be healthy while this is `disconnected`, which is exactly
-     * why the pill cannot derive cloud freshness from its own socket.
-     */
-    z.object({
-      kind: z.literal("cloudSyncStatus"),
-      ...epicLaneEpochFrameFields,
-      status: epicCloudSyncStatusSchema,
-      ...epicLaneTextFrameFields,
-    }),
     /**
      * Transition delta for the aggregate dirty flag, after this cycle's
      * `snapshot`. Absence means clean ONLY after that snapshot has been
@@ -586,6 +646,96 @@ export type EpicStatusSubscribeServerFrameV10 = z.infer<
 >;
 
 /**
+ * The first `epic.status.subscribe` minor carrying the durability legs, and
+ * therefore the floor the host must clear before putting them on the wire.
+ *
+ * Exported because the schema and the emission gate are ONE fact. The legs
+ * were originally added to `@1.0` itself, on the reading that five optional
+ * keys cannot break anyone; cli-v1.3.0 then shipped `@1.0`, and the release
+ * baseline named the mistake. Optionality protects a NEW client reading an
+ * OLD host - it does nothing for the case that matters here, an old client
+ * strict-decoding a new host's extra keys.
+ */
+export const EPIC_STATUS_DURABILITY_LEGS_MINOR = 1;
+
+/**
+ * `@1.1` server frames: `@1.0` plus the durability legs on the two frames
+ * that carry epic-level state (`snapshot`, `cloudSyncStatus`).
+ *
+ * Composed from `@1.0`'s tuple rather than restated. Sharing members with a
+ * frozen minor normally invites a later edit to rewrite it silently; here the
+ * direction is safe by construction (nothing may edit `@1.0` again) and the
+ * released-baseline gate reddens on any attempt, so the composition buys the
+ * stronger property instead: `@1.1` differs from `@1.0` in exactly the two
+ * variants named below, and no reviewer has to diff 130 lines to believe it.
+ */
+const [, , ...epicStatusSubscribeSharedFrameSchemasV10] =
+  epicStatusSubscribeServerFrameSchemaV10.options;
+
+const epicStatusSubscribeSnapshotFrameSchemaV11 =
+  epicStatusSubscribeSnapshotFrameSchemaV10.extend(
+    epicStatusDurabilityLegFields,
+  );
+/** Re-emitted whenever a leg moves, connection status unchanged or not - see
+ * the module doc's durability section. */
+const epicStatusSubscribeCloudSyncStatusFrameSchemaV11 =
+  epicStatusSubscribeCloudSyncStatusFrameSchemaV10.extend(
+    epicStatusDurabilityLegFields,
+  );
+
+export const epicStatusSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
+  "kind",
+  [
+    epicStatusSubscribeSnapshotFrameSchemaV11,
+    epicStatusSubscribeCloudSyncStatusFrameSchemaV11,
+    ...epicStatusSubscribeSharedFrameSchemasV10,
+  ],
+);
+export type EpicStatusSubscribeServerFrameV11 = z.infer<
+  typeof epicStatusSubscribeServerFrameSchemaV11
+>;
+
+/**
+ * The downgrade bridge for a peer below {@link EPIC_STATUS_DURABILITY_LEGS_MINOR}.
+ *
+ * The host composes `@1.1` frames unconditionally and projects here, per
+ * SUBSCRIBER, on the way out. Per subscriber rather than per frame because the
+ * `cloudSyncStatus` frame is a BROADCAST: one session fans a single frame out
+ * to subscribers that negotiated different minors, so a decision taken where
+ * the frame is built would have to be right for all of them at once, and
+ * cannot be.
+ *
+ * Dropping keys rather than refusing to send: the legs are decoration on
+ * frames that carry epoch, role, sync status and dirtiness. An `@1.0` peer is
+ * entitled to all of that, and its own absence rule already reads a missing
+ * `durability` as UNKNOWN - which is exactly what it is, from a host that
+ * cannot tell it.
+ */
+export function epicStatusFrameForNegotiatedMinor(
+  frame: EpicStatusSubscribeServerFrameV11,
+  negotiatedMinor: number,
+): EpicStatusSubscribeServerFrameV10 {
+  if (negotiatedMinor >= EPIC_STATUS_DURABILITY_LEGS_MINOR) {
+    // `@1.1` is a superset of `@1.0` in TYPE as well as on the wire, so the
+    // frame passes through unchanged and the return type stays honest: every
+    // `@1.0` reader can read an `@1.1` frame, it just ignores the legs.
+    return frame;
+  }
+  if (frame.kind !== "snapshot" && frame.kind !== "cloudSyncStatus") {
+    return frame;
+  }
+  const {
+    durability: _durability,
+    pauseReason: _pauseReason,
+    promotionState: _promotionState,
+    localProtection: _localProtection,
+    freshness: _freshness,
+    ...projected
+  } = frame;
+  return projected;
+}
+
+/**
  * `ping` and nothing else.
  *
  * The monolith carried a `retryMigration` CLIENT frame, and that is the one
@@ -611,5 +761,16 @@ export const epicStatusSubscribeV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: epicStatusSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStatusSubscribeServerFrameSchemaV10,
+  clientFrameSchema: epicStatusSubscribeClientFrameSchemaV10,
+});
+
+/** Additive minor: same open request and client frames; the durability legs
+ * join the `snapshot` and `cloudSyncStatus` server frames. `@1.0` shipped in
+ * cli-v1.3.0 and is frozen there. */
+export const epicStatusSubscribeV11 = defineStreamRpcContract({
+  method: "epic.status.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: epicStatusSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStatusSubscribeServerFrameSchemaV11,
   clientFrameSchema: epicStatusSubscribeClientFrameSchemaV10,
 });
