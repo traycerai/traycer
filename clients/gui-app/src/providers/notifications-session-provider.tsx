@@ -331,11 +331,6 @@ function NotificationsSessionBody(
   // Start unset so an initially cloud-capable session also clears the legacy
   // local sources before opening its first relay stream.
   const previousFeedModeRef = useRef<NotificationFeedMode | null>(null);
-  // The activity-plane admission this provider last OPENED under. `null` until
-  // the first pass, for the same reason as the feed mode above: the initial
-  // read is not a change, and treating it as one would tear down a session
-  // that has opened nothing yet.
-  const previousActivityLocalOnlyRef = useRef<boolean | null>(null);
   const [fallbackWindowId] = useState(createFallbackNotificationsWindowId);
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
   const markEntityReadMutation =
