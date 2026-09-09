@@ -56,6 +56,7 @@ import {
 } from "@/lib/composer/image-atoms";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
@@ -264,6 +265,7 @@ function AgentMessageDisplayView({
   const expectReply =
     agentMessage?.reply.expectsReply ?? agentSenderInfo.expectReply;
 
+  const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
   const openSenderTab = useCallback(() => {
     if (openTarget === null) return;
     openTile(
@@ -280,7 +282,26 @@ function AgentMessageDisplayView({
         "direct_ui",
       ),
     );
-  }, [agentSenderInfo.agentId, epicId, openTarget, senderName, openTile]);
+    // Mirror of the sent card's receiver link: park a jump for the sender's
+    // tile, which picks it up whether it is already mounted or is being
+    // opened by the call above. This row's own id IS the receipt the sender's
+    // harness stamped on its send block, so the landing is the exact "Sent
+    // message" card. A terminal-agent sender has no transcript, and a send
+    // persisted before receipts existed just leaves the tile open at rest.
+    if (openTarget.type !== "chat") return;
+    requestJump(openTarget.hostId, agentSenderInfo.agentId, {
+      kind: "receipt",
+      messageId,
+    });
+  }, [
+    agentSenderInfo.agentId,
+    epicId,
+    messageId,
+    openTarget,
+    openTile,
+    requestJump,
+    senderName,
+  ]);
 
   // Same shape as the sent card's header (`A2ASendToolSegment`): the sender
   // name is the only element allowed to shrink, so the direction words are

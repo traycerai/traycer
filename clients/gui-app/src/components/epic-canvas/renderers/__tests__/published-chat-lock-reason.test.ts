@@ -22,6 +22,7 @@ describe("publishedChatLockReason", () => {
   it("names the owning machine and this device when the owner is someone else", () => {
     const reason = publishedChatLockReason({
       ownerIsReachable: true,
+      ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: true,
       ownerLabel: "Ada's Mac",
@@ -38,6 +39,7 @@ describe("publishedChatLockReason", () => {
   it("names neither a host nor a second device when the owner IS this host", () => {
     const reason = publishedChatLockReason({
       ownerIsReachable: true,
+      ownerRefusesStore: false,
       ownerIsThisHost: true,
       ownedByViewer: true,
       ownerLabel: "Ada's Mac",
@@ -63,6 +65,7 @@ describe("publishedChatLockReason", () => {
     for (const ownerIsThisHost of [false, true]) {
       const reason = publishedChatLockReason({
         ownerIsReachable: false,
+        ownerRefusesStore: false,
         ownerIsThisHost,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -86,6 +89,7 @@ describe("publishedChatLockReason", () => {
     for (const ownerIsReachable of [false, true]) {
       const reason = publishedChatLockReason({
         ownerIsReachable,
+        ownerRefusesStore: false,
         ownerIsThisHost: false,
         ownedByViewer: false,
         ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
@@ -106,6 +110,7 @@ describe("publishedChatLockReason", () => {
     const publishedAt = Date.parse("2026-08-14T12:00:00Z");
     const reason = publishedChatLockReason({
       ownerIsReachable: false,
+      ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: false,
       ownerLabel: "some-host-id",
@@ -129,6 +134,7 @@ describe("publishedChatLockReason", () => {
     expect(
       publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -141,6 +147,7 @@ describe("publishedChatLockReason", () => {
     expect(
       publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -159,6 +166,7 @@ describe("publishedChatLockReason", () => {
       // guess - the clause states a fact or stays out of the sentence.
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -178,6 +186,7 @@ describe("publishedChatLockReason", () => {
       const publishedAt = Date.parse("2026-08-14T12:00:00Z");
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -198,6 +207,7 @@ describe("publishedChatLockReason", () => {
       const publishedAt = Date.parse("2026-08-14T12:00:00Z");
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -221,6 +231,7 @@ describe("publishedChatLockReason", () => {
       const publishedAt = Date.parse("2026-08-14T12:00:00Z");
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -243,6 +254,7 @@ describe("publishedChatLockReason", () => {
     it("says nothing extra when refresh is idle", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -257,6 +269,7 @@ describe("publishedChatLockReason", () => {
     it("states a newer copy is being fetched while loading", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -271,6 +284,7 @@ describe("publishedChatLockReason", () => {
     it("states the retry story when the re-read failed", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -287,6 +301,7 @@ describe("publishedChatLockReason", () => {
     it("states a refused re-read using the refusal's own title, lower-cased and re-punctuated", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -304,6 +319,7 @@ describe("publishedChatLockReason", () => {
       const publishedAt = Date.parse("2026-08-14T12:00:00Z");
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -328,6 +344,7 @@ describe("publishedChatLockReason", () => {
       const publishedAt = Date.parse("2026-08-14T12:00:00Z");
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
+        ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
         ownerLabel: "Ada's Mac",
@@ -344,12 +361,93 @@ describe("publishedChatLockReason", () => {
       expect(fidelityIndex).toBeGreaterThan(refreshIndex);
     });
   });
+
+  describe("owner-refuses-store arm", () => {
+    it("names this host's own update need when the refusing owner IS this host", () => {
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerRefusesStore: true,
+        ownerIsThisHost: true,
+        ownedByViewer: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt: null,
+        refresh: { kind: "idle" },
+      });
+
+      expect(reason).toContain(
+        "This host needs an update to read its live history.",
+      );
+      expect(reason).not.toContain("lives on");
+      expect(reason).not.toContain("Ada's Mac");
+    });
+
+    it("names the owning host's label when the refusing owner is someone else's machine", () => {
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerRefusesStore: true,
+        ownerIsThisHost: false,
+        ownedByViewer: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt: null,
+        refresh: { kind: "idle" },
+      });
+
+      expect(reason).toContain("which lives on Ada's Mac");
+      expect(reason).toContain(
+        "That host needs an update to read its live history.",
+      );
+    });
+
+    it("lets the offline sentence outrank a refusal, for either whose host it is", () => {
+      // A host that is offline has nothing to refuse - "offline" is the more
+      // actionable sentence while it lasts, and is checked first.
+      for (const ownerIsThisHost of [false, true]) {
+        const reason = publishedChatLockReason({
+          ownerIsReachable: false,
+          ownerRefusesStore: true,
+          ownerIsThisHost,
+          ownedByViewer: true,
+          ownerLabel: "Ada's Mac",
+          unreadableCount: 0,
+          fidelityNotice: null,
+          publishedAt: null,
+          refresh: { kind: "idle" },
+        });
+        expect(reason).toContain("which is offline");
+        expect(reason).not.toContain("needs an update");
+      }
+    });
+
+    it("lets the foreign-owner sentence outrank both reachability and refusal", () => {
+      for (const ownerIsReachable of [false, true]) {
+        const reason = publishedChatLockReason({
+          ownerIsReachable,
+          ownerRefusesStore: true,
+          ownerIsThisHost: false,
+          ownedByViewer: false,
+          ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+          unreadableCount: 0,
+          fidelityNotice: null,
+          publishedAt: null,
+          refresh: { kind: "idle" },
+        });
+        expect(reason).toContain("belongs to another collaborator");
+        expect(reason).not.toContain("needs an update");
+        expect(reason).not.toContain("which is offline");
+      }
+    });
+  });
 });
 
 describe("replicaChatLockReason", () => {
   it("names the owning machine when the owner is someone else", () => {
     const reason = replicaChatLockReason({
       ownerIsReachable: true,
+      ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: true,
       ownerLabel: "Ada's Mac",
@@ -363,6 +461,7 @@ describe("replicaChatLockReason", () => {
   it("drops the other-machine phrasing when the owner IS this host", () => {
     const reason = replicaChatLockReason({
       ownerIsReachable: true,
+      ownerRefusesStore: false,
       ownerIsThisHost: true,
       ownedByViewer: true,
       ownerLabel: "Ada's Mac",
@@ -380,6 +479,7 @@ describe("replicaChatLockReason", () => {
     for (const ownerIsReachable of [false, true]) {
       const reason = replicaChatLockReason({
         ownerIsReachable,
+        ownerRefusesStore: false,
         ownerIsThisHost: false,
         ownedByViewer: false,
         ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
@@ -390,5 +490,71 @@ describe("replicaChatLockReason", () => {
       expect(reason).not.toContain("which is offline");
       expect(reason).not.toContain("085b919a-f0a6-42e5-b05e-241738d3dd6a");
     }
+  });
+
+  describe("owner-refuses-store arm", () => {
+    it("names this host's own update need when the refusing owner IS this host", () => {
+      const reason = replicaChatLockReason({
+        ownerIsReachable: true,
+        ownerRefusesStore: true,
+        ownerIsThisHost: true,
+        ownedByViewer: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+      });
+
+      expect(reason).toContain(
+        "This host needs an update to read its live history.",
+      );
+      expect(reason).not.toContain("lives on");
+      expect(reason).not.toContain("Ada's Mac");
+    });
+
+    it("names the owning host's label when the refusing owner is someone else's machine", () => {
+      const reason = replicaChatLockReason({
+        ownerIsReachable: true,
+        ownerRefusesStore: true,
+        ownerIsThisHost: false,
+        ownedByViewer: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+      });
+
+      expect(reason).toContain("which lives on Ada's Mac");
+      expect(reason).toContain(
+        "That host needs an update to read its live history.",
+      );
+    });
+
+    it("lets the offline sentence outrank a refusal, for either whose host it is", () => {
+      for (const ownerIsThisHost of [false, true]) {
+        const reason = replicaChatLockReason({
+          ownerIsReachable: false,
+          ownerRefusesStore: true,
+          ownerIsThisHost,
+          ownedByViewer: true,
+          ownerLabel: "Ada's Mac",
+          unreadableCount: 0,
+        });
+        expect(reason).toContain("which is offline");
+        expect(reason).not.toContain("needs an update");
+      }
+    });
+
+    it("lets the foreign-owner sentence outrank both reachability and refusal", () => {
+      for (const ownerIsReachable of [false, true]) {
+        const reason = replicaChatLockReason({
+          ownerIsReachable,
+          ownerRefusesStore: true,
+          ownerIsThisHost: false,
+          ownedByViewer: false,
+          ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+          unreadableCount: 0,
+        });
+        expect(reason).toContain("belongs to another collaborator");
+        expect(reason).not.toContain("needs an update");
+        expect(reason).not.toContain("which is offline");
+      }
+    });
   });
 });

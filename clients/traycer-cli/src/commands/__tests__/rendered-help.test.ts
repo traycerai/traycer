@@ -402,6 +402,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "host install",
     options: [
+      { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--allow-self-invocation", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--from <path>", mandatory: false },
@@ -417,10 +418,15 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "host ensure",
     options: [
+      { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--allow-self-invocation", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--from <path>", mandatory: false },
       { flags: "--json", mandatory: false },
+      // Liveness-only convergence (downgrade-revert RCA): keep any
+      // installed, non-yanked host rather than reinstalling this build's
+      // pin. The desktop passes it for its background intent.
+      { flags: "--keep-installed", mandatory: false },
       { flags: "--no-linger", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--no-service-register", mandatory: false },
@@ -432,6 +438,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "host apply",
     options: [
+      { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
@@ -445,6 +452,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--release <version>", mandatory: false },
       { flags: "--allow-downgrade", mandatory: false },
       { flags: "--force", mandatory: false },
+      { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
@@ -1192,6 +1200,9 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "host adoption-nonce",
         "host maintenance-lease",
         "host update-verify",
+        // Diagnostic dump for support/debugging, not a user workflow step -
+        // see commands/host-store-formats.ts.
+        "host store-formats",
         "cli mark-source",
         "cli finalize-upgrade",
         "agent title-from-hook",
@@ -1236,10 +1247,28 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // Update ACK correlation nonce - the host echoes it back so the
         // dispatcher can tell THIS update's ack from an unrelated one.
         "traycer host update --ack-nonce",
+        // The BOUND intent (Plan D16) and the attempt it is bound to. Machine
+        // contracts of the same family: a reconciler resuming a parked
+        // attempt names both, and a person running `host update` names
+        // neither. They are argv rather than env precisely so a CLI too old
+        // to honour them refuses instead of running a plain install, which is
+        // a broader authorization than the caller asked for.
+        "traycer host update --intent",
+        "traycer host update --expect-attempt",
+        // The other two thirds of that identity (P1 window B). Same family,
+        // same reason for being argv: an attempt that re-parks keeps its id,
+        // so an id alone cannot say which park was authorized.
+        "traycer host update --expect-generation",
+        "traycer host update --expect-sequence",
         "traycer host restart --if-idle",
         "traycer host install --if-idle",
         "traycer host apply --expected-stage-fingerprint",
         "traycer host apply --no-service",
+        // Implicit-apply hold check (version-hold design): the desktop's
+        // launch-time apply passes this so a terminal downgrade that lands
+        // during the stage's download/eligibility window is not reverted.
+        // An explicit "Update now" apply never sets it.
+        "traycer host apply --respect-hold",
         "traycer host download --automatic",
       ].sort(),
     );

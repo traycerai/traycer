@@ -334,21 +334,29 @@ vi.mock("@/stores/epics/artifact-read-state-store", () => ({
   ),
 }));
 
-vi.mock("@/stores/settings/settings-store", () => ({
-  useSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      diffViewerPreferences: { ignoreWhitespace: false },
-      artifactIconColorMode: "none",
-      artifactIconColors: {
-        chat: undefined,
-        review: undefined,
-        spec: undefined,
-        story: undefined,
-        ticket: undefined,
-        "terminal-agent": undefined,
-      },
-    }),
-}));
+vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/settings/settings-store")>();
+  const state = {
+    diffViewerPreferences: { ignoreWhitespace: false },
+    artifactIconColorMode: "none",
+    artifactIconColors: {
+      chat: undefined,
+      review: undefined,
+      spec: undefined,
+      story: undefined,
+      ticket: undefined,
+      "terminal-agent": undefined,
+    },
+  };
+  return {
+    ...actual,
+    useSettingsStore: Object.assign(
+      (selector: (settingsState: typeof state) => unknown) => selector(state),
+      actual.useSettingsStore,
+    ),
+  };
+});
 
 // File-tree-panel-specific dependencies.
 // Configurable so one arm can drive the ZERO-ROW read a host that cannot

@@ -29,6 +29,33 @@ export interface HostPidMetadata {
    */
   readonly processStartIdentity: ProcessStartIdentity | null;
   /**
+   * WHY {@link processStartIdentity} is what it is - three states where that
+   * field has two (cold review C, V1).
+   *
+   * The stamp collapses "the key was absent" and "the key was present and did
+   * not parse" into one `null`. That was harmless while `null` had a single
+   * consequence: both failed closed as `pid-start-stamp-missing`. Q1 gave
+   * `null` a SECOND meaning - "this run may skip the identity comparison" -
+   * and the collapse became load-bearing, because a TAMPERED or torn stamp
+   * would then earn the fallback exactly as a genuinely old host does.
+   *
+   * So the reason is recorded beside the value rather than replacing it. A
+   * three-valued `processStartIdentity` would say this more directly and is
+   * the better shape in the abstract, but that field has ~60 readers across
+   * the CLI, the shared lock and Desktop, none of which need the distinction;
+   * this is additive and every existing reader keeps its two-valued view.
+   *
+   * `unrecognized` is also the state a PLATFORM disagreement produces - the
+   * stamp is platform-tagged, so a token this build does not recognize reads
+   * identically to no token at all - which is the case the fleet's floor
+   * derivation has to be able to see in the field.
+   *
+   * Mirrors {@link decodeLayer0Record}'s three-valued contract in this same
+   * file, and for the same reason: present-and-unexpected must never read as
+   * healthy.
+   */
+  readonly processStartIdentityRead: "present" | "absent" | "unrecognized";
+  /**
    * The host's Layer 0 single-writer (I1) verdict, `null` when this pid.json
    * carries none. Absence is "not recorded" - every file written before the
    * field shipped lacks it - and must never be read as "guaranteed".
@@ -200,6 +227,15 @@ export async function readHostPidMetadataEvidence(
       processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
         ? obj.processStartIdentity
         : null,
+      // Derived in the same breath as the value above, deliberately: two
+      // expressions that could disagree about one field is the drift this
+      // field exists to prevent, not to create.
+      processStartIdentityRead: isProcessStartIdentity(obj.processStartIdentity)
+        ? "present"
+        : obj.processStartIdentity === undefined ||
+            obj.processStartIdentity === null
+          ? "absent"
+          : "unrecognized",
       layer0: decodeLayer0Record(obj.layer0),
       // Same decoder, same fail-open-on-shape contract. An old record simply
       // has no such key and decodes to `null`.

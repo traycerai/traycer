@@ -15,6 +15,7 @@ import {
   focusActiveComposer,
   registerComposerFocus,
 } from "@/lib/composer/composer-focus-registry";
+import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
@@ -99,6 +100,23 @@ interface UseInterviewCardArgs {
     | null;
 }
 
+// The single-select advance timer's fire-time inputs: everything it must take
+// from the CURRENT render rather than the one that armed it, because each is
+// derived from `questions` and a repeated `interview.requested` rewrites those
+// in place. Filled every render; see the ref that holds it.
+interface InterviewAdvanceInputs {
+  readonly readCanonicalState: () => {
+    readonly pageIndex: number;
+    readonly drafts: ReadonlyArray<DraftAnswer>;
+  };
+  readonly total: number;
+  readonly submitDrafts: (answerDrafts: ReadonlyArray<DraftAnswer>) => void;
+  readonly navigate: (
+    direction: 1 | -1,
+    answerDrafts: ReadonlyArray<DraftAnswer>,
+  ) => void;
+}
+
 // Owns every behavior of the pending interview card - draft state, paging,
 // the highlight-then-advance timer, dispatch locking, and the keyboard
 // shortcuts - so the components stay purely presentational. Attach
@@ -160,6 +178,33 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   useEffect(() => {
     latestIsBusyRef.current = isBusy;
   }, [isBusy]);
+  // The same staleness one level up, and why `isBusy` alone is not enough:
+  // everything else that timer reads is derived from its render's QUESTIONS,
+  // and a repeated `interview.requested` for this block updates questions IN
+  // PLACE (the card is keyed by chat and block, so it does not remount). Each
+  // of these was wrong in its own way against the shape that replaced them:
+  //
+  // - `readCanonicalState` maps the stored row onto option INDICES for the
+  //   questions it was given. Reordered options are repaired by label there
+  //   (`draftFromStoredAnswer`), so reading with the old list and submitting
+  //   with the new one silently answers with a DIFFERENT option - pick
+  //   `Alpha` from `[Alpha, Beta]`, receive `[Beta, Alpha]`, send `Beta`.
+  // - `total`, and so `isLast`, decides submit-versus-advance from a question
+  //   COUNT that a repeated request can change.
+  // - `submitDrafts` guards on questions through `hasUnanswerableQuestion` and
+  //   `answersFromDrafts`'s per-question free-text test, so a channel
+  //   withdrawn during the highlight window would still be submitted from.
+  // - `navigate` looked innocent and is not: it persists through
+  //   `persistDraft`, which pairs each draft with `questions.at(index)` to
+  //   write labels. Fresh drafts against a stale question list mislabels the
+  //   stored row exactly as the submit path would.
+  //
+  // So the ref carries the whole fire-time surface rather than one member of
+  // it - the previous revision held only `submitDrafts` and left the three
+  // beside it stale. What stays captured is deliberate: `safeIndex` and
+  // `optionIndex` are the page and option this timer was ARMED on, and the
+  // guards below exist to compare them against canonical state.
+  const latestFireTimeRef = useRef<InterviewAdvanceInputs | null>(null);
 
   const drafts = useMemo(
     () => draftsFromStoredAnswers(storedDraft?.answers, questions),
@@ -172,7 +217,21 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   );
   const question = total > 0 ? questions[safeIndex] : null;
   const draft = drafts[safeIndex] ?? emptyDraft();
-  const freeTextQuestion = question !== null && question.options.length === 0;
+  // Every text field this card can render belongs to the custom-answer
+  // channel - the standalone free-text textarea when there are no options, the
+  // Other row's input when there are. So a withdrawn channel means NO field,
+  // and both focus predicates below hang off this one fact rather than
+  // re-deriving it.
+  const allowsCustomAnswer =
+    question !== null && questionAllowsCustomAnswer(question);
+  // "This question renders a text field the card should yield focus to."
+  // Withdrawing free text from an OPTIONLESS question renders no field at all
+  // (`QuestionPage` returns null), so yielding to one would leave nothing
+  // focused: the card's native key handler owns Escape/Skip and the pager, and
+  // it never receives them until the user clicks. The predicate has to name the
+  // rendered field, not merely the absence of options.
+  const freeTextQuestion =
+    question !== null && question.options.length === 0 && allowsCustomAnswer;
 
   const isLast = safeIndex >= total - 1;
   const answeredCount = drafts.filter(draftHasContent).length;
@@ -182,7 +241,26 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // interview stays pending), so the retained draft is retryable then - but not
   // an immediate double-submit while the first send is still live.
   const canAdvance = total > 0 && safeIndex < total - 1 && !isBusy;
-  const canSubmit = total > 0 && onSubmit !== null && !isBusy;
+  // A question with no options AND no free text has no answer channel at all.
+  // The raiser is not supposed to emit that pair (see `allowsCustomAnswer` in
+  // `content-blocks.ts`), and every producer refuses or downgrades it, but the
+  // schema tolerates it deliberately - rejecting there would drop a whole
+  // content block rather than one bad question - so the renderer is the
+  // documented fail-safe and has to actually be one.
+  //
+  // `question-page` already renders no input for such a question. Without this
+  // the card still offered an ENABLED Submit beside it, and Enter would send
+  // `values: []` down a channel that requires a listed option. Skip is the
+  // only honest exit, which is exactly what the schema comment promises.
+  //
+  // Scoped to the WHOLE interview, not the current page: one submission
+  // carries every question's answer, so an unanswerable question anywhere
+  // invalidates the submit rather than just its own page.
+  const hasUnanswerableQuestion = questions.some(
+    (q) => q.options.length === 0 && !questionAllowsCustomAnswer(q),
+  );
+  const canSubmit =
+    total > 0 && onSubmit !== null && !isBusy && !hasUnanswerableQuestion;
   const canSkip = onSkip !== null && !isBusy;
 
   // Read the LATEST canonical row at call time rather than trusting a
@@ -267,6 +345,11 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   const answersFromDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) =>
     questions.map((q, i) => {
       const source = answerDrafts[i] ?? emptyDraft();
+      // Evidence must agree with the values beside it: `draftToAnswerValues`
+      // drops a withdrawn Other, so recording `customText` here would attach
+      // evidence of a custom answer to an answer that carries none.
+      const otherSelected =
+        source.otherSelected && questionAllowsCustomAnswer(q);
       const optionIndices = [...source.selected].filter(
         (index) => index >= 0 && index < q.options.length,
       );
@@ -281,13 +364,13 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         notes: null,
         selection:
           !source.selectionEvidenceExact ||
-          (optionIndices.length === 0 && !source.otherSelected)
+          (optionIndices.length === 0 && !otherSelected)
             ? null
             : {
                 questionIndex: i,
                 optionIndices,
                 optionLabels,
-                customText: source.otherSelected
+                customText: otherSelected
                   ? source.otherText.trim() || null
                   : null,
               },
@@ -296,9 +379,16 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
 
   const submitDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) => {
     if (onSubmit === null || isBusy) return;
+    // Here rather than only on the button's `disabled`: `proceed()` reaches
+    // submit from Enter on the last page, and it checks `isBusy` alone - so a
+    // gate applied to `canSubmit` at the call site would leave the keyboard
+    // path open. This is the one choke point every submit passes through.
+    if (hasUnanswerableQuestion) return;
     clearAdvanceTimer();
-    // Submit is unconditional: unanswered questions go through with empty
-    // values (draftToAnswerValues returns [] for an empty draft).
+    // Submit is unconditional OTHERWISE: unanswered questions go through with
+    // empty values (draftToAnswerValues returns [] for an empty draft). The
+    // exception above is a question with no answer channel at all, which is
+    // not "unanswered" but unanswerABLE - see `hasUnanswerableQuestion`.
     const answers: InterviewAnswer[] = answersFromDrafts(answerDrafts);
     setPendingOptionIndex(null);
     // Fire and keep the draft: a returned client action id only proves the
@@ -307,6 +397,24 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     // (chat-session-store); a rejection keeps it for retry.
     onSubmit(blockId, answers);
   };
+
+  // No dependency array on purpose: these are rebuilt every render, and the
+  // point of the ref is to hold the CURRENT ones.
+  //
+  // `useLayoutEffect`, not `useEffect`, and that is the whole guarantee: a
+  // passive effect is scheduled separately from the commit and React may run
+  // it after a timer that a concurrent render's commit has already made stale.
+  // This one runs synchronously at commit, so "the ref holds the render the
+  // user is looking at" is true by construction rather than by the store
+  // updates that happen to flush effects today. Four property writes.
+  useLayoutEffect(() => {
+    latestFireTimeRef.current = {
+      readCanonicalState,
+      total,
+      submitDrafts,
+      navigate,
+    };
+  });
 
   const submit = () => {
     submitDrafts(drafts);
@@ -373,9 +481,15 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         setPendingOptionIndex(null);
         return;
       }
-      // Re-derive from the LATEST canonical row at fire time. A duplicate view
-      // may have changed this answer or the page during the highlight window.
-      const latest = readCanonicalState();
+      // Everything below reads the CURRENT render's surface, not this timer's.
+      // The `??` is for the type: the effect that fills the ref runs on mount,
+      // long before a click could arm this timer.
+      const fresh = latestFireTimeRef.current;
+      // Re-derive from the LATEST canonical row at fire time, and against the
+      // LATEST questions. A duplicate view may have changed this answer or the
+      // page during the highlight window, and the host may have re-raised the
+      // questions themselves.
+      const latest = (fresh?.readCanonicalState ?? readCanonicalState)();
       // No-op when the canonical page moved off the question this timer was
       // armed on: a duplicate view explicitly navigated (Previous/Next), and
       // submitting or advancing from here would override that navigation -
@@ -398,14 +512,30 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         return;
       }
       // Submit / page-advance against the LATEST canonical answers, never the
-      // captured snapshot.
-      if (isLast) submitDrafts(latest.drafts);
-      else navigate(1, latest.drafts);
+      // captured snapshot - and through the LATEST submit and navigate, so the
+      // drafts just derived and the questions they are written against are one
+      // shape rather than two.
+      //
+      // `isLast` is re-derived here for the same reason: it is a claim about
+      // the current question COUNT, while `safeIndex` stays the armed page the
+      // guard above just matched against canonical state.
+      const totalNow = fresh?.total ?? total;
+      if (safeIndex >= totalNow - 1) {
+        (fresh?.submitDrafts ?? submitDrafts)(latest.drafts);
+      } else {
+        (fresh?.navigate ?? navigate)(1, latest.drafts);
+      }
     }, ADVANCE_DELAY_MS);
   };
 
   const toggleOther = () => {
     if (question === null || isBusy) return;
+    // A withdrawn channel has no Other to toggle. The row is not rendered, so
+    // this closes the paths that reach the toggle without it - the digit
+    // shortcut below being the live one. Without this, a single-select press
+    // would clear the visible choice (`selected: new Set()`) and leave an
+    // invisible custom selection the user cannot see or undo.
+    if (!questionAllowsCustomAnswer(question)) return;
     // Diverting to a custom answer cancels any pending single-select advance.
     clearAdvanceTimer();
     setPendingOptionIndex(null);
@@ -452,7 +582,11 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       toggleOption(digit - 1);
       return true;
     }
-    if (digit === optionCount + 1) {
+    // `optionCount + 1` is the Other row's digit. When the channel cannot
+    // carry free text that row is not rendered, so the digit addresses
+    // nothing: fall through and leave the key to the page rather than
+    // silently mutating a selection the user cannot see.
+    if (digit === optionCount + 1 && questionAllowsCustomAnswer(question)) {
       toggleOther();
       return true;
     }
@@ -540,7 +674,20 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // refocuses when the tab becomes active (`focusActive` is a dependency).
   // Free-text and Other inputs focus themselves via their callback ref, so the
   // card yields to them.
-  const wantsFieldFocus = freeTextQuestion || draft.otherSelected;
+  // The Other half needs the same gate as the free-text half above, for the
+  // same reason: the row is not rendered when the channel is withdrawn
+  // (`QuestionPage`), so yielding to its input would focus nothing.
+  //
+  // This is defense in depth, not a live bug - every writer of
+  // `otherSelected` is already gated (`draftFromStoredAnswer` scrubs a
+  // restored one, `toggleOther` and `selectByDigit` refuse, `setFreeText`
+  // needs the textarea that is not rendered). What it buys is locality: this
+  // predicate now decides from the question in front of it instead of
+  // trusting an invariant maintained by four other functions, so a fifth
+  // writer cannot silently reopen a focus black hole that presents as "the
+  // card's number keys stopped working".
+  const wantsFieldFocus =
+    freeTextQuestion || (allowsCustomAnswer && draft.otherSelected);
   useEffect(() => {
     if (!focusActive || wantsFieldFocus) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;

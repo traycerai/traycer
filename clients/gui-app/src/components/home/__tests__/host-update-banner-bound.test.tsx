@@ -276,6 +276,7 @@ function attemptStatus(
     busyBreakdown: null,
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
   };
 }
 
@@ -766,6 +767,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
                 busyBreakdown: null,
                 updateOperation: null,
                 updateTransaction: null,
+                storeFormats: null,
               }
             : { ...attemptStatus(operation), updateProgress },
       });
@@ -870,11 +872,54 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       await screen.findByTestId("host-update-banner-operation-dismiss");
     });
 
+    it("Q19: a host-refuses-rpc record offers Diagnostics and NO Retry", async () => {
+      // The affordance set of `unavailable`, on the surface where a retry
+      // affordance actually exists. Retry is the one that must be absent: a
+      // host that refused the authenticated check will refuse it again, so the
+      // button's only outcome is the same refusal — and offering it is the
+      // failure arm's remedy arriving on a state that is not a failure.
+      //
+      // Dismiss must also be absent. `unavailable` is deliberately not
+      // dismissible (its whole purpose is to stay visible until repaired) and
+      // this inherits that: a refusal is a live condition, not an event to
+      // acknowledge.
+      bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({
+              phase: "failed",
+              execution: "terminal",
+              liveness: "interrupted",
+              error: {
+                code: "host-refuses-rpc",
+                message: "the host refused the authenticated check",
+                phase: "verifying",
+              },
+            }),
+          ),
+      });
+      renderBanner(undefined);
+      expect(await findPhaseText()).toContain(
+        "refused Traycer's authenticated check",
+      );
+      await screen.findByTestId("host-update-banner-operation-diagnostics");
+      expect(
+        screen.queryByTestId("host-update-banner-operation-retry"),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId("host-update-banner-operation-dismiss"),
+      ).toBeNull();
+    });
+
     it("Retry dispatches applyStaged", async () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "2.1.0", runningActivated: true },
+          value: {
+            appliedVersion: "2.1.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       );
       bindLocalHost({
@@ -959,6 +1004,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           onForceRestart={() => undefined}
           onRestart={null}
           onForceUpdate={null}
+          cliFloorBlocked={false}
         />,
       );
       const card = screen.getByTestId("host-overview-operation-card");
@@ -1097,6 +1143,12 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         phase: "preparing",
         continuation: null,
         updatedAt: "2026-05-15T00:00:00Z",
+        error: null,
+        // The record leg alone, with no liveness proof behind it - which is
+        // what these host-down cases are about: a retained phase rendered as
+        // last-seen, outside the lifecycle gate.
+        liveness: "unknown",
+        livenessObservedAtMs: null,
       },
     };
 
@@ -1242,7 +1294,11 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "2.1.0", runningActivated: true },
+          value: {
+            appliedVersion: "2.1.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       );
       const activateInstalled = vi.fn(() =>

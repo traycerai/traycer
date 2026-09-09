@@ -9,6 +9,7 @@ import type {
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
+  ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
   LifecycleAdmissionBlock,
   LocalHostMutationIntent,
@@ -242,6 +243,7 @@ interface HandlerBridge {
       convergeReady: (
         force: boolean,
         intent: LocalHostMutationIntent,
+        versionPolicy: ConvergeReadyVersionPolicy,
       ) => Promise<GuardedMutationOutcome<null>>;
       registerService: (
         intent: LocalHostMutationIntent,
@@ -1740,6 +1742,40 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     expect(registerService).toHaveBeenCalledTimes(1);
   });
 
+  // `converge-ready` (Doctor's liveness-only repair) must map to
+  // `keep-installed`, and `converge-latest` ("Install host" - the ONE
+  // explicit, version-seeking repair) must map to `pinned-minimum` -
+  // `convergeVersionPolicyForRepair`'s whole job.
+  it("runDoctorRepairIfIdle maps converge-ready to keep-installed and converge-latest to pinned-minimum", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const convergeReady = vi.fn(
+      (
+        _force: boolean,
+        _intent: LocalHostMutationIntent,
+        _versionPolicy: ConvergeReadyVersionPolicy,
+      ) => Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.convergeReady = convergeReady;
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairIfIdle,
+    );
+
+    await handler(null, {
+      repair: "converge-ready",
+      expectedHostId: LIVE_HOST_ID,
+    });
+    expect(convergeReady.mock.calls[0]?.[2]).toBe("keep-installed");
+
+    await handler(null, {
+      repair: "converge-latest",
+      expectedHostId: LIVE_HOST_ID,
+    });
+    expect(convergeReady.mock.calls[1]?.[2]).toBe("pinned-minimum");
+  });
+
   it("runDoctorRepairIfIdle surfaces a non-ok controller outcome as dispatched, not thrown", async () => {
     writeEnrollment(LIVE_HOST_ID);
     const invoke = RunnerHostInvoke;
@@ -1985,6 +2021,36 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       kind: "abandon",
       message: expect.stringContaining("host changed"),
     });
+  });
+
+  it("queued converge-ready maps to keep-installed and queued converge-latest maps to pinned-minimum", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    const convergeReady = vi.fn(
+      (
+        _force: boolean,
+        _intent: LocalHostMutationIntent,
+        _versionPolicy: ConvergeReadyVersionPolicy,
+      ) => Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    bridge.options.hostController.convergeReady = convergeReady;
+
+    await handler(null, {
+      repair: "converge-ready",
+      expectedHostId: LIVE_HOST_ID,
+    });
+    expect(convergeReady.mock.calls[0]?.[2]).toBe("keep-installed");
+
+    await handler(null, {
+      repair: "converge-latest",
+      expectedHostId: LIVE_HOST_ID,
+    });
+    expect(convergeReady.mock.calls[1]?.[2]).toBe("pinned-minimum");
   });
 
   it("queued restart hands the controller a user-repair intent", async () => {

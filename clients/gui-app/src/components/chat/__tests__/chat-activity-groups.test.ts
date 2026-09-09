@@ -1114,6 +1114,7 @@ describe("chat activity grouping", () => {
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
           {
             questionId: "q2",
@@ -1121,6 +1122,7 @@ describe("chat activity grouping", () => {
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
@@ -1195,6 +1197,7 @@ describe("chat activity grouping", () => {
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
@@ -1570,6 +1573,7 @@ function interviewSegment(
         header: null,
         options: [],
         multiSelect: false,
+        allowsCustomAnswer: null,
       },
     ],
     answers: [

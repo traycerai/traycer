@@ -6,7 +6,11 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { getResolvedTheme, subscribeResolvedTheme } from "@/lib/theme-applier";
+import {
+  getActiveThemePreset,
+  getResolvedTheme,
+  subscribeResolvedTheme,
+} from "@/lib/theme-applier";
 import {
   DEFAULT_MONO_FONT_STACK,
   DEFAULT_UI_FONT_STACK,
@@ -65,7 +69,6 @@ function applyCodeFontFamily(family: string | null): void {
 
 export function ThemeProvider(props: ThemeProviderProps) {
   const {
-    themePreset,
     pointerCursors,
     uiFontSize,
     codeFontSize,
@@ -73,7 +76,6 @@ export function ThemeProvider(props: ThemeProviderProps) {
     codeFontFamily,
   } = useSettingsStore(
     useShallow((s) => ({
-      themePreset: s.themePreset,
       pointerCursors: s.pointerCursors,
       uiFontSize: s.uiFontSize,
       codeFontSize: s.codeFontSize,
@@ -114,6 +116,12 @@ export function ThemeProvider(props: ThemeProviderProps) {
   useEffect(() => {
     applyCodeFontFamily(codeFontFamily);
   }, [codeFontFamily]);
+
+  const themePreset = useSyncExternalStore(
+    subscribeResolvedTheme,
+    getActiveThemePreset,
+    getActiveThemePreset,
+  );
 
   const contextValue = useMemo<ResolvedThemeContextValue>(
     () => ({ resolvedTheme, themePreset }),

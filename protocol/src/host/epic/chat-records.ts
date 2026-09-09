@@ -592,6 +592,67 @@ export type GetChatRunSettingsResponseV10 = z.infer<
 >;
 
 /**
+ * Frozen harness id set for `epic.getChatRunSettings@2.0`, as the `1.3.0` tags
+ * shipped it - everything through Reasonix, before Antigravity.
+ *
+ * v2.0 was opened to carry the ids v1.0 froze off, and bound the live
+ * persisted enum on the reading that it was the unreleased head. 1.3.0 was cut
+ * from a branch that predates Antigravity, so the tag froze v2.0 here while
+ * `main` widened the enum underneath it - the same trap one line down, which
+ * is the argument for pinning a released line the moment it ships rather than
+ * when the next id arrives.
+ *
+ * `.extract()` off the live persisted enum for the reason the V10 note gives:
+ * removing an id upstream then fails to compile here instead of silently
+ * narrowing a released line.
+ */
+const chatRunSettingsHarnessIdSchemaV20 = guiHarnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+
+/**
+ * Frozen `epic.getChatRunSettings@2.0` settings tuple. Hand-copied off
+ * `chatRunSettingsSchema` for the same reason the V10 copy is: pinning only
+ * the id over a LIVE body is a half freeze.
+ */
+export const chatRunSettingsSchemaV20 = z.object({
+  harnessId: chatRunSettingsHarnessIdSchemaV20,
+  model: z.string().min(1),
+  permissionMode: permissionModeSchema,
+  reasoningEffort: z.string().nullable(),
+  serviceTier: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  profileId: z.string().nullable().default(null),
+});
+export type ChatRunSettingsV20 = z.infer<typeof chatRunSettingsSchemaV20>;
+
+export const getChatRunSettingsResponseSchemaV20 = z.object({
+  settings: chatRunSettingsSchemaV20.nullable(),
+});
+export type GetChatRunSettingsResponseV20 = z.infer<
+  typeof getChatRunSettingsResponseSchemaV20
+>;
+
+/**
  * `host.chatRecords.subscribe@1.0` - the record-change PUSH stream, the
  * freshness half of the read above.
  *

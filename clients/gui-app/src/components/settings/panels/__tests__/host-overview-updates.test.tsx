@@ -58,6 +58,7 @@ import type {
   HostAvailableManifest,
   HostGetInstallationInfoResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
+import type { HostStatusStoreFormats } from "@traycer/protocol/host/status/index";
 import type {
   HostInstallRecord,
   HostStagedRecord,
@@ -119,16 +120,28 @@ function recordOverviewHostMethods(
   hostId: string,
   methods: readonly string[],
   installMinor: number,
+  statusMinor: number,
 ): void {
   recordNegotiatedHostMethodsByName(hostId, methods);
   const manifest: Record<string, ManifestMethodEntry> = {};
   for (const method of methods) {
     manifest[method] = {
       major: 1,
-      minor: method === "host.update.install" ? installMinor : 0,
+      minor: negotiatedMinorFor(method, installMinor, statusMinor),
     };
   }
   recordNegotiatedHostManifest(hostId, manifest);
+}
+
+/** Only the two methods this suite varies carry a negotiated minor. */
+function negotiatedMinorFor(
+  method: string,
+  installMinor: number,
+  statusMinor: number,
+): number {
+  if (method === "host.update.install") return installMinor;
+  if (method === "host.status") return statusMinor;
+  return 0;
 }
 
 // Keep existing fixture call sites concise while retaining the negotiated
@@ -137,7 +150,7 @@ function recordNegotiatedHostMethods(
   hostId: string,
   methods: readonly string[],
 ): void {
-  recordOverviewHostMethods(hostId, methods, 2);
+  recordOverviewHostMethods(hostId, methods, 2, 0);
 }
 
 function scopeFrom(
@@ -496,23 +509,31 @@ function selectedRcManifest(testCase: SelectedRcCase): HostAvailableManifest {
   };
 }
 
-function renderUpdatesHook(
-  client: OverviewHostFixture["client"],
-  hostId: string,
-  runningVersion: string,
-  stagedVersion: string | null,
-): RenderHookResult<
+function renderUpdatesHook({
+  client,
+  hostId,
+  runningVersion,
+  stagedVersion,
+  storeFormats,
+}: {
+  readonly client: OverviewHostFixture["client"];
+  readonly hostId: string;
+  readonly runningVersion: string;
+  readonly stagedVersion: string | null;
+  readonly storeFormats: HostStatusStoreFormats | null;
+}): RenderHookResult<
   HostOverviewUpdatesState,
   { readonly children: ReactNode }
-> {
+> & { readonly queryClient: QueryClient } {
   const queryClient = newQueryClient();
-  return renderHook(
+  const rendered = renderHook(
     () =>
       useHostOverviewUpdates({
         client,
         hostName: "host-a",
         hostId,
         runningVersion,
+        storeFormats,
         activationDebt: null,
         platformKey: "darwin-arm64",
         cliManifest: null,
@@ -523,6 +544,7 @@ function renderUpdatesHook(
         checkDegrade: null,
         installDegrade: null,
         busy: false,
+        incarnation: "test-incarnation",
       }),
     {
       wrapper: (props: { readonly children: ReactNode }) => (
@@ -532,6 +554,7 @@ function renderUpdatesHook(
       ),
     },
   );
+  return { ...rendered, queryClient };
 }
 
 describe("<HostSettingsPanel /> Overview updates — version picker", () => {
@@ -722,6 +745,324 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     });
   });
 
+  it("turns a fresh RPC store-floor refusal into Install anyway and sends explicit consent", async () => {
+    const installRequests: Array<{
+      readonly version: string;
+      readonly force: boolean;
+      readonly acceptStoreFormatLoss: boolean;
+    }> = [];
+    const manifestBase = multiVersionManifest(["1.3.0"]);
+    const manifest: HostAvailableManifest = {
+      ...manifestBase,
+      versions: manifestBase.versions.map((entry) => ({
+        ...entry,
+        storeFormats: { chatDb: 9 },
+      })),
+    };
+    let installCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.1",
+      storeFormats: {
+        chatDb: {
+          current: 9,
+          onDiskMax: 9,
+          epicCount: 1,
+          survey: "complete",
+        },
+      },
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest,
+          }),
+        "host.update.install": (request) => {
+          installRequests.push(request);
+          installCalls += 1;
+          return installCalls === 1
+            ? {
+                outcome: "cli-failed" as const,
+                reason: "store-format-floor" as const,
+                storeFloor: {
+                  kind: "indeterminate" as const,
+                  reason: "target-format-unknown" as const,
+                  targetVersion: "1.3.0",
+                  targetChatDb: null,
+                  onDiskMax: null,
+                  epicCount: 1,
+                  epicIds: ["epic-a"],
+                  unreadableEpicCount: 0,
+                  unreadableEpicIds: [],
+                },
+              }
+            : { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await openHostOverviewAdvanced();
+    const rows = await screen.findByTestId("host-version-rows");
+    const row = within(rows).getByRole("listitem");
+    fireEvent.click(within(row).getByRole("button", { name: "Install 1.3.0" }));
+    await waitFor(() => {
+      expect(installRequests).toEqual([
+        { version: "1.3.0", force: false, acceptStoreFormatLoss: false },
+      ]);
+      expect(
+        within(row).getByRole("button", { name: "Install 1.3.0 anyway" }),
+      ).toHaveProperty("disabled", false);
+    });
+
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Install 1.3.0 anyway" }),
+    );
+    expect(
+      (await screen.findByTestId("confirm-destructive-dialog")).textContent,
+    ).toContain("Install v1.3.0 and lose access to newer chats?");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => {
+      expect(installRequests).toEqual([
+        { version: "1.3.0", force: false, acceptStoreFormatLoss: false },
+        { version: "1.3.0", force: false, acceptStoreFormatLoss: true },
+      ]);
+    });
+  });
+
+  it("retains a typed floor across catalog refresh and clears it on the next accepted dispatch", async () => {
+    const installRequests: Array<{
+      readonly version: string;
+      readonly force: boolean;
+      readonly acceptStoreFormatLoss: boolean;
+    }> = [];
+    const manifestBase = multiVersionManifest(["1.3.0"]);
+    const manifest: HostAvailableManifest = {
+      ...manifestBase,
+      versions: manifestBase.versions.map((entry) => ({
+        ...entry,
+        storeFormats: { chatDb: 9 },
+      })),
+    };
+    const storeFormats: HostStatusStoreFormats = {
+      chatDb: {
+        current: 9,
+        onDiskMax: 9,
+        epicCount: 1,
+        survey: "complete",
+      },
+    };
+    let checkCalls = 0;
+    let installCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.1",
+      storeFormats,
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          return {
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest,
+          };
+        },
+        "host.update.install": (request) => {
+          installCalls += 1;
+          installRequests.push(request);
+          return installCalls === 1
+            ? {
+                outcome: "cli-failed" as const,
+                reason: "store-format-floor" as const,
+                storeFloor: {
+                  kind: "indeterminate" as const,
+                  reason: "target-format-unknown" as const,
+                  targetVersion: "1.3.0",
+                  targetChatDb: null,
+                  onDiskMax: null,
+                  epicCount: 1,
+                  epicIds: ["epic-a"],
+                  unreadableEpicCount: 0,
+                  unreadableEpicIds: [],
+                },
+              }
+            : { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.1",
+      stagedVersion: null,
+      storeFormats: storeFormats,
+    });
+    await waitFor(() => expect(checkCalls).toBe(1));
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(
+      rendered.result.current.picker.rows[0]?.storeFormatConfirmation,
+    ).toBeNull();
+
+    act(() => {
+      rendered.result.current.picker.onInstall("1.3.0", false);
+    });
+    await waitFor(() => expect(installCalls).toBe(1));
+    await waitFor(() =>
+      expect(
+        rendered.result.current.picker.rows[0]?.storeFormatConfirmation,
+      ).not.toBeNull(),
+    );
+
+    await rendered.queryClient.invalidateQueries();
+    await waitFor(() => expect(checkCalls).toBe(2));
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(
+      rendered.result.current.picker.rows[0]?.storeFormatConfirmation,
+    ).not.toBeNull();
+
+    act(() => {
+      rendered.result.current.picker.onInstall("1.3.0", false);
+    });
+    expect(installCalls).toBe(1);
+    expect(installRequests[0]?.acceptStoreFormatLoss).toBe(false);
+    expect(
+      rendered.result.current.picker.rows[0]?.storeFormatConfirmation,
+    ).not.toBeNull();
+
+    act(() => {
+      rendered.result.current.picker.onInstall("1.3.0", true);
+    });
+    await waitFor(() => expect(installCalls).toBe(2));
+    expect(installRequests[1]?.acceptStoreFormatLoss).toBe(true);
+    await waitFor(() =>
+      expect(
+        rendered.result.current.picker.rows[0]?.storeFormatConfirmation,
+      ).toBeNull(),
+    );
+    rendered.unmount();
+  });
+
+  it("drops the store-floor notice when a failed survey's rows all clear by format", async () => {
+    // Companion to `hostStoreFormatRestriction`'s own coverage: a failed
+    // survey used to force `storeFloorNotice` regardless of the rows it
+    // produced. With every offered row clearing by format alone (the target
+    // stamps the same chatDb as this build), there is nothing left asking for
+    // "Install anyway" consent, so the notice must follow the rows instead of
+    // the raw survey outcome.
+    const manifestBase = multiVersionManifest(["1.3.0"]);
+    const manifest: HostAvailableManifest = {
+      ...manifestBase,
+      versions: manifestBase.versions.map((entry) => ({
+        ...entry,
+        storeFormats: { chatDb: 9 },
+      })),
+    };
+    const storeFormats: HostStatusStoreFormats = {
+      chatDb: {
+        current: 9,
+        onDiskMax: null,
+        epicCount: 1,
+        survey: "failed",
+      },
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.1",
+      storeFormats,
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.1",
+      stagedVersion: null,
+      storeFormats,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(
+      rendered.result.current.picker.rows[0]?.storeFormatConfirmation,
+    ).toBeNull();
+    expect(rendered.result.current.picker.storeFloorNotice).toBe(false);
+    rendered.unmount();
+  });
+
+  it("refuses a consented install for a row withheld because the host predates the store floor", async () => {
+    // The hazard: a confirmation dialog can outlive a status poll and arrive
+    // with `acceptStoreFormatLoss: true` for a row that is now withheld -
+    // consent must never unlock a peer that cannot honour consent.
+    const installRequests: string[] = [];
+    const manifest = multiVersionManifest(["1.2.0"]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest,
+          }),
+        "host.update.install": (request) => {
+          installRequests.push(request.version);
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    // Default minors: installMinor 2 is one short of the store floor (@1.3),
+    // so this row is withheld (`floor-unsupported`) from the start.
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.0-rc.1",
+      stagedVersion: null,
+      storeFormats: null,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(
+      rendered.result.current.picker.rows.find((row) => row.version === "1.2.0")
+        ?.storeFormatConfirmation,
+    ).toBeNull();
+
+    act(() => {
+      rendered.result.current.picker.onInstall("1.2.0", true);
+    });
+
+    expect(installRequests).toEqual([]);
+    rendered.unmount();
+  });
+
   it("allows an explicit RC-to-stable downgrade, sends the exact target, and freezes the other rows while it is in flight", async () => {
     let releaseInstall: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
@@ -747,7 +1088,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         },
       },
     });
-    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    // Explicit minors: installMinor 3 puts this host past the store-floor
+    // gate, so the downgrade is offerable at all - this test is about
+    // downgrade mechanics, not the floor.
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
@@ -800,7 +1144,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
           }),
       },
     });
-    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 1);
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 1, 0);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
@@ -839,7 +1183,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
           }),
       },
     });
-    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    // Explicit minors: installMinor 3 puts this host past the store-floor
+    // gate, so the downgrade is offerable at all - this test is about
+    // downgrade mechanics, not the floor.
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
@@ -866,6 +1213,50 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         .getByRole("button", { name: "Install 1.1.0" })
         .hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("withholds an older version from a host whose install method predates the store floor", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest: multiVersionManifest(["1.4.0", "1.3.0-rc.1", "1.2.0"]),
+          }),
+      },
+    });
+    // Default minors: installMinor 2 supports downgrade at all (@1.2), but is
+    // one minor short of the store floor (@1.3) - the exact fleet gap.
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await openHostOverviewAdvanced();
+    const rows = within(await screen.findByTestId("host-version-rows"));
+    expect(
+      within(rowFor(rows.getAllByRole("listitem"), "1.4.0"))
+        .getByRole("button", { name: "Install 1.4.0" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    const olderRow = rowFor(rows.getAllByRole("listitem"), "1.2.0");
+    const older = within(olderRow);
+    expect(
+      older
+        .getByRole("button", { name: "Install 1.2.0" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      older.queryByRole("button", { name: "Install 1.2.0 anyway" }),
+    ).toBeNull();
+    expect(olderRow.textContent).toContain(
+      "Update this host before installing an older version",
+    );
   });
 
   it("a YANKED latest is never offered by the summary — the row disables it and the CLI's resolveAsset refuses it, so an offer would dispatch a guaranteed rejection", async () => {
@@ -1852,7 +2243,13 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    const rendered = renderUpdatesHook(fixture.client, "host-a", "1.2.0", null);
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.2.0",
+      stagedVersion: null,
+      storeFormats: null,
+    });
     await waitFor(() =>
       expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
     );
@@ -2270,12 +2667,13 @@ describe("Overview updates — CLI floor remedy", () => {
         },
       });
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-      const rendered = renderUpdatesHook(
-        fixture.client,
-        "host-a",
-        "1.2.0",
-        scenario.version,
-      );
+      const rendered = renderUpdatesHook({
+        client: fixture.client,
+        hostId: "host-a",
+        runningVersion: "1.2.0",
+        stagedVersion: scenario.version,
+        storeFormats: null,
+      });
       await waitFor(() =>
         expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
       );
@@ -2289,7 +2687,11 @@ describe("Overview updates — CLI floor remedy", () => {
       // pin. Bypassing describeForceUpdateRefusal would reach installForce's
       // mutation and redden the no-mutation/failure assertions below.
       act(() => {
-        rendered.result.current.installForce(scenario.version, onSettled);
+        rendered.result.current.installForce(
+          scenario.version,
+          false,
+          onSettled,
+        );
         returned = true;
       });
       expect(onSettled).toHaveBeenCalledTimes(1);
@@ -2327,12 +2729,13 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    const rendered = renderUpdatesHook(
-      fixture.client,
-      "host-a",
-      "1.3.0-rc.1",
-      null,
-    );
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.0-rc.1",
+      stagedVersion: null,
+      storeFormats: null,
+    });
     await waitFor(() =>
       expect(rendered.result.current.cliFloor).not.toBeNull(),
     );
@@ -2369,12 +2772,13 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    const yankedRendered = renderUpdatesHook(
-      yankedFixture.client,
-      "host-a",
-      "1.3.0-rc.1",
-      "1.3.0",
-    );
+    const yankedRendered = renderUpdatesHook({
+      client: yankedFixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.0-rc.1",
+      stagedVersion: "1.3.0",
+      storeFormats: null,
+    });
 
     await waitFor(() =>
       expect(yankedRendered.result.current.summary.updatableVersion).toBe(
@@ -2404,7 +2808,7 @@ describe("Overview updates — CLI floor remedy", () => {
     // yanked entry, so no change to it can authorize this release. Dropping
     // the `entry.yanked` refusal is what reddens the no-mutation pin.
     act(() => {
-      yankedRendered.result.current.installForce("1.3.0", onSettled);
+      yankedRendered.result.current.installForce("1.3.0", false, onSettled);
       returned = true;
     });
     expect(onSettled).toHaveBeenCalledTimes(1);
@@ -2450,12 +2854,13 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    const rendered = renderUpdatesHook(
-      fixture.client,
-      "host-a",
-      "1.3.0-rc.1",
-      null,
-    );
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.0-rc.1",
+      stagedVersion: null,
+      storeFormats: null,
+    });
 
     await waitFor(() =>
       expect(rendered.result.current.summary.updatableVersion).toBe("1.3.0"),
@@ -2486,12 +2891,13 @@ describe("Overview updates — CLI floor remedy", () => {
         },
       });
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-      const rendered = renderUpdatesHook(
-        fixture.client,
-        "host-a",
-        "1.3.0-rc.1",
-        null,
-      );
+      const rendered = renderUpdatesHook({
+        client: fixture.client,
+        hostId: "host-a",
+        runningVersion: "1.3.0-rc.1",
+        stagedVersion: null,
+        storeFormats: null,
+      });
 
       await waitFor(() =>
         expect(rendered.result.current.cliFloor?.requiredCliVersion).toBe(
@@ -2552,6 +2958,133 @@ describe("Overview updates — CLI floor remedy", () => {
 // stage and then refuse the version anyway, so offering it could only ever
 // destroy the stage for nothing.
 describe("Overview updates — stagedEntryOfferable", () => {
+  it("a staged downgrade below the store floor stays offerable behind its Install-anyway confirmation, and installForce carries that consent with force", async () => {
+    // A downgrade authorized with Install anyway that then parked on a busy
+    // host used to lose its way forward: the stage's Force update was
+    // withheld for any restriction, and the picker is disabled while the
+    // host is busy, so the one dispatch the host supports for this state -
+    // `{force: true, acceptStoreFormatLoss: true}` - could not be sent from
+    // this page until every session drained.
+    const installRequests: Array<{
+      readonly version: string;
+      readonly force: boolean;
+      readonly acceptStoreFormatLoss: boolean;
+    }> = [];
+    const manifestBase = multiVersionManifest(["1.2.0"]);
+    const manifest: HostAvailableManifest = {
+      ...manifestBase,
+      versions: manifestBase.versions.map((entry) => ({
+        ...entry,
+        storeFormats: { chatDb: 8 },
+      })),
+    };
+    const storeFormats: HostStatusStoreFormats = {
+      chatDb: {
+        current: 9,
+        onDiskMax: 9,
+        epicCount: 1,
+        survey: "complete",
+      },
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.1",
+      storeFormats,
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+        "host.update.install": (request) => {
+          installRequests.push(request);
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.1",
+      stagedVersion: "1.2.0",
+      storeFormats,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+
+    // The row and the stage read the same restriction: blocked, with the
+    // confirmation the row would show behind Install anyway.
+    const rowConfirmation =
+      rendered.result.current.picker.rows[0]?.storeFormatConfirmation ?? null;
+    expect(rowConfirmation).not.toBeNull();
+    expect(rendered.result.current.stagedEntryOfferable).toBe(true);
+    expect(rendered.result.current.stagedStoreFormatConfirmation).toBe(
+      rowConfirmation,
+    );
+
+    const onSettled = vi.fn();
+    act(() => {
+      rendered.result.current.installForce("1.2.0", true, onSettled);
+    });
+    await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
+    expect(installRequests).toEqual([
+      { version: "1.2.0", force: true, acceptStoreFormatLoss: true },
+    ]);
+    rendered.unmount();
+  });
+
+  it("a staged downgrade is withheld while the first survey is pending - the restriction carries no confirmation to consent to", async () => {
+    const manifestBase = multiVersionManifest(["1.2.0"]);
+    const manifest: HostAvailableManifest = {
+      ...manifestBase,
+      versions: manifestBase.versions.map((entry) => ({
+        ...entry,
+        storeFormats: { chatDb: 8 },
+      })),
+    };
+    const storeFormats: HostStatusStoreFormats = {
+      chatDb: {
+        current: 9,
+        onDiskMax: null,
+        epicCount: 0,
+        survey: "pending",
+      },
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.1",
+      storeFormats,
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.1",
+      stagedVersion: "1.2.0",
+      storeFormats,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+
+    expect(rendered.result.current.stagedEntryOfferable).toBe(false);
+    expect(rendered.result.current.stagedStoreFormatConfirmation).toBeNull();
+    rendered.unmount();
+  });
+
   it("a yanked staged entry is not offerable, and installForce refuses with the withdrawal text without dispatching", async () => {
     const base = multiVersionManifest(["1.3.0"]);
     const yankedEntry = { ...base.versions[0], yanked: true };
@@ -2575,12 +3108,13 @@ describe("Overview updates — stagedEntryOfferable", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    const rendered = renderUpdatesHook(
-      fixture.client,
-      "host-a",
-      "1.2.0",
-      "1.3.0",
-    );
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.2.0",
+      stagedVersion: "1.3.0",
+      storeFormats: null,
+    });
     await waitFor(() =>
       expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
     );
@@ -2596,7 +3130,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
       expect(returned).toBe(false);
     });
     act(() => {
-      rendered.result.current.installForce("1.3.0", onSettled);
+      rendered.result.current.installForce("1.3.0", false, onSettled);
       returned = true;
     });
     expect(onSettled).toHaveBeenCalledTimes(1);
@@ -2648,12 +3182,13 @@ describe("Overview updates — stagedEntryOfferable", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    const rendered = renderUpdatesHook(
-      fixture.client,
-      "host-a",
-      "1.2.0",
-      "1.3.0",
-    );
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.2.0",
+      stagedVersion: "1.3.0",
+      storeFormats: null,
+    });
     await waitFor(() =>
       expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
     );
@@ -2666,7 +3201,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
     // Falsification: add an `assetUnavailableReason` refusal back to
     // `describeForceUpdateRefusal` and `installCalls` below stays empty.
     act(() => {
-      rendered.result.current.installForce("1.3.0", () => {});
+      rendered.result.current.installForce("1.3.0", false, () => {});
     });
     await waitFor(() => {
       expect(installCalls).toEqual([{ version: "1.3.0", force: true }]);
@@ -2690,12 +3225,13 @@ describe("Overview updates — stagedEntryOfferable", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    const rendered = renderUpdatesHook(
-      fixture.client,
-      "host-a",
-      "1.2.0",
-      "1.3.0",
-    );
+    const rendered = renderUpdatesHook({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.2.0",
+      stagedVersion: "1.3.0",
+      storeFormats: null,
+    });
     await waitFor(() =>
       expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
     );
@@ -2748,6 +3284,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
           hostName: "host-a",
           hostId: "host-a",
           runningVersion: "1.2.0",
+          storeFormats: null,
           activationDebt: null,
           platformKey: null,
           cliManifest: null,
@@ -2758,6 +3295,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
           checkDegrade: null,
           installDegrade: null,
           busy: false,
+          incarnation: "test-incarnation",
         }),
       {
         wrapper: (props: { readonly children: ReactNode }) => (
@@ -2777,7 +3315,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
       expect(returned).toBe(false);
     });
     act(() => {
-      rendered.result.current.installForce("1.3.0", onSettled);
+      rendered.result.current.installForce("1.3.0", false, onSettled);
       returned = true;
     });
     expect(onSettled).toHaveBeenCalledTimes(1);
@@ -2826,6 +3364,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
             hostName: "host-a",
             hostId: "host-a",
             runningVersion: "1.2.0",
+            storeFormats: null,
             activationDebt: null,
             platformKey: "darwin-arm64",
             cliManifest: null,
@@ -2836,6 +3375,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
             checkDegrade: null,
             installDegrade: null,
             busy: false,
+            incarnation: "test-incarnation",
           }),
         {
           wrapper: (props: { readonly children: ReactNode }) => (
@@ -2850,7 +3390,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
       );
 
       act(() => {
-        rendered.result.current.installForce("1.3.0", () => {});
+        rendered.result.current.installForce("1.3.0", false, () => {});
       });
       await waitFor(() =>
         expect(rendered.result.current.summary.failureDescription).toContain(
@@ -3115,6 +3655,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
             busyBreakdown: null,
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
           };
         },
         "host.update.check": () => ({

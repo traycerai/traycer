@@ -407,6 +407,21 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The two bound dispatches, FIFO for exactly `host.update.install`'s reason:
+  // they mutate the host's own lifecycle, so two in flight must never collapse
+  // to "the latest". Unpolled — each is a one-shot command, and the progress
+  // it starts is read from `host.status.updateOperation`, never by re-asking
+  // the method what happened.
+  "host.update.activate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.update.continue": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Polled, at the `host.status` cadence, for one consumer: the Overview
   // derives "installed, restart to finish" and "staged, waiting for work"
   // from the install and staged records beside the live status. Those
@@ -1450,6 +1465,20 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Clearing an API key removes persisted credentials.
   "providers.clearApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The per-profile pair. `fifo` for the same reason as the provider-wide pair
+  // above, and one reason more: these two write and delete the SAME cell, so a
+  // "latest wins" policy could drop a set that a later clear was meant to
+  // follow - leaving the credential the user asked to remove still stored.
+  "providers.setProfileApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.clearProfileApiKey": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

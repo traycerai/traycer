@@ -129,7 +129,8 @@ const hostPlatformAssetSchema = z.discriminatedUnion("available", [
   }),
 ]);
 
-export const hostAvailableManifestSchema = z.object({
+// Frozen for host.update.check@1.0/1.1: those peers never reported formats.
+export const hostAvailableManifestSchemaPreStoreFormats = z.object({
   schemaVersion: z.literal(1),
   generatedAt: z.string(),
   latest: z.string(),
@@ -146,6 +147,19 @@ export const hostAvailableManifestSchema = z.object({
     }),
   ),
 });
+export const hostAvailableManifestSchema =
+  hostAvailableManifestSchemaPreStoreFormats.extend({
+    versions: z.array(
+      hostAvailableManifestSchemaPreStoreFormats.shape.versions.element.extend({
+        // Older CLI listings omit this, just like older release manifests.
+        // The caller then consults the fixed released table, never a guess.
+        storeFormats: z
+          .object({ chatDb: z.number().int().nonnegative() })
+          .nullable()
+          .optional(),
+      }),
+    ),
+  });
 export type HostAvailableManifest = z.infer<typeof hostAvailableManifestSchema>;
 
 /**
@@ -173,7 +187,10 @@ export type HostUpdateCheckRequest = z.infer<
 >;
 
 export const hostUpdateCheckResponseSchema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("ok"), manifest: hostAvailableManifestSchema }),
+  z.object({
+    outcome: z.literal("ok"),
+    manifest: hostAvailableManifestSchemaPreStoreFormats,
+  }),
   z.object({ outcome: z.literal("cli-unavailable") }),
   z.object({ outcome: z.literal("cli-failed") }),
   z.object({ outcome: z.literal("invalid-output") }),
@@ -267,7 +284,7 @@ export const hostUpdateCheckResponseSchemaV11 = z.discriminatedUnion(
   [
     z.object({
       outcome: z.literal("ok"),
-      manifest: hostAvailableManifestSchema,
+      manifest: hostAvailableManifestSchemaPreStoreFormats,
       effectiveIncludePreReleases: z.boolean(),
       includePreReleasesSource: hostIncludePreReleasesSourceSchema,
     }),
@@ -280,12 +297,40 @@ export type HostUpdateCheckResponseV11 = z.infer<
   typeof hostUpdateCheckResponseSchemaV11
 >;
 
+/** Published store formats survive the host's CLI-JSON projection from @1.2. */
+export const hostUpdateCheckResponseSchemaV12 = z.discriminatedUnion(
+  "outcome",
+  [
+    hostUpdateCheckResponseSchemaV11.options[0].extend({
+      manifest: hostAvailableManifestSchema,
+    }),
+    hostUpdateCheckResponseSchemaV11.options[1],
+    hostUpdateCheckResponseSchemaV11.options[2],
+    hostUpdateCheckResponseSchemaV11.options[3],
+  ],
+);
+export type HostUpdateCheckResponseV12 = z.infer<
+  typeof hostUpdateCheckResponseSchemaV12
+>;
+
 export const hostUpdateInstallRequestSchema = z.object({
   version: z.string().min(1),
   force: z.boolean(),
 });
 export type HostUpdateInstallRequest = z.infer<
   typeof hostUpdateInstallRequestSchema
+>;
+
+/**
+ * @1.3 separates accepting lost chat access from force's busy-work consent.
+ * Required here so every current caller states the choice explicitly.
+ */
+export const hostUpdateInstallRequestV13Schema =
+  hostUpdateInstallRequestSchema.extend({
+    acceptStoreFormatLoss: z.boolean(),
+  });
+export type HostUpdateInstallRequestV13 = z.infer<
+  typeof hostUpdateInstallRequestV13Schema
 >;
 
 /**
@@ -409,6 +454,207 @@ export const hostUpdateInstallResponseV11Schema = z.discriminatedUnion(
 );
 export type HostUpdateInstallResponseV11 = z.infer<
   typeof hostUpdateInstallResponseV11Schema
+>;
+
+/** Bounded because the whole device may contain thousands of epic stores. */
+export const HOST_STORE_FLOOR_EPIC_ID_LIMIT = 10;
+
+export const hostUpdateStoreFloorRefusalSchema = z.object({
+  kind: z.enum(["blocked", "indeterminate"]),
+  reason: z.enum([
+    "newer-chat-stores",
+    "target-format-unknown",
+    "unreadable-stores",
+  ]),
+  targetVersion: z.string().min(1),
+  targetChatDb: z.number().int().nonnegative().nullable(),
+  // Null when any stamp was unreadable, just like host.status.onDiskMax.
+  onDiskMax: z.number().int().positive().nullable(),
+  // For a blocked verdict these name only proven-newer stores. Indeterminate
+  // verdicts name the stores whose compatibility could not be established.
+  epicCount: z.number().int().nonnegative(),
+  epicIds: z.array(z.string().min(1)).max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
+  // Keep unreadable stores separate even when another store proves the move
+  // is blocked: the UI must not label an unreadable stamp as proven-newer.
+  // Zero/empty means no per-epic read failed, not that the peer said nothing.
+  unreadableEpicCount: z.number().int().nonnegative(),
+  unreadableEpicIds: z
+    .array(z.string().min(1))
+    .max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
+});
+export type HostUpdateStoreFloorRefusal = z.infer<
+  typeof hostUpdateStoreFloorRefusalSchema
+>;
+
+/**
+ * @1.3 retains cli-failed so every released peer can decode a pre-spawn
+ * refusal. The dispatcher strips these additive details for older minors;
+ * no new outcome or emission gate is needed. Null means no reason was given,
+ * including when a response is upgraded from an older peer.
+ */
+export const hostUpdateInstallResponseV13Schema = z.discriminatedUnion(
+  "outcome",
+  [
+    hostUpdateInstallResponseV11Schema.options[0],
+    hostUpdateInstallResponseV11Schema.options[1],
+    hostUpdateInstallResponseV11Schema.options[2],
+    z.object({
+      outcome: z.literal("cli-failed"),
+      // Open vocabulary, like the bound-dispatch reason, so future CLI causes
+      // do not create an unservable generation of clients.
+      reason: z.string().min(1).nullable(),
+      storeFloor: hostUpdateStoreFloorRefusalSchema.nullable(),
+    }),
+    hostUpdateInstallResponseV11Schema.options[4],
+    hostUpdateInstallResponseV11Schema.options[5],
+  ],
+);
+export type HostUpdateInstallResponseV13 = z.infer<
+  typeof hostUpdateInstallResponseV13Schema
+>;
+
+/**
+ * The request shape as it SHIPPED at `@1.0`: `attemptId` and `force`, with no
+ * `expected`. A hand-written literal, not `.omit()` over the live schema, for
+ * the reason `managedCommandSchemaPreRelaunch` gives — a future addition to
+ * the live shape must not be able to leak onto the released line this binds.
+ *
+ * Binding `@1.0` to this is what makes the strip STRUCTURAL rather than a
+ * filter applied after the fact: the dispatcher parses against the CALLER's
+ * schema, so an `expected` sent to a `@1.0` peer is unreachable for it, and
+ * that peer's behaviour is exactly what it was before this key existed.
+ */
+export const hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity = z.object(
+  {
+    attemptId: z.string().min(1),
+    force: z.boolean(),
+  },
+);
+
+/**
+ * The record position the dispatcher OBSERVED when it built this request.
+ *
+ * `z.number().int().positive()` is exactly the decoder's `positiveInteger`
+ * (`@traycer/protocol/config/host-update-attempt`): zod 4's `.int()` is
+ * safe-integer bounded, so both reject a counter above `2^53` where `+ 1`
+ * stops advancing. It is also byte-for-byte the rule `host.status` already
+ * applies to the same two fields, which matters because these values are
+ * compared for EQUALITY with the ones that arrived over that route.
+ */
+export const hostUpdateBoundDispatchExpectedIdentitySchema = z.object({
+  generation: z.number().int().positive(),
+  sequence: z.number().int().positive(),
+});
+export type HostUpdateBoundDispatchExpectedIdentity = z.infer<
+  typeof hostUpdateBoundDispatchExpectedIdentitySchema
+>;
+
+/**
+ * The request shared by the two BOUND update dispatches,
+ * `host.update.activate` and `host.update.continue`.
+ *
+ * It names an ATTEMPT, not a version. That is the whole difference from
+ * `host.update.install`: these methods resume work a durable record already
+ * describes, so the operation comes from the record's continuation and the
+ * caller supplies only which attempt it means and whether the user asked to
+ * push past a busy host. A version here would be a second, unsynchronised copy
+ * of a fact the record already owns — and one a stale UI could get wrong.
+ *
+ * ### Why `expected` is NOT that second copy
+ *
+ * The argument above stands, and it does not reach this key. A version is a
+ * fact about the world; a stale one makes the host do the WRONG THING. A
+ * generation is a cursor into the record's own history whose only use is to be
+ * compared for equality, and a stale one produces a REFUSAL. The two fail in
+ * opposite directions, which is the whole reason one is refused here and the
+ * other is carried.
+ *
+ * It is not new vocabulary either. `host.status` already carries
+ * `attemptId + generation + sequence` and calls it "the ordering key, in full"
+ * (`../status/contracts.ts`); the client receives the triple, orders on it, and
+ * then had no way to say which one it was acting on. This request was the only
+ * place in the round trip that truncated the identity to a third of itself.
+ *
+ * ### Why OPTIONAL, and what its absence means
+ *
+ * Absence is the legacy signal, not a defaulted value. A client that predates
+ * `@1.1` cannot send the key, and a `@1.0` peer parses with
+ * {@link hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity}, where it does
+ * not exist at all. A host that receives no `expected` must therefore behave
+ * exactly as it did before — unbound — because "the caller did not say" and
+ * "the caller says any position will do" have to stay distinguishable, and only
+ * the first of them is true of an old client.
+ *
+ * A host that DOES receive one compares it against the record it observes and
+ * refuses when the attempt has moved. That refusal rides the existing
+ * `dispatch-indeterminate { reason }` arm: `reason` is a free `z.string()` here
+ * and a kebab PATTERN in the ACK grammar, so the new `refused-attempt-moved`
+ * needs no schema change anywhere.
+ *
+ * The WIRE stays open and must: a host has to be able to report a reason a
+ * client predates, and an enum here would turn "a newer host said something
+ * new" into a parse failure at exactly the moment a user needs telling. What
+ * the package does enumerate is a BUILD-TIME vocabulary, one tuple per wire
+ * field, in `@traycer/protocol/config/host-update-bound-dispatch-reasons`:
+ * `HOST_UPDATE_KNOWN_INDETERMINATE_DISPATCH_REASONS` for this arm — the KNOWN
+ * values of a field that is genuinely open, because one producer generates
+ * them — and `HOST_UPDATE_CLI_FAILED_REASONS`, which is closed, for the other.
+ * A consumer narrows through that module; it never parses against it.
+ */
+export const hostUpdateBoundDispatchRequestSchema = z.object({
+  attemptId: z.string().min(1),
+  force: z.boolean(),
+  expected: hostUpdateBoundDispatchExpectedIdentitySchema.optional(),
+});
+export type HostUpdateBoundDispatchRequest = z.infer<
+  typeof hostUpdateBoundDispatchRequestSchema
+>;
+
+/**
+ * The response shared by both bound dispatches — deliberately NOT
+ * `host.update.install`'s, at any minor.
+ *
+ * Two properties of the install response make reuse actively wrong here:
+ *
+ *  - its `cli-failed` arm carries NO reason (`{ outcome: "cli-failed" }`), and
+ *    a bound dispatch's most important failure is a CLI too old to honour the
+ *    bound options at all. That is a specific, actionable thing to tell a user
+ *    ("update the CLI, then try again"), and an arm with nowhere to put it
+ *    would erase it at the wire;
+ *  - the host projects every `host.update.install@1.0` peer's decision as
+ *    `accepted {null}`, a legacy accommodation for callers that predate
+ *    attempt ids. These methods are new AT 1.0, so there is no such peer, and
+ *    inheriting a projection that turns a refusal into an acceptance would be
+ *    the "never reports a false success" rule broken on day one.
+ *
+ * Every arm carries a non-null payload, unlike the install response's
+ * required-key/nullable-value fields: those exist because an OLD peer might
+ * not have said, and there are no old peers here. A caller may therefore act
+ * on `attemptId` and render `reason` without a "did not say" branch.
+ */
+export const hostUpdateBoundDispatchResponseSchema = z.discriminatedUnion(
+  "outcome",
+  [
+    z.object({
+      outcome: z.literal("accepted"),
+      attemptId: z.string().min(1),
+    }),
+    z.object({
+      outcome: z.literal("already-updating"),
+      attemptId: z.string().min(1),
+    }),
+    z.object({
+      outcome: z.literal("dispatch-indeterminate"),
+      reason: z.string().min(1),
+    }),
+    z.object({
+      outcome: z.literal("cli-failed"),
+      reason: z.string().min(1),
+    }),
+  ],
+);
+export type HostUpdateBoundDispatchResponse = z.infer<
+  typeof hostUpdateBoundDispatchResponseSchema
 >;
 
 export const hostGetInstallationInfoRequestSchema = emptyRequestSchema;

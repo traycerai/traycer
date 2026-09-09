@@ -28,17 +28,28 @@ import { installSourceLogFields } from "./install-source-log-fields";
 // service registration was missing, auto-bootstrap forced `satisfaction:
 // presence` so a registration repair could never replace the installed host.
 // `ensureHost` does NOT: it derives satisfaction from the resolved source, so
-// bytes that differ from this CLI's expected version are reinstalled even
-// when the only visible gap was the registration.
+// bytes that differ from this CLI's expected version are reinstalled even when
+// the only visible gap was the registration - IN EVERY DIRECTION BUT ONE. A
+// host whose installed version this build's comparator ranks strictly ABOVE
+// the expected one is kept (`own-build-minimum`, `provision.ts`), because an
+// update the user already has must not be undone by a convergence they did not
+// ask for. Q7: `exact` could not express that, and the desktop requests a
+// convergence whenever the local host is down OR has not been dialed - so a
+// host updated out of band was reverted to the bundled build after every
+// outage and every launch with a remote serving, then updated again, then
+// reverted again.
 //
 // That asymmetry tracks implicit vs explicit. Auto-bootstrap ran off a READ,
 // where swapping a user's host bytes as a side effect is indefensible;
 // `ensure` is a convergence verb someone typed, and converging to the
 // expected version is what it promises (Desktop's post-auth call depends on
 // exactly that). Do not "restore" presence-only semantics here to match the
-// deleted module - it would break that contract. A caller that wants
-// registration repaired WITHOUT touching bytes wants `host service install`,
-// which is the narrower tool and still has that behaviour.
+// deleted module - it would break that contract, and it is not what the Q7
+// narrowing did: a missing, older, or unorderable install still converges, and
+// `--force` still replaces bytes unconditionally, since it never takes the
+// satisfied fast path. A caller that wants registration repaired WITHOUT
+// touching bytes wants `host service install`, which is the narrower tool and
+// still has that behaviour.
 //
 // Source resolution order (offline-capable, self-contained when the host
 // ships beside the CLI):
@@ -66,6 +77,19 @@ export interface EnsureHostOptions {
   // Skip the busy probe and restart a running host unconditionally (the
   // desktop "Force restart"). Threaded into `provisionHost`.
   readonly force: boolean;
+  /** See `ProvisionHostOptions.acceptStoreFormatLoss`. Forwarded verbatim. */
+  readonly acceptStoreFormatLoss: boolean;
+  // Liveness-only convergence: keep ANY installed, non-yanked host whatever
+  // its version, instead of converging to this build's preferred pin. The
+  // desktop passes it for its BACKGROUND intent (the selection authority's
+  // "host down" ensure, the launch boot ladder, a Doctor repair over a
+  // deliberately held version), so an out-of-band downgrade is not silently
+  // reverted by a convergence nobody asked for (the downgrade-revert RCA). An
+  // explicit `--release` still wins - a named version is an exact request;
+  // `--from`/the packaged archive only supply the FIRST-INSTALL source, so
+  // `--keep-installed --from <archive>` keeps a viable install and bootstraps
+  // from the archive only when nothing is installed.
+  readonly keepInstalled: boolean;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
   // Forwarded to `provisionHost`: runs only once this call has committed to
   // installing, registering or starting a host, never on the no-op fast
@@ -90,6 +114,7 @@ export async function ensureHost(
     environment: opts.runtime.environment,
     hasExplicitVersion: opts.versionRequest !== null,
     hasFromPath: opts.fromPath !== null,
+    keepInstalled: opts.keepInstalled,
     enableLinger: opts.enableLinger,
     allowSelfInvocation: opts.allowSelfInvocation,
     noServiceRegister: opts.noServiceRegister,
@@ -100,35 +125,66 @@ export async function ensureHost(
   // local-file; it shares this build's `config.version`, so we stamp that as
   // both the target and the recorded version. A rebuilt host (new stamp,
   // same channel) then differs from the install record and is reinstalled,
-  // while an unchanged build is a no-op. An explicit `--release <semver>`
-  // resolves to a registry source and keeps the real semver as its target.
+  // while an unchanged build - and, since Q7, a comparably NEWER install - is
+  // a no-op. An explicit `--release <semver>` resolves to a registry source
+  // and keeps the real semver as its target.
   const source = await resolveEnsureSource(opts);
   opts.runtime.logger.debug("Host ensure source resolved", {
     environment: opts.runtime.environment,
     ...installSourceLogFields(source),
   });
+  // Both local-file shapes are "this build's host": the packaged archive AND
+  // an explicit `--from`, which is what the Windows desktop passes for the
+  // very same bundled archive (`resolveWindowsBundledHostArchive`). Keying the
+  // Q7 narrowing on the local-file branch rather than on "no `--from`" is what
+  // makes the two desktop platforms behave alike; an operator who does mean
+  // "these bytes, whatever is installed" has `--force`.
   const isOwnBuild = source.kind === "local-file";
-  const satisfaction: HostSatisfactionPolicy = isOwnBuild
-    ? { kind: "exact", version: config.version }
-    : opts.versionRequest !== null &&
-        source.kind === "registry" &&
-        source.versionRequest !== "latest"
-      ? { kind: "exact", version: source.versionRequest }
-      : source.kind === "registry" && source.versionRequest !== "latest"
-        ? {
-            kind: "implicit-registry-minimum",
-            version: source.versionRequest,
-          }
-        : { kind: "presence" };
+  // `--keep-installed` with no explicit `--release` selects the liveness-only
+  // `viability` policy: keep whatever viable host is installed rather than
+  // reinstalling this build's preferred pin over it. Deliberately NOT gated on
+  // `fromPath === null` - the desktop's CLI-owned (Windows) background route
+  // passes `--from <bundled archive>` as its FIRST-INSTALL source, not as an
+  // explicit version pin, so gating on it would leave that route reverting the
+  // very downgrade the mac route no longer touches. An explicit `--release`
+  // (a named version) is the one thing that still wins, as `exact` below.
+  const satisfaction: HostSatisfactionPolicy =
+    opts.keepInstalled && opts.versionRequest === null
+      ? { kind: "viability" }
+      : isOwnBuild
+        ? { kind: "own-build-minimum", version: config.version }
+        : opts.versionRequest !== null &&
+            source.kind === "registry" &&
+            source.versionRequest !== "latest"
+          ? { kind: "exact", version: source.versionRequest }
+          : source.kind === "registry" && source.versionRequest !== "latest"
+            ? {
+                kind: "implicit-registry-minimum",
+                version: source.versionRequest,
+              }
+            : { kind: "presence" };
   opts.runtime.logger.debug("Host ensure provisioning target computed", {
     environment: opts.runtime.environment,
     sourceKind: source.kind,
     satisfactionKind: satisfaction.kind,
     satisfactionVersion:
-      satisfaction.kind === "presence" ? "presence-only" : satisfaction.version,
+      satisfaction.kind === "presence" || satisfaction.kind === "viability"
+        ? satisfaction.kind
+        : satisfaction.version,
     recordVersionOverride: isOwnBuild ? "cli-build-version" : "none",
     registerService: !opts.noServiceRegister,
   });
+  // An explicit concrete `--release X` is the one ensure path that is a
+  // deliberate version selection (the `exact` policy) and can therefore be a
+  // deliberate DOWNGRADE - so its committed install records a hold, decided
+  // inside `provisionHost` UNDER the CLI lock on the actual committed records.
+  // Derived from the effective explicit target, NOT from `keepInstalled`:
+  // `--keep-installed --release <older>` still selects `exact` above and
+  // installs the downgrade, so it must still be held. Every implicit source
+  // (packaged/`--from` own-build, the build-stamped pin default, `latest`,
+  // viability) leaves this false and never creates a hold.
+  const holdExplicitDowngrade =
+    opts.versionRequest !== null && opts.versionRequest !== "latest";
   const result = await provisionHost({
     adoption: opts.adoption,
     runtime: opts.runtime,
@@ -140,6 +196,8 @@ export async function ensureHost(
     registerService: !opts.noServiceRegister,
     lockReason: "host-ensure",
     force: opts.force,
+    acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
+    holdExplicitDowngrade,
     onProgress: opts.onProgress,
     beforeMutate: opts.beforeMutate,
   });

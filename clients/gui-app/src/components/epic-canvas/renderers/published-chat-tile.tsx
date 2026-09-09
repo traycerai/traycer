@@ -36,6 +36,7 @@ import {
   replicaChatLockReason,
   type PublishedCopyRefresh,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
+import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 
 /**
@@ -126,6 +127,37 @@ interface AppliedPublishedCopy {
   readonly unreadableCount: number;
 }
 
+/**
+ * The owning host's own name when the directory knows it, the raw id when it
+ * does not. A host that has never been seen from this device is exactly the
+ * case this surface exists for, so the fallback is a real answer rather than a
+ * defensive one.
+ */
+function publishedCopyOwnerLabel(
+  ownerHostId: string,
+  hostLabel: string,
+): string {
+  return ownerHostId.length > 0 ? hostLabel : "another device";
+}
+
+/**
+ * Whether the machine that owns this chat is the one serving this copy.
+ *
+ * Read off the ref rather than probed: `hostId` is the serving host the tile is
+ * bound to for life and `ownerHostId` is the row's owner, so their equality IS
+ * the question, settled at open and stable for the tab's life (a later
+ * active-host swap cannot reach either field). Reached by the canvas
+ * substituting a copy for a chat its own connected host answered
+ * `CHAT_NOT_VISIBLE` for - see `ChatDeadTileBanner`'s `chat-not-on-this-host`,
+ * whose banner this tile's footer sits under.
+ */
+function ownerHostIsServingHost(
+  ownerHostId: string,
+  servingHostId: string,
+): boolean {
+  return ownerHostId.length > 0 && ownerHostId === servingHostId;
+}
+
 export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const { node } = props;
   // The TAB's client, not the app's. The ref records which host was chosen to
@@ -173,30 +205,25 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     () => ({ identity, client }),
     [identity, client],
   );
-  // The owning host's own name when the directory knows it, the raw id when it
-  // does not. A host that has never been seen from this device is exactly the
-  // case this surface exists for, so the id is a real fallback rather than a
-  // defensive one.
-  const ownerLabel =
-    node.ownerHostId.length > 0
-      ? ownerReachability.hostLabel
-      : "another device";
-  // Whether the machine that owns this chat is the one serving this copy.
-  // Read off the ref rather than probed: `hostId` is the serving host this
-  // tile is bound to for life and `ownerHostId` is the row's owner, so their
-  // equality IS the question, settled at open and stable for the tab's life
-  // (a later active-host swap cannot reach either field). Reached by the
-  // canvas substituting a copy for a chat its own connected host answered
-  // `CHAT_NOT_VISIBLE` for - see `ChatDeadTileBanner`'s
-  // `chat-not-on-this-host`, whose banner this footer sits under.
-  const ownerIsThisHost =
-    node.ownerHostId.length > 0 && node.ownerHostId === node.hostId;
+  const ownerLabel = publishedCopyOwnerLabel(
+    node.ownerHostId,
+    ownerReachability.hostLabel,
+  );
+  const ownerIsThisHost = ownerHostIsServingHost(node.ownerHostId, node.hostId);
   // Whether this copy is the viewer's own chat, read off the ref like the
   // owner-host equality above. A collaborator's chat swaps the lock sentence
   // (and, in the child banner, the clone copy) for the foreign-owner arm -
   // the offline/back-soon vocabulary below is about the viewer's own fleet
   // and cannot be honestly said about a machine this account never sees.
   const ownedByViewer = useOwnedByViewer(node.ownerUserId);
+  // Whether this copy is on screen because the owner, though reachable, is a
+  // build too old for the epic's store. Read live rather than off the ref so
+  // the lock sentence follows the host: an update retires the verdict and
+  // the footer stops asking for one.
+  const ownerRefusesStore = useHostRefusesEpicStore(
+    node.ownerHostId.length > 0 ? node.ownerHostId : null,
+    node.taskId,
+  );
 
   // The same Clone offer the LIVE tile's dead-tile banner makes, on the copy.
   // Gated (inside the child) on the SAME two signals the lock sentence below
@@ -344,6 +371,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
         {deadTileBanner}
         <ChatTileSessionView
+          isLiveSession={false}
           handle={replicaHandle}
           node={{
             id: node.chatId,
@@ -356,6 +384,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           currentEpicId={props.epicId}
           readOnlyNotice={replicaChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
+            ownerRefusesStore,
             ownerIsThisHost,
             ownedByViewer,
             ownerLabel,
@@ -402,6 +431,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           have no business knowing about publication. Absent everywhere else. */}
       <PublishedChatSourceProvider source={publishedSource}>
         <ChatTileSessionView
+          isLiveSession={false}
           handle={applied.handle}
           node={{
             // The CHAT id, not the tile ref's id: inside the surface this is what
@@ -418,6 +448,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
+            ownerRefusesStore,
             ownerIsThisHost,
             ownedByViewer,
             ownerLabel,

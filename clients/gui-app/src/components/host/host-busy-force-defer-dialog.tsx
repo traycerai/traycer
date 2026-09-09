@@ -15,7 +15,27 @@ export interface HostBusyForceDeferDialogProps {
    */
   readonly purpose: "restart" | "update";
   readonly open: boolean;
+  /**
+   * The dialog's heading, and REQUIRED rather than defaulted.
+   *
+   * This used to hard-code "Host is busy", which was true of the two
+   * confirmations it was written for and false of the third. The bound
+   * activation offer opens on a host that has PARKED waiting for a restart,
+   * whose own `message` may well be counting zero blocking sessions — heading
+   * that with "Host is busy" contradicts the sentence directly underneath it.
+   * A default would have preserved that: every call site states its own.
+   */
+  readonly title: string;
   readonly message: string;
+  /**
+   * A second consequence the force carries, rendered as its own paragraph
+   * under `message` - the store-format loss a staged downgrade's Force update
+   * also consents to. `null` for the ordinary busy/force/defer decision.
+   * Kept apart from `message` because the description is one paragraph: a
+   * newline inside it collapses, and a sentence that IS the consent must not
+   * land mid-paragraph after the busy blurb.
+   */
+  readonly detail: string | null;
   readonly isForcing: boolean;
   readonly forceLabel: string;
   readonly onForce: () => void;
@@ -53,11 +73,19 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
       >
         <div className="flex flex-col gap-1.5 p-5">
           <DialogTitle className="text-ui font-semibold leading-snug">
-            Host is busy
+            {props.title}
           </DialogTitle>
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
             {props.message}
           </DialogDescription>
+          {props.detail === null ? null : (
+            <p
+              className="text-ui-sm leading-relaxed text-foreground"
+              data-testid="host-busy-force-defer-detail"
+            >
+              {props.detail}
+            </p>
+          )}
         </div>
         <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button

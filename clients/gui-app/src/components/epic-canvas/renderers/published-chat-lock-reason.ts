@@ -48,6 +48,13 @@ export function publishedChatLockReason(input: {
   /** Whether something answers to the owning host id at all. */
   readonly ownerIsReachable: boolean;
   /**
+   * Whether the owning host, though reachable, is known to refuse this
+   * chat's epic store as written by a newer build (`HOST_OLDER_THAN_DATA`).
+   * Read below the reachability arm: a host that is offline has nothing to
+   * refuse, and "offline" is the more actionable sentence while it lasts.
+   */
+  readonly ownerRefusesStore: boolean;
+  /**
    * Whether the owning host IS the host serving this read - i.e. this
    * device. See the same-host sentence below for why it cannot share the
    * cross-host one.
@@ -131,6 +138,8 @@ function refusalClause(title: string): string {
 export function replicaChatLockReason(input: {
   readonly ownerIsReachable: boolean;
   /** Same fact, same reason, as `publishedChatLockReason`'s. */
+  readonly ownerRefusesStore: boolean;
+  /** Same fact, same reason, as `publishedChatLockReason`'s. */
   readonly ownerIsThisHost: boolean;
   /** Same fact, same reason, as `publishedChatLockReason`'s. */
   readonly ownedByViewer: boolean;
@@ -171,6 +180,7 @@ export function replicaChatLockReason(input: {
  */
 function publishedCopySentence(input: {
   readonly ownerIsReachable: boolean;
+  readonly ownerRefusesStore: boolean;
   readonly ownerIsThisHost: boolean;
   readonly ownedByViewer: boolean;
   readonly ownerLabel: string;
@@ -186,6 +196,15 @@ function publishedCopySentence(input: {
   if (!input.ownerIsReachable) {
     return `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
   }
+  // A reachable host that cannot READ the chat: its build is older than the
+  // store a newer host wrote. "Live history is no longer on this host" would
+  // be false here - it is on the host, unreadable - and the remedy is a host
+  // update, so the sentence names that and nothing about devices.
+  if (input.ownerRefusesStore) {
+    return input.ownerIsThisHost
+      ? `Showing the last published copy of this agent. This host needs an update to read its live history.`
+      : `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. That host needs an update to read its live history.`;
+  }
   if (input.ownerIsThisHost) {
     return `Showing the last published copy of this agent. Its live history is no longer on this host.`;
   }
@@ -195,6 +214,7 @@ function publishedCopySentence(input: {
 /** The doc-replica branch's counterpart, splitting the same three ways. */
 function replicaCopySentence(input: {
   readonly ownerIsReachable: boolean;
+  readonly ownerRefusesStore: boolean;
   readonly ownerIsThisHost: boolean;
   readonly ownedByViewer: boolean;
   readonly ownerLabel: string;
@@ -205,6 +225,12 @@ function replicaCopySentence(input: {
   }
   if (!input.ownerIsReachable) {
     return `This agent lives on ${input.ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;
+  }
+  // Same arm, same reason, as `publishedCopySentence`'s store-refusal one.
+  if (input.ownerRefusesStore) {
+    return input.ownerIsThisHost
+      ? `Showing this device's synced copy of this agent. This host needs an update to read its live history.`
+      : `Showing this device's synced copy of this agent, which lives on ${input.ownerLabel}. That host needs an update to read its live history.`;
   }
   if (input.ownerIsThisHost) {
     return `Showing this device's synced copy of this agent. Its live history is no longer on this host.`;

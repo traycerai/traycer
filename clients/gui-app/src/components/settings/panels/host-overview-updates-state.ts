@@ -1,7 +1,18 @@
 import { useEffect, useState } from "react";
+import type { HostStatusStoreFormats } from "@traycer/protocol/host/status/index";
+import {
+  hostStoreFormatRestriction,
+  hostStoreFormatRestrictionFromRpc,
+  type HostStoreFormatRestriction,
+  describeHostStoreFloorRpcRefusal,
+} from "./host-overview-store-formats";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  baseDispatchAckReason,
+  dispatchAckReasonClosedStaleAttempt,
+} from "@traycer/protocol/config/host-update-ack-reason";
 import {
   compareHostVersions,
   isValidHostVersion,
@@ -18,7 +29,9 @@ import {
 import type {
   HostAvailableManifest,
   HostIncludePreReleasesSource,
-  HostUpdateCheckResponseV11,
+  HostUpdateCheckResponseV12,
+  HostUpdateInstallResponseV13,
+  HostUpdateStoreFloorRefusal,
 } from "@traycer/protocol/host/maintenance/index";
 import type { StoredCliInstallManifest } from "@traycer/protocol/config/installation-records";
 import type { DesktopAppUpdateSnapshot } from "@/lib/windows/types";
@@ -35,15 +48,20 @@ import {
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import {
+  useHostUpdateActivate,
   useHostUpdateCheckQuery,
+  useHostUpdateContinue,
   useHostUpdateInstall,
+  type BoundDispatchResponse,
 } from "@/components/settings/panels/host-overview-rpc";
 import {
   useHostNegotiatedMethodVersion,
   type NegotiatedMethodVersion,
 } from "@/hooks/host/use-host-negotiated-method-version";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { FleetUpdateAttemptPosition } from "@/lib/host/fleet-update/fleet-update-view";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 /**
@@ -111,6 +129,7 @@ export function useHostOverviewUpdates(input: {
   readonly hostId: string | null;
   /** What the PROCESS reports about itself (`host.status.hostVersion`). */
   readonly runningVersion: string | null;
+  readonly storeFormats: HostStatusStoreFormats | null;
   /**
    * The install record is ahead of the running host (`legacy-update-facts.ts`).
    * When set, every catalog comparison below is against the INSTALLED version,
@@ -141,6 +160,12 @@ export function useHostOverviewUpdates(input: {
   readonly checkDegrade: OverviewDegradeReason | null;
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
+  /**
+   * The dispatching panel mount's token (D8), threaded to all three update
+   * dispatches so an `accepted` answer can be attributed to the mount that
+   * asked for it. See `host-overview-rpc.ts`'s `settleUpdateDispatch`.
+   */
+  readonly incarnation: string;
 }): HostOverviewUpdatesState {
   const { client, hostName } = input;
   // The version the catalog is compared against. Under activation debt that
@@ -211,7 +236,15 @@ export function useHostOverviewUpdates(input: {
     enabled: input.enabled && input.checkDegrade === null,
     includePreReleases: includePreReleasesOverride,
   });
-  const installMutation = useHostUpdateInstall(client);
+  const installMutation = useHostUpdateInstall(client, input.incarnation);
+  const bound = useBoundUpdateDispatches({
+    client,
+    hostId: input.hostId,
+    hostName,
+    incarnation: input.incarnation,
+    beforeDispatch: () => setForceRefusal(null),
+    onAccepted: () => setInstallFailure(null),
+  });
 
   // Derived from the latest answer rather than accumulated across attempts.
   //
@@ -250,6 +283,7 @@ export function useHostOverviewUpdates(input: {
   const checking = checkQuery.isFetching;
 
   const runCheck = (): void => {
+    storeFloor.clear();
     setForceRefusal(null);
     void checkQuery.refetch();
   };
@@ -257,14 +291,19 @@ export function useHostOverviewUpdates(input: {
   const install = (
     version: string,
     force: boolean,
+    acceptStoreFormatLoss: boolean,
     // The caller's own settle hook, for UI that opened a confirmation over
     // this dispatch and has to close it whatever the answer was. MOUNTED
     // state only, like the callbacks beside it.
     onSettled: (() => void) | null,
   ): void => {
     setForceRefusal(null);
+    if (!storeFloor.prepareInstall(version, acceptStoreFormatLoss)) {
+      onSettled?.();
+      return;
+    }
     installMutation.mutate(
-      { version, force },
+      { version, force, acceptStoreFormatLoss },
       {
         onSettled: () => onSettled?.(),
         // MOUNTED UI state only. The `host.status` invalidation this
@@ -275,6 +314,10 @@ export function useHostOverviewUpdates(input: {
         // Everything left here only touches state that is
         // meaningless without this component.
         onSuccess: (response) => {
+          if (storeFloor.recordRefusal(response)) {
+            setInstallFailure(null);
+            return;
+          }
           handleInstallOutcome({
             outcome: response.outcome,
             indeterminateReason:
@@ -324,13 +367,22 @@ export function useHostOverviewUpdates(input: {
     hostName,
     retire: () => setForceRefusal(null),
   });
-  const failureDescription = describeUpdateFailure({
-    refusal: forceRefusal,
-    manifest: actionableManifest,
-    platformKey: input.platformKey,
-    failure: transientFailure,
+  const storeFloor = useHostInstallStoreFloor({
+    hostId: input.hostId,
+    installSupportsStoreFloor: versionSupportsStoreFloor(installVersion),
     hostName,
+    runningVersion: input.runningVersion,
+    storeFormats: input.storeFormats,
+    manifest: actionableManifest,
+    fallbackFailure: describeUpdateFailure({
+      refusal: forceRefusal,
+      manifest: actionableManifest,
+      platformKey: input.platformKey,
+      failure: transientFailure,
+      hostName,
+    }),
   });
+  const { failureDescription } = storeFloor;
   // The best STRICTLY NEWER version this catalog offers, before the yanked and
   // platform-asset gates - what the sentence is about, where
   // `updatableVersion` below is what the button can act on.
@@ -432,21 +484,48 @@ export function useHostOverviewUpdates(input: {
   // picker rows: a latest with no usable asset for this host is advertised
   // nowhere rather than installable in one surface and unavailable in the
   // other.
-  const updatableVersion = offerableLatestVersion(summaryCandidate);
+  const updatableVersion = storeFloor.offerableVersion(
+    offerableLatestVersion(summaryCandidate),
+  );
   const installingVersion = installMutation.isPending
     ? installMutation.variables.version
     : null;
-
+  // ONE in-flight update dispatch per page, whatever its intent. The three
+  // mutations share a mutation key so any `useIsMutating` reader sees them
+  // alike, and this is the same fact read from the page's own observers: the
+  // controls a dispatch greys out must be greyed by an activation and a
+  // continuation too, or the page would offer a second dispatch beside one it
+  // is already waiting on.
+  const dispatching = installingVersion !== null || bound.pending;
+  const versionRows = visibleVersionRows({
+    manifest: actionableManifest,
+    installedVersion,
+    platformKey: input.platformKey,
+    showAll: showAllVersions,
+    supportsDowngrade,
+    storeRestrictionForVersion: storeFloor.restrictionForVersion,
+  });
   return {
     degrade,
     cliFloor,
-    stagedEntryOfferable,
+    cliFloorForVersion: (version) =>
+      readCliFloorForVersion(actionableManifest, input.platformKey, version),
+    stagedEntryOfferable: storeFloor.stagedEntryOfferable(
+      stagedEntryOfferable,
+      input.stagedVersion,
+    ),
+    stagedStoreFormatConfirmation: storeFloor.stagedStoreFormatConfirmation(
+      input.stagedVersion,
+    ),
+    activate: bound.activate,
+    continueAttempt: bound.continueAttempt,
     // The staged-wait force: the SAME dispatch as a row's Install, with
-    // `force: true`, so the accepted latch, the invalidations and the
-    // outcome toasts are the ones every other install on this page gets.
+    // `force: true` and whatever loss consent its confirmation collected, so
+    // the accepted latch, the invalidations, the outcome toasts and the
+    // store-floor gate are the ones every other install on this page gets.
     // The confirmation that precedes it is the panel's (the ellipsis on
     // "Force update…" is a promise); this is only the dispatch.
-    installForce: (version, onSettled) => {
+    installForce: (version, acceptStoreFormatLoss, onSettled) => {
       // Re-read the exact version named by the confirmation. A catalog poll
       // can withdraw it or project a refusal after the offer was opened.
       const refusal = describeForceUpdateRefusal({
@@ -466,7 +545,7 @@ export function useHostOverviewUpdates(input: {
         onSettled();
         return;
       }
-      install(version, true, onSettled);
+      install(version, true, acceptStoreFormatLoss, onSettled);
     },
     summary: {
       hostName,
@@ -497,21 +576,18 @@ export function useHostOverviewUpdates(input: {
       // and never while the row is still reporting a failed attempt. "Update
       // now" is a promise that pressing it changes something.
       updatableVersion,
-      installing: installingVersion !== null,
+      installing: dispatching,
       busy: input.busy,
       onCheck: runCheck,
       onUpdateLatest: () => {
-        if (updatableVersion !== null) install(updatableVersion, false, null);
+        if (updatableVersion !== null) {
+          install(updatableVersion, false, false, null);
+        }
       },
     },
     picker: {
-      rows: visibleVersionRows({
-        manifest: actionableManifest,
-        installedVersion,
-        platformKey: input.platformKey,
-        showAll: showAllVersions,
-        supportsDowngrade,
-      }),
+      rows: versionRows,
+      storeFloorNotice: storeFloor.showNotice(versionRows),
       totalCount: manifest?.versions.length ?? 0,
       showAll: showAllVersions,
       onToggleShowAll: () => setShowAllVersions((previous) => !previous),
@@ -539,10 +615,324 @@ export function useHostOverviewUpdates(input: {
       ),
       installingVersion,
       disabled: input.busy,
-      onInstall: (version) => install(version, false, null),
+      onInstall: (version, acceptStoreFormatLoss) =>
+        install(version, false, acceptStoreFormatLoss, null),
       awaitingFirstCheck: actionableManifest === null,
       checking,
     },
+  };
+}
+
+interface RetainedHostInstallRefusal {
+  readonly hostId: string | null;
+  readonly hostVersion: string | null;
+  readonly message: string;
+  readonly storeFloor: HostUpdateStoreFloorRefusal | null;
+}
+
+interface HostInstallStoreFloor {
+  readonly failureDescription: string | null;
+  readonly clear: () => void;
+  readonly restrictionForVersion: (
+    version: string,
+  ) => HostStoreFormatRestriction | null;
+  readonly offerableVersion: (version: string | null) => string | null;
+  readonly stagedEntryOfferable: (
+    offerable: boolean,
+    version: string | null,
+  ) => boolean;
+  /** The staged version's Install-anyway confirmation, or `null`. */
+  readonly stagedStoreFormatConfirmation: (
+    version: string | null,
+  ) => string | null;
+  readonly showNotice: (rows: readonly HostVersionRow[]) => boolean;
+  readonly prepareInstall: (
+    version: string,
+    acceptStoreFormatLoss: boolean,
+  ) => boolean;
+  readonly recordRefusal: (response: HostUpdateInstallResponseV13) => boolean;
+}
+
+/**
+ * The version offers and the dispatch gate share one view of store evidence.
+ * A catalog refresh cannot refute a fresh RPC refusal, so that evidence stays
+ * local to this panel until Check or a new dispatch. Consent is only an input
+ * to prepareInstall; it is never retained or inherited by another dispatch.
+ */
+function useHostInstallStoreFloor(input: {
+  readonly hostId: string | null;
+  readonly hostName: string;
+  readonly runningVersion: string | null;
+  readonly storeFormats: HostStatusStoreFormats | null;
+  readonly manifest: HostAvailableManifest | null;
+  readonly fallbackFailure: string | null;
+  /** Whether the negotiated install method carries the store-format floor. */
+  readonly installSupportsStoreFloor: boolean;
+}): HostInstallStoreFloor {
+  const [retained, setRetained] = useState<RetainedHostInstallRefusal | null>(
+    null,
+  );
+  const activeRefusal =
+    retained !== null &&
+    retained.hostId === input.hostId &&
+    retained.hostVersion === input.runningVersion
+      ? retained
+      : null;
+  const storeFloorForVersion = (
+    version: string,
+  ): HostUpdateStoreFloorRefusal | null => {
+    const storeFloor = activeRefusal?.storeFloor ?? null;
+    return storeFloor?.targetVersion === version ? storeFloor : null;
+  };
+  const restrictionForVersion = (
+    version: string,
+  ): HostStoreFormatRestriction | null => {
+    const restriction = hostStoreFormatRestriction({
+      version,
+      publishedFormats:
+        input.manifest?.versions.find((entry) => entry.version === version)
+          ?.storeFormats ?? null,
+      runningVersion: input.runningVersion,
+      storeFormats: input.storeFormats,
+      installSupportsStoreFloor: input.installSupportsStoreFloor,
+    });
+    // Neither of these may be displaced by retained RPC evidence. `pending` is
+    // transient; `unsupported` says this peer cannot honour consent at all, so
+    // a refusal it once sent cannot turn the row back into an offer.
+    if (
+      restriction?.kind === "pending" ||
+      restriction?.kind === "floor-unsupported"
+    ) {
+      return restriction;
+    }
+    const storeFloor = storeFloorForVersion(version);
+    if (storeFloor !== null) {
+      return hostStoreFormatRestrictionFromRpc(storeFloor);
+    }
+    return restriction;
+  };
+  return {
+    failureDescription: activeRefusal?.message ?? input.fallbackFailure,
+    clear: () => setRetained(null),
+    restrictionForVersion,
+    offerableVersion: (version) => {
+      if (version === null || restrictionForVersion(version) !== null) {
+        return null;
+      }
+      return version;
+    },
+    // A staged version's Force update is offered under the same rule as a
+    // row's Install: an unrestricted target, or one whose restriction carries
+    // a confirmation - "Install anyway" for a blocked, unknown or failed
+    // survey. The dialog that precedes the force then names that loss beside
+    // the sessions it ends, and dispatches with the consent the person gave
+    // there (`installForce`). Withheld, exactly as the row is, for a
+    // restriction with no confirmation: a pending survey, or a peer that
+    // cannot honour consent.
+    //
+    // This is the RECORD-derived staged wait - the park `legacyPark`
+    // projects with no attempt id, which `installForce` resumes through
+    // `host.update.install {force}`, the one dispatch that carries
+    // `acceptStoreFormatLoss`. A park that is a bound ATTEMPT resumes through
+    // `host.update.continue`, whose request carries no consent on the wire
+    // and whose dialog names no loss; a downgrade parked that way still
+    // finishes through a fresh Install anyway once the host is idle. Carrying
+    // consent on `continue` is a protocol change, recorded as a follow-up.
+    stagedEntryOfferable: (offerable, version) => {
+      if (!offerable || version === null) return false;
+      const restriction = restrictionForVersion(version);
+      return restriction === null || restriction.confirmation !== null;
+    },
+    stagedStoreFormatConfirmation: (version) =>
+      version === null
+        ? null
+        : (restrictionForVersion(version)?.confirmation ?? null),
+    // The notice explains the Install-anyway affordance, so it follows the
+    // rows that actually carry one rather than re-deriving the two conditions
+    // that used to imply it. A failed survey no longer implies one by itself:
+    // a target stamping at or above this build's format clears from formats
+    // alone, and a notice about consent nothing is asking for reads as a
+    // warning the page cannot act on. This also picks up the unknown-target
+    // row, which offers Install anyway and which the old pair missed.
+    showNotice: (rows) =>
+      rows.some((row) => row.storeFormatConfirmation !== null),
+    prepareInstall: (version, acceptStoreFormatLoss) => {
+      // A dialog can outlive a status poll. Re-read the row's evidence; force
+      // authorizes ending busy work and never implies losing chat access.
+      const restriction = restrictionForVersion(version);
+      if (
+        restriction !== null &&
+        // `unsupported` sits beside `pending` for the same reason it does in
+        // `restrictionForVersion`, and it is the more important half: consent
+        // must not unlock a peer that cannot HONOUR consent. A dialog that
+        // outlived a status poll could otherwise arrive here with
+        // `acceptStoreFormatLoss` true and dispatch the very install this
+        // restriction exists to withhold.
+        (!acceptStoreFormatLoss ||
+          restriction.kind === "pending" ||
+          restriction.kind === "floor-unsupported")
+      ) {
+        setRetained({
+          hostId: input.hostId,
+          hostVersion: input.runningVersion,
+          message: restriction.detail ?? restriction.reason,
+          // Local rejection obtains no fresher evidence. Preserve the typed
+          // answer so a cached safe catalog cannot erase Install anyway.
+          storeFloor: storeFloorForVersion(version),
+        });
+        return false;
+      }
+      setRetained(null);
+      return true;
+    },
+    recordRefusal: (response) => {
+      if (response.outcome !== "cli-failed") return false;
+      const message = describeInstallRefusal(
+        response.reason,
+        response.storeFloor,
+        input.hostName,
+      );
+      if (message === null) return false;
+      setRetained({
+        hostId: input.hostId,
+        hostVersion: input.runningVersion,
+        message,
+        storeFloor: response.storeFloor,
+      });
+      return true;
+    },
+  };
+}
+
+/**
+ * What a `cli-failed` install refusal tells the reader, or `null` when the
+ * arm said nothing this page can improve on.
+ *
+ * The two named arms are refusals with their own remedy. The last one is the
+ * open half of the vocabulary, and it is deliberately ADDITIVE rather than a
+ * replacement: this page keeps its own sentence and attaches what it was told,
+ * the same shape the bound dispatches use for a reason they do not recognise.
+ * A reason is not guaranteed to be copy - the host mints short codes, while
+ * the local-CLI fallback lane forwards the CLI's own sentence, which for a
+ * store-format refusal is the ONLY evidence that reaches this page - so
+ * presenting one as the whole message would sooner or later put a bare code
+ * where a sentence belongs.
+ */
+function describeInstallRefusal(
+  reason: string | null,
+  storeFloor: HostUpdateStoreFloorRefusal | null,
+  hostName: string,
+): string | null {
+  if (storeFloor !== null) return describeHostStoreFloorRpcRefusal(storeFloor);
+  if (reason === "cli-too-old") {
+    return "This device's Traycer CLI is too old to start the update. Update the CLI, then try again.";
+  }
+  if (reason === null) return null;
+  return `${describeCliShellFailure("cli-failed", hostName)} (${reason})`;
+}
+
+/**
+ * The two BOUND dispatches, and whether either is in flight.
+ *
+ * Split out of {@link useHostOverviewUpdates} because it is a self-contained
+ * question — does this host advertise the methods, and what happens when one
+ * answers — and the hook it came from is already at its complexity ceiling.
+ *
+ * Both go through the SAME machinery an install goes through: the accepted
+ * latch, the read invalidations and the settle classification live in
+ * `useHostUpdateActivate` / `useHostUpdateContinue`, which share them with
+ * `useHostUpdateInstall` and share its mutation key.
+ *
+ * What they deliberately do NOT go through is `describeForceUpdateRefusal`.
+ * That gate exists to stop this page offering to place bytes it has just been
+ * told cannot be placed here — a withdrawn release, an unresolvable asset, a
+ * CLI floor — and neither of these places bytes on that basis: `activate`
+ * places none at all, and `continue` resumes bytes the attempt was authorized
+ * to fetch when it was created (a downgrade park re-downloads the same version
+ * it was created for). Running the catalog gate over them would refuse a
+ * parked update because the catalog has since moved, which is exactly the
+ * state a park needs to be resumable out of.
+ *
+ * `null` means the host does not advertise that method.
+ * `useHostSupportsMethod` fails closed on a manifest it has not seen, so the
+ * page keeps its legacy routes until a handshake positively proves the method
+ * present — never dispatching something the transport would refuse.
+ */
+function useBoundUpdateDispatches(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly hostName: string;
+  readonly incarnation: string;
+  /** Clears the page's stale Force refusal, as an install's dispatch does. */
+  readonly beforeDispatch: () => void;
+  /** Clears the transient CLI-failure notice on any answer that ran. */
+  readonly onAccepted: () => void;
+}): {
+  readonly activate: ((variables: BoundDispatchInput) => void) | null;
+  readonly continueAttempt: ((variables: BoundDispatchInput) => void) | null;
+  readonly pending: boolean;
+} {
+  // Each gated on ITS OWN method: they are two authorizations, and a host can
+  // advertise one without the other.
+  const supportsActivate = useHostSupportsMethod(
+    input.hostId,
+    "host.update.activate",
+  );
+  const supportsContinue = useHostSupportsMethod(
+    input.hostId,
+    "host.update.continue",
+  );
+  const activateMutation = useHostUpdateActivate(
+    input.client,
+    input.incarnation,
+  );
+  const continueMutation = useHostUpdateContinue(
+    input.client,
+    input.incarnation,
+  );
+  // BOTH mutations arrive here — `continueMutation` is passed to a parameter
+  // spelled `typeof activateMutation`, which type-checks only because the two
+  // responses coincide. `typeof activateMutation | typeof continueMutation`
+  // says it properly and is rejected by
+  // `typescript(no-duplicate-type-constituents)` for the same reason the union
+  // in `host-overview-rpc.ts` is, so what guarantees this stays sound is that
+  // module's `BoundDispatchResponsesAgree` assertion, not this annotation.
+  // Worth stating here because this site names no response type at all: no
+  // search for `BoundDispatchResponse` reaches it.
+  const dispatch = (
+    mutation: typeof activateMutation,
+    variables: BoundDispatchInput,
+  ): void => {
+    input.beforeDispatch();
+    mutation.mutate(
+      {
+        attemptId: variables.attemptId,
+        force: variables.force,
+        expected: variables.expected,
+      },
+      {
+        onSettled: () => variables.onSettled(),
+        onSuccess: (response) => {
+          handleBoundDispatchOutcome({
+            response,
+            hostName: input.hostName,
+            targetVersion: variables.targetVersion,
+            onAccepted: input.onAccepted,
+          });
+        },
+        onError: (error) =>
+          toastFromHostError(error, "Couldn't start the update."),
+      },
+    );
+  };
+  return {
+    activate: supportsActivate
+      ? (variables) => dispatch(activateMutation, variables)
+      : null,
+    continueAttempt: supportsContinue
+      ? (variables) => dispatch(continueMutation, variables)
+      : null,
+    pending: activateMutation.isPending || continueMutation.isPending,
   };
 }
 
@@ -559,18 +949,109 @@ export interface HostOverviewUpdatesSummary {
   readonly onUpdateLatest: () => void;
 }
 
+/**
+ * What a bound dispatch needs from its caller: which attempt, whether the user
+ * consented to push past live work, what to say it is updating to, and how to
+ * close the confirmation that asked.
+ *
+ * `targetVersion` is for COPY only and is deliberately not sent: the operation
+ * comes from the record's own continuation, and a version on the wire would be
+ * a second copy of a fact the record owns — one a stale UI could get wrong.
+ *
+ * ## Why `expected` is not that second copy
+ *
+ * That argument stands, and it does not reach this field. A version is a fact
+ * about the world, and a stale one makes the host do the WRONG THING. A
+ * position is a cursor into the record's own history whose only use is to be
+ * compared for equality, and a stale one produces a REFUSAL. They fail in
+ * opposite directions, which is why one is withheld here and the other is sent.
+ *
+ * `null` means this view named no attempt position, and it is sent as an ABSENT
+ * key rather than a synthesised one. Absence is the legacy signal — a client
+ * that predates the field cannot send it, and a `@1.0` peer parses with a
+ * schema where it does not exist — so "the caller did not say" has to stay
+ * distinguishable from "the caller says any position will do". Filling in a
+ * position this page did not observe would be an affirmative claim from a
+ * client that observed nothing, which is the one thing this field must never be.
+ */
+export interface BoundDispatchInput {
+  readonly attemptId: string;
+  readonly force: boolean;
+  /**
+   * Which position of {@link BoundDispatchInput.attemptId} the user was shown.
+   * Sent, unlike `targetVersion` — see the note above.
+   */
+  readonly expected: FleetUpdateAttemptPosition | null;
+  /** The attempt's target, when the view named one. Toast copy only. */
+  readonly targetVersion: string | null;
+  readonly onSettled: () => void;
+}
+
 export interface HostOverviewUpdatesState {
   readonly degrade: OverviewDegradeReason | null;
   readonly summary: HostOverviewUpdatesSummary;
   readonly picker: VersionPickerProps;
+  /**
+   * The SUMMARY WALK's floor — the one the remedy row and the recheck are
+   * about, on the version this region would offer to install.
+   *
+   * Deliberately NOT an answer about any other version. The staged release is
+   * not part of the walk (it was chosen earlier, by a catalog that may since
+   * have moved), and neither is a parked attempt's target: a manifest can
+   * carry a floored rc.4 above a perfectly installable rc.3, and this field
+   * says nothing about rc.3. A consumer asking "is THIS version floored" wants
+   * {@link HostOverviewUpdatesState.cliFloorForVersion}.
+   */
   readonly cliFloor: CliFloor | null;
+  /**
+   * The catalog's CLI floor for one named version, or `null` when that version
+   * installs on this host's tools — the per-version question {@link cliFloor}
+   * cannot answer.
+   *
+   * Same `readCliFloor` the summary walk uses, so the two cannot disagree
+   * about a version they both look at; `null` for a version the manifest does
+   * not list, and for a null version (a park that named no target). It reads
+   * ONLY the floor, deliberately not `describeForceUpdateRefusal`: that also
+   * refuses a withdrawn or unresolvable entry, and a caller choosing CLI-floor
+   * COPY off it would say "update your command-line tools" about a release
+   * that was yanked.
+   */
+  readonly cliFloorForVersion: (version: string | null) => CliFloor | null;
   readonly stagedEntryOfferable: boolean;
   /**
-   * `host.update.install {version, force: true}` — the staged-wait force.
-   * `onSettled` runs once the request answers or fails, so the confirmation
-   * that dispatched it can close on the answer rather than on a guess.
+   * The store-format loss the staged version's Force update has to name and
+   * collect consent for - the same confirmation its picker row would show
+   * behind Install anyway - or `null` when the stage carries no such
+   * restriction. Read at offer time by the panel, so the dialog describes the
+   * loss the person is consenting to.
    */
-  readonly installForce: (version: string, onSettled: () => void) => void;
+  readonly stagedStoreFormatConfirmation: string | null;
+  /**
+   * `host.update.install {version, force: true}` — the staged-wait force.
+   * `acceptStoreFormatLoss` is the consent the confirmation collected when it
+   * named a store-format loss (`stagedStoreFormatConfirmation`); the dispatch
+   * gate re-reads the row's evidence and still refuses a peer that cannot
+   * honour it. `onSettled` runs once the request answers or fails, so the
+   * confirmation that dispatched it can close on the answer rather than on a
+   * guess.
+   */
+  readonly installForce: (
+    version: string,
+    acceptStoreFormatLoss: boolean,
+    onSettled: () => void,
+  ) => void;
+  /**
+   * `host.update.activate {attemptId, force}` — restart into an attempt's
+   * already-placed bytes. `null` when this host does not advertise the method,
+   * which is how the page keeps the legacy `host.restart` route for a host that
+   * predates the cutover rather than dispatching something it cannot serve.
+   */
+  readonly activate: ((input: BoundDispatchInput) => void) | null;
+  /**
+   * `host.update.continue {attemptId, force}` — resume a parked attempt.
+   * `null` on a host without the method, exactly as `activate`.
+   */
+  readonly continueAttempt: ((input: BoundDispatchInput) => void) | null;
 }
 
 /**
@@ -588,6 +1069,9 @@ function visibleVersionRows(input: {
   readonly platformKey: string | null;
   readonly showAll: boolean;
   readonly supportsDowngrade: boolean;
+  readonly storeRestrictionForVersion: (
+    version: string,
+  ) => HostStoreFormatRestriction | null;
 }): readonly HostVersionRow[] {
   const { manifest } = input;
   if (manifest === null) return [];
@@ -597,19 +1081,32 @@ function visibleVersionRows(input: {
   return entries.map((entry) => {
     const asset = platformAssetFor(entry.platforms, input.platformKey);
     const isInstalled = entry.version === input.installedVersion;
+    // Platform and version refusals retain priority. A store warning must not
+    // obscure an asset that cannot be installed on this device at all.
+    const existingReason =
+      assetUnavailableReason(asset) ??
+      versionUnavailableReason(
+        input.installedVersion,
+        entry.version,
+        input.supportsDowngrade,
+      );
+    // A yanked entry is blocked by the row itself, and no store restriction is
+    // computed for one: "install anyway" past a store floor is a choice about
+    // chat access, and it is not on offer for a release that was withdrawn.
+    const restriction =
+      existingReason === null && !entry.yanked
+        ? input.storeRestrictionForVersion(entry.version)
+        : null;
     return {
       version: entry.version,
       releasedAt: entry.releasedAt,
       yanked: entry.yanked,
       isLatest: entry.version === manifest.latest,
       isInstalled,
-      unavailableReason:
-        assetUnavailableReason(asset) ??
-        versionUnavailableReason(
-          input.installedVersion,
-          entry.version,
-          input.supportsDowngrade,
-        ),
+      unavailableReason: existingReason ?? restriction?.reason ?? null,
+      unavailableDetail: restriction?.detail ?? null,
+      newerData: restriction?.kind === "blocked",
+      storeFormatConfirmation: restriction?.confirmation ?? null,
     };
   });
 }
@@ -853,6 +1350,21 @@ function versionSupportsDowngrade(version: NegotiatedMethodVersion): boolean {
   return version.major > 1 || (version.major === 1 && version.minor >= 2);
 }
 
+/**
+ * Whether the negotiated `host.update.install` carries the store-format floor.
+ *
+ * `@1.3`, where `versionSupportsDowngrade` is `@1.2` - one minor apart, and
+ * the gap is a real fleet state rather than a theoretical one. A host in it
+ * advertises downgrades and has nothing behind them: no pre-dispatch survey,
+ * no typed refusal, and the framework projects `acceptStoreFormatLoss` away
+ * before the request lands. Fails CLOSED on an unnegotiated method for the
+ * same reason its sibling does - an unknown peer is not a floor-capable one.
+ */
+function versionSupportsStoreFloor(version: NegotiatedMethodVersion): boolean {
+  if (version === null || version === false) return false;
+  return version.major > 1 || (version.major === 1 && version.minor >= 3);
+}
+
 /** Only a host advertising downgrade support can honor an older target. */
 function versionUnavailableReason(
   installedVersion: string | null,
@@ -1016,6 +1528,27 @@ function deriveCliFloorAndForceGate(input: {
             hostName: input.hostName,
           }),
   };
+}
+
+/**
+ * The floor for ONE named version, looked up in the same actionable manifest
+ * the summary walk reads.
+ *
+ * The walk's own candidate is chosen by an ordered scan; this is the direct
+ * question, for a caller that already knows which version it means — a parked
+ * attempt's target, say, which the walk may never visit because something
+ * newer sits above it.
+ */
+function readCliFloorForVersion(
+  manifest: HostAvailableManifest | null,
+  platformKey: string | null,
+  version: string | null,
+): CliFloor | null {
+  if (version === null) return null;
+  return readCliFloor(
+    manifest?.versions.find((entry) => entry.version === version),
+    platformKey,
+  );
 }
 
 function readCliFloor(
@@ -1318,9 +1851,7 @@ function handleInstallOutcome(input: {
     // negotiated route for progress and is unaffected by this arm.
     input.onAccepted();
     toast.info(
-      input.indeterminateReason === null
-        ? `Couldn't confirm the update started on ${input.hostName}. Watching for progress.`
-        : `Couldn't confirm the update started on ${input.hostName}: ${input.indeterminateReason}. Watching for progress.`,
+      describeIndeterminateDispatch(input.indeterminateReason, input.hostName),
     );
     return;
   }
@@ -1335,6 +1866,206 @@ function handleInstallOutcome(input: {
     return;
   }
   input.onTransient(input.outcome);
+}
+
+/**
+ * The copy this page owns for the CLI floor a bound dispatch can hit.
+ *
+ * The host maps a spawned CLI that rejected `--intent` (an old parser exits
+ * before any command body runs) — and its own diagnostic version preflight — to
+ * `cli-failed {reason: "cli-too-old"}`. That is the one refusal with a concrete
+ * remedy, and it is worth its own sentence rather than the generic
+ * "couldn't complete the request": nothing on the HOST is wrong, and no amount
+ * of retrying this button changes anything until the CLI is updated.
+ */
+const CLI_TOO_OLD_MESSAGE =
+  "This computer's Traycer CLI is too old to resume the update. Update the CLI, then try again.";
+
+/**
+ * What a `dispatch-indeterminate` reason means to a person (D18).
+ *
+ * The host names a reason from a closed grammar, and three of those reasons are
+ * not really "we could not confirm" at all — they are definite answers about
+ * work that did not need doing, which read as a shrug if they go through the
+ * generic sentence. The rest keep today's wording WITH the reason attached:
+ * several distinct causes reach this one outcome, and flattening them into one
+ * opaque message is the diagnostic substitution this epic has already paid for
+ * more than once.
+ */
+function describeIndeterminateDispatch(
+  reason: string | null,
+  hostName: string,
+): string {
+  // Q26. A decline that ALSO closed a stranded attempt carries
+  // `<base>-stale-attempt-closed`, and every comparison below is on the BASE.
+  // Comparing the raw string dropped every such decline into the generic
+  // sentence — "Couldn't confirm the update started on host-a:
+  // nothing-to-do-stale-attempt-closed" over a host that is simply up to date.
+  //
+  // Stripping is the protocol's job, not this module's: the suffix has exactly
+  // one spelling in the repository (`STALE_ATTEMPT_CLOSED_SUFFIX`), the CLI's
+  // generator imports the same constant, and a local copy of either the literal
+  // or the strip is how a build and a strip drift apart.
+  const base = reason === null ? null : baseDispatchAckReason(reason);
+  // An INSTALL-path reason, and only that: the bound verbs never mint it. So it
+  // sits outside the known bound-dispatch vocabulary by design, and its absence
+  // from that tuple is not a coverage gap. This function serves both call sites,
+  // which is why the arm lives here rather than beside the bound ones.
+  if (base === "nothing-to-do") {
+    return withStaleClosure(`${hostName} is already up to date.`, reason);
+  }
+  // No closure clause on either recovery arm. The lead sentence is already
+  // about a record being concluded, so appending "a stranded update record was
+  // also closed" narrates one event as two — the boundary the ruling drew.
+  //
+  // These two reasons ARE reachable here, including through a bound verb —
+  // `selectBoundResume`'s non-parked arm reaches `interruptedResume` under
+  // `reselect`. What they cannot arrive as is SUFFIXED, and the reason is that
+  // their producer returns DIRECTLY rather than routing through the decline
+  // path that appends the suffix.
+  //
+  // Explicitly NOT "they ride the `terminalized` outcome kind and the suffix
+  // rides `released`". That was the mechanism first recorded here and it is
+  // false: under `reselect` — which is what `runHostUpdate` passes — the
+  // recovery returns `released` too, the same kind the close path produces. The
+  // conclusion survived the correction; the reason did not, and a wrong reason
+  // on a right entry is the worse defect, because it reads as verified and the
+  // next person extends it.
+  //
+  // The clause rule is a rule about the GRAMMAR, which permits the suffix on
+  // any base, so it holds however the producers move.
+  if (base === "recovered-complete") return "The last update already finished.";
+  // The record's own failure arrives on the next `host.status` frame and the
+  // operation card states it; this only says which run it is about.
+  if (base === "recovered-failed") return "The last update failed.";
+  // The attempt is PRESENT and is the one named — what moved is its position.
+  // Deliberately not folded into `refused-attempt-gone`: that one says "there is
+  // nothing here to act on", this one says "what is here is not what you were
+  // shown", and the only correct response is to look again.
+  //
+  // The sentence carries the whole instruction because there is no dialog left
+  // to carry it: the confirmation closes on the answer, whatever the answer is.
+  // Reopening it automatically would be worse than saying nothing — it would
+  // put a fresh confirmation on screen populated from a record the user has not
+  // read, which is the same consent defect one turn later and is exactly what
+  // sending `expected` exists to prevent.
+  if (base === "refused-attempt-moved") {
+    return withStaleClosure(
+      `The update moved on while you were deciding, so ${hostName} did not act on it. Re-read the confirmation and confirm again.`,
+      reason,
+    );
+  }
+  if (
+    base === "refused-attempt-gone" ||
+    // No producer mints this literal — a moved install record on a park is
+    // written `failed {install-changed}` and arrives as the record's own
+    // failure. Kept as a defensive arm rather than deleted: it is a value the
+    // generated `refused-<code>` grammar can still express, and a sentence that
+    // misdescribes it is worse than one that does not.
+    base === "refused-install-changed"
+  ) {
+    return withStaleClosure(
+      "The host changed while the update was being prepared. Try again.",
+      reason,
+    );
+  }
+  // NOT the sentence above, though it shipped sharing it. This reason has two
+  // producers that mean different things: the host mints it when the attempt
+  // record cannot be decoded, and the CLI mints it for consent failures — a
+  // park with no claim, a target that is not an upgrade, a downgrade with
+  // neither `allowDowngrade` nor strict-upgrade set. "The host changed" is true
+  // of the first and false of all three of the second, so it told most of this
+  // reason's arrivals something that had not happened. The wording has to be
+  // true of every producer, which means naming the check that failed rather
+  // than a cause it does not know.
+  if (base === "refused-unverifiable") {
+    return withStaleClosure(
+      `${hostName} could not verify this request against the update record, so nothing was started.`,
+      reason,
+    );
+  }
+  // The DIAGNOSTIC arm echoes what the host actually sent, suffix included, and
+  // adds no clause: this sentence exists to be pasted into a support thread, so
+  // stripping here would hide a fact from the one place that reports the raw
+  // vocabulary, and appending a clause would say the same thing twice.
+  return reason === null
+    ? `Couldn't confirm the update started on ${hostName}. Watching for progress.`
+    : `Couldn't confirm the update started on ${hostName}: ${reason}. Watching for progress.`;
+}
+
+/**
+ * The lead sentence, plus one clause when this decline also closed a stranded
+ * attempt.
+ *
+ * Worth saying at all because the closure is USER-VISIBLE: the stranded record
+ * was what the Overview card had been reporting, and the dispatch ends it. A
+ * card that changes with no explanation is worse than one short sentence, which
+ * is why this is not the layered narration the page otherwise deletes — it is
+ * the dispatch's own outcome, not a second remedy for one blocker.
+ *
+ * Says only what the suffix knows. It records THAT a stranded attempt was
+ * closed and never HOW it settled — the same 21 characters ride a record that
+ * ended `complete` and one that ended `failed` — so this must not imply either
+ * (see the note in `host-update-ack-reason.ts`, which rules out a
+ * "concludes-as-done" predicate for exactly this reason). "Cleaned up" is
+ * outcome-free on purpose; the record's own state arrives on the next
+ * `host.status` frame and the operation card states it.
+ */
+function withStaleClosure(sentence: string, reason: string | null): string {
+  if (reason === null || !dispatchAckReasonClosedStaleAttempt(reason)) {
+    return sentence;
+  }
+  return `${sentence} An interrupted update record was also cleaned up.`;
+}
+
+/**
+ * The bound methods' four outcomes, which are the install's minus the two
+ * structural refusals and plus a REASONED `cli-failed`.
+ *
+ * Neither `externally-managed` nor `cli-unavailable` can arrive here — the
+ * bound response schema has no arm for either — which is why this does not
+ * touch the sticky region-degrade state at all. A bound dispatch cannot retire
+ * the updates region, and pretending it could would take the version list away
+ * on an answer that never said the mechanism was gone.
+ */
+function handleBoundDispatchOutcome(input: {
+  readonly response: BoundDispatchResponse;
+  readonly hostName: string;
+  readonly targetVersion: string | null;
+  readonly onAccepted: () => void;
+}): void {
+  const { hostName } = input;
+  if (input.response.outcome === "accepted") {
+    input.onAccepted();
+    // The same sentence an install's acceptance produces, deliberately: from
+    // the user's side this IS the update continuing, and a second vocabulary
+    // for "the host took the job" would read as a different thing happening.
+    toast.success(
+      input.targetVersion === null
+        ? `Updating ${hostName}`
+        : `Updating ${hostName} to v${input.targetVersion}`,
+    );
+    return;
+  }
+  if (input.response.outcome === "already-updating") {
+    input.onAccepted();
+    toast.info(`${hostName} is already installing an update.`);
+    return;
+  }
+  if (input.response.outcome === "dispatch-indeterminate") {
+    input.onAccepted();
+    toast.info(describeIndeterminateDispatch(input.response.reason, hostName));
+    return;
+  }
+  // `cli-failed`, whose `reason` is non-nullable on this schema — the whole
+  // point of not reusing the install's response, whose `cli-failed` arm has
+  // nowhere to put one.
+  const reason = input.response.reason;
+  if (reason === "cli-too-old") {
+    toast.error(CLI_TOO_OLD_MESSAGE);
+    return;
+  }
+  toast.error(`${describeCliShellFailure("cli-failed", hostName)} (${reason})`);
 }
 
 function describeCheckState(input: {
@@ -1457,7 +2188,7 @@ function describeIncludePreReleasesSource(
  * "Nothing asked yet" and an `ok` answer both mean "no failure", which is why
  * the two collapse here rather than at every use site.
  */
-function readCheckResponse(response: HostUpdateCheckResponseV11 | null): {
+function readCheckResponse(response: HostUpdateCheckResponseV12 | null): {
   readonly manifest: HostAvailableManifest | null;
   readonly sticky: OverviewDegradeReason | null;
   readonly transient: CliShellFailure | null;
