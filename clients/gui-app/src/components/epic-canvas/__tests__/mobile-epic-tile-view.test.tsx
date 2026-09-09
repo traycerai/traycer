@@ -2,6 +2,7 @@ import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
+import { AppConnectivityStripContext } from "@/components/layout/app-connectivity-strip-context";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -61,10 +62,10 @@ vi.mock("@/components/epic-canvas/canvas/pane-opener", () => ({
 vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
   MobileCurrentTileBar: ({
     tile,
-    epicStripShowing,
+    outerStripShowing,
   }: {
     readonly tile: EpicCanvasTileRef;
-    readonly epicStripShowing: boolean;
+    readonly outerStripShowing: boolean;
   }) => (
     <div
       data-testid="current-tile-bar"
@@ -73,7 +74,7 @@ vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
       // outer strip decided on. The tile bar suppresses its own strip off these;
       // if the view ever stopped passing them, the two strips would stack and
       // only this attribute would say so.
-      data-epic-strip-showing={String(epicStripShowing)}
+      data-outer-strip-showing={String(outerStripShowing)}
     />
   ),
 }));
@@ -305,7 +306,7 @@ describe("<MobileEpicTileView />", () => {
       expect(
         screen
           .getByTestId("current-tile-bar")
-          .getAttribute("data-epic-strip-showing"),
+          .getAttribute("data-outer-strip-showing"),
       ).toBe("true");
     });
 
@@ -324,8 +325,42 @@ describe("<MobileEpicTileView />", () => {
       expect(
         screen
           .getByTestId("current-tile-bar")
-          .getAttribute("data-epic-strip-showing"),
+          .getAttribute("data-outer-strip-showing"),
       ).toBe("false");
+    });
+
+    it("yields to the app-wide strip, leaving exactly one bar on screen", () => {
+      // An app switch drops this client's whole transport, so the app-wide
+      // strip and every stream below it report the same interruption in the
+      // same tick. Three bars saying one thing is what the rule prevents.
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      render(
+        <AppConnectivityStripContext.Provider value>
+          <MobileEpicTileView epicId="epic-1" tabId={VIEW_TAB_ID} />
+        </AppConnectivityStripContext.Provider>,
+      );
+      expect(epicStrip()).toBeNull();
+      // …and the tile below is told to stay quiet too, so the deferral reaches
+      // all the way down rather than stopping here.
+      expect(
+        screen
+          .getByTestId("current-tile-bar")
+          .getAttribute("data-outer-strip-showing"),
+      ).toBe("true");
+    });
+
+    it("takes over when the app-wide strip stops but its own stream is still away", () => {
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(epicStrip()).not.toBeNull();
     });
 
     it("shows no strip on an empty pane, which has no content to be stale", () => {

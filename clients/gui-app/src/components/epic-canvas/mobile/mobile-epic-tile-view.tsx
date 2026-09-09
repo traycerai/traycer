@@ -7,6 +7,7 @@ import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-ter
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { StreamSyncingBar } from "@/components/sync/stream-syncing-bar";
+import { useAppConnectivityStripShowing } from "@/components/layout/app-connectivity-strip-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
   useEpicHostTransportStatus,
@@ -71,6 +72,14 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
     hasContent: epicSnapshotLoaded,
     identity: epicId,
   });
+  // The app-wide strip outranks this one. Its subject is this client's whole
+  // transport, so when it is speaking every stream below it is down for the
+  // same reason and an Epic bar under it would be the same sentence a second
+  // time. The spell above still runs - it times the outage, not the drawing -
+  // so this strip takes over mid-outage with its own elapsed time intact when
+  // the session returns while the Epic's stream is still restoring.
+  const appStripShowing = useAppConnectivityStripShowing();
+  const epicStripShowing = !appStripShowing && epicSpell.syncing;
 
   // Non-null root with no resolvable tile = an empty pane (e.g. the user closed
   // the last tab). Desktop renders the inline `PaneOpener` for this; do the
@@ -122,20 +131,22 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           installed Capacitor build as a PRODUCT (see `lib/mobile-app.ts`),
           which would drop the strip in a mobile browser, where the relay drops
           the socket exactly the same way. */}
-      <StreamSyncingBar
-        spell={epicSpell}
-        surfaceLabel="Task"
-        testId="epic-stream-syncing-bar"
-      />
+      {epicStripShowing ? (
+        <StreamSyncingBar
+          spell={epicSpell}
+          surfaceLabel="Task"
+          testId="epic-stream-syncing-bar"
+        />
+      ) : null}
       <MobileCurrentTileBar
         epicId={epicId}
         tile={selection.ref}
-        // The DECIDED answer, not the legs behind it. The tile bar suppresses
-        // its own strip while this one is speaking, and re-deriving "is it
-        // speaking" from the same two legs down there would be a second
-        // decider that can disagree for a frame - the frame in which both
-        // strips paint.
-        epicStripShowing={epicSpell.syncing}
+        // The DECIDED answer for every bar OUTSIDE the tile, not the legs
+        // behind them. The tile bar suppresses its own strip while any of them
+        // is speaking, and re-deriving "is one speaking" down there would be a
+        // second decider that can disagree for a frame - the frame in which two
+        // bars paint.
+        outerStripShowing={appStripShowing || epicStripShowing}
       />
       <div className="relative min-h-0 flex-1">
         <TabBodySelectedContext.Provider value>

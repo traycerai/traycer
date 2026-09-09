@@ -31,12 +31,13 @@ interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
   /**
-   * Whether the Epic's own strip is currently showing - the DECIDED answer,
+   * Whether any strip OUTSIDE this tile is currently showing a bar - the app-wide
+   * session strip, or the Epic's. The DECIDED answer,
    * passed down rather than re-derived here. Re-deriving it from the legs
    * behind it would be a second decider that can disagree with the first for a
    * frame, and that frame is the one in which both strips paint.
    */
-  readonly epicStripShowing: boolean;
+  readonly outerStripShowing: boolean;
 }
 
 /**
@@ -161,7 +162,7 @@ function MobileCurrentTileBarBody(
   // rule, and the rule belongs where the strip is decided: a future resolver
   // that answered a spec id from some other table would otherwise put a chat's
   // reconnect banner on an artifact with nothing to say.
-  const showChatStrip = isChat && !props.epicStripShowing && chatSpell.syncing;
+  const showChatStrip = isChat && !props.outerStripShowing && chatSpell.syncing;
 
   return (
     <div

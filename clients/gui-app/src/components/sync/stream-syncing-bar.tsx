@@ -1,9 +1,9 @@
 import { type ReactNode } from "react";
+import { SyncingSweepBar } from "@/components/sync/syncing-sweep-bar";
 import {
   streamSyncingLabel,
   type StreamSyncingSpell,
 } from "@/lib/sync/stream-syncing-state";
-import { cn } from "@/lib/utils";
 
 interface StreamSyncingBarProps {
   /**
@@ -56,49 +56,15 @@ export function StreamSyncingBar(props: StreamSyncingBarProps): ReactNode {
         <span className="sr-only">{props.surfaceLabel}: </span>
         {streamSyncingLabel(spell.escalated)}
       </span>
-      <div
-        // `bg-foreground/8`, never `bg-muted`: this sits on `bg-canvas` today
-        // but the strip is mounted wherever a surface header is, and every
-        // preset theme's dark variant collapses `--muted` into the card and
-        // popover colours - the track would vanish on the first raised surface
-        // that adopts this. An alpha of the foreground is surface-independent
-        // by construction.
-        className="h-0.5 w-full overflow-hidden bg-foreground/8"
-        // The bar is decoration for the word above it. Announcing it as well
-        // would make a screen reader say the same fact twice, and a valueless
-        // progressbar is a worse way to say it than "Syncing…" already is.
-        aria-hidden
-      >
-        <div
-          data-testid={`${props.testId}-sweep`}
-          className={cn(
-            "h-full bg-primary",
-            // The travel STOPS at escalation. Two reasons, and the second is
-            // the one that decides it:
-            //
-            //  - By then the word is doing the work. A segment still sweeping
-            //    under "Still syncing…" says "any moment now" about a retry
-            //    that has already been told it is not converging.
-            //  - It bounds the animation. Blink samples every running CSS
-            //    animation once per display frame and recalcs the element's
-            //    style, which against this stylesheet is a few KB of heap
-            //    garbage per frame - the measurement that moved the "working"
-            //    indicator off CSS animation entirely (see `index.css`). A
-            //    resync that never converges would otherwise animate for as
-            //    long as the app is in the foreground. The bound holds per
-            //    OUTAGE rather than per mount only because the clock behind
-            //    `spell` outlives this component.
-            //
-            // Motion lives in a class, not an inline `animation` style: an
-            // inline style cannot be overridden by the reduced-motion rule
-            // that ships with it, which is why the two host-install bars
-            // honour nothing.
-            spell.escalated
-              ? "w-full opacity-45"
-              : "w-2/5 stream-syncing-sweep",
-          )}
-        />
-      </div>
+      {/* The bar is decoration for the word above it - it carries no semantics
+          of its own, so a reader hears the sentence once. The bound on its
+          motion holds per OUTAGE rather than per mount only because the clock
+          behind `spell` outlives this component. */}
+      <SyncingSweepBar
+        settled={spell.escalated}
+        testId={`${props.testId}-sweep`}
+        className={undefined}
+      />
     </div>
   );
 }
