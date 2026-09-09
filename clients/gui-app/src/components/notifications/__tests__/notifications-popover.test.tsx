@@ -1704,7 +1704,7 @@ describe("NotificationsPopover", () => {
       expect(separator.className).toContain("text-micro");
       expect(separator.className).toContain("sticky");
       expect(separator.className).toContain("top-5");
-      expect(separator.className).toContain("bg-popover");
+      expect(separator.className).toContain("glass-inset");
       expect(separator.className).not.toContain("uppercase");
       expect(separator.className).not.toContain("font-semibold");
       expect(separator.className).not.toContain("text-overline");
@@ -1715,7 +1715,7 @@ describe("NotificationsPopover", () => {
     expect(recentHeader.className).toContain("font-semibold");
     expect(recentHeader.className).toContain("sticky");
     expect(recentHeader.className).toContain("top-0");
-    expect(recentHeader.className).toContain("bg-popover");
+    expect(recentHeader.className).toContain("glass-inset");
   });
 
   it("renders failed host outcomes and stalled rows as failure severity", async () => {
