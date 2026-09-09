@@ -97,10 +97,10 @@ describe("seeded protocol registries", () => {
     // change that moves one moves the other. Bound to the SAME constant object,
     // not two equal literals - see `chat-sync/version.ts`.
     expect(
-      persistenceRecordRegistry["chat-head"][1].versions[3].contract
+      persistenceRecordRegistry["chat-head"][1].versions[4].contract
         .schemaVersion,
     ).toBe(
-      persistenceRecordRegistry["chat-shard"][1].versions[3].contract
+      persistenceRecordRegistry["chat-shard"][1].versions[4].contract
         .schemaVersion,
     );
   });

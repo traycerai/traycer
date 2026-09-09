@@ -6,7 +6,11 @@ import type {
   InterviewQuestion,
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { InterviewOptionDetailsButton } from "@/components/chat/segments/interview-visuals";
+import {
+  InterviewOptionDetailsButton,
+  InterviewOptionDetailsRegion,
+} from "@/components/chat/segments/interview-visuals";
+import { useInterviewOptionDetailsDisclosure } from "@/components/chat/segments/use-interview-option-details-disclosure";
 import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
@@ -249,13 +253,14 @@ function OptionRow(props: OptionRowProps) {
     onToggle,
   } = props;
   const shouldReduceMotion = useReducedMotion();
+  const disclosure = useInterviewOptionDetailsDisclosure();
   return (
     <m.div
       animate={
         pending && !shouldReduceMotion ? { scale: [1, 1.015, 1] } : { scale: 1 }
       }
       transition={QUESTION_TRANSITION}
-      className="w-full"
+      className="flex w-full flex-col gap-1.5"
     >
       <div
         className={cn(
@@ -296,11 +301,15 @@ function OptionRow(props: OptionRowProps) {
             option={option}
             className="pointer-events-auto relative z-20 self-center"
             pinnedDetailRegionId={null}
+            disclosure={disclosure}
           />
         )}
         <span aria-hidden className="pointer-events-none min-w-0 flex-1" />
         {badge}
       </div>
+      {option === null ? null : (
+        <InterviewOptionDetailsRegion option={option} disclosure={disclosure} />
+      )}
     </m.div>
   );
 }
