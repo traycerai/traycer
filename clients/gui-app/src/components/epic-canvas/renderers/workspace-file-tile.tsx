@@ -67,9 +67,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
+  documentAssetKindOf,
   isImageAssetPath,
-  isPdfAssetPath,
   isSvgAssetPath,
+  type DocumentAssetKind,
 } from "@/lib/assets/image-extension-allowlist";
 import { useFileAsset } from "@/hooks/assets/use-file-asset";
 import {
@@ -77,14 +78,41 @@ import {
   PdfPreviewLazy,
 } from "@/components/epic-canvas/pdf-preview/pdf-preview-lazy";
 import {
+  DOCX_VIEWER_UNAVAILABLE_REASON,
+  DocxPreviewLazy,
+} from "@/components/epic-canvas/docx-preview/docx-preview-lazy";
+import type { LazyDocumentViewerProps } from "@/components/epic-canvas/document-preview/lazy-document-viewer";
+import {
   DEFAULT_ANIMATION_MS,
   ImagePreview,
 } from "@/components/epic-canvas/image-preview/image-preview";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
 import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
-import { usePdfOpenExternallyTarget } from "@/hooks/editor/use-pdf-open-target";
+import { useDocumentOpenExternallyTarget } from "@/hooks/editor/use-document-open-target";
 import { useWorkspaceFileOpenExternally } from "@/hooks/editor/use-workspace-file-open-externally";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
+
+/**
+ * The viewer each document format opens in, and the placeholder copy for
+ * the viewer failing to load on this device. Both viewers take the same
+ * props and the same lazy-load contract (`lazy-document-viewer.tsx`).
+ */
+const DOCUMENT_VIEWERS: Record<
+  DocumentAssetKind,
+  {
+    readonly Viewer: (props: LazyDocumentViewerProps) => ReactNode;
+    readonly unavailableReason: string;
+  }
+> = {
+  pdf: {
+    Viewer: PdfPreviewLazy,
+    unavailableReason: PDF_VIEWER_UNAVAILABLE_REASON,
+  },
+  docx: {
+    Viewer: DocxPreviewLazy,
+    unavailableReason: DOCX_VIEWER_UNAVAILABLE_REASON,
+  },
+};
 
 type WorkspaceFileViewMode = "source" | "preview";
 
@@ -167,20 +195,21 @@ function WorkspaceFileTileRouter(props: {
   const { node } = props;
   const isImage = isImageAssetPath(node.filePath);
   const isSvg = isSvgAssetPath(node.filePath);
-  const isPdf = isPdfAssetPath(node.filePath);
+  const documentKind = documentAssetKindOf(node.filePath);
   const [viewAsSource, setViewAsSource] = useState(false);
-  // PDF needs `workspace.streamAsset >= 1.1` (the minor that taught the host
-  // `application/pdf`), and the STREAM's own negotiation is the only
-  // authority on that: stream methods never reach the unary openAck manifest
-  // the negotiated-version registry records, so no client-side version gate
-  // can ever positively know a host is old. The asset hook maps an old host's
-  // refusal to the shared fallback placeholder (honest copy + Open
-  // Externally) - that IS the old-host path.
+  // A document needs the `workspace.streamAsset` minor that taught the host
+  // its media type (1.1 for PDF, 1.2 for Word), and the STREAM's own
+  // negotiation is the only authority on that: stream methods never reach
+  // the unary openAck manifest the negotiated-version registry records, so
+  // no client-side version gate can ever positively know a host is old. The
+  // asset hook maps an old host's refusal to the shared fallback placeholder
+  // (honest copy + Open Externally) - that IS the old-host path.
 
-  if (isPdf) {
+  if (documentKind !== null) {
     return (
-      <WorkspacePdfFileTile
+      <WorkspaceDocumentFileTile
         node={node}
+        kind={documentKind}
         viewTabId={props.viewTabId}
         revealTarget={props.revealTarget}
       />
@@ -331,18 +360,19 @@ function WorkspaceImageFileTile(props: {
 }
 
 /**
- * PDF mode for a workspace file tile: same shape as the image mode above -
- * `useFileAsset` for the bytes, `BinaryPlaceholder` for any fallback,
- * uniformly - but the ready state hands the blob to the lazy-loaded pdf.js
- * viewer instead of an `<img>`. Only mounted behind the router's
- * `workspace.streamAsset >= 1.1` gate.
+ * Document mode (PDF, Word) for a workspace file tile: same shape as the
+ * image mode above - `useFileAsset` for the bytes, `BinaryPlaceholder` for
+ * any fallback, uniformly - but the ready state hands the blob to the
+ * format's lazy-loaded viewer instead of an `<img>`.
  */
-function WorkspacePdfFileTile(props: {
+function WorkspaceDocumentFileTile(props: {
   readonly node: WorkspaceFileRef;
+  readonly kind: DocumentAssetKind;
   readonly viewTabId: string;
   readonly revealTarget: WorkspaceFileRevealTarget | null;
 }) {
   const { node, revealTarget } = props;
+  const { Viewer, unavailableReason } = DOCUMENT_VIEWERS[props.kind];
   const assetState = useFileAsset({
     method: "workspace",
     workspacePath: node.workspacePath,
@@ -357,9 +387,10 @@ function WorkspacePdfFileTile(props: {
     () => setViewerUnavailable(true),
     [],
   );
-  // PDFs open with the OS default application when the host speaks
-  // editor.openPaths >= 1.1; older hosts keep the default-editor behavior.
-  const openTarget = usePdfOpenExternallyTarget(node.hostId);
+  // Documents open with the OS default application when the host's
+  // editor.openPaths admits the format; older hosts keep the default-editor
+  // behavior.
+  const openTarget = useDocumentOpenExternallyTarget(node.hostId, props.kind);
   const {
     opening: openExternallyOpening,
     onOpenExternally: handleOpenExternally,
@@ -369,7 +400,7 @@ function WorkspacePdfFileTile(props: {
     target: openTarget,
   });
 
-  // No line-goto in PDF mode either - evict a reveal target immediately
+  // No line-goto in document mode either - evict a reveal target immediately
   // rather than stranding it (same rationale as the image mode above).
   useEffect(() => {
     if (revealTarget !== null) {
@@ -389,11 +420,7 @@ function WorkspacePdfFileTile(props: {
           <BinaryPlaceholder
             fileName={node.name}
             sizeBytes={assetState.totalBytes}
-            reason={
-              viewerUnavailable
-                ? PDF_VIEWER_UNAVAILABLE_REASON
-                : assetState.reason
-            }
+            reason={viewerUnavailable ? unavailableReason : assetState.reason}
             onOpenExternally={handleOpenExternally}
             openExternallyOpening={openExternallyOpening}
             compact={false}
@@ -409,7 +436,7 @@ function WorkspacePdfFileTile(props: {
     // path/actions bar above it would repeat both.
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
-        <PdfPreviewLazy
+        <Viewer
           url={assetState.url}
           fileName={node.filePath}
           compact={false}
@@ -483,9 +510,9 @@ function OpenExternallyIconButton(props: {
 }
 
 /**
- * Toolbar for the MEDIA tile modes (image, and PDF outside its ready state -
- * the ready PDF viewer brings its own). Distinct from `WorkspaceFileToolbar`
- * below, the text/markdown tile's toolbar.
+ * Toolbar for the MEDIA tile modes (image, and a document outside its ready
+ * state - the ready document viewer brings its own). Distinct from
+ * `WorkspaceFileToolbar` below, the text/markdown tile's toolbar.
  */
 function WorkspaceMediaFileToolbar(props: {
   readonly filePath: string;

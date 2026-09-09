@@ -1,13 +1,13 @@
 /**
- * The compact PDF diff block (diff-surface redesign, 2026-09-03): one
+ * The compact document diff block (diff-surface redesign, 2026-09-03): one
  * centered summary - path, status · size - with a single Open action that
  * opens the CURRENT version as a workspace file tile (latest-only by
  * decision; deleted files therefore have no open affordance). No modal, no
- * Open Externally, no fetching from the block itself.
+ * Open Externally, no fetching from the block itself. Every document format
+ * shares the block, so a `.docx` reads exactly like a `.pdf` here.
  */
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { GitFileStatus } from "@traycer/protocol/host";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
@@ -30,18 +30,26 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: state.openTile }),
 }));
 
-import { PdfDiffView } from "../pdf-diff-view";
+import {
+  DocumentDiffView,
+  type DocumentDiffViewProps,
+} from "../document-diff-view";
 
-function renderView(overrides: {
-  readonly filePath?: string;
-  readonly previousPath?: string | null;
-  readonly status?: GitFileStatus;
-  readonly oldStage?: "staged" | "unstaged" | null;
-  readonly newStage?: "staged" | "unstaged" | null;
-  readonly sizeBytes?: number | null;
-}) {
+function renderView(
+  overrides: Partial<
+    Pick<
+      DocumentDiffViewProps,
+      | "filePath"
+      | "previousPath"
+      | "status"
+      | "oldStage"
+      | "newStage"
+      | "sizeBytes"
+    >
+  >,
+) {
   return render(
-    <PdfDiffView
+    <DocumentDiffView
       hostId="host-A"
       viewTabId="view-1"
       runningDir="/work/repo"
@@ -68,7 +76,7 @@ function lastIntent(): TileOpenIntent {
   return call[0];
 }
 
-describe("PdfDiffView", () => {
+describe("DocumentDiffView", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
@@ -77,9 +85,35 @@ describe("PdfDiffView", () => {
   it("shows a modified PDF as one compact block with path, status and size", () => {
     renderView({});
 
-    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
     expect(screen.getByText("docs/report.pdf")).toBeTruthy();
     expect(screen.getByText("Modified · 2.0 KiB")).toBeTruthy();
+  });
+
+  // The block is format-agnostic: a Word document takes the identical route,
+  // so nothing here may be keyed to the PDF extension.
+  it("shows a modified Word document as the same compact block", () => {
+    renderView({ filePath: "docs/brief.docx" });
+
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
+    expect(screen.getByText("docs/brief.docx")).toBeTruthy();
+    expect(screen.getByText("Modified · 2.0 KiB")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Open brief.docx" }),
+    ).toBeTruthy();
+  });
+
+  it("opens a Word document's current version as a workspace file tile", () => {
+    renderView({ filePath: "docs/brief.docx" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open brief.docx" }));
+
+    expect(lastIntent().node).toMatchObject({
+      type: "workspace-file",
+      hostId: "host-A",
+      workspacePath: "/work/repo",
+      filePath: "docs/brief.docx",
+    });
   });
 
   it("opens the current version as a workspace file tile", () => {

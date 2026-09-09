@@ -1141,6 +1141,95 @@ describe("useFileAsset", () => {
     second.unmount();
   });
 
+  // Each document format has its OWN over-cap event, so the 20 MiB cap's
+  // evidence stream can be read per format rather than as one PDF-shaped
+  // total.
+  it("tracks DocxPreviewTooLarge, not the PDF event, for an over-cap Word document", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const docxRequest: FileAssetRequest = {
+      method: "workspace",
+      workspacePath: "/repo",
+      filePath: "docs/brief.docx",
+    };
+    const { result, unmount } = renderHook(() => useFileAsset(docxRequest));
+
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitFailure(session, "too-large");
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("fallback");
+    expect(result.current.reason).toBe(
+      "This Word document is too large to preview.",
+    );
+    const docxTooLargeCalls = track.mock.calls.filter(
+      ([event]) => event === AnalyticsEvent.DocxPreviewTooLarge,
+    );
+    expect(docxTooLargeCalls).toHaveLength(1);
+    expect(docxTooLargeCalls[0]?.[1]).toEqual({ surface: "workspace" });
+    expect(
+      track.mock.calls.filter(
+        ([event]) => event === AnalyticsEvent.PdfPreviewTooLarge,
+      ),
+    ).toHaveLength(0);
+    unmount();
+  });
+
+  // The wire literal is historical ("unsupported asset type"); for a document
+  // request it means the host negotiated below the minor that admitted the
+  // format, so the copy has to read as an old host rather than as a bad file.
+  it("reads a Word document's refused admission as an unsupported host", async () => {
+    const docxRequest: FileAssetRequest = {
+      method: "workspace",
+      workspacePath: "/repo",
+      filePath: "docs/brief.docx",
+    };
+    const { result, unmount } = renderHook(() => useFileAsset(docxRequest));
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitFailure(session, "not-image");
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("fallback");
+    expect(result.current.reason).toBe(
+      "This host does not support Word document previews yet.",
+    );
+    unmount();
+  });
+
+  it("reports a Word document's render failure in the format's own words", async () => {
+    const docxRequest: FileAssetRequest = {
+      method: "workspace",
+      workspacePath: "/repo",
+      filePath: "docs/brief.docx",
+    };
+    const { result, unmount } = renderHook(() => useFileAsset(docxRequest));
+    const session = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(session, "docx-render-failure", 3);
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+
+    act(() => {
+      result.current.reportDecodeFailure();
+    });
+
+    expect(result.current).toMatchObject({
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This Word document could not be rendered.",
+    });
+    unmount();
+  });
+
   it.each(FALLBACK_CASES)(
     "maps $reason to its exact fallback message",
     async ({ reason, expected, totalBytes }) => {

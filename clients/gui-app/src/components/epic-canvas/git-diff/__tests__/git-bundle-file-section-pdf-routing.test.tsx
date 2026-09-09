@@ -1,8 +1,8 @@
 /**
- * PDF routing in BUNDLE diff rows: the aggregated view composes the same
+ * Document routing in BUNDLE diff rows: the aggregated view composes the same
  * per-type views as the single-file tile (the image branch is the
- * precedent), so a .pdf row renders the compact summary block by extension
- * alone - there is no host-version gate on this routing decision.
+ * precedent), so a `.pdf` or `.docx` row renders the compact summary block by
+ * extension alone - there is no host-version gate on this routing decision.
  */
 import type { ReactNode } from "react";
 import {
@@ -59,9 +59,9 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
 }));
 
 // `git-bundle-file-section.tsx` no longer imports `useHostMethodSchemaVersion`
-// - `routeToPdfCards` is decided purely by `gitRoutesToPdfDiffCards(file)`.
+// - the block is decided purely by `gitRoutesToDocumentDiffBlock(file)`.
 // `useHostSupportsMethod` stays mocked defensively; nothing in this render
-// tree currently calls it, but `PdfDiffView` shares the module with code
+// tree currently calls it, but `DocumentDiffView` shares the module with code
 // paths that do.
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => false,
@@ -257,18 +257,18 @@ afterEach(() => {
   cleanup();
 });
 
-describe("<BundleFileSection /> PDF routing", () => {
-  // No host-version gate remains here: `routeToPdfCards` is decided purely
-  // by `gitRoutesToPdfDiffCards(file)`, so this single test now covers what
+describe("<BundleFileSection /> document routing", () => {
+  // No host-version gate remains here: the block is decided purely by
+  // `gitRoutesToDocumentDiffBlock(file)`, so this single test now covers what
   // used to be split across a known-1.1, an unknown-handshake, and a
   // known-1.0 case.
-  it("routes a binary PDF row to the summary cards", () => {
+  it("routes a binary PDF row to the summary block", () => {
     renderSection(file({ path: "docs/report.pdf", isBinary: true }));
 
-    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
     expect(screen.queryByText("Binary file")).toBeNull();
     expect(screen.queryByTestId("bundle-file-diff")).toBeNull();
-    // Cards are metadata-only - the closed dialog must not fetch a side.
+    // The block is metadata-only - it must not fetch a side.
     expect(state.requests.every((request) => request === null)).toBe(true);
     expect(state.coverage).toHaveBeenCalledWith(
       expect.stringContaining("docs/report.pdf"),
@@ -276,17 +276,31 @@ describe("<BundleFileSection /> PDF routing", () => {
     );
   });
 
-  it("routes an ASCII-authored (non-binary) PDF row to the cards, not the text diff", () => {
+  it("routes an ASCII-authored (non-binary) PDF row to the block, not the text diff", () => {
     renderSection(file({ path: "docs/test-diff.pdf", isBinary: false }));
 
-    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
     expect(screen.queryByTestId("bundle-file-diff")).toBeNull();
   });
 
-  it("keeps non-PDF binary rows on the bundle placeholder", () => {
+  // Word documents share the block by extension alone, exactly as PDFs do.
+  it("routes a binary Word document row to the summary block", () => {
+    renderSection(file({ path: "docs/brief.docx", isBinary: true }));
+
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
+    expect(screen.queryByText("Binary file")).toBeNull();
+    expect(screen.queryByTestId("bundle-file-diff")).toBeNull();
+    expect(state.requests.every((request) => request === null)).toBe(true);
+    expect(state.coverage).toHaveBeenCalledWith(
+      expect.stringContaining("docs/brief.docx"),
+      "binary",
+    );
+  });
+
+  it("keeps non-document binary rows on the bundle placeholder", () => {
     renderSection(file({ path: "assets/archive.zip", isBinary: true }));
 
-    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+    expect(screen.queryByTestId("document-diff-block")).toBeNull();
     expect(screen.getByText("Binary file")).toBeTruthy();
   });
 });

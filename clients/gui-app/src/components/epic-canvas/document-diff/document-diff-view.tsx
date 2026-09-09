@@ -1,14 +1,15 @@
 /**
- * PDF change summary for the git diff surfaces (single-file tile and bundle
- * rows) - the GitHub-shaped treatment, settled with the user 2026-09-03:
- * one COMPACT centered block (icon, path, "Added/Modified · size"), never a
- * full-height fake two-column diff (two multi-page viewers would look like
- * a diff while carrying none of a diff's meaning), never a modal. The one
- * action is Open: the CURRENT version in the app's own PDF viewer (the
- * workspace file tile), with the app's standard click-to-open +
- * drag-to-split mechanics. Old-version open deliberately deferred (needs a
- * file-at-revision tile kind; the user chose latest-only for now), so a
- * deleted PDF shows its status with no open affordance.
+ * Document (PDF, Word) change summary for the git diff surfaces
+ * (single-file tile and bundle rows) - the GitHub-shaped treatment, settled
+ * with the user 2026-09-03 for PDF and shared by every document format
+ * since: one COMPACT centered block (icon, path, "Added/Modified · size"),
+ * never a full-height fake two-column diff (two multi-page viewers would
+ * look like a diff while carrying none of a diff's meaning), never a modal.
+ * The one action is Open: the CURRENT version in the app's own viewer (the
+ * workspace file tile, which routes by extension), with the app's standard
+ * click-to-open + drag-to-split mechanics. Old-version open deliberately
+ * deferred (needs a file-at-revision tile kind; the user chose latest-only
+ * for now), so a deleted document shows its status with no open affordance.
  */
 import { useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
@@ -30,7 +31,7 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 
-export interface PdfDiffViewProps {
+export interface DocumentDiffViewProps {
   readonly hostId: string;
   readonly viewTabId: string;
   readonly runningDir: string;
@@ -45,7 +46,7 @@ export interface PdfDiffViewProps {
   readonly sizeBytes: number | null;
 }
 
-interface PdfDiffStatusSummary {
+interface DocumentDiffStatusSummary {
   readonly label: string;
   /** The other path this change names, or `null` when it names none. */
   readonly sourcePath: string | null;
@@ -61,7 +62,9 @@ interface PdfDiffStatusSummary {
  * inferring from the paths alone labels it "Renamed" and tells the reader
  * the source moved when it is still sitting there.
  */
-function statusSummary(props: PdfDiffViewProps): PdfDiffStatusSummary {
+function statusSummary(
+  props: DocumentDiffViewProps,
+): DocumentDiffStatusSummary {
   if (props.oldStage === null) return { label: "Added", sourcePath: null };
   if (props.newStage === null) return { label: "Deleted", sourcePath: null };
   const distinctSource =
@@ -77,7 +80,7 @@ function statusSummary(props: PdfDiffViewProps): PdfDiffStatusSummary {
   return { label: "Modified", sourcePath: null };
 }
 
-export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
+export function DocumentDiffView(props: DocumentDiffViewProps): ReactNode {
   const epicId = useOpenEpicId();
   const { openTile } = useEpicTileNavigation();
 
@@ -90,8 +93,8 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
 
   // Latest-only by decision: the ref points at the CURRENT file on disk, so
   // the button exists only while a current side does. The tile's own router
-  // handles whatever the path turns out to be (a rename can put a non-PDF on
-  // the new side - the file tile renders its true type).
+  // handles whatever the path turns out to be (a rename can put a non-document
+  // on the new side - the file tile renders its true type).
   const openRef = useMemo(() => {
     if (props.newStage === null) return null;
     return workspaceFileRefFromTreePath(
@@ -116,7 +119,7 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
   const { listeners, setNodeRef: dragRef } = useDraggable({
     id: getPaneScopedDndId(
       props.viewTabId,
-      getWorkspaceFileDragId(openRef?.id ?? `pdf-diff:${props.filePath}`),
+      getWorkspaceFileDragId(openRef?.id ?? `document-diff:${props.filePath}`),
     ),
     data: dragData ?? undefined,
     disabled: openRef === null || dragDisabled,
@@ -151,7 +154,7 @@ export function PdfDiffView(props: PdfDiffViewProps): ReactNode {
   return (
     <div
       className="flex items-center justify-center p-6"
-      data-testid="pdf-diff-block"
+      data-testid="document-diff-block"
     >
       <div className="flex min-w-0 max-w-full flex-col items-center gap-2 text-center">
         <FileTextIcon className="size-8 text-muted-foreground" />

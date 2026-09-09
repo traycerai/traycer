@@ -534,10 +534,12 @@ import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/
 import {
   workspaceStreamAssetV10,
   workspaceStreamAssetV11,
+  workspaceStreamAssetV12,
 } from "@traycer/protocol/host/workspace/asset-stream";
 import {
   gitStreamFileAssetV10,
   gitStreamFileAssetV11,
+  gitStreamFileAssetV12,
 } from "@traycer/protocol/host/git-asset-stream";
 import {
   terminalCreateDowngradeV21ToV10,
@@ -693,8 +695,10 @@ import {
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   editorOpenPathsUpgradeV10ToV11,
+  editorOpenPathsUpgradeV11ToV12,
   editorOpenPathsV10,
   editorOpenPathsV11,
+  editorOpenPathsV12,
 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
@@ -7418,7 +7422,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "editor.openPaths": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: editorOpenPathsV10,
@@ -7427,6 +7431,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: editorOpenPathsV11,
           upgradeFromPreviousVersion: editorOpenPathsUpgradeV10ToV11,
+        },
+        2: {
+          contract: editorOpenPathsV12,
+          upgradeFromPreviousVersion: editorOpenPathsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -9672,10 +9680,10 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Asset preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc. 1.1 adds PDF.
+  // Asset preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc. 1.1 adds PDF, 1.2 adds Word `.docx`.
   "workspace.streamAsset": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: workspaceStreamAssetV10,
@@ -9683,19 +9691,25 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         1: {
           contract: workspaceStreamAssetV11,
         },
+        2: {
+          contract: workspaceStreamAssetV12,
+        },
       },
     },
   },
-  // Sibling of `workspace.streamAsset` for the git diff tile's old/new sides - same no-degrade rationale. 1.1 adds PDF.
+  // Sibling of `workspace.streamAsset` for the git diff tile's old/new sides - same no-degrade rationale. 1.1 adds PDF, 1.2 adds Word `.docx`.
   "git.streamFileAsset": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: gitStreamFileAssetV10,
         },
         1: {
           contract: gitStreamFileAssetV11,
+        },
+        2: {
+          contract: gitStreamFileAssetV12,
         },
       },
     },

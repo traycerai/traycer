@@ -8,9 +8,9 @@ import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query"
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   FILE_EDIT_REASON_COPY,
-  PDF_FILE_DIFF_COPY,
+  documentFileDiffCopy,
 } from "@/lib/chat/file-edit-reason-copy";
-import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 
 /**
@@ -33,16 +33,16 @@ export function SnapshotHashInlineDiff(props: {
   readonly afterHash: string | null;
   readonly cacheScope: string;
 }) {
-  // A PDF row always renders the copy line below - keep the blob download
-  // from ever starting, not just its result from rendering.
-  const isPdf = isPdfAssetPath(props.filePath);
+  // A document row always renders the copy line below - keep the blob
+  // download from ever starting, not just its result from rendering.
+  const isDocument = isDocumentAssetPath(props.filePath);
   const query = useSnapshotDiffQuery({
     // Mounted only from artifact rows/cards inside a chat TILE, and the blobs
     // these hashes address are that tab host's (D15).
     client: useTabHostClient(),
     beforeHash: props.beforeHash,
     afterHash: props.afterHash,
-    enabled: !isPdf,
+    enabled: !isDocument,
   });
 
   const patch = useMemo(() => {
@@ -57,10 +57,10 @@ export function SnapshotHashInlineDiff(props: {
     });
   }, [query.data, props.filePath]);
 
-  if (isPdf) {
+  if (isDocument) {
     return (
       <div className="text-ui-sm text-muted-foreground">
-        {PDF_FILE_DIFF_COPY}
+        {documentFileDiffCopy(props.filePath)}
       </div>
     );
   }

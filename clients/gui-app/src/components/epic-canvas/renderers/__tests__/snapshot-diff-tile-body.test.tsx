@@ -30,7 +30,7 @@ import type {
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TabHostProvider } from "../../tab-host-provider";
-import { PDF_FILE_DIFF_COPY } from "@/lib/chat/file-edit-reason-copy";
+import { documentFileDiffCopy } from "@/lib/chat/file-edit-reason-copy";
 
 interface SnapshotTestStore {
   readonly snapshotLoaded: boolean;
@@ -446,7 +446,34 @@ describe("<SnapshotDiffTileBody />", () => {
 
     renderSnapshotTile(node);
 
-    expect(screen.getByText(PDF_FILE_DIFF_COPY)).toBeTruthy();
+    expect(
+      screen.getByText(documentFileDiffCopy("docs/report.pdf")),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
+    ).toBeNull();
+    expect(state.snapshotDiffQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false }),
+    );
+  });
+
+  // Word documents ride the same extension gate, and name themselves rather
+  // than borrowing the PDF wording.
+  it("renders the Word document copy and never issues the snapshot content query for a .docx filePath", () => {
+    const node = makeSnapshotHashDiffTile({
+      hostId: "host-1",
+      chatId: "chat-1",
+      filePath: "docs/report.docx",
+      beforeHash: "before-hash",
+      afterHash: "after-hash",
+      title: null,
+    });
+
+    renderSnapshotTile(node);
+
+    expect(
+      screen.getByText(documentFileDiffCopy("docs/report.docx")),
+    ).toBeTruthy();
     expect(
       screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeNull();
@@ -476,7 +503,9 @@ describe("<SnapshotDiffTileBody />", () => {
 
     renderSnapshotTile(node);
 
-    expect(screen.getByText(PDF_FILE_DIFF_COPY)).toBeTruthy();
+    expect(
+      screen.getByText(documentFileDiffCopy("docs/report.pdf")),
+    ).toBeTruthy();
     expect(
       screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeNull();
@@ -500,7 +529,9 @@ describe("<SnapshotDiffTileBody />", () => {
 
     renderSnapshotTile(node);
 
-    expect(screen.getByText(PDF_FILE_DIFF_COPY)).toBeTruthy();
+    expect(
+      screen.getByText(documentFileDiffCopy("docs/report.pdf")),
+    ).toBeTruthy();
     expect(
       screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeNull();
@@ -533,7 +564,9 @@ describe("<SnapshotDiffTileBody />", () => {
     expect(
       screen.getByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeTruthy();
-    expect(screen.queryByText(PDF_FILE_DIFF_COPY)).toBeNull();
+    expect(
+      screen.queryByText(documentFileDiffCopy("docs/report.pdf")),
+    ).toBeNull();
   });
 
   // The PDF branch is terminal like every other branch, but it must still
@@ -559,7 +592,7 @@ describe("<SnapshotDiffTileBody />", () => {
       throw new Error("expected a metadata-partial find registration");
     }
     expect(registration.source.coverageMessage).toBe(
-      "PDF content is not searchable; only file metadata was searched.",
+      "Document content is not searchable; only file metadata was searched.",
     );
     if (registration.source.index === null) {
       throw new Error("expected a find index on the PDF source");

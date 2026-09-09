@@ -206,13 +206,14 @@ vi.mock("@/components/epic-canvas/binary-placeholder", () => ({
   ),
 }));
 
-// The compact PDF diff block pulls in useDraggable/useEpicCanvasStore
+// The compact document diff block pulls in useDraggable/useEpicCanvasStore
 // selectors this suite does not stub end to end - the routing contract under
-// test is only "a PDF row shows the compact block and skips the text query",
-// which a stub component pins the same way `ImagePreview` is stubbed above.
-vi.mock("@/components/epic-canvas/pdf-preview/pdf-diff-view", () => ({
-  PdfDiffView: (props: { readonly filePath: string }) => (
-    <div data-testid="pdf-diff-block" data-file-name={props.filePath} />
+// test is only "a document row shows the compact block and skips the text
+// query", which a stub component pins the same way `ImagePreview` is stubbed
+// above.
+vi.mock("@/components/epic-canvas/document-diff/document-diff-view", () => ({
+  DocumentDiffView: (props: { readonly filePath: string }) => (
+    <div data-testid="document-diff-block" data-file-name={props.filePath} />
   ),
 }));
 
@@ -712,8 +713,8 @@ describe("<GitDiffTile /> image routing", () => {
 
   it("keeps the text diff for an svg -> pdf rename toggled to source, instead of the PDF block", () => {
     // Straddles both allowlists: the current path (.pdf) routes to
-    // `gitRoutesToPdfDiffCards`, the previous path (.svg) routes to the image
-    // diff with a source toggle. `showsPdfDiffBlock` must key off the RAW
+    // `gitRoutesToDocumentDiffBlock`, the previous path (.svg) routes to the
+    // image diff with a source toggle. The block gate must key off the RAW
     // image-routing decision (always true here), not the post-toggle
     // `showImageDiff` - otherwise picking Source would hand the row to the
     // PDF block instead of revealing the text diff.
@@ -732,13 +733,13 @@ describe("<GitDiffTile /> image routing", () => {
     expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
     expect(screen.getByText("PDF diffs aren't previewed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "View source" })).toBeTruthy();
-    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+    expect(screen.queryByTestId("document-diff-block")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "View source" }));
 
     expect(screen.getByTestId("file-diff-content")).toBeTruthy();
     expect(screen.queryByTestId("image-preview-side")).toBeNull();
-    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+    expect(screen.queryByTestId("document-diff-block")).toBeNull();
   });
 
   it("offers no source toggle for a BINARY svg -> pdf rename, keeping the side-by-side view", () => {
@@ -764,6 +765,25 @@ describe("<GitDiffTile /> image routing", () => {
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
   });
 
+  // The non-image side's copy names the format it actually is, so a Word
+  // document must not be described in the PDF's words.
+  it("names a Word document on the non-image side of an svg -> docx rename", () => {
+    renderTile(
+      changedFile({
+        path: "assets/new.docx",
+        previousPath: "assets/old.svg",
+        status: "renamed",
+        isBinary: true,
+      }),
+    );
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(
+      screen.getByText("Word document diffs aren't previewed."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("document-diff-block")).toBeNull();
+  });
+
   it("offers no source toggle for a binary .svg, whose text diff is never fetched", () => {
     renderTile(changedFile({ path: "assets/icon.svg", isBinary: true }));
 
@@ -782,7 +802,18 @@ describe("<GitDiffTile /> image routing", () => {
 
     renderTile(changed);
 
-    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
+    expect(screen.queryByTestId("file-diff-content")).toBeNull();
+    expect(screen.queryByTestId("binary-placeholder")).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
+  // The block is a document-format union, so a Word document takes the same
+  // route and never falls through to the generic binary placeholder.
+  it("routes a .docx row to the compact document block and skips the text diff query", () => {
+    renderTile(changedFile({ path: "docs/brief.docx", isBinary: true }));
+
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
     expect(screen.queryByTestId("file-diff-content")).toBeNull();
     expect(screen.queryByTestId("binary-placeholder")).toBeNull();
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);

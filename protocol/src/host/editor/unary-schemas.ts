@@ -57,7 +57,8 @@ export const openPathsRequestSchema = z.object({
  * appear in the default-editor picker, which iterates `EDITORS`:
  *
  * - `"system"` opens a path with the OS default application instead of an
- *   editor deep link - the target for formats an editor renders poorly (PDFs).
+ *   editor deep link - the target for formats an editor renders poorly (PDFs
+ *   from 1.1, Word `.docx` documents from 1.2).
  * - `"finder"` shows a path in the host's file manager: a directory opens as a
  *   window, a file is revealed selected inside its parent. macOS only; the
  *   host rejects it on any other platform.

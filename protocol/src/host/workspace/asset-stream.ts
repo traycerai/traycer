@@ -22,6 +22,7 @@ import {
   assetStreamClientFrameSchema,
   assetStreamServerFrameSchema,
   assetStreamServerFrameSchemaV11,
+  assetStreamServerFrameSchemaV12,
 } from "@traycer/protocol/host/asset-stream-schemas";
 
 export const workspaceStreamAssetOpenRequestSchema = z.object({
@@ -54,5 +55,20 @@ export const workspaceStreamAssetV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: workspaceStreamAssetOpenRequestSchema,
   serverFrameSchema: assetStreamServerFrameSchemaV11,
+  clientFrameSchema: assetStreamClientFrameSchema,
+});
+
+/**
+ * 1.2 adds Word documents: the `.docx` media type joins the enum, served
+ * exactly like PDF (`width`/`height: null`, magic-sniffed, never parsed
+ * host-side). Same per-version frame schema and the same admission/emission
+ * gate on the negotiated minor - a `.docx` request on a 1.0 or 1.1 stream is
+ * refused with `assetError "not-image"`.
+ */
+export const workspaceStreamAssetV12 = defineStreamRpcContract({
+  method: "workspace.streamAsset",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: workspaceStreamAssetOpenRequestSchema,
+  serverFrameSchema: assetStreamServerFrameSchemaV12,
   clientFrameSchema: assetStreamClientFrameSchema,
 });
