@@ -337,6 +337,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -449,6 +450,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -512,6 +514,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
       },
     });
@@ -556,6 +559,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -692,6 +696,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -835,6 +840,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -933,6 +939,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         // The catalog does NOT list "1.6.0" — the attempt's own target.
         // Falsifies: routing the dialog's Force through `installForce`
@@ -1011,6 +1018,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1116,6 +1124,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         // Registered so "never called" is a fact about the page's routing and
         // not about a handler that was missing anyway.
@@ -1138,7 +1147,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
 
   it("a staged wait still dispatches host.update.install {force: true} through the legacy Force route", async () => {
     // The WHOLE request, not a projection of it. `toEqual` against the exact
-    // two-field shape is what makes this pin falsify "carry the intent as a
+    // three-field shape is what makes this pin falsify "carry the intent as a
     // request field instead of a method": an added `intent` (or any other
     // field smuggled onto the legacy install) reddens here, where recording
     // only `version` and `force` would have swallowed it.
@@ -1177,7 +1186,13 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
     await screen.findByTestId("host-busy-force-defer-dialog");
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
-      expect(installCalls).toEqual([{ version: "1.3.0", force: true }]);
+      expect(installCalls).toEqual([
+        {
+          version: "1.3.0",
+          force: true,
+          acceptStoreFormatLoss: false,
+        },
+      ]);
     });
   });
 });
@@ -1205,6 +1220,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1330,6 +1346,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
               recordSchemaVersion: 2 as const,
               authority: "attempt" as const,
             },
+            storeFormats: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,
@@ -1602,6 +1619,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         ...overrides,
       },
@@ -1758,6 +1776,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
       },
     });
@@ -1807,6 +1826,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
       },
     });
@@ -1890,6 +1910,7 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
             recordSchemaVersion: 2 as const,
             authority: "attempt" as const,
           },
+          storeFormats: null,
         }),
         "host.update.check": () => {
           checkCalls += 1;
@@ -2077,6 +2098,7 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
               recordSchemaVersion: 2 as const,
               authority: "attempt" as const,
             },
+            storeFormats: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,

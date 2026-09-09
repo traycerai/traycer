@@ -393,6 +393,18 @@ export function hostIdentityNeedsReauthPath(
 export function hostDevIdentityPoolRoot(): string {
   return join(HOST_HOME, HOST_DEV_SUBDIR, HOST_DEV_IDENTITIES_SUBDIR);
 }
+/**
+ * The UNSLOTTED dev home (`~/.traycer/host/dev`).
+ *
+ * Deliberately not `hostHomeDir("dev")`, which resolves a `dev-runs/<slot>`
+ * when one is configured. This is the root a dev host uses when the CLI did
+ * not hand it a `--host-data-dir` - the same premise as
+ * {@link hostDevIdentityPoolRoot}, which sits inside it - and the chat-store
+ * survey covers both because a slot's emptiness says nothing about it.
+ */
+export function hostDevHomeDir(): string {
+  return join(HOST_HOME, HOST_DEV_SUBDIR);
+}
 /** Durable lifecycle-layer substrate selection (v1, temp+rename writes). */
 export function hostSubstratePath(
   environment: Environment | undefined,

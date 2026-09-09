@@ -278,6 +278,22 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.blocks.items.anyOf[*].properties.questions.items.properties.allowsCustomAnswer",
+      "reason": "Interview answer-channel capability, nullable/.default(null). It describes the CHANNEL the answer travels back on, not the question: a permission-riding interview answers over ACP session/request_permission, which carries an option id and no text, so free text typed into 'Other' is undeliverable. null means unstated and the client offers 'Other' exactly as it shipped - which is precisely what a pre-field host produces, so old-host frames degrade to today's behavior and an old client strips the key and is unaffected. Only false hides the affordance, and only a host that knows the channel cannot carry text sends it. Scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.event.anyOf[*].properties.questions.items.properties.allowsCustomAnswer",
+      "reason": "The interview.requested counterpart of the **.blocks.items.anyOf[*].properties.questions.items.properties.allowsCustomAnswer entry (nullable/.default(null)): the shared accumulator copies the questions onto the interview block it builds, so host and client derive an identical block. Absent from a pre-field host's events, which yields the same null the block schema defaults to."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.backgroundTask",
       "reason": "Parsed-stream background-task marker (block: nullable/.default(false); events: .optional() with `?? null` in the shared accumulator): falsy means no background-card promotion, so old-host tool calls collapse into the generic activity group exactly as before #127."
     },

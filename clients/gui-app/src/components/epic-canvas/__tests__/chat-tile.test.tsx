@@ -938,6 +938,7 @@ function streamingInterviewAssistantMessage(): Message {
               { label: "Option B", description: null, preview: null },
             ],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [],
@@ -987,6 +988,7 @@ function answeredInterviewAssistantMessage(): Message {
               { label: "Option B", description: null, preview: null },
             ],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [

@@ -10,6 +10,7 @@ import type {
   InterviewQuestion,
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
@@ -289,6 +290,19 @@ export function StaticInterviewOptions(props: {
 }) {
   const selected = new Set(props.selectedOptionIndices);
   const detailRegionIdPrefix = useId();
+  // The historical card must not offer a choice the live card refused. A
+  // question that withdrew free text never rendered an Other row while it was
+  // pending, and the digit it would carry here (`options.length + 1`) is
+  // exactly the one `selectByDigit` declines - so appending an unselected
+  // "Other" to the transcript invents an option the user was never allowed to
+  // pick, and misnumbers nothing else only by luck.
+  //
+  // `customText !== null` keeps it for legacy rows that DO carry a custom
+  // answer: those were answered under the old contract, and hiding the row
+  // would hide the user's own words. Withdrawal governs what is offered, not
+  // what was already said.
+  const showsCustomRow =
+    questionAllowsCustomAnswer(props.question) || props.customText !== null;
   return (
     <ul className="m-0 flex list-none flex-col gap-1.5 pl-0">
       {props.question.options.map((option, index) => {
@@ -326,21 +340,23 @@ export function StaticInterviewOptions(props: {
           </li>
         );
       })}
-      <li>
-        <StaticOptionRow
-          label={props.customText === null ? "Other" : props.customText}
-          option={null}
-          index={props.question.options.length + 1}
-          selected={props.customText !== null}
-          custom
-          labelFindUnitId={props.customFindUnitId}
-          pinnedDetailRegionId={null}
-        >
-          {props.customText === null ? null : (
-            <span className="sr-only">Selected custom answer</span>
-          )}
-        </StaticOptionRow>
-      </li>
+      {showsCustomRow ? (
+        <li>
+          <StaticOptionRow
+            label={props.customText === null ? "Other" : props.customText}
+            option={null}
+            index={props.question.options.length + 1}
+            selected={props.customText !== null}
+            custom
+            labelFindUnitId={props.customFindUnitId}
+            pinnedDetailRegionId={null}
+          >
+            {props.customText === null ? null : (
+              <span className="sr-only">Selected custom answer</span>
+            )}
+          </StaticOptionRow>
+        </li>
+      ) : null}
     </ul>
   );
 }

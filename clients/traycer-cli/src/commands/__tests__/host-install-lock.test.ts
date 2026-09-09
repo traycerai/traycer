@@ -286,6 +286,7 @@ describe.skipIf(process.platform === "win32")(
           ifIdle: false,
           force: false,
           attemptAdoption: null,
+          acceptStoreFormatLoss: false,
         });
         const pending = command(fakeCtx());
 
@@ -340,6 +341,7 @@ describe.skipIf(process.platform === "win32")(
           ifIdle: true,
           force: false,
           attemptAdoption: null,
+          acceptStoreFormatLoss: false,
         });
         const pending = command(fakeCtx());
 

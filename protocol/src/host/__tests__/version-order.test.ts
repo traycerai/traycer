@@ -3,7 +3,7 @@ import {
   compareHostVersions,
   isStrictlyNewerHostVersion,
   isValidHostVersion,
-} from "../compare-host-versions";
+} from "../version-order";
 
 describe("compareHostVersions", () => {
   it("orders ordinary triplets", () => {

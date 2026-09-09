@@ -48,6 +48,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../../host/pid-metadata", () => ({
   readHostPidMetadata: mocks.readHostPidMetadata,
   removeHostPidMetadata: mocks.removeHostPidMetadata,
+  // The stop route's own liveness read behind `onHostAddressed`. No test here
+  // asserts the report; an absent record keeps every fixture's stop silent.
+  readHostPidMetadataEvidence: async () => ({ kind: "absent" as const }),
 }));
 
 interface RecordedCall {

@@ -80,6 +80,7 @@ function createEntry(version: string): HostVersionEntry {
     deprecationReason: null,
     requiredCliVersion: null,
     minimumEpoch: null,
+    storeFormats: null,
     platforms: {
       "darwin-arm64": AVAILABLE_ASSET,
     },
@@ -584,6 +585,7 @@ describe("buildHostAvailableCommand's real data envelope against desktop's parse
           deprecationReason: null,
           requiredCliVersion: null,
           minimumEpoch: null,
+          storeFormats: null,
           platforms: {
             "linux-x64": AVAILABLE_ASSET,
           },
@@ -638,6 +640,7 @@ function createMultiPlatformManifest(
         deprecationReason: null,
         requiredCliVersion: null,
         minimumEpoch: null,
+        storeFormats: null,
         platforms,
       },
     ],
@@ -702,5 +705,47 @@ describe("buildHostAvailableListing platform scoping", () => {
       latest: "1.2.0",
       versions: [{ version: "1.2.0", available: true }],
     });
+  });
+
+  it("carries storeFormats verbatim through the projection", () => {
+    // A regression pin: `storeFormats` passes through
+    // `projectPlatformAsset`/`projectClientFloor`'s entry spread today, but
+    // nothing else asserts on it - a future projection rewrite that builds
+    // the entry field-by-field instead of spreading could silently drop it.
+    const manifest = createMultiPlatformManifest({
+      "darwin-arm64": AVAILABLE_ASSET,
+    });
+    const withFormats = {
+      ...manifest,
+      versions: [{ ...manifest.versions[0], storeFormats: { chatDb: 9 } }],
+    };
+
+    const listing = buildHostAvailableListing({
+      manifest: withFormats,
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+      cliVersion: "9.9.9",
+    });
+
+    expect(listing.manifest.versions[0].storeFormats).toEqual({ chatDb: 9 });
+  });
+
+  it("carries a null storeFormats through the projection", () => {
+    const manifest = createMultiPlatformManifest({
+      "darwin-arm64": AVAILABLE_ASSET,
+    });
+
+    const listing = buildHostAvailableListing({
+      manifest,
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+      cliVersion: "9.9.9",
+    });
+
+    expect(listing.manifest.versions[0].storeFormats).toBeNull();
   });
 });

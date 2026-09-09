@@ -1252,6 +1252,7 @@ describe("TopLevelTabHost: a background epic's pending interview card cannot sna
     header: null,
     options: [],
     multiSelect: false,
+    allowsCustomAnswer: null,
   };
 
   /**

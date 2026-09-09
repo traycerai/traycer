@@ -112,6 +112,7 @@ function baseArgs(overrides: Partial<HostEnsureArgs>): HostEnsureArgs {
     // Every existing case is a solo invocation - the acquire-or-refuse path
     // these tests already assert.
     attemptAdoption: null,
+    acceptStoreFormatLoss: false,
     ...overrides,
   };
 }

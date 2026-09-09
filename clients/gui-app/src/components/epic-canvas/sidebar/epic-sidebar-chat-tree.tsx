@@ -9,6 +9,7 @@ import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import {
@@ -1560,6 +1561,10 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const ownerReachability = useHostReachability(
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
+  // The other reason a reachable owner cannot serve the live chat: its build
+  // is older than this epic's store. Same source `ChatRowButton`'s lock reads,
+  // so the row never promises a published copy the click will not open.
+  const ownerRefusesStore = useHostRefusesEpicStore(ownerHostId, epicId);
   const ownerUserId = useEpicNodeOwnerUserId(nodeId);
   const openRef = useCallback(
     () =>
@@ -1570,6 +1575,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
             ownerHostId,
             ownerUserId,
             ownerIsUnreachable: ownerReachability.status === "unreachable",
+            ownerRefusesStore,
             name: nodeName,
             sessionHostId: readingHostId,
           })
@@ -1585,6 +1591,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       ownerHostId,
       ownerUserId,
       ownerReachability.status,
+      ownerRefusesStore,
       epicId,
       nodeId,
       nodeName,
@@ -2758,6 +2765,20 @@ const ARCHIVED_ROW_CLASS = "opacity-55";
  * screen-reader user never receives it - the lock's tooltip is hover-or-focus
  * on a trigger that is not focusable.
  */
+function describeOfflineLockForAria(
+  lock: OfflineRowLock | null,
+): string | null {
+  if (lock === null) return null;
+  if (lock.reason === "host-older-than-data") {
+    return `on ${lock.hostLabel}, needs a host update, opens read-only`;
+  }
+  const outcome =
+    lock.access === "published-copy"
+      ? "opens read-only"
+      : "unavailable until that machine is back";
+  return `on ${lock.hostLabel}, offline, ${outcome}`;
+}
+
 function chatRowAriaLabel(input: {
   readonly nodeName: string;
   readonly isArchived: boolean;
@@ -2767,13 +2788,7 @@ function chatRowAriaLabel(input: {
   const stateSuffix = [
     input.isArchived ? "archived" : null,
     input.sharedWithTask ? "shared with task" : null,
-    input.offlineLock === null
-      ? null
-      : `on ${input.offlineLock.hostLabel}, offline, ${
-          input.offlineLock.access === "published-copy"
-            ? "opens read-only"
-            : "unavailable until that machine is back"
-        }`,
+    describeOfflineLockForAria(input.offlineLock),
   ]
     .filter((part): part is string => part !== null)
     .join(", ");
@@ -2804,10 +2819,22 @@ function chatRowAriaLabel(input: {
 type OfflineRowLock = {
   readonly hostLabel: string;
   readonly access: "published-copy" | "unavailable";
+  /**
+   * WHY the row is locked. `owner-offline` is the original case, and the
+   * only one a terminal agent can be in. `host-older-than-data` is a chat
+   * whose owner is up but runs a build older than this epic's chat store
+   * (`HOST_OLDER_THAN_DATA`): "offline" would send the reader to wake a
+   * machine that is already answering, so the copy names the host update
+   * instead.
+   */
+  readonly reason: "owner-offline" | "host-older-than-data";
 };
 
 /** The tooltip for {@link OfflineRowLock}, in that promise's own words. */
 function offlineRowLockTooltip(lock: OfflineRowLock): string {
+  if (lock.reason === "host-older-than-data") {
+    return `Lives on ${lock.hostLabel}, which needs a host update to read this agent. Opens read-only from the last published copy.`;
+  }
   return lock.access === "published-copy"
     ? `Lives on ${lock.hostLabel}, which is offline. Opens read-only from the last published copy.`
     : `Lives on ${lock.hostLabel}, which is offline. The agent and its transcript stay on that machine, and it becomes available again when ${lock.hostLabel} is back.`;
@@ -2909,6 +2936,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const rowOwnerUserId = useEpicNodeOwnerUserId(nodeId);
   const ownerIsUnreachable = ownerReachability.status === "unreachable";
+  // The reachable-but-too-old owner (`HOST_OLDER_THAN_DATA`), read from the
+  // same registry `ChatNode` builds the click's ref from.
+  const ownerRefusesStore = useHostRefusesEpicStore(ownerHostId, epicId);
   const offlineLock = useMemo<OfflineRowLock | null>(() => {
     if (
       chatOpensPublishedCopy({
@@ -2916,11 +2946,16 @@ function ChatRowButton(props: ChatRowButtonProps) {
         ownerHostId,
         ownerUserId: rowOwnerUserId,
         ownerIsUnreachable,
+        ownerRefusesStore,
       })
     ) {
       return {
         hostLabel: ownerReachability.hostLabel,
         access: "published-copy",
+        // Offline outranks the store verdict: a host that is not answering
+        // is the fact a reader can act on now, and the refusal is only
+        // known to hold for a build that is currently running.
+        reason: ownerIsUnreachable ? "owner-offline" : "host-older-than-data",
       };
     }
     // The terminal-agent sibling. It needs no owner-user check where the chat
@@ -2930,12 +2965,17 @@ function ChatRowButton(props: ChatRowButtonProps) {
     // able to name is the machine it lives on.
     if (artifactType !== "terminal-agent") return null;
     if (ownerHostId === null || !ownerIsUnreachable) return null;
-    return { hostLabel: ownerReachability.hostLabel, access: "unavailable" };
+    return {
+      hostLabel: ownerReachability.hostLabel,
+      access: "unavailable",
+      reason: "owner-offline",
+    };
   }, [
     artifactType,
     ownerHostId,
     ownerIsUnreachable,
     ownerReachability.hostLabel,
+    ownerRefusesStore,
     rowOwnerUserId,
   ]);
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(

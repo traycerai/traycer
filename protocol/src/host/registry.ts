@@ -244,9 +244,11 @@ import {
   hostStatusV11,
   hostStatusV12,
   hostStatusV13,
+  hostStatusV14,
   hostStatusUpgradeV10ToV11,
   hostStatusUpgradeV11ToV12,
   hostStatusUpgradeV12ToV13,
+  hostStatusUpgradeV13ToV14,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -271,15 +273,19 @@ import {
   hostUpdateActivateV10,
   hostUpdateActivateV11,
   hostUpdateCheckUpgradeV10ToV11,
+  hostUpdateCheckUpgradeV11ToV12,
   hostUpdateCheckV10,
   hostUpdateCheckV11,
+  hostUpdateCheckV12,
   hostUpdateContinueUpgradeV10ToV11,
   hostUpdateContinueV10,
   hostUpdateContinueV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
   hostUpdateInstallV12,
+  hostUpdateInstallV13,
   hostUpdateInstallUpgradeV11ToV12,
+  hostUpdateInstallUpgradeV12ToV13,
   hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
@@ -837,6 +843,10 @@ import {
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV10,
   providersSetEnabledResponseSchemaV20,
+  providersClearProfileApiKeyRequestSchema,
+  providersClearProfileApiKeyResponseSchema,
+  providersSetProfileApiKeyRequestSchema,
+  providersSetProfileApiKeyResponseSchema,
   providersSetProfileEnabledRequestSchema,
   providersSetProfileEnabledResponseSchema,
   providersSetEnvOverrideRequestSchema,
@@ -3370,6 +3380,36 @@ export const providersSetProfileEnabledV10 = defineRpcContract({
   responseSchema: providersSetProfileEnabledResponseSchema,
 });
 
+/**
+ * Brand-new v1.0 methods, registered like `providers.submitLoginCode` below:
+ * outside `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`,
+ * because a new method NAME is handshake-fatal against a released peer.
+ *
+ * These could NOT have ridden `providers.setApiKey` as a `profileId` field
+ * instead - see `providersSetProfileApiKeyRequestSchema`'s note. That method is
+ * ON the floor, so the scope would be projected away against a floor peer and
+ * the key would silently be stored provider-wide.
+ *
+ * Missing-peer behavior is safe by construction: a host that predates these
+ * also predates `ProviderProfile.apiKey`, so every profile it reports carries
+ * `apiKey: null` ("unknown") and the client draws no paste form to call them
+ * from. The degrade arm covers a client that calls anyway with per-call
+ * upgrade guidance rather than a dead handshake.
+ */
+export const providersSetProfileApiKeyV10 = defineRpcContract({
+  method: "providers.setProfileApiKey",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetProfileApiKeyRequestSchema,
+  responseSchema: providersSetProfileApiKeyResponseSchema,
+});
+
+export const providersClearProfileApiKeyV10 = defineRpcContract({
+  method: "providers.clearProfileApiKey",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersClearProfileApiKeyRequestSchema,
+  responseSchema: providersClearProfileApiKeyResponseSchema,
+});
+
 export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   typeof providersSetEnabledV20,
   typeof providersSetEnabledV21
@@ -4322,7 +4362,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -4339,6 +4379,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         3: {
           contract: hostStatusV13,
           upgradeFromPreviousVersion: hostStatusUpgradeV12ToV13,
+        },
+        4: {
+          contract: hostStatusV14,
+          upgradeFromPreviousVersion: hostStatusUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -4422,7 +4466,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.check": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostUpdateCheckV10,
@@ -4432,6 +4476,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: hostUpdateCheckV11,
           upgradeFromPreviousVersion: hostUpdateCheckUpgradeV10ToV11,
         },
+        2: {
+          contract: hostUpdateCheckV12,
+          upgradeFromPreviousVersion: hostUpdateCheckUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -4439,7 +4487,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
@@ -4469,6 +4517,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostUpdateInstallV12,
           upgradeFromPreviousVersion: hostUpdateInstallUpgradeV11ToV12,
+        },
+        3: {
+          contract: hostUpdateInstallV13,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -8365,6 +8417,32 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersSetProfileEnabledV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.setProfileApiKey": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetProfileApiKeyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.clearProfileApiKey": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersClearProfileApiKeyV10,
           upgradeFromPreviousVersion: null,
         },
       },
