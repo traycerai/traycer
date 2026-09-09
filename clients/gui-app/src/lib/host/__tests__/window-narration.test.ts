@@ -476,6 +476,69 @@ describe("deriveWindowNarration", () => {
       });
     });
 
+    it("does NOT wait over an incompatible lease - an actionable ∅ is not a vacuum", () => {
+      // The lease list and the directory's answer are two independent reads, so
+      // the authority can already know a fleet while discovery is still
+      // pending. `update-host` is a version fix the user could walk NOW, and a
+      // wait hides whatever it covers for as long as it lasts.
+      const detail = incompatibility({});
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          targetHostId: "host-a",
+          leases: [deadLease("host-a", { reason: "incompatible", detail })],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
+      });
+    });
+
+    it("does NOT wait over an all-plan-restricted fleet", () => {
+      // The upgrade CTA is the whole answer on that arm, and withholding it
+      // until the directory answers withholds the only action there is.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [deadLease("host-a", { reason: "plan-restricted" })],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "plan-restricted" },
+      });
+    });
+
+    it("still waits when the scan would have said offline anyway", () => {
+      // The discriminating control for the two cases above: same unconcluded
+      // discovery, a dead lease that is merely offline, and nothing actionable
+      // to withhold - so the wait applies.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [deadLease("host-a", { reason: "offline" })],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
     it("does not silence a shell that can boot a local host", () => {
       // Desktop's `cold-start` arm is untouched: something really is starting
       // there, and "Starting Traycer…" is the truer sentence than silence.
@@ -514,6 +577,8 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: "host-a",
           localHostExpected: false,
           discoveryConcluded: false,
+          leases: [],
+          targetHostId: null,
         }),
       ).toBe(false);
     });
@@ -531,6 +596,8 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: null,
           localHostExpected: false,
           discoveryConcluded: false,
+          leases: [],
+          targetHostId: null,
         }),
       ).toBe(false);
     });
@@ -542,6 +609,8 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: null,
           localHostExpected: false,
           discoveryConcluded: false,
+          leases: [],
+          targetHostId: null,
         }),
       ).toBe(true);
       expect(
@@ -550,6 +619,8 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: null,
           localHostExpected: true,
           discoveryConcluded: false,
+          leases: [],
+          targetHostId: null,
         }),
       ).toBe(false);
       expect(
@@ -558,6 +629,8 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: null,
           localHostExpected: false,
           discoveryConcluded: true,
+          leases: [],
+          targetHostId: null,
         }),
       ).toBe(false);
     });

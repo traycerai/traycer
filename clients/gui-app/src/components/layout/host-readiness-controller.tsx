@@ -63,6 +63,7 @@ import {
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
 export function HostReadinessControllerProvider(props: {
@@ -595,11 +596,21 @@ function AttachPendingCard(props: {
   // correct answer.
   const localHostExpected = useRunnerHostOrNull()?.hasLocalHost ?? false;
   const discoveryConcluded = useHostDiscoveryConcluded();
+  // The fleet, because the predicate refuses to wait over an ACTIONABLE ∅ - an
+  // incompatible or plan-restricted lease the user could act on now. Read here
+  // rather than passed down: this card is the predicate's second reader, and
+  // the two must be answering it from the same inputs.
+  const leases = useHostLeases();
+  const targetHostId = useSelectionAuthorityStore(
+    (state) => state.targetHostId,
+  );
   const awaitingDiscovery = windowNarrationAwaitsDiscovery({
     attached,
     effectiveHostId,
     localHostExpected,
     discoveryConcluded,
+    leases,
+    targetHostId,
   });
   if (attached && !awaitingDiscovery) return null;
   return (

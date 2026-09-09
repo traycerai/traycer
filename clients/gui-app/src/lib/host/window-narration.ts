@@ -182,7 +182,7 @@ export interface WindowNarrationInput {
  * the narrator able to speak" is how a frame ends up with two cards, or with
  * none.
  *
- * Four conjuncts, each of which is load-bearing:
+ * Five conjuncts, each of which is load-bearing:
  *
  *  - `attached`: while the kernel has not attached the narrator is silent
  *    anyway, and the gate's cover already owns that window. Answering `true`
@@ -199,17 +199,36 @@ export interface WindowNarrationInput {
  *  - `!discoveryConcluded`: the actual wait. Once an attempt has concluded -
  *    delivered or failed - ∅ is a verdict and the narration below is
  *    unchanged.
+ *  - the fleet scan answers `offline`: the difference between SOFTENING a
+ *    verdict and SUPPRESSING one, and the same gate the pre-serve grace below
+ *    states for itself. A wait hides whatever it covers for as long as it
+ *    lasts, and `offline` is the one variant with nothing to hide - the boot
+ *    surface carries the same story, and no action is being withheld.
+ *    `update-host` and `plan-restricted` are the opposite: a version fix or an
+ *    upgrade the user could walk NOW, derived from leases the authority has
+ *    already concluded are dead. The lease list and the directory's answer come
+ *    from two independent reads, so a fleet CAN be known while discovery is
+ *    still pending - that is exactly when suppressing them would bite.
+ *
+ * Asking `deriveNoHostVariant` rather than enumerating dead reasons is the same
+ * decision the grace below documents: a new variant becomes actionable by
+ * default, which is the safe direction to be wrong in.
  */
 export function windowNarrationAwaitsDiscovery(input: {
   readonly attached: boolean;
   readonly effectiveHostId: string | null;
   readonly localHostExpected: boolean;
   readonly discoveryConcluded: boolean;
+  readonly leases: readonly HostLeaseSnapshot[];
+  readonly targetHostId: string | null;
 }): boolean {
   if (!input.attached) return false;
   if (input.effectiveHostId !== null) return false;
   if (input.localHostExpected) return false;
-  return !input.discoveryConcluded;
+  if (input.discoveryConcluded) return false;
+  return (
+    deriveNoHostVariant(input.leases, input.targetHostId).kind === "offline"
+  );
 }
 
 /**
