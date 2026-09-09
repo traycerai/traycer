@@ -1002,15 +1002,31 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     );
     // Inject reachability so the reachable -> unreachable -> reachable
     // transitions are deterministic rather than racing real socket
-    // bind/close/rebind on the same port (the CI flake).
+    // bind/close/rebind on the same port.
     let reachable = true;
+    // The assertions below read a hysteresis counter that advances once per
+    // OBSERVATION, so this case means what it says only while its own reloads
+    // are the only observations there are. Any other reload both advances that
+    // counter and takes the newer reload generation - which leaves the awaited
+    // reload's fold skipped and `getSnapshot()` a full observation stale - and
+    // this class has two self-driven ones: the reachability retry ladder that
+    // every degraded fold arms, and the pid-metadata watcher, which sees the
+    // fixture write above land in the directory it is installed on. The clock
+    // is frozen for the first; the second is why the `available` seed comes
+    // from a reload rather than `bootstrap` (bootstrap is what installs the
+    // watcher, and this case is about the fold, not the watcher). `probes`
+    // asserts that premise below rather than assuming it.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let probes = 0;
     const lifecycle = new HostLifecycle({
       layout,
       bundledBinaryPath: null,
       label: PRODUCTION_LABEL,
       readyTimeoutMs: 5_000,
-      reachabilityProbe: (url) =>
-        Promise.resolve(url === websocketUrl && reachable),
+      reachabilityProbe: (url) => {
+        probes += 1;
+        return Promise.resolve(url === websocketUrl && reachable);
+      },
     });
     const restoreLiveness = useIndeterminateProcessLiveness();
     const changes: Array<string | null> = [];
@@ -1018,7 +1034,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       changes.push(snapshot?.hostId ?? null);
     });
     try {
-      await lifecycle.bootstrap({ hostInstalled: true });
+      await lifecycle.reloadSnapshotFromDisk();
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
 
@@ -1045,9 +1061,13 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.availability).toBe("available");
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host", "same-host", "same-host"]);
+      // One per reload above, and nothing else. Anything higher means another
+      // observer moved the counter these assertions read.
+      expect(probes).toBe(4);
     } finally {
       restoreLiveness();
       lifecycle.dispose();
+      vi.useRealTimers();
       await rm(dir, { recursive: true, force: true });
     }
   });
