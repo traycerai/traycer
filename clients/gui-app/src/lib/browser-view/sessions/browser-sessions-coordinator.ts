@@ -281,11 +281,17 @@ interface BrowserSessionsCoordinator {
    * coordinator since it last entered `failed`. It is what bounds that sweep -
    * see its docblock for why the release edge can no longer bound itself.
    *
-   * Cleared on any transition OUT of `failed`, which is the only real
-   * progress: the stream opened, or is at least reconnecting, so the next
-   * failure is a NEW episode and earns a fresh re-ask. A coordinator that
-   * fails, is re-asked, and fails again is left alone until something other
-   * than the sweep moves it.
+   * Cleared when the stream reaches `live`, which is the only real progress:
+   * it actually opened, so the next failure is a NEW episode and earns a fresh
+   * re-ask. A coordinator that fails, is re-asked, and fails again is left
+   * alone until something other than the sweep moves it.
+   *
+   * Deliberately NOT "left `failed`". A retry publishes `connecting` on its
+   * way out and main forwards that as a status like any other, so clearing on
+   * it would hand the flag back once per ATTEMPT - which is once per sweep,
+   * leaving the sweep able to feed itself exactly as before the bound.
+   * `reconnecting` needs no arm of its own: it is only reachable from `live`,
+   * which has already cleared this.
    */
   sweptSinceFailure: boolean;
   /**
@@ -442,18 +448,20 @@ export function acquireBrowserSessionsCoordinator(args: {
  *     React rather than through this call stack, which no reentrancy flag
  *     would catch.
  *
- * So the sweep could feed itself, and with several undialable devices it did:
- * exactly the failure {@link retryCapRefusedCoordinators} refuses to risk -
- * "two undialable hosts would each free a slot the other's failure swept on,
- * forever" - reached from the other edge. Unbounded nested updates surface as
- * React error #185 ("maximum update depth exceeded"), which takes the window
- * down to the crash card.
+ * So the sweep can feed itself: exactly the failure
+ * {@link retryCapRefusedCoordinators} refuses to risk - "two undialable hosts
+ * would each free a slot the other's failure swept on, forever" - reached from
+ * the other edge. Unbounded nested updates surface as React error #185
+ * ("maximum update depth exceeded"), which takes the window down to the crash
+ * card. A staging machine with three undialable remote devices hit #185
+ * repeatedly and stopped once they were dialable again; that is the
+ * correlation this was derived from, not an observed loop.
  *
  * `sweptSinceFailure` restores a bound without narrowing what a release may
  * revive: each coordinator is re-asked at most ONCE per failure episode, so a
- * chain is bounded by the number of failed coordinators, and only a transition
- * out of `failed` re-arms one. Same shape as the cap-refused sweep's bound,
- * for the same reason.
+ * chain is bounded by the number of failed coordinators, and only reaching
+ * `live` re-arms one (see the field's docblock for why `connecting` must not).
+ * Same shape as the cap-refused sweep's bound, for the same reason.
  *
  * Ordering: the released coordinator's close went to main before these opens
  * (`stop()` inside `dispose()` sends it), and main handles a renderer's
