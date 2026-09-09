@@ -172,6 +172,7 @@ export const authenticatedUserBaseSchema = z.object({
   // payloads without the fields still parse; Zod clients on this contract
   // retain the keys instead of stripping them as unknown.
   cloudSyncAllowed: z.boolean().optional(),
+  cloudSyncObservedAt: z.string().datetime().optional(),
   graceExpiresAt: z.string().optional(),
 });
 
