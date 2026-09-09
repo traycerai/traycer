@@ -7,25 +7,11 @@ export interface InterviewOptionDetailsDisclosure {
 }
 
 /**
- * Per-option disclosure state for the `?` affordance, owned by whichever row
- * component renders it.
- *
- * A Radix tooltip is hover/focus-only BY CONSTRUCTION, so a finger could never
- * reach these strings: the trigger's `pointerMove` returns early on
- * `pointerType === "touch"` - the only open-from-pointer path there is - and
- * the tap's own `pointerdown` sets the flag that suppresses the focus
- * fallback. The `?` had no `onClick` either, so on a phone it was a dead hole
- * in the row that swallowed the tap without selecting the option (it sits at
- * `z-20` over the row's own `absolute inset-0` toggle).
- *
- * So the `?` doubles as a disclosure. This is deliberately NOT gated on
- * `useCoarsePointer()`: hover still previews on a fine pointer, and a click
- * pins the same text inline under the row where it survives a scroll - which
- * is an improvement on a mouse too, and one branch less to keep true.
- *
- * It lives in its own module rather than beside the components that use it
- * because `react-refresh/only-export-components` (warn, `--max-warnings 0`)
- * fails a component file that also exports a function.
+ * A row's disclosure state for its `?`. A click or tap pins the details
+ * inline; hover still previews them through the button's tooltip, which a
+ * Radix tooltip can never open from a touch pointer. Not gated on pointer
+ * type on purpose - one path to keep true. Own module because
+ * `react-refresh/only-export-components` rejects a hook in a component file.
  */
 export function useInterviewOptionDetailsDisclosure(): InterviewOptionDetailsDisclosure {
   const regionId = useId();

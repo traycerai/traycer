@@ -2591,17 +2591,9 @@ describe("PendingInterviewCard keyboard navigation", () => {
   // tap's own `pointerdown` sets the flag that suppresses the focus
   // fallback. Before the fix the `?` had no `onClick`, so a finger could
   // never reach these strings at all.
-  it("reveals an option's description on a touch tap of its details button", () => {
+  it("reveals an option's description on a touch tap and collapses it on the next", () => {
     const detailsButton = renderDetailsCard();
     expect(screen.queryByText(BETA_DESCRIPTION)).toBeNull();
-
-    tapWithFinger(detailsButton);
-
-    expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();
-  });
-
-  it("collapses the revealed description on a second touch tap", () => {
-    const detailsButton = renderDetailsCard();
 
     tapWithFinger(detailsButton);
     expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();

@@ -318,7 +318,10 @@ function StaticOptionRow(props: {
           custom={props.custom}
         />
       </div>
-      {props.option === null ? null : (
+      {/* Search pins this option's details open in the parent, and the pinned
+          button has no toggle - so a region the user expanded first must
+          yield to it, or both render. It returns when the pin clears. */}
+      {props.option === null || props.pinnedDetailRegionId !== null ? null : (
         <InterviewOptionDetailsRegion
           option={props.option}
           disclosure={disclosure}
