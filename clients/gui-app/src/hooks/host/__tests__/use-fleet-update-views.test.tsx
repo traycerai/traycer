@@ -101,6 +101,7 @@ function idleStatus(version: string) {
     busyBreakdown: null,
     updateOperation: { kind: "none" },
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
   };
 }
 

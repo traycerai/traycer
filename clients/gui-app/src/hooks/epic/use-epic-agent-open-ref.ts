@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { makeChatOpenTileRef } from "@/lib/chats/chat-open-tile-ref";
 import {
@@ -37,6 +38,13 @@ export function useEpicAgentOpenRef(
   const ownerReachability = useHostReachability(
     projectedOwnerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
+  // The other way a reachable owner cannot serve the live chat: its build is
+  // older than the epic's store. Learned from a live open's refusal, so this
+  // read is `false` until some tile has paid that dial.
+  const ownerRefusesStore = useHostRefusesEpicStore(
+    projectedOwnerHostId,
+    epicId,
+  );
 
   return useCallback(
     () =>
@@ -48,6 +56,7 @@ export function useEpicAgentOpenRef(
             ownerHostId: projectedOwnerHostId,
             ownerUserId,
             ownerIsUnreachable: ownerReachability.status === "unreachable",
+            ownerRefusesStore,
             sessionHostId,
           })
         : {
@@ -63,6 +72,7 @@ export function useEpicAgentOpenRef(
       name,
       type,
       ownerReachability.status,
+      ownerRefusesStore,
       ownerUserId,
       projectedOwnerHostId,
       sessionHostId,

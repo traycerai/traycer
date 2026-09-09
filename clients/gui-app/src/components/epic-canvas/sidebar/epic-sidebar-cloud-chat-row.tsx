@@ -1,4 +1,4 @@
-import { useCallback, type MouseEvent, type ReactNode } from "react";
+import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -7,7 +7,10 @@ import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { cloudChatRowLastActiveAt } from "@/lib/chats/unified-chat-list";
 import {
   useIsActiveEpicArtifact,
   useIsActiveTile,
@@ -76,6 +79,24 @@ export function EpicSidebarCloudChatRow(
   // not be answering yet, and the tile this ref opens binds that id for life.
   // The OWNING host below is metadata.
   const readingHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The record row's publication head for this identity, when the epic's
+  // record table holds one: pushed as the owner publishes, so it moves the
+  // idle-time chip ahead of the polled cloud list's `publishedAt`. The same
+  // value the tree sorts this row by (`lastActiveAtByKey`), so the chip and
+  // the order agree.
+  // The epic comes from the SESSION this row is projected by, not from a
+  // prop: the row no longer takes one, and the session is the only epic whose
+  // record table could hold this chat's head anyway. Read off the context
+  // directly - the same access `useEpicChatRecordHead` uses - rather than
+  // through `useMaybeOpenEpicHandle`, which several sidebar suites mock with a
+  // narrower surface. No session (`""`) fails the hook's own guard and reads
+  // `null`, which is exactly the pre-head behavior.
+  const epicSession = use(EpicSessionContext);
+  const recordHead = useEpicChatRecordHead(
+    epicSession?.epicId ?? "",
+    chat.identity.ownerUserId,
+    chat.identity.chatId,
+  );
   // The SAME tint rule a local chat row's idle glyph resolves (settings-driven
   // per-type color, muted only when the user turns icon colors off). A
   // hardcoded muted class here made the icon column encode row ORIGIN - local
@@ -251,7 +272,10 @@ export function EpicSidebarCloudChatRow(
             </TooltipWrapper>
           )}
           <CloudRowIdleTime
-            publishedAt={chat.publishedAt ?? chat.metadataUpdatedAt}
+            publishedAt={cloudChatRowLastActiveAt(
+              chat,
+              recordHead?.publishedAt ?? null,
+            )}
           />
         </span>
       </button>

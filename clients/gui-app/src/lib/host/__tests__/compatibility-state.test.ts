@@ -163,6 +163,7 @@ const compatibleHostStatus: HostStatusResponse = {
   // which is exactly what host.status@1.2-and-older peers send.
   updateOperation: null,
   updateTransaction: null,
+  storeFormats: null,
 };
 
 interface Deferred<T> {

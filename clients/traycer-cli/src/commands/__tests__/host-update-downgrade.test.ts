@@ -23,7 +23,44 @@ const mocks = vi.hoisted(() => ({
     readonly force: boolean;
     readonly onWillStopHost: (() => void) | null;
   }>,
+  gateStoreFormatFloorMock: vi.fn(),
+  serviceManagerMayRespawnMock: vi.fn(),
 }));
+
+// The commit tail's post-stop check asks `serviceManagerMayRespawn` (the
+// `service/index.ts` facade) and, since the settle-wait, POLLS it for up to
+// 15 s while it answers "may respawn". Left real it reads the developer's own
+// launchd/systemd state - on a machine with a loaded Traycer job every commit
+// here would sit through that window and time the test out. Stubbed to
+// "cannot respawn", the ordinary quiescent machine these fixtures assume.
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
+  return {
+    ...actual,
+    serviceManagerMayRespawn: (
+      ...callArgs: Parameters<typeof actual.serviceManagerMayRespawn>
+    ) => mocks.serviceManagerMayRespawnMock(...callArgs),
+  };
+});
+mocks.serviceManagerMayRespawnMock.mockResolvedValue(false);
+
+// Real by default (the sandboxed `hostHomeDir` below points it at an empty
+// temp tree, which the floor clears unconditionally) - mocked only for the
+// gate-site test that proves a refusal here happens BEFORE any bytes are
+// staged, which a real empty sandbox can never observe.
+vi.mock("../../host/store-format-floor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/store-format-floor")>();
+  return {
+    ...actual,
+    gateStoreFormatFloor: (
+      ...callArgs: Parameters<typeof actual.gateStoreFormatFloor>
+    ) =>
+      mocks.gateStoreFormatFloorMock.getMockImplementation() === undefined
+        ? actual.gateStoreFormatFloor(...callArgs)
+        : mocks.gateStoreFormatFloorMock(...callArgs),
+  };
+});
 
 // Keep the real staging and commit primitives, but route their host paths to a
 // disposable tree. The downgrade helper must therefore replace real bytes and
@@ -249,6 +286,7 @@ describe("installHostDowngrade", () => {
       environment: ENV,
       version: "1.2.0",
       force: true,
+      acceptStoreFormatLoss: false,
       onProgress: noopProgress,
       onBeforeCommit: async () => undefined,
       onWillDisruptHost: () => undefined,
@@ -283,6 +321,7 @@ describe("installHostDowngrade", () => {
       environment: ENV,
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
       onProgress: noopProgress,
       onBeforeCommit: async () => {
         onBeforeCommitCalls += 1;
@@ -327,6 +366,7 @@ describe("installHostDowngrade", () => {
       environment: ENV,
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
       onProgress: noopProgress,
       onBeforeCommit: async () => undefined,
       onWillDisruptHost,
@@ -355,6 +395,7 @@ describe("installHostDowngrade", () => {
         environment: ENV,
         version: "1.2.0",
         force: false,
+        acceptStoreFormatLoss: false,
         onProgress: noopProgress,
         onBeforeCommit: async () => undefined,
         onWillDisruptHost: () => undefined,
@@ -382,6 +423,7 @@ describe("installHostDowngrade", () => {
         environment: ENV,
         version: "1.2.0",
         force: false,
+        acceptStoreFormatLoss: false,
         onProgress: noopProgress,
         onBeforeCommit: async () => undefined,
         onWillDisruptHost: () => undefined,
@@ -416,6 +458,7 @@ describe("installHostDowngrade", () => {
       environment: ENV,
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
       onProgress: noopProgress,
       onBeforeCommit: async () => {
         beforeCommitCalls += 1;
@@ -448,6 +491,7 @@ describe("installHostDowngrade", () => {
         environment: ENV,
         version: "1.2.0",
         force: false,
+        acceptStoreFormatLoss: false,
         onProgress: noopProgress,
         onBeforeCommit: async () => {
           beforeCommitCalls += 1;
@@ -483,6 +527,7 @@ describe("installHostDowngrade", () => {
       environment: ENV,
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
       onProgress: noopProgress,
       onBeforeCommit: async () => undefined,
       onWillDisruptHost: () => undefined,
@@ -521,6 +566,7 @@ describe("installHostDowngrade", () => {
         environment: ENV,
         version: "1.2.0",
         force: false,
+        acceptStoreFormatLoss: false,
         onProgress: noopProgress,
         onBeforeCommit: async () => undefined,
         onWillDisruptHost: () => undefined,
@@ -550,6 +596,7 @@ describe("installHostDowngrade", () => {
       environment: ENV,
       version: "1.2.0",
       force: false,
+      acceptStoreFormatLoss: false,
       onProgress: noopProgress,
       onBeforeCommit: async () => {
         order.push("onBeforeCommit");
@@ -577,6 +624,38 @@ describe("installHostDowngrade", () => {
     // Falsification: stop forwarding `beforeExtract` into
     // `stageHostInstallSource` and it drops out of `order` entirely; hand it
     // to the lifecycle instead and it moves behind `onBeforeCommit`.
+  });
+
+  it("consults the store-format floor before staging, and refuses without ever reaching the registry when the floor refuses", async () => {
+    await writeInstalled("1.3.0-rc.4", "old");
+    mocks.gateStoreFormatFloorMock.mockRejectedValue(
+      Object.assign(new Error("host update: refusing to install host 1.2.0"), {
+        code: "E_HOST_STORE_FORMAT_FLOOR",
+      }),
+    );
+
+    await expect(
+      installHostDowngrade({
+        environment: ENV,
+        version: "1.2.0",
+        force: true,
+        acceptStoreFormatLoss: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+    expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledTimes(1);
+    expect(mocks.gateStoreFormatFloorMock.mock.calls[0]?.[0]).toMatchObject({
+      targetVersion: "1.2.0",
+      site: "host update",
+    });
+    // Nothing downstream of the refused gate ran - not even a network
+    // client was constructed, let alone a download or a stage.
+    expect(mocks.createDefaultRegistryClientMock).not.toHaveBeenCalled();
   });
 
   // Final hold model: the downgrade write now happens INSIDE
@@ -609,6 +688,7 @@ describe("installHostDowngrade", () => {
         environment: ENV,
         version: "1.2.0",
         force: false,
+        acceptStoreFormatLoss: false,
         onProgress: noopProgress,
         onBeforeCommit: async () => undefined,
         onWillDisruptHost: () => undefined,
@@ -640,6 +720,7 @@ describe("installHostDowngrade", () => {
         environment: ENV,
         version: "2.0.0+bar",
         force: false,
+        acceptStoreFormatLoss: false,
         onProgress: noopProgress,
         onBeforeCommit: async () => undefined,
         onWillDisruptHost: () => undefined,

@@ -153,6 +153,7 @@ describe("buildHostUpdateCommand — illegal ack nonce refuses before anything i
     const command = buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       // Too short and outside the legal charset for
       // `isValidUpdateDispatchAckNonce` (`^[A-Za-z0-9_-]{8,128}$`).
@@ -183,6 +184,7 @@ describe("buildHostUpdateCommand — illegal ack nonce refuses before anything i
     const command = buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       ackNonce: "nonce-abcdefgh",
       intent: null,
@@ -216,6 +218,7 @@ describe("buildHostUpdateCommand — the bound-intent pairing is refused, and st
     const command = buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       ackNonce: "nonce-abcdefgh",
       // `install` is a real intent inside `update-run.ts`, but it is not a
@@ -243,6 +246,7 @@ describe("buildHostUpdateCommand — the bound-intent pairing is refused, and st
     const command = buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       ackNonce: "nonce-abcdefgh",
       intent: "activate",
@@ -270,6 +274,7 @@ describe("buildHostUpdateCommand — the bound-intent pairing is refused, and st
     const command = buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: null,
       ackNonce: "nonce-abcdefgh",
       intent: null,
@@ -298,6 +303,7 @@ describe("buildHostUpdateCommand — the bound-intent pairing is refused, and st
     const command = buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       versionRequest: "2.0.0",
       ackNonce: null,
       intent: "continue",

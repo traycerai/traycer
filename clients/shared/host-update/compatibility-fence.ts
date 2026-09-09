@@ -416,15 +416,13 @@ export type HostStampPolicy = "identity-required" | "version-only";
  *
  * ## The bug this exists to close (Q1)
  *
- * No released host through 1.3.0-rc.3 writes `processStartIdentity`, so
- * `readRunningObservation` answers `unreadable("pid-start-stamp-missing")` for
- * every one of them, the verify leg polls a condition that can never become
- * true, and after the whole 45s budget a CORRECT install of a HEALTHY host is
- * recorded `failed` and exits `E_HOST_UPDATE_HEALTH_CHECK_FAILED`. It is
- * reached by `--allow-downgrade` rollbacks and by Desktop rollback - the paths
- * people take when an update has already gone wrong, so the failure lands at
- * the worst possible moment. It is not reached by ordinary forward updates,
- * which is why it survived to the matrix.
+ * Hosts that predate the pid start stamp cannot satisfy identity verification,
+ * so requiring it would make a healthy rollback fail after the full polling
+ * budget. HOST_START_STAMP_FLOOR follows the evidence above, including the
+ * distinction between the writer's first release and the proven floor.
+ * Host 1.2.0 already writes `processStartIdentity` and takes the strong
+ * identity-required path. A missing stamp on that release or any newer build
+ * is missing evidence, never a reason to weaken verification.
  *
  * ## Why the gate is on the TARGET, not on the observation
  *

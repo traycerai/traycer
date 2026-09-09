@@ -103,9 +103,9 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     }
   });
 
-  it("installs epic.listChatRecords with both @1.0 and @1.1 minors, latestMinor 1", () => {
+  it("installs epic.listChatRecords with @1.0, @1.1 and @1.2 minors, latestMinor 2", () => {
     const majorLine = hostRpcRegistry["epic.listChatRecords"][1];
-    expect(majorLine.latestMinor).toBe(1);
+    expect(majorLine.latestMinor).toBe(2);
     expect(majorLine.versions[0].contract.schemaVersion).toEqual({
       major: 1,
       minor: 0,
@@ -113,6 +113,13 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     expect(majorLine.versions[1].contract.schemaVersion).toEqual({
       major: 1,
       minor: 1,
+    });
+    // @1.2 adds the cloud publication head to each row. The lane's own
+    // `hasDocReplica` request is unchanged, so this minor stacks on @1.1
+    // rather than forking it.
+    expect(majorLine.versions[2].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 2,
     });
   });
 });

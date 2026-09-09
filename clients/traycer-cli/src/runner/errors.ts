@@ -136,9 +136,24 @@ export const CLI_ERROR_CODES = {
   // is a RUNNING host answering a handshake: this fires before anything is
   // downloaded, and the remedy is to update Traycer rather than the host.
   HOST_CLIENT_FLOOR_UNMET: "E_HOST_CLIENT_FLOOR_UNMET",
+  // The target host build reads an on-disk store format OLDER than one this
+  // machine's host data is already written in, so landing it would make those
+  // chats unreadable - and a host that meets a store it cannot open crash-
+  // loops instead of reporting it. Raised before anything is downloaded,
+  // stopped or swapped, and equally when the target's format cannot be
+  // established at all: an unprovable move is refused, not assumed safe.
+  //
+  // Deliberately NOT HOST_CLIENT_FLOOR_UNMET, which is the other pre-download
+  // refusal: that one is about the CLI being too old for the host, and its
+  // remedy is to update Traycer. This one is about DATA, the target is
+  // typically older on purpose, and the only remedies are to update forward or
+  // to accept the loss explicitly with `--accept-store-format-loss`.
+  // `--force` never reaches it - see `host/store-format-floor.ts`.
+  HOST_STORE_FORMAT_FLOOR: "E_HOST_STORE_FORMAT_FLOOR",
   REGISTRY_UNAVAILABLE: "E_REGISTRY_UNAVAILABLE",
   REGISTRY_VERSION_NOT_FOUND: "E_REGISTRY_VERSION_NOT_FOUND",
   REGISTRY_NOT_IMPLEMENTED: "E_REGISTRY_NOT_IMPLEMENTED",
+  RELEASE_AUTHENTICATION_REQUIRED: "E_RELEASE_AUTHENTICATION_REQUIRED",
 
   // --- OS service registration (NP-2) ---
   SERVICE_UNSUPPORTED_PLATFORM: "E_SERVICE_UNSUPPORTED_PLATFORM",
