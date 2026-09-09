@@ -112,9 +112,12 @@ vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
 // are asserted too: reading a chat's stream off the wrong tile kind, or off a
 // tile with no host, is the failure that would make the strip describe a
 // different machine's chat.
+/** The surface's own wake, spied so a test can prove the button reaches it. */
+const chatWakeSpy = vi.hoisted(() => vi.fn());
+
 const chatSyncMock = vi.hoisted(() => {
   const current: { value: ChatStreamSyncState } = {
-    value: { status: "closed", hasContent: false },
+    value: { status: "closed", hasContent: false, wake: chatWakeSpy },
   };
   const calls: Array<readonly [string, string, string | null]> = [];
   return { current, calls };
@@ -360,8 +363,13 @@ describe("<MobileCurrentTileBar />", () => {
 
   describe("stream-syncing strip", () => {
     beforeEach(() => {
-      chatSyncMock.current.value = { status: "closed", hasContent: false };
+      chatSyncMock.current.value = {
+        status: "closed",
+        hasContent: false,
+        wake: chatWakeSpy,
+      };
       chatSyncMock.calls.length = 0;
+      chatWakeSpy.mockClear();
     });
 
     function renderChatBar(input: {
@@ -387,7 +395,7 @@ describe("<MobileCurrentTileBar />", () => {
       renderChatBar({
         outerStripShowing: false,
         tile: CHAT_TILE,
-        chat: { status: "reconnecting", hasContent: true },
+        chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
       });
       expect(chatStrip()).not.toBeNull();
     });
@@ -396,7 +404,7 @@ describe("<MobileCurrentTileBar />", () => {
       renderChatBar({
         outerStripShowing: false,
         tile: CHAT_TILE,
-        chat: { status: "open", hasContent: true },
+        chat: { status: "open", hasContent: true, wake: chatWakeSpy },
       });
       expect(chatStrip()).toBeNull();
     });
@@ -405,7 +413,7 @@ describe("<MobileCurrentTileBar />", () => {
       renderChatBar({
         outerStripShowing: false,
         tile: CHAT_TILE,
-        chat: { status: "connecting", hasContent: false },
+        chat: { status: "connecting", hasContent: false, wake: chatWakeSpy },
       });
       expect(chatStrip()).toBeNull();
     });
@@ -417,7 +425,7 @@ describe("<MobileCurrentTileBar />", () => {
       renderChatBar({
         outerStripShowing: true,
         tile: CHAT_TILE,
-        chat: { status: "reconnecting", hasContent: true },
+        chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
       });
       expect(chatStrip()).toBeNull();
     });
@@ -434,7 +442,11 @@ describe("<MobileCurrentTileBar />", () => {
           outerStripShowing
         />,
       );
-      chatSyncMock.current.value = { status: "reconnecting", hasContent: true };
+      chatSyncMock.current.value = {
+        status: "reconnecting",
+        hasContent: true,
+        wake: chatWakeSpy,
+      };
       view.rerender(
         <MobileCurrentTileBar
           epicId="epic-1"
@@ -458,7 +470,7 @@ describe("<MobileCurrentTileBar />", () => {
       renderChatBar({
         outerStripShowing: false,
         tile: SPEC_TILE,
-        chat: { status: "reconnecting", hasContent: true },
+        chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
       });
       expect(chatStrip()).toBeNull();
       // A `null` host is what makes the hook resolve no session. Passing the
@@ -471,7 +483,7 @@ describe("<MobileCurrentTileBar />", () => {
       renderChatBar({
         outerStripShowing: false,
         tile: CHAT_TILE,
-        chat: { status: "open", hasContent: true },
+        chat: { status: "open", hasContent: true, wake: chatWakeSpy },
       });
       expect(chatSyncMock.calls).toContainEqual([
         "epic-1",

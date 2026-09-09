@@ -105,6 +105,9 @@ type OwnerIdentityVerdict =
 
 const OWNER_IDENTITY_STABLE: OwnerIdentityVerdict = { kind: "stable" };
 
+/** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
+const EPIC_SESSION_WAKE_REASON = "user-retry";
+
 /**
  * INVARIANT (R-1): a tuple's `ownerIdentityKey` is the owner identity OF its
  * own `hostId`, and this is the only place that decides what a new reading
@@ -914,6 +917,19 @@ export function EpicSessionProvider(
           onRetryTransport: () => {
             liveness.dead = true;
             setRetryGeneration((generation) => generation + 1);
+          },
+          // THIS session's socket, never the app-wide one. Every surface owns
+          // its own transport - a chat opens one per session, and this opener
+          // holds the epic's - so a wake resolved from anywhere else would
+          // collapse the backoff on a connection the user is not waiting for
+          // and leave theirs sitting out its delay. `probeFirst: false`
+          // because a person pressing a button is demanding a re-dial, and the
+          // probe-first flavour answers a live-but-stuck socket with nothing.
+          onWakeTransport: () => {
+            wsStreamClient.reconnectAll(EPIC_SESSION_WAKE_REASON, {
+              probeFirst: false,
+              wakeProbe: null,
+            });
           },
           runtime: {
             port: runtimeWorker.port,

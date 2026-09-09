@@ -174,6 +174,7 @@ function createConsumerHarness(): ConsumerHarness {
     userId: "owner-1",
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (
       epicId: string,

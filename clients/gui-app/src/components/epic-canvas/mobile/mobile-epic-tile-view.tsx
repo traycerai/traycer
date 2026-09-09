@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { ActiveTabBody } from "@/components/epic-canvas/canvas/tab-group-view";
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
@@ -9,6 +9,7 @@ import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-se
 import { StreamSyncingBar } from "@/components/sync/stream-syncing-bar";
 import { useAppConnectivityStripShowing } from "@/components/layout/app-connectivity-strip-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import {
   useEpicHostTransportStatus,
   useEpicSnapshotLoaded,
@@ -80,6 +81,12 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // the session returns while the Epic's stream is still restoring.
   const appStripShowing = useAppConnectivityStripShowing();
   const epicStripShowing = !appStripShowing && epicSpell.syncing;
+  // The session's own wake, not the app-wide one - this view always sits under
+  // a live session, and the handle is what names this Epic's socket.
+  const epicHandle = useMaybeOpenEpicHandle();
+  const wakeEpicTransport = useCallback(() => {
+    epicHandle?.wakeTransport();
+  }, [epicHandle]);
 
   // Non-null root with no resolvable tile = an empty pane (e.g. the user closed
   // the last tab). Desktop renders the inline `PaneOpener` for this; do the
@@ -134,6 +141,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
       {epicStripShowing ? (
         <StreamSyncingBar
           spell={epicSpell}
+          onWake={epicHandle === null ? null : wakeEpicTransport}
           surfaceLabel="Task"
           testId="epic-stream-syncing-bar"
         />

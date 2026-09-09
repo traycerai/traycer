@@ -194,6 +194,7 @@ function MobileCurrentTileBarBody(
       {showChatStrip ? (
         <StreamSyncingBar
           spell={chatSpell}
+          onWake={chatSync.wake}
           surfaceLabel="Chat"
           testId="chat-stream-syncing-bar"
         />

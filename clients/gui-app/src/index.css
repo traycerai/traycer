@@ -56,7 +56,7 @@
     transform: translateX(-100%);
   }
   to {
-    transform: translateX(340%);
+    transform: translateX(var(--host-progress-sweep-end, 340%));
   }
 }
 
@@ -70,7 +70,21 @@
    reached by an unrelated question. So the animation is bounded twice over: by
    the reader's motion preference, and by how long one resync may run. */
 .stream-syncing-sweep {
+  /* The segment is `w-2/5`, so it clears the right edge at 250% of its own
+     width. The shared default overshoots to 340%, which parks it fully outside
+     the track at BOTH ends of the alternating cycle: measured at 880ms of every
+     2.8s round trip with nothing on screen at all. On an install bar that runs
+     for minutes the gap reads as pacing; on an indicator that lives two to four
+     seconds it can be most of what the user sees, and it is what makes the
+     motion read as restarting rather than travelling. The install bars keep the
+     old value through the fallback in the keyframe. */
+  --host-progress-sweep-end: 250%;
   animation: host-progress-indeterminate 1.4s ease-in-out infinite alternate;
+  /* The one moving element on screen during a reconnect, and a bar this thin
+     shows compositor jitter plainly. Promoting it keeps the sweep off the main
+     thread's paint path; it is bounded by the escalation, so the layer is not
+     held indefinitely. */
+  will-change: transform;
 }
 
 /* The base layer's blanket reduced-motion rule collapses every animation to

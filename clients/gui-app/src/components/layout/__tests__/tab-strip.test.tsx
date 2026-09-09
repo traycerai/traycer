@@ -369,6 +369,7 @@ function buildHeaderEpicHandle(
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
     ...INERT_ROOT_STATE_PORT,
@@ -396,6 +397,7 @@ function registerChatSession(epicId: string, chatId: string): void {
         userId: null,
         onAuthError: null,
         onProviderAuthError: null,
+        wakeTransport: null,
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         streamClientFactory: () => ({
           sendAction: () => undefined,

@@ -1,14 +1,22 @@
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { StreamSyncingBar } from "@/components/sync/stream-syncing-bar";
 import type { StreamSyncingSpell } from "@/lib/sync/stream-syncing-state";
 
 const TEST_ID = "syncing-bar";
 
+const wake = vi.fn();
+
 function renderBar(spell: StreamSyncingSpell) {
   return render(
-    <StreamSyncingBar spell={spell} surfaceLabel="Task" testId={TEST_ID} />,
+    <StreamSyncingBar
+      spell={spell}
+      onWake={wake}
+      surfaceLabel="Task"
+      testId={TEST_ID}
+    />,
   );
 }
 
@@ -27,7 +35,10 @@ function sweep(): HTMLElement {
   return screen.getByTestId(`${TEST_ID}-sweep`);
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  wake.mockClear();
+});
 
 describe("<StreamSyncingBar />", () => {
   it("renders nothing when no spell is running", () => {
@@ -96,6 +107,33 @@ describe("<StreamSyncingBar />", () => {
     // the same still form reduced motion produces.
     expect(sweep().classList.contains("w-full")).toBe(true);
     expect(sweep().classList.contains("w-2/5")).toBe(false);
+  });
+
+  it("offers no Retry while the transport is still on its first attempt", () => {
+    // The transport is already redialing and has not yet failed, so a button
+    // here would invite a tap that changes nothing.
+    renderBar({ syncing: true, escalated: false });
+    expect(screen.queryByTestId(`${TEST_ID}-retry`)).toBeNull();
+  });
+
+  it("offers Retry once escalated, and wakes only when pressed", async () => {
+    renderBar({ syncing: true, escalated: true });
+    expect(wake).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId(`${TEST_ID}-retry`));
+    expect(wake).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no Retry when the surface has no session to wake", () => {
+    render(
+      <StreamSyncingBar
+        spell={{ syncing: true, escalated: true }}
+        onWake={null}
+        surfaceLabel="Task"
+        testId={TEST_ID}
+      />,
+    );
+    expect(screen.getByTestId(`${TEST_ID}-text`)).toBeTruthy();
+    expect(screen.queryByTestId(`${TEST_ID}-retry`)).toBeNull();
   });
 
   it("keeps the track off `bg-muted`, which collapses on raised surfaces", () => {

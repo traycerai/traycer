@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import { SyncingSweepBar } from "@/components/sync/syncing-sweep-bar";
 import {
   streamSyncingLabel,
@@ -18,6 +19,18 @@ interface StreamSyncingBarProps {
    * surrounding context ("Task", "Chat"). The visible word stays the short one.
    */
   readonly surfaceLabel: string;
+  /**
+   * Stops this surface's transport waiting out its backoff and re-dials now.
+   *
+   * Offered only in the escalated state. While the wait still looks momentary
+   * the transport is already redialing and its first attempt has not failed, so
+   * a button there would invite a tap that changes nothing.
+   *
+   * It must wake THIS surface's own connection: every surface owns its
+   * transport, so one resolved app-wide would collapse a backoff the user is
+   * not waiting on. `null` where there is no session to wake.
+   */
+  readonly onWake: (() => void) | null;
   readonly testId: string;
 }
 
@@ -68,15 +81,31 @@ export function StreamSyncingBar(props: StreamSyncingBarProps): ReactNode {
         {props.surfaceLabel}: {streamSyncingLabel(spell.escalated)}
       </span>
       {spell.escalated ? (
-        <span
-          // `aria-hidden`, because the line above already says it: without this
-          // the escalated state is announced twice.
-          aria-hidden
-          data-testid={`${props.testId}-text`}
-          className="block truncate px-3 pb-1 text-ui-xs text-muted-foreground"
-        >
-          {streamSyncingLabel(true)}
-        </span>
+        // Same shape as the app-wide strip's escalated row: the sentence takes
+        // the width, the action sits at the trailing edge.
+        <div className="flex w-full items-center gap-2 px-3 pb-1">
+          <span
+            // `aria-hidden`, because the line above already says it: without
+            // this the escalated state is announced twice.
+            aria-hidden
+            data-testid={`${props.testId}-text`}
+            className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground"
+          >
+            {streamSyncingLabel(true)}
+          </span>
+          {props.onWake === null ? null : (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              className="shrink-0 text-muted-foreground"
+              data-testid={`${props.testId}-retry`}
+              onClick={props.onWake}
+            >
+              Retry now
+            </Button>
+          )}
+        </div>
       ) : null}
       {/* The bar carries no semantics of its own, so a reader hears the sentence
           once. The bound on its motion holds per OUTAGE rather than per mount

@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 
@@ -7,6 +7,15 @@ export interface ChatStreamSyncState {
   readonly status: StreamConnectionStatus;
   /** `snapshotLoaded`: a transcript is on screen and may now be behind. */
   readonly hasContent: boolean;
+  /**
+   * Wakes THIS chat's own transport, or `null` when no session is open.
+   *
+   * Deliberately the session's `wake`, never its `retry`: `retry()` clears
+   * `snapshotLoaded`, which would blank the transcript and, because that field
+   * is also the strip's own "there is content to be stale" gate, remove the
+   * indicator the user just pressed.
+   */
+  readonly wake: (() => void) | null;
 }
 
 /**
@@ -51,7 +60,20 @@ export function useChatStreamSyncState(
   );
   const status = useSyncExternalStore(subscribe, readStatus, readClosed);
   const hasContent = useSyncExternalStore(subscribe, readHasContent, readFalse);
-  return { status, hasContent };
+  // Read off the handle rather than subscribed: the action is fixed for a
+  // session's lifetime, and the store's own `wake` already resolves the
+  // CURRENT transport when it runs, so a rebuilt socket needs no new callback
+  // here.
+  const wake = useMemo(
+    () =>
+      handle === null
+        ? null
+        : () => {
+            handle.store.getState().wake();
+          },
+    [handle],
+  );
+  return { status, hasContent, wake };
 }
 
 function readClosed(): StreamConnectionStatus {
