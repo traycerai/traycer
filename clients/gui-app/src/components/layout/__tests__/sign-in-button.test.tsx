@@ -79,6 +79,7 @@ function makeMessengerFactory(): (args: {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           }),
       },
     });
