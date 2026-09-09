@@ -863,6 +863,16 @@ export const agentGetProviderProfileRateLimitsV50 = defineRpcContract({
 // The LIVE line. Ranges over `providerRateLimitsSchema`; the moment a tag
 // ships `6`, freeze it against a `V90` union and open `7` - do not edit this
 // comment to say the line is safe because it is newest.
+//
+// This method deliberately does NOT follow its siblings, where the head
+// contract names the un-suffixed base schema. Here the head gets its own
+// `...ResponseSchemaVN` object and the base name
+// `agentGetProviderProfileRateLimitsResponseSchema` stays a structurally
+// identical but DISTINCT object that is canonical for nothing. That is not an
+// oversight: it is the fixture
+// `clients/traycer-cli/src/internal/__tests__/host-rpc.test.ts` uses to prove
+// the CLI's `assertCanonicalResponseSchema` backstop actually fires. Collapse
+// the two and that test has nothing left to falsify with.
 export const agentGetProviderProfileRateLimitsResponseSchemaV6 = z.object({
   rateLimits: providerRateLimitsSchema,
   usageUpdatedAt: z.number().nullable(),
