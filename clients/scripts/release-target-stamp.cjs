@@ -70,6 +70,44 @@ const REQUIRED_INSTALL_IDENTITY = {
 };
 
 /**
+ * The desktop's RUNTIME identity, per target.
+ *
+ * `REQUIRED_INSTALL_IDENTITY` above pins where the host is installed and
+ * registered; this pins who the app claims to BE. They are separate tables
+ * because these three fields are stamped TWICE, by mechanisms that never read
+ * each other:
+ *
+ *   - `set-deploy-target.cjs` writes fixed literals into `config.ts`, and that
+ *     is what the running app reads - `DESKTOP_APP_USER_MODEL_ID` is
+ *     `config.appId`, the OAuth handler registers `config.protocolScheme`, and
+ *     the userData directory and single-instance lock derive from them;
+ *   - `release-target-electron-builder.cjs` reads these DESCRIPTOR values and
+ *     hands them to electron-builder, and that is what gets PACKAGED.
+ *
+ * Checking them only as non-empty strings lets the two halves diverge. A
+ * descriptor `appId` that differs from the config literal packages one AUMID
+ * while the runtime calls `setAppUserModelId` with another, and Windows
+ * silently drops every toast it cannot attribute - the same failure the
+ * `appUserModelId` mirror below exists to prevent, one level further out.
+ *
+ * That mirror is not a substitute: it pins two DESCRIPTOR fields to each
+ * other, so it stays green when both move together. Only this pins either of
+ * them to the identity the app actually runs as.
+ */
+const REQUIRED_DESKTOP_IDENTITY = {
+  production: {
+    appId: "ai.traycer.desktop",
+    productName: "Traycer",
+    protocolScheme: "traycer",
+  },
+  staging: {
+    appId: "ai.traycer.desktop.staging",
+    productName: "Traycer Staging",
+    protocolScheme: "traycer-staging",
+  },
+};
+
+/**
  * The LaunchAgent label the desktop's in-bundle plist must be named.
  *
  * DERIVED, not a third column, because the runtime derives it the same way:
@@ -480,6 +518,17 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
     //   - `installerDisplayName`: NSIS derives its shortcut and uninstall
     //     entry names from `productName`, which the generated config already
     //     stamps.
+    // THE ABSOLUTE IDENTITY, checked before the mirrors below so that
+    // `appUserModelId` and `installerDisplayName` are pinned to a known value
+    // rather than to whatever this descriptor happened to say.
+    const requiredDesktopIdentity = REQUIRED_DESKTOP_IDENTITY[stamp.target];
+    for (const key of ["appId", "productName", "protocolScheme"]) {
+      if (stamp[key] !== requiredDesktopIdentity[key]) {
+        throw new ClientTargetStampError(
+          `client target stamp ${key} ${JSON.stringify(stamp[key])} is not the ${stamp.target} desktop identity ${JSON.stringify(requiredDesktopIdentity[key])}. This value is stamped twice - as a literal into config.ts by set-deploy-target.cjs, and into the electron-builder config from this descriptor - and nothing reconciles the two, so a difference here packages one identity and runs as another.`,
+        );
+      }
+    }
     for (const [key, mirrors] of [
       ["appUserModelId", "appId"],
       ["installerDisplayName", "productName"],
@@ -576,6 +625,21 @@ function targetInputFromArg(argv, expectedTarget, required, component) {
  */
 const PRODUCTION_RELEASE_REPO = "traycerai/traycer";
 const REPO_COORDINATE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+// A segment made only of dots is a PATH TRAVERSAL, not a name. Dots are legal
+// inside a GitHub owner or repo (`my.repo`), so the character class above has
+// to admit them - which also admits `.` and `..`, making `owner/..`, `./x` and
+// `../..` all well-formed coordinates.
+//
+// Both consumers then treat the result as a path fragment:
+// `release-target-electron-builder.cjs` splits it into owner/repo for the
+// publish provider, and the stamped `releaseRepo` is interpolated into GitHub
+// API URLs, where a URL parser resolves `..` BEFORE the request is sent. So a
+// misspelled TRAYCER_RELEASE_REPO of that shape does not fail at stamp time -
+// it builds something that quietly queries a different path.
+//
+// The same unnormalized-string class `requireHomeRelativePath` already refuses
+// for install roots.
+const DOTS_ONLY_SEGMENT = /^\.+$/;
 
 function resolveReleaseRepoForTarget(raw, releaseTarget) {
   const trimmed = typeof raw === "string" ? raw.trim() : "";
@@ -589,7 +653,10 @@ function resolveReleaseRepoForTarget(raw, releaseTarget) {
     }
     return { ok: true, repo: PRODUCTION_RELEASE_REPO };
   }
-  if (!REPO_COORDINATE.test(trimmed)) {
+  if (
+    !REPO_COORDINATE.test(trimmed) ||
+    trimmed.split("/").some((segment) => DOTS_ONLY_SEGMENT.test(segment))
+  ) {
     return {
       ok: false,
       reason: `TRAYCER_RELEASE_REPO (or RELEASE_REPO) must be an owner/repo coordinate, got ${JSON.stringify(trimmed)}.`,
@@ -614,6 +681,7 @@ module.exports = {
   // `service/__tests__/label.test.ts`, which is the only place both this table
   // and `serviceLabelFor`/`windowsTaskName` are reachable at once. Nothing in
   // the build path reads it from here.
+  REQUIRED_DESKTOP_IDENTITY,
   REQUIRED_INSTALL_IDENTITY,
   // Same reason, for the derived half: the CLI-side lockstep compares this
   // against `smAppServiceAgentLabelId`, so the `.agent` suffix living in two

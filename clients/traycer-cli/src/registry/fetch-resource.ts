@@ -533,7 +533,27 @@ async function downloadAttempt(
       // AFTER `closeWriter`, never before: deleting while the writer still has
       // a pending flush races it (EBUSY on Windows, or a file recreated by the
       // flush that lands after the unlink).
-      if (oversize) await discardPartial(opts.destPath);
+      if (oversize) {
+        // BEST EFFORT, and it must not replace `err`. `rm(..., { force: true })`
+        // suppresses ENOENT but not EPERM or EBUSY, and this branch already
+        // treats Windows file locking as a real condition: an antivirus
+        // scanner or indexer can hold the just-closed file.
+        //
+        // A rejection escaping here would replace the size-cap CliError, with
+        // two consequences. The caller loses the diagnosis and sees a
+        // filesystem error instead; and `isCliError(err)` becomes false, so
+        // `downloadWithRetries` reclassifies a PERMANENT refusal as transient
+        // and re-downloads an origin that streams past its declared size until
+        // the stall budget is exhausted.
+        //
+        // Leaving a partial file behind is strictly the better failure: the
+        // next attempt truncates it.
+        try {
+          await discardPartial(opts.destPath);
+        } catch {
+          // Intentionally ignored; `err` below is the verdict that matters.
+        }
+      }
       throw err;
     }
   } finally {

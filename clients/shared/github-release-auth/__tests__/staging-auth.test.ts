@@ -95,6 +95,45 @@ describe("staging GitHub release credentials", () => {
     });
   });
 
+  it("does not cache a token discarded while it was still being read", async () => {
+    // `checkForUpdatesNow()` calls `prepareStagingUpdateToken()` BEFORE it
+    // consults `checkInFlight`, so concurrent IPC, startup and resume checks
+    // can be inside `resolveOrThrow()` together. When one takes a 401 and
+    // discards while another is still reading `gh auth token`, the late read
+    // must not become the cached answer - otherwise the token the server just
+    // rejected is reused for the process lifetime and every later staging
+    // request fails identically, with no way back short of a restart.
+    Reflect.deleteProperty(process.env, STAGING_RELEASE_TOKEN_ENV);
+    setPlatform("win32");
+    ghFixture("stale-token");
+    const resolver = new GitHubReleaseCredentialResolver();
+
+    const pending = resolver.resolveOrThrow();
+    resolver.discardLease();
+    // The in-flight caller still receives its answer; what must not happen is
+    // that answer being REMEMBERED.
+    await expect(pending).resolves.toMatchObject({ token: "stale-token" });
+
+    ghFixture("fresh-token");
+    await expect(resolver.resolveOrThrow()).resolves.toMatchObject({
+      token: "fresh-token",
+    });
+  });
+
+  it("joins concurrent resolutions rather than racing them", async () => {
+    // Two callers entering together must share one resolution, so there is a
+    // single result to accept or discard rather than two that can disagree.
+    Reflect.deleteProperty(process.env, STAGING_RELEASE_TOKEN_ENV);
+    setPlatform("win32");
+    ghFixture("shared-token");
+    const resolver = new GitHubReleaseCredentialResolver();
+    const [first, second] = await Promise.all([
+      resolver.resolveOrThrow(),
+      resolver.resolveOrThrow(),
+    ]);
+    expect(first).toBe(second);
+  });
+
   it("reuses a lease until discardLease, then resolves the new token", async () => {
     process.env[STAGING_RELEASE_TOKEN_ENV] = "first-token";
     const resolver = new GitHubReleaseCredentialResolver();

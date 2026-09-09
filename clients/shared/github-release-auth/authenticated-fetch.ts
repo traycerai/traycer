@@ -111,5 +111,26 @@ function isRedirect(status: number): boolean {
  * update check leaks one connection per failure.
  */
 export async function cancelResponseBody(response: Response): Promise<void> {
-  if (response.body !== null) await response.body.cancel();
+  if (response.body === null) return;
+  try {
+    await response.body.cancel();
+  } catch {
+    // BEST EFFORT, because every caller is already on a path with a verdict to
+    // deliver and `cancel()` rejects when the underlying connection has
+    // already errored - precisely the case where these paths are reached.
+    //
+    // Swallowing it here rather than at the call sites is what makes the two
+    // consequences impossible rather than merely fixed once:
+    //
+    //   - after a 401 the very next statement is `resolver.discardLease()`. A
+    //     rejection there skips the discard, so the token the server just
+    //     rejected stays cached for the process lifetime and every later
+    //     staging request fails the same way - and the caller sees a stream
+    //     error instead of AuthenticationRequiredError, so the CLI reports a
+    //     generic registry failure instead of re-authentication guidance.
+    //   - on the redirect path it aborts the chain with an unrelated error.
+    //
+    // The leak this function exists to prevent is bounded either way: a body
+    // that cannot be cancelled is one whose connection is already gone.
+  }
 }

@@ -150,11 +150,30 @@ async function assertRepositoryVisible(
 ): Promise<void> {
   const { owner, repo } = policy.repository;
   const probeUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-  const probe = await fetchWithGitHubReleaseAuth(resolver, policy, probeUrl, {
-    method: "GET",
-    headers: { accept: "application/vnd.github+json" },
-    signal,
-  });
+  let probe: Response;
+  try {
+    probe = await fetchWithGitHubReleaseAuth(resolver, policy, probeUrl, {
+      method: "GET",
+      headers: { accept: "application/vnd.github+json" },
+      signal,
+    });
+  } catch (error) {
+    // "Best effort" has to mean best effort at the PROBE, not at the caller's
+    // verdict. An incidental failure here - offline, 5xx, DNS - escaped to
+    // `registryFetch`, which rethrows every non-authentication error
+    // unchanged, so a transient blip surfaced INSTEAD of the 404 this probe
+    // was called to explain.
+    //
+    // Two kinds still have to escape:
+    //   - `AuthenticationRequiredError` IS the verdict this probe exists to
+    //     reach. `fetchWithGitHubReleaseAuth` raises it on a 401/403 that is
+    //     not a rate limit, having already discarded the lease.
+    //   - a caller-requested abort, or cancellation silently stops working
+    //     here and the caller waits out the rest of the operation.
+    if (error instanceof AuthenticationRequiredError) throw error;
+    if (signal !== null && signal.aborted) throw error;
+    return;
+  }
   if (probe.body !== null) await probe.body.cancel();
   if (probe.status !== 404) return;
   resolver.discardLease();

@@ -552,7 +552,9 @@ function productionDesktopStamp(): Stamp {
   stamp.target = "production";
   stamp.environment = "production";
   stamp.releaseChannel = "stable";
-  return toProductionCredentialPolicy(toProductionInstallIdentity(stamp));
+  return toProductionCredentialPolicy(
+    toProductionDesktopIdentity(toProductionInstallIdentity(stamp)),
+  );
 }
 
 /**
@@ -578,6 +580,22 @@ function productionDesktopStamp(): Stamp {
 // `REQUIRED_INSTALL_IDENTITY` (plus the derived agent label) has to appear
 // here, so adding a pin there and forgetting this one reddens loudly rather
 // than quietly re-teaching the bug.
+// The desktop's RUNTIME identity, which `REQUIRED_DESKTOP_IDENTITY` pins to an
+// exact value per target. Separate from the install identity above because it
+// answers a different question - who the app claims to BE, rather than where
+// the host is installed - and because it has to carry the two Windows mirrors
+// with it, or the fixture trips the mirror check instead of the pin.
+function toProductionDesktopIdentity(stamp: Stamp): Stamp {
+  stamp.appId = "ai.traycer.desktop";
+  stamp.productName = "Traycer";
+  stamp.protocolScheme = "traycer";
+  if (stamp.windows !== undefined) {
+    (stamp.windows as Stamp).appUserModelId = "ai.traycer.desktop";
+    (stamp.windows as Stamp).installerDisplayName = "Traycer";
+  }
+  return stamp;
+}
+
 function toProductionInstallIdentity(stamp: Stamp): Stamp {
   stamp.cliInstallRoot = "~/.traycer/cli";
   stamp.hostInstallRoot = "~/.traycer/host";
@@ -588,6 +606,86 @@ function toProductionInstallIdentity(stamp: Stamp): Stamp {
   }
   return stamp;
 }
+
+describe("the desktop runtime identity is pinned per target", () => {
+  // These three are stamped TWICE and reconciled nowhere: `set-deploy-target.cjs`
+  // writes literals into `config.ts` (what the app RUNS as) while the
+  // electron-builder config takes the descriptor values (what gets PACKAGED).
+  // A merely non-empty string therefore packages one identity and runs as
+  // another - on Windows an unmatched AUMID means every toast is dropped, with
+  // no error anywhere.
+  it.each([
+    [
+      "appId",
+      (stamp: Stamp) => {
+        stamp.appId = "ai.traycer.desktop.other";
+        (stamp.windows as Stamp).appUserModelId = "ai.traycer.desktop.other";
+      },
+    ],
+    [
+      "productName",
+      (stamp: Stamp) => {
+        stamp.productName = "Traycer Other";
+        (stamp.windows as Stamp).installerDisplayName = "Traycer Other";
+      },
+    ],
+    [
+      "protocolScheme",
+      (stamp: Stamp) => {
+        stamp.protocolScheme = "traycer-other";
+      },
+    ],
+  ])(
+    "rejects a production stamp whose %s is not production's",
+    (key, mutate) => {
+      const stamp = productionDesktopStamp();
+      mutate(stamp);
+      expect(() =>
+        stampModule.readClientTargetStamp(
+          writeStamp(stamp),
+          "production",
+          "desktop",
+        ),
+      ).toThrow(new RegExp(key));
+    },
+  );
+
+  it("rejects a staging stamp wearing production's identity", () => {
+    // THE CASE THE MIRRORS CANNOT SEE. `windows.appUserModelId` is pinned to
+    // `appId`, so moving both together keeps that check green; only an
+    // absolute per-target value catches a build that is staging in every
+    // respect except who it claims to be. Such a build would take over the
+    // production app's userData directory and single-instance lock.
+    const stamp = desktopStamp();
+    stamp.appId = "ai.traycer.desktop";
+    (stamp.windows as Stamp).appUserModelId = "ai.traycer.desktop";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/appId/);
+  });
+
+  it("accepts each target's own identity", () => {
+    // The positive control: the pin refuses the wrong value, not every value.
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(desktopStamp()),
+        "staging",
+        "desktop",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(productionDesktopStamp()),
+        "production",
+        "desktop",
+      ),
+    ).not.toThrow();
+  });
+});
 
 describe("desktop releaseChannel enforcement", () => {
   it("rejects a staging stamp that claims the stable channel", () => {
@@ -832,6 +930,34 @@ describe("resolveReleaseRepoForTarget", () => {
       ).toBe(false);
     },
   );
+
+  it.each(["owner/..", "../repo", "./x", "../..", "owner/.", "./."])(
+    "rejects %s, whose segment is only dots",
+    (raw) => {
+      // A dots-only segment is a PATH, not a name. Both consumers treat the
+      // result as a path fragment - the electron-builder publish provider
+      // splits it into owner/repo, and the stamped `releaseRepo` is
+      // interpolated into GitHub API URLs where a URL parser resolves `..`
+      // BEFORE the request goes out. So a misspelled TRAYCER_RELEASE_REPO of
+      // this shape used to build something that quietly queried a different
+      // path instead of failing at stamp time.
+      expect(stampModule.resolveReleaseRepoForTarget(raw, "staging").ok).toBe(
+        false,
+      );
+      expect(
+        stampModule.resolveReleaseRepoForTarget(raw, "production").ok,
+      ).toBe(false);
+    },
+  );
+
+  it("still accepts names that merely CONTAIN dots", () => {
+    // The positive control, and the reason the rule is "a segment that is only
+    // dots" rather than "no dots": `my.repo` is a legal GitHub name, so
+    // banning the character outright would refuse valid coordinates.
+    expect(
+      stampModule.resolveReleaseRepoForTarget("my.org/my.repo", "staging"),
+    ).toEqual({ ok: true, repo: "my.org/my.repo" });
+  });
 
   it("rejects the production repository on staging but accepts it on production", () => {
     expect(

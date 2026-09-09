@@ -874,12 +874,31 @@ function credentialSafeLogValue(error: unknown): unknown {
     : error;
 }
 
+/**
+ * A 401 that is actually an HTTP STATUS, not merely the digits 401.
+ *
+ * `\b401\b` matched a bounded 401 anywhere in a rendered message - an asset
+ * named `traycer-401.zip`, a version `1.401.0`, an id inside a URL - and every
+ * reachable caller of `isStagingAuthFailure` DISCARDS `stagingUpdateToken` and
+ * reports "Updates are not available for this build." So an unrelated failure
+ * could throw away a working credential and then explain itself with the wrong
+ * cause, leaving the next check to fail for a new reason.
+ *
+ * The 403 arm already demanded a corroborating word; this holds 401 to the
+ * same standard. The structured path (`isAuthenticationRequiredError`) covers
+ * our own fetch wrapper, so this fallback only has to keep matching the forms
+ * a THIRD party renders: electron-updater's `HttpError: 401 Unauthorized` and
+ * undici/GitHub's `401 Unauthorized\nHeaders: …`, plus `HTTP 401` phrasing.
+ */
+const HTTP_401_MESSAGE =
+  /\b401\s+unauthorized\b|\b(?:http|status)[^0-9]{0,12}401\b/u;
+
 function isStagingAuthFailure(error: unknown): boolean {
   if (!stagingReleaseAuthRequired()) return false;
   if (isAuthenticationRequiredError(error)) return true;
   const message = rawErrorMessage(error).toLowerCase();
   return (
-    /\b401\b/.test(message) ||
+    HTTP_401_MESSAGE.test(message) ||
     (/\b403\b/.test(message) &&
       !isRenderedRateLimit(message) &&
       (message.includes("forbidden") || message.includes("credentials")))
