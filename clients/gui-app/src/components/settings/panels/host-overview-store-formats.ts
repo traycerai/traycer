@@ -184,12 +184,34 @@ function storeFloorReach(input: HostStoreFormatOffer): {
 } {
   const versionDowngrade = storeFloorApplicability(
     input.version,
-    input.runningVersion,
+    installedVersionOperand(input),
     null,
   ).applies;
   const localArchiveInstall =
     input.install !== null && input.install.source === "local-file";
   return { applies: versionDowngrade || localArchiveInstall, versionDowngrade };
+}
+
+/**
+ * The version the floor compares the target against: the INSTALL RECORD's,
+ * which is the operand the CLI passes (`readInstalledFloorOperands` reads
+ * `install.json`'s version, and `applicabilityOperands` hands it straight to
+ * `storeFloorApplicability` for a registry artifact).
+ *
+ * Not the running process's, and activation debt is where the two part: the
+ * bytes on disk are ahead of the host still serving, so with 1.4.0 installed
+ * over a running 1.2.0 a 1.3.0 row is an UPGRADE from the process and a
+ * DOWNGRADE from the record. The CLI lands over the record, so the record
+ * decides - otherwise this pre-check calls that row unrestricted and the CLI
+ * surveys it, which is the disagreement the install report exists to end. The
+ * panel already takes the same baseline for its catalog comparisons
+ * (`comparisonBaseline`).
+ *
+ * `runningVersion` remains the fallback for a peer too old to report an
+ * install, which is what every row was judged by before the field existed.
+ */
+function installedVersionOperand(input: HostStoreFormatOffer): string | null {
+  return input.install === null ? input.runningVersion : input.install.version;
 }
 
 /**

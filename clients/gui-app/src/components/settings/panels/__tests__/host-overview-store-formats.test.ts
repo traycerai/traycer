@@ -239,6 +239,37 @@ describe("hostStoreFormatRestriction over a local-file install (the CLI's local-
     ).toBeNull();
   });
 
+  it("compares against the RECORD's version, not the running process's, so a row between them is still evaluated under activation debt", () => {
+    // 1.4.0 is installed over a running 1.2.0 - the bytes are ahead of the
+    // host still serving. A 1.3.0 row is an upgrade from the PROCESS and a
+    // downgrade from the RECORD, and the CLI lands over the record: it
+    // surveys, and a failed survey there is an indeterminate refusal. Judging
+    // this from `runningVersion` called the row unrestricted and left the
+    // refusal to arrive from the host.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0",
+          publishedFormats: { chatDb: 9 },
+          runningVersion: "1.2.0",
+          storeFormats: {
+            chatDb: {
+              current: 8,
+              onDiskMax: null,
+              epicCount: 2,
+              survey: "failed",
+            },
+          },
+          install: {
+            source: "registry",
+            version: "1.4.0",
+            declaredFormats: null,
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "failed" });
+  });
+
   it("judges the installed side from the RECORD, not this build's stamp, under activation debt", () => {
     // The install is ahead of the running process: the record says rc.4
     // (format 9) while the running build still stamps 8. The CLI compares
