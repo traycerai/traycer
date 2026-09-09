@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { hashFileSha256 } from "../installer/sha256";
+import { registryFetch } from "./staging-release-auth";
 
 // Tiny resource fetcher used by the registry client. Supports the two
 // schemes the manifest URLs are allowed to use:
@@ -153,7 +154,7 @@ export async function fetchText(
       controller.abort();
     }, FETCH_TEXT_ATTEMPT_CAP_MS);
     try {
-      const response = await fetch(url, { signal: linkedSignal });
+      const response = await registryFetch(url, { signal: linkedSignal });
       if (!response.ok) {
         throw await httpStatusFailure(url, response);
       }
@@ -312,19 +313,30 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
       restarted = true;
       lastError = new Error(result.reason);
     } catch (err) {
-      // Same shutdown class as in `fetchText`, and it has to be answered
-      // BEFORE the CliError branch below: that branch discards the partial,
-      // which is exactly the wrong move here. The bytes on disk were written
-      // by responses the origin actually sent - only our client went away -
-      // so they stay, and the next invocation resumes them.
+      // Same shutdown class as in `fetchText`, and it stays FIRST - but for a
+      // different reason than the one it arrived with. On `main` it had to
+      // precede the CliError branch because that branch discarded the partial;
+      // here nothing below discards, so what keeps it first is the error
+      // CONVERSION it performs, which the branch below would swallow.
       const shutdownCode = httpClientShutdownCode(err);
       if (shutdownCode !== null) {
         throw httpClientShutdownError(opts.url, shutdownCode);
       }
-      if (isCliError(err)) {
-        await discardPartial(opts.destPath);
-        throw err;
-      }
+      // Terminal, but the partial is NOT this loop's to judge. `isCliError` is
+      // a bare name check, so it cannot tell "these bytes are poisoned" from
+      // "the request could not be made at all" - and both shapes reach here.
+      // The size-cap abort discards its own bytes at the throw site; a staging
+      // `RELEASE_AUTHENTICATION_REQUIRED` wrote nothing, so deleting a
+      // resumable partial for it would restart a multi-hundred-megabyte
+      // download from zero after the user simply re-authenticates. The layer
+      // above already draws that line correctly (`isTrustFailure` in
+      // registry/client.ts keeps the file for everything but a sha256
+      // mismatch); deleting here silently contradicted it.
+      //
+      // `main` added the shutdown branch above as a narrow exemption from that
+      // same discard. Both sides were removing a wrong discard; this keeps the
+      // general answer and the conversion.
+      if (isCliError(err)) throw err;
       lastError = err;
     }
     if (restarted) {
@@ -378,6 +390,10 @@ async function downloadAttempt(
   options: DownloadAttemptOptions,
 ): Promise<DownloadAttemptResult> {
   const { opts, state, offset, attempt } = options;
+  // Set only by the size-cap abort below. The bytes on disk are the ones a
+  // run-on stream already over-wrote, so THIS attempt owns discarding them -
+  // see the catch at the end of the write loop.
+  let oversize = false;
   const controller = new AbortController();
   const linkedSignal = linkAbortSignals(controller, opts.signal);
   const resuming = offset > 0;
@@ -400,7 +416,10 @@ async function downloadAttempt(
     onTimeout: () => emitHeartbeat(opts.onHeartbeat, "watchdog", attempt, null),
   });
   try {
-    const response = await fetch(opts.url, { signal: linkedSignal, headers });
+    const response = await registryFetch(opts.url, {
+      signal: linkedSignal,
+      headers,
+    });
     if (!state.sawFirstSuccessfulResponse && response.ok) {
       state.sawFirstSuccessfulResponse = true;
       state.entityValidator = entityValidatorFrom(response);
@@ -467,6 +486,7 @@ async function downloadAttempt(
           opts.expectedSizeBytes + DOWNLOAD_SIZE_SLACK_BYTES
         ) {
           controller.abort();
+          oversize = true;
           throw cliError({
             code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
             message: `host registry: ${opts.url} exceeded declared size ${opts.expectedSizeBytes} bytes (received ${downloadedBytes}); aborted to protect local disk`,
@@ -510,6 +530,30 @@ async function downloadAttempt(
     } catch (err) {
       controller.abort();
       await closeWriter(writer);
+      // AFTER `closeWriter`, never before: deleting while the writer still has
+      // a pending flush races it (EBUSY on Windows, or a file recreated by the
+      // flush that lands after the unlink).
+      if (oversize) {
+        // BEST EFFORT, and it must not replace `err`. `rm(..., { force: true })`
+        // suppresses ENOENT but not EPERM or EBUSY, and this branch already
+        // treats Windows file locking as a real condition: an antivirus
+        // scanner or indexer can hold the just-closed file.
+        //
+        // A rejection escaping here would replace the size-cap CliError, with
+        // two consequences. The caller loses the diagnosis and sees a
+        // filesystem error instead; and `isCliError(err)` becomes false, so
+        // `downloadWithRetries` reclassifies a PERMANENT refusal as transient
+        // and re-downloads an origin that streams past its declared size until
+        // the stall budget is exhausted.
+        //
+        // Leaving a partial file behind is strictly the better failure: the
+        // next attempt truncates it.
+        try {
+          await discardPartial(opts.destPath);
+        } catch {
+          // Intentionally ignored; `err` below is the verdict that matters.
+        }
+      }
       throw err;
     }
   } finally {
@@ -755,8 +799,27 @@ function parseContentRange(
   return { start, total };
 }
 
+/**
+ * The CLI's own copy of the shared helper of the same name, and it has to keep
+ * that helper's non-throwing contract or the name lies.
+ *
+ * Every caller here is already carrying a verdict: `httpStatusFailure` cancels
+ * BEFORE constructing the error it returns, so a rejecting cancel meant
+ * `throw await httpStatusFailure(...)` threw a stream error and the
+ * "GET <url> returned 404 Not Found" diagnosis was never built; the three
+ * resume-path callers would have lost their `{ kind: "restart" }` the same way,
+ * turning a recoverable resume into a hard failure. `cancel()` rejects when the
+ * connection has already errored - exactly when these paths run - so the leak
+ * this prevents is bounded either way: a body that cannot be cancelled belongs
+ * to a connection that is already gone.
+ */
 async function cancelResponseBody(response: Response): Promise<void> {
-  if (response.body !== null) await response.body.cancel();
+  if (response.body === null) return;
+  try {
+    await response.body.cancel();
+  } catch {
+    // Best effort; the caller's verdict is the one that matters.
+  }
 }
 
 async function finishWriter(writer: WriteStream): Promise<void> {

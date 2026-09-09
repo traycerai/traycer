@@ -142,6 +142,24 @@ export interface WindowNarrationInput {
    */
   readonly localHostExpected: boolean;
   /**
+   * Whether an attempt to read the host registry has concluded for the current
+   * identity - a listing delivered (empty or not) or a fetch that failed.
+   * `false` until then, and again after a `signed-out` outcome withdraws it.
+   *
+   * The authority derives its leases from the fleet it has been given, so
+   * before any attempt concludes, an unanswered fleet and an account with no
+   * hosts are the same value: an empty lease list, and therefore ∅. This is
+   * the only input that tells them apart, and it is what the pre-discovery arm
+   * below reads.
+   *
+   * CONCLUDED rather than delivered, and not a latch. A registry that cannot be
+   * reached never delivers, so waiting for a listing would wait for the whole
+   * outage; and the flag is withdrawn wherever the observation is, which is the
+   * same edge that wipes the authority's fleet, so the wait re-arms rather than
+   * being spent once per process.
+   */
+  readonly discoveryConcluded: boolean;
+  /**
    * THIS MACHINE's host id, or null when there is none.
    *
    * Carried separately from {@link localHostExpected} because they answer
@@ -152,6 +170,65 @@ export interface WindowNarrationInput {
    * arm is waiting on is the one this app can actually start.
    */
   readonly localHostId: string | null;
+}
+
+/**
+ * Whether the window narrator is holding its tongue because NO DISCOVERY
+ * ATTEMPT HAS CONCLUDED - the ∅ that is a vacuum rather than a verdict.
+ *
+ * ONE definition, two readers, in the image of `gateCardReadiness`: the
+ * narrator returns `silent` on it, and the gate's attach-pending cover keeps
+ * the boot surface up for exactly the same window. A second derivation of "is
+ * the narrator able to speak" is how a frame ends up with two cards, or with
+ * none.
+ *
+ * Five conjuncts, each of which is load-bearing:
+ *
+ *  - `attached`: while the kernel has not attached the narrator is silent
+ *    anyway, and the gate's cover already owns that window. Answering `true`
+ *    here would only make two arms claim one state.
+ *  - `effectiveHostId === null`: this is a statement about ∅ ALONE. A window
+ *    that has been given a host is not waiting for discovery, whatever the
+ *    directory has or has not delivered.
+ *  - `!localHostExpected`: a shell that can boot a local host narrates its
+ *    launch through the `cold-start` arm, which is a truer sentence than
+ *    silence - something really is starting. This arm is for the shells where
+ *    nothing is: the phone, and a browser window. Desktop stays on cold-start
+ *    whether its target is local or remote, because `hasLocalHost` is a
+ *    property of the SHELL.
+ *  - `!discoveryConcluded`: the actual wait. Once an attempt has concluded -
+ *    delivered or failed - ∅ is a verdict and the narration below is
+ *    unchanged.
+ *  - the fleet scan answers `offline`: the difference between SOFTENING a
+ *    verdict and SUPPRESSING one, and the same gate the pre-serve grace below
+ *    states for itself. A wait hides whatever it covers for as long as it
+ *    lasts, and `offline` is the one variant with nothing to hide - the boot
+ *    surface carries the same story, and no action is being withheld.
+ *    `update-host` and `plan-restricted` are the opposite: a version fix or an
+ *    upgrade the user could walk NOW, derived from leases the authority has
+ *    already concluded are dead. The lease list and the directory's answer come
+ *    from two independent reads, so a fleet CAN be known while discovery is
+ *    still pending - that is exactly when suppressing them would bite.
+ *
+ * Asking `deriveNoHostVariant` rather than enumerating dead reasons is the same
+ * decision the grace below documents: a new variant becomes actionable by
+ * default, which is the safe direction to be wrong in.
+ */
+export function windowNarrationAwaitsDiscovery(input: {
+  readonly attached: boolean;
+  readonly effectiveHostId: string | null;
+  readonly localHostExpected: boolean;
+  readonly discoveryConcluded: boolean;
+  readonly leases: readonly HostLeaseSnapshot[];
+  readonly targetHostId: string | null;
+}): boolean {
+  if (!input.attached) return false;
+  if (input.effectiveHostId !== null) return false;
+  if (input.localHostExpected) return false;
+  if (input.discoveryConcluded) return false;
+  return (
+    deriveNoHostVariant(input.leases, input.targetHostId).kind === "offline"
+  );
 }
 
 /**
@@ -306,6 +383,22 @@ export function deriveWindowNarration(
   input: WindowNarrationInput,
 ): WindowNarrationState {
   if (!input.attached) return { kind: "silent" };
+  // NOBODY HAS ASKED YET, so nothing may report a verdict. An ∅ derived from a
+  // fleet no attempt has concluded for is indistinguishable from an ∅ derived
+  // from an account that owns no hosts - both are an empty lease list - and on
+  // a shell with no local host the pre-serve grace below does not soften it, so
+  // the second reading would be narrated as fact.
+  //
+  // The frame is not left empty: the gate's attach-pending cover holds the
+  // shared boot surface over exactly this window, gated on the same predicate
+  // (see `windowNarrationAwaitsDiscovery`).
+  //
+  // OUTSIDE the pre-serve grace below, and not gated on `hasBeenServed`: the
+  // wait is a statement about the answer, not about this window's history, and
+  // the flag it reads is withdrawn on the identity edge that also wipes the
+  // authority's fleet. A launch-only latch would narrate the same vacuum on the
+  // way back from a re-attach.
+  if (windowNarrationAwaitsDiscovery(input)) return { kind: "silent" };
   if (input.effectiveHostId === null) {
     // THE PRE-SERVE GRACE: before this window has ever been served, an ∅
     // whose fleet has not CONCLUDED anything is a start in progress, not a

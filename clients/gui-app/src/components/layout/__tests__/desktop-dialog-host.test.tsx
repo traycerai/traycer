@@ -192,7 +192,8 @@ function createSupportBridgeFixture(input: {
     revealLog: input.revealLog,
     submitReport: input.submitReport,
     tailLog: input.tailLog,
-    freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+    freezeEvidence: () =>
+      Promise.resolve({ reportId: "rpt_test", contactEmail: null }),
     discardFrozenEvidence: () => Promise.resolve(),
     readFrozenLogTail: (frozenInput) =>
       Promise.resolve({
