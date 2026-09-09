@@ -543,11 +543,19 @@ function normalizeClaimBaseline(
     dataProperty(value, "stageFingerprint"),
   );
   const allowDowngrade = dataProperty(value, "allowDowngrade");
+  // Absent is `false`, exactly as the protocol decoder reads it: the key was
+  // added after claims were first written, and a claim that never recorded
+  // this consent never had it. Present and not a boolean is invalid like any
+  // other malformed key.
+  const acceptStoreFormatLossRaw = dataProperty(value, "acceptStoreFormatLoss");
+  const acceptStoreFormatLoss =
+    acceptStoreFormatLossRaw === undefined ? false : acceptStoreFormatLossRaw;
   if (
     installedVersion === null ||
     installGeneration === null ||
     stageFingerprint === "invalid" ||
-    typeof allowDowngrade !== "boolean"
+    typeof allowDowngrade !== "boolean" ||
+    typeof acceptStoreFormatLoss !== "boolean"
   ) {
     return "invalid";
   }
@@ -556,6 +564,7 @@ function normalizeClaimBaseline(
     installGeneration,
     stageFingerprint,
     allowDowngrade,
+    acceptStoreFormatLoss,
   };
 }
 
@@ -902,7 +911,8 @@ function sameClaimBaseline(
     a.installedVersion === b.installedVersion &&
     a.installGeneration === b.installGeneration &&
     a.stageFingerprint === b.stageFingerprint &&
-    a.allowDowngrade === b.allowDowngrade
+    a.allowDowngrade === b.allowDowngrade &&
+    a.acceptStoreFormatLoss === b.acceptStoreFormatLoss
   );
 }
 

@@ -72,6 +72,7 @@ function status(
         ? null
         : { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
+    install: null,
   };
 }
 
