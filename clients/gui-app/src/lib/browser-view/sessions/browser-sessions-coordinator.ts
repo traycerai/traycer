@@ -277,6 +277,18 @@ interface BrowserSessionsCoordinator {
   readonly scope: HostResourceScope;
   state: BrowserSessionsState;
   /**
+   * Whether {@link retryFailedCoordinators} has already re-asked this
+   * coordinator since it last entered `failed`. It is what bounds that sweep -
+   * see its docblock for why the release edge can no longer bound itself.
+   *
+   * Cleared on any transition OUT of `failed`, which is the only real
+   * progress: the stream opened, or is at least reconnecting, so the next
+   * failure is a NEW episode and earns a fresh re-ask. A coordinator that
+   * fails, is re-asked, and fails again is left alone until something other
+   * than the sweep moves it.
+   */
+  sweptSinceFailure: boolean;
+  /**
    * Snapshot-only capture of one tab on this coordinator's host, for a chat
    * pinned to ANOTHER host (spec decision #10). It hangs off the coordinator
    * rather than off `BrowserSessionsState` because only the mention picker
@@ -411,20 +423,51 @@ export function acquireBrowserSessionsCoordinator(args: {
  * device a tombstone still names), and the coordinator refused is then a
  * visible one: the panel's, or a canvas tile's.
  *
- * Every failed coordinator is re-asked here, not only the cap-refused ones. A
- * release is a discrete gesture in the UI rather than something a retry can
- * produce, so the sweep cannot re-trigger itself however the retries land;
- * that costs one open per release, and only while a stream stays failed.
- * {@link retryCapRefusedCoordinators} is the same idea on the edge main frees
- * a slot on by itself, where that guarantee does NOT hold.
+ * Every failed coordinator is re-asked here, not only the cap-refused ones,
+ * because a release genuinely frees a slot and any of them may now fit.
+ *
+ * This used to rest on "a release is a discrete gesture in the UI rather than
+ * something a retry can produce, so the sweep cannot re-trigger itself however
+ * the retries land". That is no longer true, in two ways that compose:
+ *
+ *   - The always-mounted tombstone recovery bridge reaches this edge on its
+ *     own. `LANDING_BROWSER_RECOVERY_HOST_CAP`'s docblock says so outright: a
+ *     release happens "when its tombstones drain, and, since the rotation
+ *     below, also when it yields" - and a device YIELDS precisely by failing
+ *     to answer, which is also what leaves its coordinator `failed`.
+ *   - A `failed` lifecycle changes what consumers render (`browser-peek-tile`,
+ *     `epic-browser-sidebar`, `switcher-browsers-list`), so a retry that fails
+ *     again can unmount the consumer holding an acquisition - and that
+ *     unmount's cleanup IS another release. The sweep then re-enters through
+ *     React rather than through this call stack, which no reentrancy flag
+ *     would catch.
+ *
+ * So the sweep could feed itself, and with several undialable devices it did:
+ * exactly the failure {@link retryCapRefusedCoordinators} refuses to risk -
+ * "two undialable hosts would each free a slot the other's failure swept on,
+ * forever" - reached from the other edge. Unbounded nested updates surface as
+ * React error #185 ("maximum update depth exceeded"), which takes the window
+ * down to the crash card.
+ *
+ * `sweptSinceFailure` restores a bound without narrowing what a release may
+ * revive: each coordinator is re-asked at most ONCE per failure episode, so a
+ * chain is bounded by the number of failed coordinators, and only a transition
+ * out of `failed` re-arms one. Same shape as the cap-refused sweep's bound,
+ * for the same reason.
  *
  * Ordering: the released coordinator's close went to main before these opens
  * (`stop()` inside `dispose()` sends it), and main handles a renderer's
  * invokes in order, so the count the cap reads no longer includes it.
  */
 function retryFailedCoordinators(): void {
-  for (const coordinator of browserSessionsCoordinators.values()) {
-    if (coordinator.state.lifecycle === "failed") coordinator.state.retry();
+  for (const coordinator of [...browserSessionsCoordinators.values()]) {
+    if (coordinator.state.lifecycle !== "failed") continue;
+    if (coordinator.sweptSinceFailure) continue;
+    // Set BEFORE the retry: `retry()` restarts a stream and is free to publish
+    // synchronously, including a fresh `failed`, and a re-ask that has not yet
+    // recorded itself would be eligible all over again.
+    coordinator.sweptSinceFailure = true;
+    coordinator.state.retry();
   }
 }
 
@@ -765,6 +808,19 @@ function createBrowserSessionsCoordinator(args: {
           ? allocateConnectionGeneration()
           : coordinator.state.connectionGeneration,
     });
+    // Reaching `live` is the progress that re-arms the release sweep for this
+    // coordinator: the stream actually opened, so a later failure is a new
+    // episode rather than the one already swept.
+    //
+    // `live` and NOT merely "left `failed`". A retry publishes `connecting`
+    // on the way out, and main forwards that as a status like any other, so
+    // re-arming on it would hand the flag back once per ATTEMPT - which is
+    // once per sweep, leaving the sweep able to feed itself exactly as before.
+    // `reconnecting` needs no arm of its own: it is only reachable from
+    // `live`, which has already cleared this.
+    //
+    // Set before the sweep below, which may re-enter this setter synchronously.
+    if (next === "live") coordinator.sweptSinceFailure = false;
     // AFTER the patch, so this coordinator is already carrying the message the
     // sweep reads it by and cannot be re-asked as one of its own targets.
     if (next === "failed" && !isBrowserSessionsWindowCapRefusal(errorMessage)) {
@@ -850,6 +906,8 @@ function createBrowserSessionsCoordinator(args: {
     owner: args.owner,
     scope: args.scope,
     captureTabPreview,
+    // Starts `connecting`, so there is no failure episode to have swept yet.
+    sweptSinceFailure: false,
     state: {
       hostId: args.owner.hostId,
       lifecycle: "connecting",
