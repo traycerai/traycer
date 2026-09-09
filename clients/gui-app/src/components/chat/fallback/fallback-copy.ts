@@ -2,6 +2,7 @@ import type {
   ChatFallbackListTargetsResponse,
   FallbackActionOutcome,
 } from "@traycer/protocol/host/chat-fallback";
+import type { FallbackWaitDisposition } from "@traycer/protocol/host/agent/gui/subscribe";
 import { FALLBACK_REASON_LABELS } from "@traycer/protocol/host/notifications/presentation";
 
 /**
@@ -99,6 +100,33 @@ export function queuedMessagesMovingText(count: number): string | null {
 }
 
 /**
+ * What picking a destination actually DOES, said before any row is clicked.
+ *
+ * The grace card states this above its menu because the card itself carries
+ * {@link FRESH_SESSION_HELPER}; the error card and the waiting card had no
+ * equivalent anywhere, and their trigger is a bare "Switch…" / "Switch
+ * instead…" - which reads perfectly well as changing a setting for the NEXT
+ * message. It is not: the pick replays the failed message immediately, in a
+ * new provider session, and takes the queue with it. Three consequences the
+ * user was finding out about afterwards.
+ *
+ * `queuedItemsMoving` is `null` where no count exists - the error card acts on
+ * a failed ATTEMPT and its DTO carries no queue figure - and the copy then
+ * says the true thing without a number rather than guessing one or staying
+ * silent about the queue entirely.
+ */
+export function switchConsequencesText(
+  queuedItemsMoving: number | null,
+): string {
+  const queued =
+    queuedItemsMoving === null
+      ? "Any queued messages move with it."
+      : queuedMessagesMovingText(queuedItemsMoving);
+  const replay = `Replays this message on the destination you pick. ${FRESH_SESSION_HELPER}`;
+  return queued === null ? replay : `${replay} ${queued}`;
+}
+
+/**
  * "N queued messages are waiting with it."
  *
  * The waiting card's counterpart to {@link queuedMessagesMovingText}, and a
@@ -173,9 +201,21 @@ export const FINDING_DESTINATIONS_LABEL = "Finding destinations…";
  * headline already refuses.
  */
 export const PAUSING_COUNTDOWN_LABEL = "Pausing the countdown…";
-/** The hold the host declined - the menu says so and closes. */
-export const COUNTDOWN_NOT_PAUSED_LABEL =
-  "Couldn't pause the countdown — this chat has moved on.";
+/**
+ * The hold the host declined - the menu says so and closes.
+ *
+ * NO CAUSE, deliberately (D220). This used to end "— this chat has moved on",
+ * which is one cause stated as the only one and unproven at every site that
+ * renders it: an ACCEPTED ack carrying no token refuses too (the host took the
+ * freeze and minted nothing), and since B1 made reopening from `choosing` a
+ * normal path, a refusal no longer implies the traversal advanced. Same class
+ * as MF10/F6 - refusal copy names no cause unless advancement is proven.
+ *
+ * A "try again" or "the countdown is still running" tail is not a fix either:
+ * both are causes in disguise. The card or menu state above this line is the
+ * truthful next step, so this sentence stops at the fact it can vouch for.
+ */
+export const COUNTDOWN_NOT_PAUSED_LABEL = "Couldn't pause the countdown.";
 /**
  * The empty menu, when the host gave no rung-level explanation.
  *
@@ -188,6 +228,88 @@ export const COUNTDOWN_NOT_PAUSED_LABEL =
  */
 export const NO_DESTINATIONS_LABEL =
   "No other profile or equivalent model is available right now.";
+/**
+ * The menu that FOUND candidates and can offer none of them.
+ *
+ * A different sentence from {@link NO_DESTINATIONS_LABEL} because the rows are
+ * still on screen underneath, each with the host's own reason. "No other
+ * profile … is available" above a list of profiles would read as a
+ * contradiction; this names what the user is actually looking at.
+ */
+export const NO_SELECTABLE_DESTINATIONS_LABEL =
+  "None of these can be used right now.";
+/**
+ * The one transport FAILURE this menu can hit, as opposed to every `outcome`
+ * above - all of which arrive in a successful response.
+ *
+ * A constant because the popup's status region has to announce the same
+ * sentence the body renders, and two copies of one line is how the ear and the
+ * eye start disagreeing.
+ */
+export const HOST_UNREACHABLE_LABEL =
+  "Couldn't reach this chat's host just now.";
+/**
+ * The destination popup's accessible NAME.
+ *
+ * Radix gives the content `role="dialog"`, so without this it announced as an
+ * unnamed dialog - "dialog", and nothing about what opened. One name for all
+ * three entry points because it is one dialog doing one thing; what differs
+ * between them is the consequence copy in the header, which is its
+ * DESCRIPTION.
+ */
+export const DESTINATION_MENU_DIALOG_LABEL = "Choose a destination";
+
+/**
+ * The one sentence that may claim the chat advanced.
+ *
+ * Shared by the two switches below because `attempt_not_latest` is one fact
+ * with one name on both the listing and the action side, and two wordings for
+ * it in one file is how a renderer starts implying they are different
+ * situations.
+ */
+const CHAT_MOVED_ON_LABEL = "This chat has moved on since that message.";
+
+/**
+ * Why the failed attempt is offering no wait, or `null` when it is.
+ *
+ * Every branch renders a HOST-ESTABLISHED fact. This is the whole point of the
+ * disposition existing: before it, the only thing a card could reason from was
+ * `failure.resetsAt`, which is PRESENT for a boundary beyond the user's cap and
+ * ABSENT for one the host never verified - so the two states a user can
+ * actually act on (raise the cap; wait for the provider to report a boundary)
+ * looked identical, and the state where a wait is impossible looked like the
+ * state where it is merely far away.
+ *
+ * `resetsAt` is the failure payload's, read WITHOUT a cap, and it is named only
+ * under `beyond_cap` - the one disposition where the boundary is known. The cap
+ * itself never reaches the client, so the copy points at Settings instead of
+ * quoting a number it does not have.
+ *
+ * Exhaustive with no `default`, so a new disposition is a compile error rather
+ * than a silently unexplained card.
+ */
+export function describeWaitDisposition(
+  disposition: FallbackWaitDisposition,
+  resetsAtLabel: string | null,
+): string | null {
+  switch (disposition) {
+    case "eligible":
+      // Nothing to explain: the button IS the statement, and a sentence
+      // beside it saying a wait is available would be the card narrating its
+      // own controls.
+      return null;
+    case "checking":
+      return "Checking whether this account has a confirmed reset time.";
+    case "no_verified_reset":
+      return "No confirmed reset time for this account yet, so there's nothing to wait for.";
+    case "beyond_cap":
+      return resetsAtLabel === null
+        ? "This limit resets later than your longest wait allows."
+        : `This limit resets at ${resetsAtLabel}, later than your longest wait allows.`;
+    case "attempt_unavailable":
+      return "This message can't be re-sent on the account it ran on.";
+  }
+}
 
 /**
  * What to say when `chat.fallback.listTargets` answered anything but `listed`.
@@ -213,7 +335,7 @@ export function describeListTargetsOutcome(
     case "attempt_not_latest":
       // The transcript moved under an open menu - a later turn ran, so the
       // failure this menu was opened from is no longer the one to act on.
-      return "This chat has moved on since that message.";
+      return CHAT_MOVED_ON_LABEL;
     case "state_unreadable":
       // Deliberately does not speculate. The host could not read the state it
       // would have listed from, and naming a cause would be a guess presented
@@ -255,11 +377,28 @@ export function describeFallbackOutcome(
       // cannot tell them apart and the remedy is identical: re-read the DTO.
       return "The menu is out of date — reopen it to choose.";
     case "rung_unavailable":
-      // Deliberately generic. Seven host guards answer this code and five of
-      // them say nothing about which, so naming a cause would be a guess
-      // presented as a reason. A typed refusal reason is a recorded follow-up;
-      // until it exists, one honest sentence beats seven speculative ones.
-      return "That isn't available any more — this chat has moved on.";
+      // The NEUTRAL residue, and it must stay neutral. This arm used to read
+      // "That isn't available any more — this chat has moved on", and it was
+      // the only string the card had: the host returns this code for an
+      // unusable destination and a failed preparation with no newer turn at
+      // all, so the copy asserted an advancement the host had established
+      // nothing about. The two facts the host CAN prove now have their own
+      // outcomes below; whatever still reaches here gets a sentence that
+      // claims no cause.
+      return "That action isn't available right now.";
+    case "attempt_not_latest":
+      // The ONE outcome that proves the chat advanced, and the only one
+      // allowed to say so. Deliberately the same sentence
+      // `describeListTargetsOutcome` gives the identically-named outcome: one
+      // fact, one wording, across the two switches this file holds.
+      return CHAT_MOVED_ON_LABEL;
+    case "rung_target_unavailable":
+      // "right now", never "any more". The chat did NOT move and the attempt
+      // is still the latest - the destination simply stopped validating - so
+      // "any more" would assert a change that is exactly what did not happen.
+      // Reopening the menu is the useful next step, which is what this points
+      // at.
+      return "That destination isn't available right now.";
     case "return_unavailable":
       // NEVER rendered as success: the offer closed and the chat did NOT move.
       // The host appends a durable notice saying why, which is where the

@@ -8,7 +8,12 @@ import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-contex
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { formatClockTime } from "@/lib/relative-time";
-import { SWITCH_LABEL, describeFallbackOutcome } from "./fallback-copy";
+import {
+  SWITCH_LABEL,
+  describeFallbackOutcome,
+  describeWaitDisposition,
+  switchConsequencesText,
+} from "./fallback-copy";
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import {
@@ -16,6 +21,7 @@ import {
   useFallbackRunManualRung,
 } from "./use-fallback-actions";
 import { useChatLastFailedAttempt } from "./use-last-failed-attempt";
+import { usePublishConfirmedManualFallbackAction } from "./use-confirmed-manual-action";
 
 /**
  * The error row's manual affordances: Retry, Switch…, and "Wait until <time>".
@@ -94,7 +100,16 @@ function ManualRungActions({
 }) {
   const client = useHostClientForHostId(hostId);
   const attempt = useChatLastFailedAttempt({ epicId, chatId, hostId });
-  const runManualRung = useFallbackRunManualRung(client, chatId);
+  const publishConfirmed = usePublishConfirmedManualFallbackAction({
+    epicId,
+    chatId,
+    hostId,
+  });
+  const runManualRung = useFallbackRunManualRung(
+    client,
+    chatId,
+    publishConfirmed,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
@@ -185,11 +200,17 @@ function ManualRungActions({
   const rungs = attempt.eligibleRungs;
   const waitUntil = waitUntilLabel(attempt);
   const busy = runManualRung.isPending;
-  // No buttons is a real state, and the host said so. Render the settings link
-  // alone rather than nothing, so a user looking at a failure the policy
-  // declined to act on can still reach the policy.
-  const anyAction =
-    rungs.includes("retry") || rungs.includes("switch") || waitUntil !== null;
+  // Why there is no wait button, in the host's own terms. Never inferred from
+  // the failure payload: `resetsAt` is PRESENT for a boundary past the user's
+  // cap and ABSENT for one nobody verified, so the two states a user can act
+  // on were indistinguishable from here, and the state where a wait is
+  // impossible looked like the state where it is merely far away.
+  const waitExplanation = describeWaitDisposition(
+    attempt.waitDisposition,
+    attempt.failure.resetsAt === undefined
+      ? null
+      : formatClockTime(attempt.failure.resetsAt),
+  );
 
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -209,7 +230,12 @@ function ManualRungActions({
         <FallbackDestinationMenu
           triggerLabel={SWITCH_LABEL}
           triggerDisabled={busy}
-          header={null}
+          // `null` for the count, and that is the honest answer rather than a
+          // gap: this card acts on a failed ATTEMPT, and `lastFailedAttempt`
+          // carries no queue figure - the traversal that would have counted
+          // one is over. The copy says the queue moves without naming a
+          // number it does not have.
+          header={switchConsequencesText(null)}
           // The ATTEMPT selector, not a traversal one. This card renders where
           // there is no dispatch-holding traversal to name - a terminal failure,
           // an exhausted ladder, a `completed_awaiting_return` left over from an
@@ -275,7 +301,23 @@ function ManualRungActions({
           {waitUntil}
         </Button>
       )}
-      {anyAction ? null : <FallbackNoticeSettingsLink />}
+      {/*
+       * ALWAYS, not only when there is nothing else. Hiding it beside buttons
+       * made the escape available in exactly the state where the user had
+       * least need of it and unavailable in the state where a destination
+       * turned out to be unusable and the policy was the thing to go and look
+       * at. "No buttons is a real state, and the host said so" is still true -
+       * the difference is that the link is not the consolation prize for it.
+       */}
+      <FallbackNoticeSettingsLink />
+      {waitExplanation === null ? null : (
+        // Full-width below the buttons rather than inline beside them: it is a
+        // sentence, not a control, and `beyond_cap`'s version names a time the
+        // Settings link next to it is the remedy for.
+        <div className="w-full text-ui-xs text-muted-foreground">
+          {waitExplanation}
+        </div>
+      )}
     </div>
   );
 }

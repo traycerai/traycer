@@ -115,9 +115,11 @@ export function FallbackLadderEditor(
         </SortableContext>
       </DndContext>
       <p className="text-ui-xs text-muted-foreground">
-        Turning a step off keeps it here, but its place in the order is only
-        remembered while it is on - a step you turn off moves to the end next
-        time you open this page.
+        Turning a step off keeps it here, and turning it back on puts it back
+        where it was. Only its saved position is lost: next time you open this
+        page a step that is off sits just above &ldquo;
+        {FALLBACK_RUNG_COPY.notify.label}&rdquo; - never below it, where turning
+        it on again would leave it unable to run.
       </p>
     </div>
   );
@@ -248,13 +250,77 @@ function FallbackLadderRow(props: {
           SETTINGS_ROW_STACK.control,
         )}
       >
-        <Switch
-          checked={enabled}
-          onCheckedChange={onToggle}
-          aria-label={`${copy.label} - run this step`}
-        />
+        {fixed ? (
+          <FixedStepControl
+            label={copy.label}
+            enabled={enabled}
+            onToggle={onToggle}
+          />
+        ) : (
+          <Switch
+            checked={enabled}
+            onCheckedChange={onToggle}
+            aria-label={`${copy.label} - run this step`}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * What the terminal `notify` step offers instead of a switch.
+ *
+ * It had the same `Switch` as every other row, sitting beside copy that says
+ * "Always runs when nothing else worked" - two statements that cannot both be
+ * true, and the one a first-time user believes is the switch. They read it as a
+ * notification preference; it is nothing of the kind. Turning it off does not
+ * suppress a single notification: exhaustion still ends in the same terminal
+ * consequences and the error card is always published. What it actually changes
+ * is engine traversal configuration - whether a notify-only grace hold arms -
+ * which is not a choice this page has any way to explain.
+ *
+ * So the ordinary state offers no control at all, matching the reserved gutters
+ * this row already renders in place of a drag handle and arrows: absence says
+ * "this cannot be changed" once, where a disabled switch would invite the
+ * reader to look for the state that enables it.
+ *
+ * The step CAN still be absent from a stored ladder - the wire format allows it
+ * and a policy written before this rule, or by something other than this panel,
+ * may have it - and the row keeps rendering that honestly rather than drawing a
+ * step that is not there. The affordance offered then is one-way: a link that
+ * puts the step back. There is deliberately no path from here to turning it
+ * off, so nothing on this page can imply the always-published error card is
+ * something a user has switched on.
+ */
+function FixedStepControl(props: {
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly onToggle: (next: boolean) => void;
+}): ReactNode {
+  const { label, enabled, onToggle } = props;
+  if (enabled) {
+    return (
+      <span
+        className="text-ui-sm text-muted-foreground"
+        data-testid="fallback-step-always-on"
+      >
+        Always
+      </span>
+    );
+  }
+  return (
+    <Button
+      type="button"
+      variant="link"
+      className="h-auto p-0 text-ui-sm"
+      aria-label={`${label} - add this step back`}
+      onClick={() => {
+        onToggle(true);
+      }}
+    >
+      Add this step back
+    </Button>
   );
 }
 

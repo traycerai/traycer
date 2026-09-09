@@ -6,10 +6,19 @@ import type {
   TierCandidatePreview,
 } from "@traycer/protocol/host/fallback-policy";
 import {
-  toWireGroups,
+  keyedGroup,
+  withTierGroups,
+  type FallbackGroupsInverse,
   type KeyedGroup,
 } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
 import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/fallback/fallback-profile-labels";
+import type { FallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
+import {
+  FALLBACK_ADD_GROUP_ATTRIBUTE,
+  FALLBACK_GROUP_DELETE_ATTRIBUTE,
+  focusSelector,
+  useRemovalFocus,
+} from "@/components/settings/panels/fallback/fallback-removal-focus";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -51,6 +60,8 @@ export interface FallbackTierGroupsEditorProps {
   readonly preview: readonly TierCandidatePreview[] | null;
   /** Names the account a preview row resolved on - never its raw id (D190). */
   readonly labelFor: FallbackSettingsProfileLabel;
+  /** The effort levels each row's harness advertises; see `fallback-effort-options.ts`. */
+  readonly effortOptions: FallbackEffortOptions;
   readonly previewPending: boolean;
   /**
    * A draft move that is NOT saved: a keystroke in the group-name or model-family
@@ -74,6 +85,17 @@ export interface FallbackTierGroupsEditorProps {
     next: FallbackPolicy,
     groups: readonly KeyedGroup[],
   ) => void;
+  /**
+   * "Undo" on a removal toast: the inverse of that one removal, for the panel
+   * to apply to the draft as it stands when the button is pressed.
+   *
+   * Not an `onCommit` with a reconstructed list, which is what this replaced. A
+   * toast outlives the render that raised it, so a list built here is a
+   * SNAPSHOT: it also reverts every unrelated setting changed since, and an
+   * older toast's Undo resurrects a row deleted after it. Only the panel holds
+   * the current draft, so only the panel can apply an inverse to it.
+   */
+  readonly onUndo: (inverse: FallbackGroupsInverse) => void;
   /** "Restore the default groups" - the RESTORE op, not a client-built list. */
   readonly onRestoreDefaults: () => void;
   readonly restorePending: boolean;
@@ -99,28 +121,29 @@ export function FallbackTierGroupsEditor(
     groups,
     preview,
     labelFor,
+    effortOptions,
     previewPending,
     onChange,
     onCommit,
+    onUndo,
     onRestoreDefaults,
     restorePending,
     status,
   } = props;
 
-  // The one place the keyed form is projected back to the wire form. Every edit
-  // below builds a new keyed list and goes through here, so identity never
-  // leaves this module in a saved policy and never has to be reconstructed on
-  // the way back in.
-  const toPolicy = (next: readonly KeyedGroup[]): FallbackPolicy => ({
-    ...policy,
-    tierGroups: [...toWireGroups(next)],
-  });
+  // Every edit below builds a new keyed list and projects it through
+  // `withTierGroups`, so identity never leaves this module in a saved policy
+  // and never has to be reconstructed on the way back in.
+  const toPolicy = (next: readonly KeyedGroup[]): FallbackPolicy =>
+    withTierGroups(policy, next);
   const emitDraft = (next: readonly KeyedGroup[]): void => {
     onChange(toPolicy(next), next);
   };
   const emit = (next: readonly KeyedGroup[]): void => {
     onCommit(toPolicy(next), next);
   };
+
+  const { containerRef, focusAfterRemoval } = useRemovalFocus();
 
   return (
     <SettingsGroup
@@ -129,7 +152,7 @@ export function FallbackTierGroupsEditor(
       dataTestId="settings-fallback-tier-groups"
       fill={false}
     >
-      <div className="px-5 py-4">
+      <div className="px-5 py-4" ref={containerRef}>
         <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
           Models you consider interchangeable. When one fails, the
           &ldquo;equivalent model&rdquo; step tries the others in this order.
@@ -143,15 +166,19 @@ export function FallbackTierGroupsEditor(
           <div className="mt-3 flex flex-col gap-3">
             {groups.map((group, index) => (
               <FallbackTierGroupCard
-                // The id alone, no index: `fallbackPolicySchema` refines group
-                // ids to be unique, so this is collision-free by construction.
-                // The index was belt-and-braces that cost correctness - it
-                // makes React reuse the node at a position rather than follow
-                // the group, which is the bug `no-array-index-key` names.
-                key={group.id}
+                // The group's own client-side identity, not its `id`. The id
+                // is the EDITABLE NAME: keying on it remounted the card - and
+                // so destroyed the focused input - on every keystroke of a
+                // rename, and could not represent the intermediate duplicate
+                // and empty names a rename passes through. Not the index
+                // either, for the reason `no-array-index-key` names. See
+                // `fallback-tier-group-keys.ts`.
+                key={group.draftKey}
                 group={group}
                 preview={previewForGroup(preview, group.id)}
                 labelFor={labelFor}
+                effortOptions={effortOptions}
+                onUndo={onUndo}
                 defaultHarnessId={firstHarnessId(groups)}
                 onChange={(next) => {
                   emitDraft(
@@ -168,19 +195,28 @@ export function FallbackTierGroupsEditor(
                   );
                 }}
                 onDelete={() => {
-                  // Undo restores the groups as they were BEFORE this delete,
-                  // not a reconstruction of the group: reconstructing would put
-                  // it back at the end and lose its position, and position is
-                  // the one thing a user cannot re-enter by typing. Restoring
-                  // the list also restores its rows' identities, so undo brings
-                  // back the same rows rather than lookalikes.
-                  const previous = groups;
+                  // The keyboard has to land somewhere: the button that had it
+                  // is inside the subtree about to be filtered out. The group
+                  // that takes this one's place, its neighbour if this was the
+                  // last, and "Add a group" once the list is empty.
+                  focusAfterRemoval([
+                    ...groupDeleteSelectors(groups, index),
+                    `[${FALLBACK_ADD_GROUP_ATTRIBUTE}]`,
+                  ]);
                   emit(groups.filter((_, at) => at !== index));
+                  // The INVERSE of this one deletion, not the list as it stands
+                  // now: the toast outlives this render, and re-submitting a
+                  // captured list would also revert whatever the user changed
+                  // while the toast was up - and resurrect a group deleted
+                  // after it. `group` carries its own identity and its rows',
+                  // so the undo brings back the same group rather than a
+                  // lookalike, at the position it held; position is the one
+                  // thing a user cannot re-enter by typing.
                   toast.success(`Deleted “${group.id}”`, {
                     action: {
                       label: "Undo",
                       onClick: () => {
-                        emit(previous);
+                        onUndo({ kind: "group", group, index });
                       },
                     },
                   });
@@ -194,8 +230,14 @@ export function FallbackTierGroupsEditor(
             type="button"
             variant="outline"
             className="h-8"
+            {...{ [FALLBACK_ADD_GROUP_ATTRIBUTE]: "" }}
             onClick={() => {
-              emit([...groups, { id: nextGroupName(groups), candidates: [] }]);
+              // `keyedGroup` mints the identity, which is what lets two clicks
+              // produce two distinguishable cards even before either is named.
+              emit([
+                ...groups,
+                keyedGroup({ id: nextGroupName(groups), candidates: [] }),
+              ]);
             }}
           >
             Add a group
@@ -263,6 +305,40 @@ function EmptyGroups(props: {
       </Button>
     </div>
   );
+}
+
+/**
+ * Where focus goes when the group at `index` is deleted, most-preferred first.
+ *
+ * The NEXT group before the previous one: it is the one that will occupy the
+ * removed row's place, so focus stays where the user was looking. Deleting the
+ * last group is the only case that moves it backwards.
+ */
+function groupDeleteSelectors(
+  groups: readonly KeyedGroup[],
+  index: number,
+): readonly string[] {
+  return [
+    ...groupDeleteSelectorAt(groups, index + 1),
+    ...groupDeleteSelectorAt(groups, index - 1),
+  ];
+}
+
+/**
+ * One selector, or none when `index` is off either end. Same range check, and
+ * the same two reasons, as `candidateRemoveSelectorAt` in
+ * `fallback-tier-group-card.tsx`: `noUncheckedIndexedAccess` is off, so an
+ * `=== undefined` test reads as an impossible comparison, and `.at()` would
+ * wrap a negative index round to the end of the list.
+ */
+function groupDeleteSelectorAt(
+  groups: readonly KeyedGroup[],
+  index: number,
+): readonly string[] {
+  if (index < 0 || index >= groups.length) return [];
+  return [
+    focusSelector(FALLBACK_GROUP_DELETE_ATTRIBUTE, groups[index].draftKey),
+  ];
 }
 
 function previewForGroup(

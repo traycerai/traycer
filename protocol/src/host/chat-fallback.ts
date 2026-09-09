@@ -44,11 +44,46 @@ export const FALLBACK_ACTION_OUTCOMES = [
    */
   "choice_lease_stale",
   /**
-   * The manual rung is not offered any more: a newer turn exists on this chat,
-   * a turn is running, or the named attempt is not the chat's latest. Only
-   * `chat.fallback.runManualRung`.
+   * The manual rung did nothing, and the host is NOT claiming to know why in
+   * any way the user could act on: a turn is running, the chat has no eligible
+   * failed attempt, a dispatch-holding traversal is live, or the replacement
+   * turn could not be prepared. Only `chat.fallback.runManualRung`.
+   *
+   * **The NEUTRAL residue, and it must be rendered as one.** It used to carry
+   * the advancement cases as well, so a card had exactly one string for "this
+   * chat has moved on" and printed it for a destination that had merely stopped
+   * validating - a cause the host had established nothing about. The two facts
+   * the host CAN prove now have their own values below; anything that reaches
+   * this one gets "that action isn't available right now" and nothing more.
    */
   "rung_unavailable",
+  /**
+   * The named attempt is not the chat's latest any more - a newer turn ran, or
+   * a replay of the same user message succeeded. Only
+   * `chat.fallback.runManualRung`.
+   *
+   * **The only outcome that proves the chat advanced**, and the only one whose
+   * copy may say so. The host returns it from exactly one comparison: the
+   * client's `{ userMessageId, turnId }` pair against the chat's latest durable
+   * attempt.
+   *
+   * Deliberately the SAME word `chat.fallback.listTargets` already uses for the
+   * same fact. The two enums are separate types and could have spelled it
+   * differently; one file renders both, and two words for one fact in one
+   * switch is how a renderer ends up implying they are different situations.
+   */
+  "attempt_not_latest",
+  /**
+   * The rung had a destination and it does not validate right now - the profile
+   * was deleted, the model left the catalog, or the settings commit was
+   * refused. Only `chat.fallback.runManualRung`.
+   *
+   * **The chat did NOT move and the attempt is still the latest**, which is the
+   * whole reason this is not `attempt_not_latest`: the useful next step is to
+   * reopen the destination menu and pick again, not to accept that the moment
+   * has passed.
+   */
+  "rung_target_unavailable",
   /**
    * The return offer is closed, and the chat did NOT move.
    *
@@ -143,7 +178,11 @@ export type ChatFallbackChooseTargetResponse = z.infer<
  * The `retry`, `switch` and `wait_once` rungs of the error card's manual
  * affordances.
  *
- * Outcomes: `applied`, `rung_unavailable`.
+ * Outcomes: `applied`, `rung_unavailable`, `attempt_not_latest`,
+ * `rung_target_unavailable`. The last three are three DIFFERENT facts and are
+ * separate values precisely so a renderer stops having to pick one sentence for
+ * all of them; see their entries in {@link FALLBACK_ACTION_OUTCOMES} for which
+ * one may claim the chat advanced.
  *
  * Deliberately NOT a {@link fallbackTraversalRefSchema}: this verb runs where
  * there is no dispatch-holding traversal to name - a terminal failure, an

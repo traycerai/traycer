@@ -16,15 +16,47 @@ import {
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   openSettings: vi.fn(),
+  /** The `outcome` the mocked mutation answers with. See the mock below. */
+  outcome: "applied",
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * The double delivers the host's answer to the MUTATION-LEVEL `onSuccess`.
+ *
+ * It used to be a bare `mutate: vi.fn()` that recorded the call and answered
+ * nothing, which was sufficient only while "Sign in instead" opened Settings
+ * synchronously in its click handler. F8 moved that navigation to the
+ * mutation-level `onSuccess`, gated on `outcome === "applied"`, precisely
+ * because an applied cancel settles the traversal and unmounts this card - so
+ * a per-call handler never runs, and the user was left in a chat that had
+ * already switched with Settings never opening.
+ *
+ * A double that answers nothing therefore cannot express the fixed behaviour:
+ * it reports "cancel" and stops, which is indistinguishable from the bug. It
+ * models the real signature - `onSuccess(data, variables)` - for the same
+ * reason `fallback-manual-rungs.test.tsx` does: a double that under-models a
+ * callback is invisible until production reads the argument it omitted, and
+ * then it fails as a `TypeError` inside production code.
+ */
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
-  useHostScopedMutationForClient: () => ({
-    mutate: mocks.mutate,
+  useHostScopedMutationForClient: (
+    _client: unknown,
+    options: {
+      readonly onSuccess:
+        | ((data: { readonly outcome: string }, variables: unknown) => void)
+        | undefined;
+    },
+  ) => ({
+    mutate: (variables: unknown) => {
+      mocks.mutate(variables);
+      // `applied` by default: the arm every caller in this file drives. A case
+      // needing a refusal sets `mocks.outcome` before clicking.
+      options.onSuccess?.({ outcome: mocks.outcome }, variables);
+    },
     isPending: false,
   }),
 }));
@@ -47,6 +79,11 @@ function gracePending(input: {
     reason: input.reason,
     failedTuple: FAILED_CLAUDE_TUPLE,
     targetTuple: input.targetTuple,
+    // F5 (the headline-from-`impendingAction` rewrite) rewrites this fixture
+    // with a per-case plan; every existing case in this file predates that
+    // work and asserts nothing about it, so it is fixed here rather than
+    // threaded through ten call sites that do not vary it.
+    impendingAction: null,
     deadline: input.deadline,
     attempt: 1,
     maxAttempts: 3,
@@ -75,6 +112,10 @@ describe("FallbackGraceCard", () => {
   beforeEach(() => {
     mocks.mutate.mockReset();
     mocks.openSettings.mockReset();
+    // Reset with the spies: `outcome` is shared mutable state on a hoisted
+    // object, so a case that sets a refusal would otherwise leak it into every
+    // later case in file order.
+    mocks.outcome = "applied";
     useSettingsHostScopeStore.getState().setScopedHostId(APP_HOST);
   });
 
@@ -107,8 +148,11 @@ describe("FallbackGraceCard", () => {
         deadline: Date.now() + 12_000,
       }),
     });
+    // The RESOLVED destination, not the bare profile label. F7 made this
+    // sentence name provider and model as well, so asserting only "target01"
+    // would keep passing if the resolver regressed to the profile-only form.
     expect(screen.getByTestId("fallback-grace-card").textContent).toMatch(
-      /Switching to target01/,
+      /Switching to Codex · gpt-5 on target01/,
     );
     expect(screen.getByTestId("fallback-grace-card").textContent).toMatch(
       /\d+s|\d+m/,
@@ -153,7 +197,7 @@ describe("FallbackGraceCard", () => {
       }),
     });
     const text = screen.getByTestId("fallback-grace-card").textContent;
-    expect(text).toMatch(/Switching to target01/);
+    expect(text).toMatch(/Switching to Codex · gpt-5 on target01/);
     expect(text).not.toMatch(/\d+s/);
     expect(text).not.toMatch(/countdown paused/i);
     expect(text).not.toMatch(/any moment now/);
@@ -207,7 +251,16 @@ describe("FallbackGraceCard", () => {
       order.push("settings");
     });
     fireEvent.click(screen.getByRole("button", { name: "Sign in instead" }));
-    // Falsification: remove the onCancel() call at the top of onSignInInstead and THIS assertion must go red.
+    // Falsification, TWO ways, and the second is the one F8 exists for:
+    // (a) remove the `onCancel()` call at the top of `onSignInInstead` and the
+    //     ORDER breaks - Settings opens without the cancel having been sent.
+    // (b) move the navigation from the mutation-level `onSuccess` back to a
+    //     per-call `mutate(vars, { onSuccess })` handler and "settings" never
+    //     arrives at all. That is not a hypothetical: an applied cancel settles
+    //     the traversal, the settled frame clears `pendingFallback`, the card
+    //     unmounts, and TanStack does not run a per-call handler after the
+    //     observer is gone. The one outcome that matters is exactly the one
+    //     that guarantees the unmount.
     expect(order).toEqual(["cancel", "settings"]);
   });
 

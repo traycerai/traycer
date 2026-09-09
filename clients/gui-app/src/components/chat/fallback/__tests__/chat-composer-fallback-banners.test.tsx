@@ -50,6 +50,7 @@ function pendingAt(
     reason: "rate_limit",
     failedTuple: FAILED_CLAUDE_TUPLE,
     targetTuple: TARGET_CODEX_TUPLE,
+    impendingAction: null,
     deadline: Date.now() + 30_000,
     attempt: 1,
     maxAttempts: 3,

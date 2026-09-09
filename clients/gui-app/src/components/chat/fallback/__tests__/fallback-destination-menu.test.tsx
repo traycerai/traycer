@@ -33,6 +33,7 @@ import {
   BANNED_VOCABULARY,
   FAILED_CLAUDE_TUPLE,
   TARGET_CODEX_TUPLE,
+  chatRunSettings,
   fallbackModelTarget,
   fallbackProfileTarget,
   fallbackSkip,
@@ -136,6 +137,8 @@ function profileRow(input: {
 function modelRow(input: {
   readonly harnessId: string;
   readonly modelFamily: string;
+  readonly model: string | null;
+  readonly reasoningEffort: string | null;
   readonly severity: string;
   readonly usedPercent: number | null;
   readonly target: ChatRunSettings | null;
@@ -146,7 +149,8 @@ function modelRow(input: {
     groupId: GROUP_ID,
     harnessId: input.harnessId,
     modelFamily: input.modelFamily,
-    model: input.target === null ? null : input.target.model,
+    model: input.model,
+    reasoningEffort: input.reasoningEffort,
     profileId: input.target === null ? null : input.target.profileId,
     severity: input.severity,
     usedPercent: input.usedPercent,
@@ -178,6 +182,7 @@ function holdPending(state: "hold" | "choosing" | "waiting") {
     reason: "rate_limit",
     failedTuple: FAILED_CLAUDE_TUPLE,
     targetTuple: TARGET_CODEX_TUPLE,
+    impendingAction: null,
     deadline: new Date(2026, 5, 15, 15, 0, 0).getTime(),
     attempt: 1,
     maxAttempts: 3,
@@ -186,6 +191,28 @@ function holdPending(state: "hold" | "choosing" | "waiting") {
     traversalId: "traversal-dest",
     revision: 8,
   });
+}
+
+// The mocked lease this suite hand-sets (`leaseHarness.lease = ...`) rather
+// than obtaining from a real store - see the file's `vi.mock` of
+// `use-fallback-choice-lease`. `releaseRequested`/`connectionEpoch` are
+// FIXED here at their ordinary-case values: every case in this file is a
+// lease in normal standing, never a close-before-ack (`releaseRequested:
+// true`, driven by the unmount tests through the mocked `release()`, never
+// by constructing a lease) or a cross-connection one (`connectionEpoch`
+// differing from the frame's - nothing in this file exercises a detach).
+function graceLease(input: {
+  readonly token: string | null;
+  readonly status: FallbackChoiceLease["status"];
+}): FallbackChoiceLease {
+  return {
+    traversalId: "traversal-dest",
+    clientActionId: "action-1",
+    token: input.token,
+    status: input.status,
+    releaseRequested: false,
+    connectionEpoch: 0,
+  };
 }
 
 function renderMenu(input: {
@@ -259,9 +286,18 @@ describe("FallbackDestinationMenu", () => {
           }),
         ],
         modelTargets: [
+          // A coherent fixture, deliberately: the resolved slug and the
+          // equivalence-group family are DIFFERENT strings (MF03). The old
+          // fixture here paired `modelFamily: "sonnet"` with a `target` whose
+          // model was `gpt-5`, which was harmless only because the row used
+          // to title itself from the family alone - the exact bug this
+          // coherent shape exposes. See the two dedicated MF03 cases below
+          // for the resolved and unresolved arms.
           modelRow({
             harnessId: "claude",
             modelFamily: "sonnet",
+            model: TARGET_CODEX_TUPLE.model,
+            reasoningEffort: null,
             severity: "ok",
             usedPercent: 10,
             target: TARGET_CODEX_TUPLE,
@@ -287,9 +323,11 @@ describe("FallbackDestinationMenu", () => {
       screen.getByRole("heading", { name: "Equivalent models" }),
     ).toBeDefined();
     expect(screen.getByText("work-account")).toBeDefined();
-    expect(screen.getByText("Claude Code · sonnet")).toBeDefined();
+    // The resolved MODEL, not the family: `model` is `TARGET_CODEX_TUPLE.model`
+    // ("gpt-5"), which now wins over `modelFamily` ("sonnet").
+    expect(screen.getByText("Claude Code · gpt-5")).toBeDefined();
     // Falsification: render target.harnessId instead of fallbackHarnessLabelFor(...) and the "no raw harness id" assertion must go red.
-    expect(screen.queryByText(/^claude · sonnet$/)).toBeNull();
+    expect(screen.queryByText(/^claude · gpt-5$/)).toBeNull();
     const body = screen.getByRole("heading", {
       name: "Other profiles",
     }).parentElement;
@@ -299,6 +337,109 @@ describe("FallbackDestinationMenu", () => {
     expect(body.parentElement.textContent).not.toMatch(BANNED_VOCABULARY);
     // Falsification: render a group heading from groupId and this must go red.
     expect(body.parentElement.textContent).not.toContain(GROUP_ID);
+  });
+
+  // MF03: a model row used to title itself from the equivalence-group FAMILY
+  // unconditionally, so a group named `gpt` resolving to `gpt-6-astra` offered
+  // a click whose actual model the user never saw. The fixture below is the
+  // positive pin - it deliberately makes the family and the resolved slug
+  // DIFFERENT strings, because a fixture where they coincide (as the old
+  // "claude"/"sonnet"-labeled-but-`TARGET_CODEX_TUPLE`-targeted row above did)
+  // cannot tell a row that reads the resolved model from one that still reads
+  // the family; that incoherent fixture is why this regression shipped once
+  // already.
+  it("titles a resolved model row by its resolved slug and effort, not the equivalence-group family", () => {
+    // The click payload's OWN `reasoningEffort` is irrelevant here -
+    // `fallbackDestinationOfModelTarget` reads the row's top-level
+    // `reasoningEffort` (set on `modelRow` below), never this tuple's.
+    const resolvedTarget = chatRunSettings({
+      harnessId: "codex",
+      model: "gpt-6-astra",
+      profileId: null,
+    });
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [
+          profileRow({
+            profileId: null,
+            label: "Terminal account",
+            severity: "ok",
+            usedPercent: null,
+            selectable: true,
+            skip: null,
+          }),
+        ],
+        modelTargets: [
+          modelRow({
+            harnessId: "codex",
+            modelFamily: "gpt",
+            model: "gpt-6-astra",
+            reasoningEffort: "high",
+            severity: "ok",
+            usedPercent: null,
+            target: resolvedTarget,
+            selectable: true,
+            skip: null,
+          }),
+        ],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+    // Falsification: restore `title={`${fallbackHarnessLabelFor(target.harnessId)} · ${target.modelFamily}`}` in FallbackDestinationMenu's model row and this must go red - the row would read "Codex · gpt" again.
+    expect(screen.getByText("Codex · gpt-6-astra · high")).toBeDefined();
+    // Negative half: the bare family must not appear as a row title on its own.
+    expect(screen.queryByText(/^Codex · gpt$/)).toBeNull();
+    expect(screen.queryByText(/^Codex · gpt ·/)).toBeNull();
+  });
+
+  // The fallback branch `fallbackDestinationOfModelTarget` takes when the host
+  // could not resolve a slug for the group - unpinned by the case above, which
+  // only exercises the resolved arm.
+  it("falls back to the equivalence-group family when the host resolved no model", () => {
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [],
+        modelTargets: [
+          modelRow({
+            harnessId: "codex",
+            modelFamily: "gpt",
+            model: null,
+            reasoningEffort: null,
+            severity: "ok",
+            usedPercent: null,
+            target: null,
+            selectable: false,
+            skip: fallbackSkip({
+              reason: "unresolved",
+              label: "No matching model on this provider",
+            }),
+          }),
+        ],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+    // Falsification: change `modelLabel: model ?? target.modelFamily` in
+    // `fallbackDestinationOfModelTarget` to always use `model` and this must
+    // go red (nothing to render at all, since `model` is `null`).
+    expect(screen.getByText("Codex · gpt")).toBeDefined();
   });
 
   it("renders no meter when usedPercent is null", () => {
@@ -437,6 +578,8 @@ describe("FallbackDestinationMenu", () => {
           modelRow({
             harnessId: "codex",
             modelFamily: "gpt-5",
+            model: TARGET_CODEX_TUPLE.model,
+            reasoningEffort: null,
             severity: "hard_limit",
             usedPercent: 99,
             target: TARGET_CODEX_TUPLE,
@@ -521,6 +664,8 @@ describe("FallbackDestinationMenu", () => {
           modelRow({
             harnessId: "claude",
             modelFamily: "sonnet",
+            model: null,
+            reasoningEffort: null,
             severity: "ok",
             usedPercent: 10,
             target: null,
@@ -907,6 +1052,8 @@ describe("FallbackGraceMenu", () => {
         modelRow({
           harnessId: "codex",
           modelFamily: "gpt-5",
+          model: TARGET_CODEX_TUPLE.model,
+          reasoningEffort: null,
           severity: "ok",
           usedPercent: 10,
           target: TARGET_CODEX_TUPLE,
@@ -954,12 +1101,7 @@ describe("FallbackGraceMenu", () => {
   it("does not list until the lease is held and the DTO reports choosing", () => {
     const pendingHold = holdPending("hold");
     const choosing = holdPending("choosing");
-    leaseHarness.lease = {
-      traversalId: "traversal-dest",
-      clientActionId: "action-1",
-      token: null,
-      status: "pending",
-    };
+    leaseHarness.lease = graceLease({ token: null, status: "pending" });
     const { rerender } = render(
       <TabHostProvider hostId={HOST_ID}>
         <FallbackGraceMenu
@@ -978,12 +1120,10 @@ describe("FallbackGraceMenu", () => {
     expect(screen.getByText(PAUSING_COUNTDOWN_LABEL)).toBeDefined();
     expect(screen.queryByText("work-account")).toBeNull();
 
-    leaseHarness.lease = {
-      traversalId: "traversal-dest",
-      clientActionId: "action-1",
+    leaseHarness.lease = graceLease({
       token: "lease-token-1",
       status: "held",
-    };
+    });
     rerender(
       <TabHostProvider hostId={HOST_ID}>
         <FallbackGraceMenu
@@ -1000,12 +1140,7 @@ describe("FallbackGraceMenu", () => {
     expect(screen.getByText(PAUSING_COUNTDOWN_LABEL)).toBeDefined();
     expect(screen.queryByText("work-account")).toBeNull();
 
-    leaseHarness.lease = {
-      traversalId: "traversal-dest",
-      clientActionId: "action-1",
-      token: null,
-      status: "pending",
-    };
+    leaseHarness.lease = graceLease({ token: null, status: "pending" });
     rerender(
       <TabHostProvider hostId={HOST_ID}>
         <FallbackGraceMenu
@@ -1021,12 +1156,10 @@ describe("FallbackGraceMenu", () => {
     expect(screen.getByText(PAUSING_COUNTDOWN_LABEL)).toBeDefined();
     expect(screen.queryByText("work-account")).toBeNull();
 
-    leaseHarness.lease = {
-      traversalId: "traversal-dest",
-      clientActionId: "action-1",
+    leaseHarness.lease = graceLease({
       token: "lease-token-1",
       status: "held",
-    };
+    });
     rerender(
       <TabHostProvider hostId={HOST_ID}>
         <FallbackGraceMenu
@@ -1043,13 +1176,95 @@ describe("FallbackGraceMenu", () => {
     expect(screen.getByText("work-account")).toBeDefined();
   });
 
+  // This file mocks `use-fallback-choice-lease` wholesale (see the
+  // `vi.mock` at the top), so nothing here can call the real
+  // `fallbackHoldForChoice` - it only renders whatever shape `leaseHarness`
+  // is set to. The GATE this narrative depends on
+  // (`pending.state !== "hold" && pending.state !== "choosing"` in
+  // `chat-session-store.ts`) is falsified in
+  // `chat-session-store-choice-lease.test.ts`'s "reopening during a pending
+  // release reuses the in-flight hold instead of minting a second one", NOT
+  // here: that test calls `store.getState().fallbackHoldForChoice(...)`
+  // directly, with no mock between it and the code. An ablation of that gate
+  // reddens the store test and leaves THIS test green, because this test
+  // never asks the store to produce the lease shape below - it types it in.
+  // Reader, if you came here after watching that ablation and finding this
+  // file unmoved: that is expected, not a hole in the store's pin - it is
+  // this file's known limit, stated so nobody "fixes" it by mocking harder.
+  //
+  // What this test DOES pin: given that shape, the render (MF01's
+  // symptom - a menu stuck on "Pausing the countdown…") actually clears.
+  // MF01 was a menu that stayed on that label forever after a
+  // close-before-ack, because the DTO never goes back to `hold` once the host
+  // has taken the freeze - it reads `choosing` for the rest of the traversal.
+  it("reopening after a close-before-ack reaches destination rows instead of staying on the pausing label", () => {
+    const choosing = holdPending("choosing");
+    // The shape `chat-session-store-choice-lease.test.ts`'s reopen case
+    // proves the store returns: the withdrawn obligation (`releaseRequested`
+    // back to `false`) surfaces to this hook as the same in-flight `pending`
+    // lease it started with - not a fresh one. This file cannot verify that
+    // claim itself; see the comment above.
+    leaseHarness.lease = graceLease({ token: null, status: "pending" });
+    const { rerender } = render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={choosing}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    listHarness.calls = [];
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    );
+    // Negative half: `preparing` suppresses the FETCH, not just the rows -
+    // reopening onto a still-pending reacquired lease must not query targets
+    // for a window it cannot yet present.
+    expect(screen.getByText(PAUSING_COUNTDOWN_LABEL)).toBeDefined();
+    // Explicit, rather than relying on `getByText`'s implicit at-most-one
+    // check: this is the pin for the sr-only live region that used to MIRROR
+    // this exact sentence into a second element. Falsification: reintroduce a
+    // `<div role="status" aria-live="polite" className="sr-only">` echoing
+    // `PAUSING_COUNTDOWN_LABEL` in `fallback-destination-menu.tsx` and this
+    // goes red (length 2).
+    expect(screen.getAllByText(PAUSING_COUNTDOWN_LABEL)).toHaveLength(1);
+    expect(screen.queryByText("work-account")).toBeNull();
+    expect(listHarness.calls.length).toBeGreaterThan(0);
+    expect(listHarness.calls.every((call) => !call.enabled)).toBe(true);
+
+    // The ack the reused in-flight request was always going to get.
+    leaseHarness.lease = graceLease({
+      token: "lease-token-1",
+      status: "held",
+    });
+    rerender(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={choosing}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    // Falsification: change `preparing` at fallback-card-menus.tsx from
+    // `lease?.status !== "held" || pending.state !== "choosing"` to
+    // `pending.state !== "hold"` (the pre-fix reading) - the DTO is
+    // `choosing`, never `hold`, for the rest of this traversal, so `preparing`
+    // is permanently `true` and this goes red (the label never clears, the
+    // row never appears).
+    expect(screen.queryByText(PAUSING_COUNTDOWN_LABEL)).toBeNull();
+    expect(screen.getByText("work-account")).toBeDefined();
+  });
+
   it("shows the refused-hold sentence once, issues no listTargets fetch, and draws no rows", () => {
-    leaseHarness.lease = {
-      traversalId: "traversal-dest",
-      clientActionId: "action-1",
-      token: null,
-      status: "refused",
-    };
+    leaseHarness.lease = graceLease({ token: null, status: "refused" });
     render(
       <TabHostProvider hostId={HOST_ID}>
         <FallbackGraceMenu
@@ -1077,12 +1292,10 @@ describe("FallbackGraceMenu", () => {
   });
 
   it("sends chooseTarget with the lease token on a grace pick", () => {
-    leaseHarness.lease = {
-      traversalId: "traversal-dest",
-      clientActionId: "action-1",
+    leaseHarness.lease = graceLease({
       token: "lease-token-1",
       status: "held",
-    };
+    });
     render(
       <TabHostProvider hostId={HOST_ID}>
         <FallbackGraceMenu
@@ -1115,12 +1328,10 @@ describe("FallbackGraceMenu", () => {
   });
 
   it("keeps the menu open with inline refusal copy, and closes on applied", () => {
-    leaseHarness.lease = {
-      traversalId: "traversal-dest",
-      clientActionId: "action-1",
+    leaseHarness.lease = graceLease({
       token: "lease-token-1",
       status: "held",
-    };
+    });
     actionHarness.mutate.mockImplementation(
       (
         _vars: unknown,
@@ -1192,6 +1403,68 @@ describe("FallbackGraceMenu", () => {
     expect(screen.queryByText("This chat already resumed.")).toBeNull();
     expect(screen.queryByText("work-account")).toBeNull();
   });
+
+  // A released chat session stays warm ~10 minutes, so closing the tile over
+  // an open menu never fires `onOpenChange(false)` - the popover just
+  // disappears with the stream still connected. Without the unmount cleanup
+  // below, that leaves the host holding a frozen window with no UI anywhere
+  // left to give it back. `release()` here is the same
+  // `fallbackReleaseChoice` an explicit close calls, so the frame it sends
+  // (token, traversalId) is already pinned by the store-level suite; this
+  // pins only whether the component calls it, and when.
+  it("releases on unmount when the popover was open", () => {
+    leaseHarness.lease = graceLease({
+      token: "lease-token-1",
+      status: "held",
+    });
+    const { unmount } = render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("choosing")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    );
+    expect(leaseHarness.release).not.toHaveBeenCalled();
+
+    // Falsification: delete the `useEffect(() => () => { if (openRef.current)
+    // releaseRef.current(); }, [])` cleanup in fallback-card-menus.tsx and
+    // this must go red (release never called on unmount).
+    unmount();
+    expect(leaseHarness.release).toHaveBeenCalledTimes(1);
+  });
+
+  // Negative half of the case above: without the `openRef.current` guard, an
+  // unconditional release-on-unmount would fire for every card that ever
+  // mounted, including one whose menu was never opened - resuming a window
+  // this component never held anything on.
+  it("does not release on unmount when the popover was never opened", () => {
+    leaseHarness.lease = null;
+    const { unmount } = render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackGraceMenu
+          pending={holdPending("hold")}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    // Falsification: change the cleanup's `if (openRef.current) release()` to
+    // an unconditional `releaseRef.current()` and this goes red (release
+    // called despite the menu never having been opened).
+    unmount();
+    expect(leaseHarness.release).not.toHaveBeenCalled();
+  });
 });
 
 describe("FallbackWaitingMenu", () => {
@@ -1204,6 +1477,8 @@ describe("FallbackWaitingMenu", () => {
         modelRow({
           harnessId: "codex",
           modelFamily: "gpt-5",
+          model: TARGET_CODEX_TUPLE.model,
+          reasoningEffort: null,
           severity: "ok",
           usedPercent: 10,
           target: TARGET_CODEX_TUPLE,
@@ -1220,8 +1495,20 @@ describe("FallbackWaitingMenu", () => {
     cleanup();
   });
 
-  it("names the reset time in the header, and omits the header when deadline is null", () => {
+  // F10 (MF06): the header used to say only the reset time, so "Switch
+  // instead…" read as changing a setting for the NEXT message - nothing on
+  // screen said the pick replays the failed message right now, starts a
+  // fresh provider session, and takes the queue with it. The consequence
+  // sentence must be visible BEFORE any destination row is clicked, which is
+  // why both assertions below happen right after opening the menu.
+  it("names the reset time in the header alongside the switch consequences, and drops the reset fragment when deadline is null", () => {
     const at = new Date(2026, 5, 15, 15, 0, 0).getTime();
+    // `queuedItemsMoving: 0` hides the queue clause (`queuedMessagesMovingText`
+    // returns `null` at zero) - this pins the base sentence, not the queue
+    // count. `chat-composer-fallback-banners.test.tsx` already covers the
+    // count wording.
+    const consequences =
+      "Replays this message on the destination you pick. Starts a fresh session from this transcript.";
     const { unmount } = render(
       <TabHostProvider hostId={HOST_ID}>
         <FallbackWaitingMenu
@@ -1230,6 +1517,7 @@ describe("FallbackWaitingMenu", () => {
             reason: "rate_limit",
             failedTuple: FAILED_CLAUDE_TUPLE,
             targetTuple: null,
+            impendingAction: null,
             deadline: at,
             attempt: 1,
             maxAttempts: 1,
@@ -1246,9 +1534,12 @@ describe("FallbackWaitingMenu", () => {
       </TabHostProvider>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+    // Falsification: revert `waitingMenuHeader` to return only
+    // `Resumes at ${formatClockTime(deadline)} unless you pick something.`
+    // (drop the trailing `${consequences}`) and this goes red.
     expect(
       screen.getByText(
-        `Resumes at ${formatClockTime(at)} unless you pick something.`,
+        `Resumes at ${formatClockTime(at)} unless you pick something. ${consequences}`,
       ),
     ).toBeDefined();
     unmount();
@@ -1261,6 +1552,7 @@ describe("FallbackWaitingMenu", () => {
             reason: "rate_limit",
             failedTuple: FAILED_CLAUDE_TUPLE,
             targetTuple: null,
+            impendingAction: null,
             deadline: null,
             attempt: 1,
             maxAttempts: 1,
@@ -1277,6 +1569,9 @@ describe("FallbackWaitingMenu", () => {
       </TabHostProvider>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+    // With no deadline the header must be the consequence sentence ALONE - no
+    // dangling "Resumes at" fragment with nothing to fill it.
+    expect(screen.getByText(consequences)).toBeDefined();
     expect(screen.queryByText(/Resumes at/)).toBeNull();
   });
 

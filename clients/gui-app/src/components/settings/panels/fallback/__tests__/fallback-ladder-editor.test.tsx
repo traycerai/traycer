@@ -120,3 +120,75 @@ describe("FallbackLadderEditor", () => {
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("FallbackLadderEditor - F19 notify has no switch", () => {
+  it("renders no `switch` role for notify at all, while every movable row DOES have one", () => {
+    render(
+      <FallbackLadderEditor
+        displayOrder={DISPLAY_ORDER}
+        enabled={ALL_ENABLED}
+        onToggle={vi.fn()}
+        onMove={vi.fn()}
+        profileStepHint={null}
+      />,
+    );
+    // Falsification: render `<Switch>` for the fixed step too (undo the
+    // `fixed ? <FixedStepControl .../> : <Switch .../>` branch in
+    // `FallbackLadderRow`, `fallback-ladder-editor.tsx`) - this would then
+    // find a switch named "Notify me - run this step".
+    expect(
+      screen.queryByRole("switch", {
+        name: `${FALLBACK_RUNG_COPY.notify.label} - run this step`,
+      }),
+    ).toBeNull();
+    // Positive control: a movable row DOES expose one, proving the query
+    // above would find a switch if notify rendered one too.
+    expect(
+      screen.getByRole("switch", {
+        name: `${FALLBACK_RUNG_COPY.profile.label} - run this step`,
+      }),
+    ).not.toBeNull();
+  });
+
+  it("with notify absent from `enabled`, the 'add this step back' link appears and calls onToggle(\"notify\", true)", () => {
+    const onToggle = vi.fn();
+    const enabled = new Set<FallbackRungKind>(["profile", "tier", "wait"]);
+    render(
+      <FallbackLadderEditor
+        displayOrder={DISPLAY_ORDER}
+        enabled={enabled}
+        onToggle={onToggle}
+        onMove={vi.fn()}
+        profileStepHint={null}
+      />,
+    );
+    const addBack = screen.getByRole("button", {
+      name: `${FALLBACK_RUNG_COPY.notify.label} - add this step back`,
+    });
+    // Falsification: swap the `enabled` branch in `FixedStepControl`
+    // (`fallback-ladder-editor.tsx`) so it always renders the "Always" span -
+    // this button would then not exist at all.
+    fireEvent.click(addBack);
+    expect(onToggle).toHaveBeenCalledWith("notify", true);
+    // And the "Always" static label is absent while notify is off.
+    expect(screen.queryByTestId("fallback-step-always-on")).toBeNull();
+  });
+
+  it("with notify present in `enabled`, 'Always' renders and the 'add this step back' link is absent", () => {
+    render(
+      <FallbackLadderEditor
+        displayOrder={DISPLAY_ORDER}
+        enabled={ALL_ENABLED}
+        onToggle={vi.fn()}
+        onMove={vi.fn()}
+        profileStepHint={null}
+      />,
+    );
+    expect(screen.getByTestId("fallback-step-always-on")).not.toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: `${FALLBACK_RUNG_COPY.notify.label} - add this step back`,
+      }),
+    ).toBeNull();
+  });
+});

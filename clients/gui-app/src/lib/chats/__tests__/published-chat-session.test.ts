@@ -385,4 +385,31 @@ describe("publishedChatSessionState", () => {
     expect(state.chat.settings).toBeNull();
     expect(state.chat.parentId).toBeNull();
   });
+
+  it("D215: initializes lastFallbackOutcome to undefined - a frozen copy never confirmed an outcome", () => {
+    const state = publishedChatSessionState(publishedInputWith([], []));
+    // Falsification: seed this with a real outcome (or omit it and let a
+    // default-parameter/`??` fill something in) and this must go red - a
+    // published copy has no live traversal to have produced one.
+    expect(state.lastFallbackOutcome).toBeUndefined();
+  });
+
+  it("sets transcriptBaselineEpoch and connectionEpoch EQUAL (both 0), so a consumer gating on equality reads READY rather than stalling on a reconnect that can never come", () => {
+    const state = publishedChatSessionState(publishedInputWith([], []));
+    expect(state.transcriptBaselineEpoch).toBe(0);
+    expect(state.connectionEpoch).toBe(0);
+    // The equality itself is the pin, not the specific number: a consumer
+    // (`useChatAnnouncements` and friends) reads
+    // `transcriptBaselineEpoch === connectionEpoch` as "this connection's
+    // baseline is seated" - a live store's cold-mount reads UNEQUAL
+    // (`NO_TRANSCRIPT_BASELINE` / `0`, see
+    // `chat-session-store-connection-epoch.test.ts`) precisely because
+    // nothing has seated yet, and a published copy is the opposite case: it
+    // is COMPLETE and FROZEN, standing in for the snapshot that would have
+    // seated it. Falsification: give this pair different values (e.g. leave
+    // `connectionEpoch` at whatever the live store's cold default is) and a
+    // consumer gating on equality would wait forever for a reconnect this
+    // frozen copy will never have.
+    expect(state.transcriptBaselineEpoch).toBe(state.connectionEpoch);
+  });
 });

@@ -1,4 +1,5 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GRACE_COUNTDOWN_IMMINENT,
@@ -11,11 +12,15 @@ import {
   formatResetFullDateTime,
   isFarReset,
   useGraceCountdown,
+  useRelativeTimestamp,
 } from "@/lib/relative-time";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
+// A fixed instant for the batching/coalescing suite below, distinct from the
+// per-describe `now` constants above so nothing here reads as tied to those.
+const BASE = Date.parse("2026-06-01T00:00:00.000Z");
 
 describe("formatRelativeTimestamp", () => {
   const now = Date.parse("2026-04-23T12:00:00.000Z");
@@ -246,8 +251,11 @@ describe("createSharedClock subscribe cost", () => {
   it("costs at most one notification per subscriber on a mass mount", () => {
     vi.useFakeTimers();
     // Fake timers freeze `Date.now`, so every subscribe below lands on the same
-    // millisecond - the shape of a real mass mount, 300 worktree rows arriving
-    // in one commit. The current implementation notifies ZERO times here (the
+    // millisecond - one instance of the mass-mount shape (300 worktree rows
+    // arriving in one commit), not the only one: a real mass mount can equally
+    // spread across several milliseconds, which is what the batching-contract
+    // suite below pins separately (per-millisecond and shared-millisecond-bucket
+    // variants). The current implementation notifies ZERO times here (the
     // first subscriber's `startIfNeeded` samples, and nobody after it finds the
     // clock moved); the bound is written as linear rather than as 0 so a future
     // legitimate per-subscriber notification does not read as a regression.
@@ -312,5 +320,505 @@ describe("createSharedClock subscribe cost", () => {
 
     stopFirst();
     stopLate();
+  });
+});
+
+/**
+ * F13 batching/coalescing contract pins: one immediate correction per batch,
+ * one bounded trailing sweep for the rest, generation invalidation on idle.
+ */
+describe("createSharedClock batching contract", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /**
+   * Batch size N, +1ms advance before each subscribe (no interval timer ever
+   * runs - `setSystemTime` never fires one). Predicted totals: 1, 51, 301.
+   */
+  it("costs one immediate notification plus one bounded trailing sweep, not one notification per subscriber", async () => {
+    vi.useFakeTimers();
+    const predictions: Array<{ count: number; expectedTotal: number }> = [
+      { count: 1, expectedTotal: 1 },
+      { count: 50, expectedTotal: 51 },
+      { count: 300, expectedTotal: 301 },
+    ];
+
+    for (const { count, expectedTotal } of predictions) {
+      vi.setSystemTime(BASE);
+      const clock = createSharedClock(MINUTE_MS);
+      let calls = 0;
+      const stops: Array<() => void> = [];
+
+      for (let i = 1; i <= count; i += 1) {
+        vi.setSystemTime(BASE + i);
+        stops.push(
+          clock.subscribe(() => {
+            calls += 1;
+          }),
+        );
+        // Sample AND snapshot are both fresh synchronously after each real
+        // time advance - a moved sample alone would not correct React.
+        expect(clock.sampledNow()).toBe(BASE + i);
+        expect(clock.getSnapshot()).toBe(i);
+      }
+
+      expect(calls).toBe(1); // only the first subscribe's immediate correction
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Falsification A: revert `notifySubscriptionRefresh` to notify
+      // unconditionally instead of returning early while a refresh is
+      // pending - totals become 1, 1_275, 45_150 (the quadratic shape).
+      // Falsification B: delete the `queueMicrotask` trailing sweep - `calls`
+      // never grows past 1 for count > 1.
+      expect(calls).toBe(expectedTotal);
+      expect(calls).toBeLessThanOrEqual(2 * count); // negative half: not quadratic
+
+      for (const stop of stops) stop();
+    }
+  });
+
+  /**
+   * Same totals via shared-millisecond buckets (10 subscribers per advance,
+   * first bucket aged 5s past construction): only the first seat of each
+   * bucket finds the clock moved, but the sync/trailing split is decided by
+   * whether a refresh is pending, not by how many distinct ms were touched.
+   */
+  it("gives the same totals when subscribers arrive in shared-millisecond buckets, with the first bucket aged", async () => {
+    vi.useFakeTimers();
+    const predictions: Array<{ count: number; expectedTotal: number }> = [
+      { count: 50, expectedTotal: 51 },
+      { count: 300, expectedTotal: 301 },
+    ];
+    const SEATS_PER_BUCKET = 10;
+
+    for (const { count, expectedTotal } of predictions) {
+      vi.setSystemTime(BASE);
+      const clock = createSharedClock(MINUTE_MS);
+      let calls = 0;
+      const stops: Array<() => void> = [];
+      const bucketCount = count / SEATS_PER_BUCKET;
+      const agedFirstBucketAt = BASE + 5_000;
+
+      for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+        vi.setSystemTime(agedFirstBucketAt + bucket);
+        for (let seat = 0; seat < SEATS_PER_BUCKET; seat += 1) {
+          stops.push(
+            clock.subscribe(() => {
+              calls += 1;
+            }),
+          );
+        }
+        // Sample and snapshot are both current synchronously at the end of
+        // each bucket - the snapshot only actually moves on the bucket's
+        // first seat, but every seat sees a value consistent with `now`.
+        expect(clock.sampledNow()).toBe(agedFirstBucketAt + bucket);
+        expect(clock.getSnapshot()).toBe(bucket + 1);
+      }
+
+      expect(calls).toBe(1);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(calls).toBe(expectedTotal);
+      expect(calls).toBeLessThanOrEqual(2 * count);
+
+      for (const stop of stops) stop();
+    }
+  });
+
+  /**
+   * Control: a fully frozen clock (nobody ever sees it move) costs ZERO
+   * notifications, catching a guard that fires gratuitously (e.g. weakened
+   * from `now > sampleTheRenderSaw` to unconditional, or removed outright).
+   */
+  it("costs zero notifications on a fully frozen clock (frozen-time control)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE);
+    const clock = createSharedClock(MINUTE_MS);
+    let calls = 0;
+    const stops: Array<() => void> = [];
+    for (let i = 0; i < 50; i += 1) {
+      stops.push(
+        clock.subscribe(() => {
+          calls += 1;
+        }),
+      );
+    }
+    // Falsification: weaken the guard to fire unconditionally (or on any
+    // `!==` rather than `>`) - this becomes >0 with nothing ever moving.
+    expect(calls).toBe(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toBe(0);
+    for (const stop of stops) stop();
+  });
+
+  /**
+   * An old sibling must synchronously observe the batch's FIRST correction
+   * (D170, unaffected by coalescing) and the batch's FINAL sample once the
+   * trailing sweep fires - captured from INSIDE its own callback, not read
+   * from the clock externally.
+   */
+  it("an old sibling's own callback observes the batch's first correction synchronously and the final sample at flush", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE);
+    const clock = createSharedClock(MINUTE_MS);
+
+    const oldObservedSamples: number[] = [];
+    const stopOld = clock.subscribe(() => {
+      oldObservedSamples.push(clock.sampledNow());
+    });
+    expect(oldObservedSamples).toEqual([]); // same ms as construction
+
+    vi.setSystemTime(BASE + 900);
+    const stopB1 = clock.subscribe(() => undefined); // batch's first mover
+    expect(oldObservedSamples).toEqual([BASE + 900]);
+
+    vi.setSystemTime(BASE + 1_800);
+    const stopB2 = clock.subscribe(() => undefined); // same batch, pre-flush
+    // Not told about the second move yet - only the trailing sweep does that.
+    expect(oldObservedSamples).toEqual([BASE + 900]);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Falsification: delete only the trailing `queueMicrotask` sweep (keep
+    // the immediate `notifyListeners()` call). `oldObservedSamples` then
+    // never grows past `[BASE + 900]`.
+    expect(oldObservedSamples).toEqual([BASE + 900, BASE + 1_800]);
+
+    stopOld();
+    stopB1();
+    stopB2();
+  });
+
+  /**
+   * The generation guard, isolated by manually capturing and controlling
+   * exactly which queued microtask runs when. An ordinary "drain everything
+   * with `await`" test cannot distinguish this: draining both callbacks
+   * together produces the same final counts whether or not the guard exists,
+   * because the old callback's own tick-vs-`lastNotifiedTick` check happens
+   * to agree with the new one by the time both have run. Only running the
+   * OLD callback alone, before the NEW one, exposes the difference.
+   */
+  it("boundary: an old batch's stale sweep is inert alone; the new generation's own sweep delivers the final sample", () => {
+    vi.useFakeTimers();
+    const capturedCallbacks: Array<() => void> = [];
+    vi.spyOn(globalThis, "queueMicrotask").mockImplementation(
+      (callback: () => void) => {
+        capturedCallbacks.push(callback);
+      },
+    );
+
+    vi.setSystemTime(BASE);
+    const clock = createSharedClock(MINUTE_MS);
+
+    // Old batch: A (no correction), then B 5s later - generation 1's sweep
+    // queued, A+B notified immediately.
+    let aCalls = 0;
+    const stopA = clock.subscribe(() => {
+      aCalls += 1;
+    });
+    vi.setSystemTime(BASE + 5_000);
+    let bCalls = 0;
+    const stopB = clock.subscribe(() => {
+      bCalls += 1;
+    });
+    expect(aCalls).toBe(1);
+    expect(bCalls).toBe(1);
+    expect(capturedCallbacks).toHaveLength(1);
+    const oldSweep = capturedCallbacks[0];
+
+    // Everyone leaves before the old sweep fires - the clock goes idle.
+    stopA();
+    stopB();
+
+    // New batch leads with C, 5s later: generation 2, its own sweep queued,
+    // C notified immediately.
+    vi.setSystemTime(BASE + 10_000);
+    let cCalls = 0;
+    const stopC = clock.subscribe(() => {
+      cCalls += 1;
+    });
+    expect(cCalls).toBe(1);
+    expect(capturedCallbacks).toHaveLength(2);
+    const newSweep = capturedCallbacks[1];
+
+    // D advances the sample further, 5s later, while the NEW sweep is still
+    // pending - D's own subscribe finds a refresh already pending and is
+    // folded into that sweep instead of getting an immediate call, but its
+    // sample/snapshot are already fresh synchronously.
+    vi.setSystemTime(BASE + 15_000);
+    let dCalls = 0;
+    const stopD = clock.subscribe(() => {
+      dCalls += 1;
+    });
+    expect(dCalls).toBe(0);
+    expect(clock.sampledNow()).toBe(BASE + 15_000);
+    expect(clock.getSnapshot()).toBe(3);
+    expect(capturedCallbacks).toHaveLength(2); // no third sweep queued
+
+    // Execute ONLY the old (generation-1) sweep.
+    // Falsification: delete the `pendingRefreshGeneration !== generation`
+    // check inside the queued callback - the old sweep then notifies C/D
+    // early off the CURRENT (already-advanced) tick and clears the new
+    // generation's pending marker, so `cCalls`/`dCalls` change here already.
+    oldSweep();
+    expect(cCalls).toBe(1); // unchanged - the old sweep is a complete no-op
+    expect(dCalls).toBe(0); // unchanged - D got zero further notifications
+
+    // Now execute the new (generation-2) sweep: it delivers the final sample.
+    newSweep();
+    expect(cCalls).toBe(2);
+    expect(dCalls).toBe(1);
+    expect(clock.sampledNow()).toBe(BASE + 15_000);
+    expect(clock.getSnapshot()).toBe(3);
+
+    stopC();
+    stopD();
+  });
+
+  /**
+   * Negative control for the boundary pin above: a subscriber sharing the
+   * mover's EXACT millisecond never finds the clock moved, so it is neither
+   * notified immediately nor swept in later - not even after every pending
+   * sweep drains.
+   */
+  it("negative control: a subscriber sharing the mover's exact millisecond is never notified", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE);
+    const clock = createSharedClock(MINUTE_MS);
+    const stopLeader = clock.subscribe(() => undefined);
+
+    vi.setSystemTime(BASE + 1_000);
+    let moverCalls = 0;
+    const stopMover = clock.subscribe(() => {
+      moverCalls += 1;
+    });
+    expect(moverCalls).toBe(1); // the mover itself IS notified
+
+    let sameMsCalls = 0;
+    const stopSameMs = clock.subscribe(() => {
+      sameMsCalls += 1;
+    });
+    expect(sameMsCalls).toBe(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    // Falsification: have the trailing sweep notify unconditionally rather
+    // than gating on `lastNotifiedTick !== tick` - this becomes 1.
+    expect(sameMsCalls).toBe(0);
+
+    stopLeader();
+    stopMover();
+    stopSameMs();
+  });
+});
+
+/**
+ * F13: the sample-capture-before-`startIfNeeded` ordering, pinned across an
+ * idle -> restart cycle on the SAME clock instance. A fresh instance is
+ * sampled at construction and can never exercise the stale case; only an
+ * instance aged WHILE idle, before being resubscribed, can.
+ */
+describe("createSharedClock restart after going idle", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("corrects a subscriber that restarts the same aged clock instance, across two restart cycles", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE);
+    const clock = createSharedClock(MINUTE_MS);
+
+    let firstCalls = 0;
+    const stopFirst = clock.subscribe(() => {
+      firstCalls += 1;
+    });
+    expect(firstCalls).toBe(0); // same millisecond as construction
+    expect(clock.getSnapshot()).toBe(0);
+    stopFirst(); // last unsubscribe -> clock goes idle, interval cleared
+
+    // Age the SAME clock instance while it sits idle.
+    vi.setSystemTime(BASE + 45_000);
+    let restartedCalls = 0;
+    const stopRestarted = clock.subscribe(() => {
+      restartedCalls += 1;
+    });
+    // Falsification: move `const sampleTheRenderSaw = sampledNow` to AFTER
+    // `startIfNeeded()`. `startIfNeeded` itself resamples `sampledNow` on
+    // this idle->active transition, so `sampledNow()` would still read
+    // `BASE + 45_000` correctly even under the bug - what actually breaks is
+    // that `sampleTheRenderSaw` then equals `now`, the guard never fires,
+    // `getSnapshot()` never bumps past 0, and `restartedCalls` stays 0: the
+    // snapshot React reads never changes, so nothing re-renders even though
+    // the underlying sample was already fixed.
+    expect(restartedCalls).toBe(1);
+    expect(clock.getSnapshot()).toBe(1);
+    expect(clock.sampledNow()).toBe(BASE + 45_000);
+    stopRestarted(); // idle again
+
+    // A second restart cycle on the SAME instance, to rule out this only
+    // working once by accident of leftover state.
+    vi.setSystemTime(BASE + 45_000 + 12_000);
+    let secondRestartCalls = 0;
+    const stopSecondRestart = clock.subscribe(() => {
+      secondRestartCalls += 1;
+    });
+    expect(secondRestartCalls).toBe(1);
+    expect(clock.getSnapshot()).toBe(2);
+    expect(clock.sampledNow()).toBe(BASE + 57_000);
+    stopSecondRestart();
+  });
+});
+
+/**
+ * F13: minute/second clock separation and interval lifecycle. `useGraceCountdown`
+ * is the only consumer of the second clock; every other hook here shares the
+ * minute clock.
+ */
+describe("minute/second clock separation and interval lifecycle", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("ticking the second clock does not re-render a minute-clock consumer", () => {
+    vi.useFakeTimers();
+    const createdAt = Date.now() - 30_000;
+
+    // A vi.fn() probe called from a layout effect (post-render), not a write
+    // to an outer variable during render (D194).
+    const minuteRenderProbe = vi.fn();
+    const { result: minuteResult, unmount: unmountMinute } = renderHook(() => {
+      const label = useRelativeTimestamp(createdAt);
+      useLayoutEffect(() => {
+        minuteRenderProbe();
+      });
+      return label;
+    });
+    expect(minuteResult.current).toBe("Just now");
+    // Captured AFTER mount settles, not assumed to be 1: the minute clock is
+    // a module singleton shared with every other test in this file.
+    const baselineRenderCount = minuteRenderProbe.mock.calls.length;
+
+    const deadline = Date.now() + 10_000;
+    const { result: graceResult, unmount: unmountGrace } = renderHook(() =>
+      useGraceCountdown(deadline),
+    );
+    expect(graceResult.current).toBe("10s");
+
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    // Falsification 1: if `useGraceCountdown` read the MINUTE clock's
+    // subscribe/getSnapshot instead of `secondClock`'s, this itself goes red
+    // - nothing ticks within 1s on the minute cadence.
+    expect(graceResult.current).toBe("9s");
+    // Falsification 2: if `secondClock` were the SAME instance as
+    // `minuteClock` (constructed once and reused for both cadences instead
+    // of its own `createSharedClock(SECOND_MS)`), the tick above would also
+    // bump the minute clock's snapshot and this would go red.
+    expect(minuteRenderProbe.mock.calls.length).toBe(baselineRenderCount);
+
+    unmountMinute();
+    unmountGrace();
+  });
+
+  it("pure formatters never start a timer; only subscribing to a clock does", () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const now = Date.now();
+
+    formatRelativeTimestamp(now - 30_000, now);
+    formatGraceCountdown(now + 5_000, now);
+    formatResetCountdown(now + 5_000, now);
+    // Falsification: give a formatter its own internal `setInterval`-driven
+    // cache instead of taking `now` as a plain parameter.
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+
+    const clock = createSharedClock(MINUTE_MS);
+    const stop = clock.subscribe(() => undefined);
+    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("stopping the last subscriber on one cadence's clock does not touch the other cadence's interval", () => {
+    vi.useFakeTimers();
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    const minuteLikeClock = createSharedClock(MINUTE_MS);
+    const secondLikeClock = createSharedClock(1_000);
+
+    const stopMinuteLike = minuteLikeClock.subscribe(() => undefined);
+    const secondTicks: number[] = [];
+    const stopSecondLike = secondLikeClock.subscribe(() => {
+      secondTicks.push(secondLikeClock.getSnapshot());
+    });
+
+    stopMinuteLike(); // the only, and therefore last, subscriber on this clock
+    expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    // Falsification: if `stopIfIdle` cleared a shared/global handle instead
+    // of the one captured in THIS clock's own closure, the second-like
+    // clock's interval would have been torn down too and no tick would ever
+    // arrive.
+    expect(secondTicks.length).toBeGreaterThan(0);
+
+    stopSecondLike();
+  });
+
+  /**
+   * Old-flush/new-generation isolation via ordinary draining (`await`),
+   * paired with the explicit boundary pin above that isolates the single
+   * step this one cannot.
+   */
+  it("a stale trailing sweep from an emptied-out batch cannot notify a newer generation after the clock restarts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE);
+    const clock = createSharedClock(MINUTE_MS);
+
+    let firstCalls = 0;
+    const stopA = clock.subscribe(() => {
+      firstCalls += 1;
+    });
+    vi.setSystemTime(BASE + 5_000);
+    let secondCalls = 0;
+    const stopB = clock.subscribe(() => {
+      secondCalls += 1;
+    });
+    expect(firstCalls).toBe(1);
+    expect(secondCalls).toBe(1);
+
+    // Everyone leaves before generation 1's trailing sweep fires - idle.
+    stopA();
+    stopB();
+
+    vi.setSystemTime(BASE + 10_000);
+    let thirdCalls = 0;
+    const stopC = clock.subscribe(() => {
+      thirdCalls += 1;
+    });
+    const callsRightAfterSubscribe = thirdCalls;
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Falsification: delete `pendingRefreshGeneration = null` from
+    // `stopIfIdle`. C's own `subscribe` then finds a refresh already
+    // "pending" (generation 1, never invalidated) and skips its own
+    // immediate notify (`callsRightAfterSubscribe` becomes 0); generation 1's
+    // stale sweep then still matches its own recorded generation and
+    // notifies C anyway, so `thirdCalls` ends at 1 from the WRONG sweep -
+    // `thirdCalls !== callsRightAfterSubscribe` (1 vs 0).
+    expect(callsRightAfterSubscribe).toBe(1);
+    expect(thirdCalls).toBe(callsRightAfterSubscribe);
+
+    stopC();
   });
 });

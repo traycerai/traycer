@@ -34,6 +34,7 @@ function waitingPending(deadline: number | null) {
     reason: "rate_limit",
     failedTuple: FAILED_CLAUDE_TUPLE,
     targetTuple: null,
+    impendingAction: null,
     deadline,
     attempt: 1,
     maxAttempts: 1,

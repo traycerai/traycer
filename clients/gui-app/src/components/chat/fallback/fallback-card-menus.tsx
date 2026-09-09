@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   ChatRunSettings,
@@ -11,6 +11,7 @@ import {
   COUNTDOWN_NOT_PAUSED_LABEL,
   SWITCH_INSTEAD_LABEL,
   describeFallbackOutcome,
+  switchConsequencesText,
 } from "./fallback-copy";
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { useFallbackChooseTarget } from "./use-fallback-actions";
@@ -39,13 +40,25 @@ import { useFallbackChoiceLease } from "./use-fallback-choice-lease";
  * running. The card's own headline follows the same rule.
  *
  * **It does not keep a refused hold open.** A `refused` lease means the host
- * declined — a traversal that advanced under the click — so the menu says so and
- * closes rather than listing destinations for a window nobody holds.
+ * declined the hold, so the menu says so and closes rather than listing
+ * destinations for a window nobody holds. It does NOT mean the traversal
+ * advanced: an accepted ack that mints no token refuses too, and reopening from
+ * `choosing` has been a normal path since B1. The menu reports that it has
+ * nothing to list, never a cause it did not learn.
  *
- * **It does not release on unmount.** Detach, chat close and host restart all
- * resume the remainder host-side, so a release frame is a courtesy for the
- * ordinary close, never the mechanism. That is also why the host can never treat
- * it as the only way a hold ends.
+ * **It does not decide when a token is handed back.** Close is a plain
+ * `release()`; the STREAM STORE owns the rest, because menu visibility and
+ * lease lifetime are different facts. A close that beats the ack leaves the
+ * store holding the obligation, and the token is released when it arrives -
+ * after this component has stopped caring. Detach, chat close and host restart
+ * still resume the remainder host-side, which is why the host can never treat
+ * the release frame as the only way a hold ends; the frame is what keeps a
+ * still-connected subscriber from sitting on a frozen window.
+ *
+ * The unmount release below is the same courtesy for the one close this
+ * component never hears about: a released chat session stays warm for ten
+ * minutes, so closing the tile over an open menu leaves the stream connected
+ * and the host holding a window with no UI anywhere to give it back.
  */
 export function FallbackGraceMenu({
   pending,
@@ -82,6 +95,24 @@ export function FallbackGraceMenu({
       release();
     },
     [hold, pending.traversalId, release],
+  );
+
+  // Latest-value refs rather than effect dependencies, so the cleanup below
+  // runs on UNMOUNT and on nothing else. Depending on `open`/`release`
+  // directly would fire a release every time the popover toggled or the
+  // session handle changed - which is the ordinary close, already handled
+  // above, reported twice.
+  const openRef = useRef(open);
+  const releaseRef = useRef(release);
+  useEffect(() => {
+    openRef.current = open;
+    releaseRef.current = release;
+  });
+  useEffect(
+    () => () => {
+      if (openRef.current) releaseRef.current();
+    },
+    [],
   );
 
   const onPick = useCallback(
@@ -224,7 +255,7 @@ export function FallbackWaitingMenu({
     <FallbackDestinationMenu
       triggerLabel={SWITCH_INSTEAD_LABEL}
       triggerDisabled={!canAct}
-      header={waitingMenuHeader(pending.deadline)}
+      header={waitingMenuHeader(pending.deadline, pending.queuedItemsMoving)}
       selector={{
         kind: "traversal",
         traversalId: pending.traversalId,
@@ -251,7 +282,11 @@ export function FallbackWaitingMenu({
  * in it. The waiting card above already reads "Resuming shortly…" in that state,
  * so the menu adds nothing by repeating a time it does not have.
  */
-function waitingMenuHeader(deadline: number | null): string | null {
-  if (deadline === null) return null;
-  return `Resumes at ${formatClockTime(deadline)} unless you pick something.`;
+function waitingMenuHeader(
+  deadline: number | null,
+  queuedItemsMoving: number,
+): string {
+  const consequences = switchConsequencesText(queuedItemsMoving);
+  if (deadline === null) return consequences;
+  return `Resumes at ${formatClockTime(deadline)} unless you pick something. ${consequences}`;
 }

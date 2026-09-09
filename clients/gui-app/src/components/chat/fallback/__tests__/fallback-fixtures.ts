@@ -1,6 +1,8 @@
 import type {
   BackgroundItem,
   ChatRunSettings,
+  FallbackImpendingAction,
+  FallbackWaitDisposition,
   LastFailedAttempt,
   PendingFallback,
   PendingReturn,
@@ -43,6 +45,7 @@ export function pendingFallback(input: {
   readonly reason: string;
   readonly failedTuple: ChatRunSettings;
   readonly targetTuple: ChatRunSettings | null;
+  readonly impendingAction: FallbackImpendingAction | null;
   readonly deadline: number | null;
   readonly attempt: number;
   readonly maxAttempts: number;
@@ -58,12 +61,39 @@ export function pendingFallback(input: {
     reason: input.reason,
     failedTuple: input.failedTuple,
     targetTuple: input.targetTuple,
+    impendingAction: input.impendingAction,
     deadline: input.deadline,
     graceRemainingMs: null,
     attempt: input.attempt,
     maxAttempts: input.maxAttempts,
     queuedItemsMoving: input.queuedItemsMoving,
     siblingSwitching: input.siblingSwitching,
+  };
+}
+
+/**
+ * A `fallbackImpendingAction` plan - what the host says it will do when the
+ * current countdown ends.
+ *
+ * `planId` is opaque and for comparison only (see the schema doc), so tests
+ * that only render a plan's fields can pass a fixed id; a test asserting on
+ * plan-change announcements should vary it explicitly at the call site.
+ */
+export function fallbackImpendingAction(input: {
+  readonly planId: string;
+  readonly rung: FallbackImpendingAction["rung"];
+  readonly target: ChatRunSettings | null;
+  readonly targetModelFamily: string | null;
+  readonly resumesAt: number | null;
+  readonly pending: FallbackImpendingAction["pending"];
+}): FallbackImpendingAction {
+  return {
+    planId: input.planId,
+    rung: input.rung,
+    target: input.target,
+    targetModelFamily: input.targetModelFamily,
+    resumesAt: input.resumesAt,
+    pending: input.pending,
   };
 }
 
@@ -143,12 +173,14 @@ export function lastFailedAttempt(input: {
   readonly turnId: string;
   readonly failure: AgentFailure;
   readonly eligibleRungs: ReadonlyArray<"retry" | "switch" | "wait_once">;
+  readonly waitDisposition: FallbackWaitDisposition;
 }): LastFailedAttempt {
   return {
     userMessageId: input.userMessageId,
     turnId: input.turnId,
     failure: input.failure,
     eligibleRungs: [...input.eligibleRungs],
+    waitDisposition: input.waitDisposition,
   };
 }
 
@@ -184,6 +216,7 @@ export function fallbackModelTarget(input: {
   readonly harnessId: string;
   readonly modelFamily: string;
   readonly model: string | null;
+  readonly reasoningEffort: string | null;
   readonly profileId: string | null;
   readonly severity: string;
   readonly usedPercent: number | null;
@@ -197,7 +230,7 @@ export function fallbackModelTarget(input: {
     harnessId: input.harnessId,
     modelFamily: input.modelFamily,
     model: input.model,
-    reasoningEffort: null,
+    reasoningEffort: input.reasoningEffort,
     profileId: input.profileId,
     severity: input.severity,
     usedPercent: input.usedPercent,

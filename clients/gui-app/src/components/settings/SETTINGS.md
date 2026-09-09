@@ -1884,13 +1884,45 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     `PointerSensor` is registered - the buttons are the keyboard and touch
     path, and two competing keyboard gestures over one list would be worse than
     one that is announced. `Notify me` has neither handle nor arrows.
+  - **`Notify me` has no switch either.** It used to carry the same `Switch` as
+    every other row, beside copy saying "Always runs when nothing else worked" -
+    two statements that cannot both be true, and the one a first-time user
+    believes is the switch. They read it as a notification preference; it is
+    nothing of the kind. Turning it off suppresses no notification (exhaustion
+    ends in the same terminal consequences and the error card is always
+    published) - it changes engine traversal configuration, whether a
+    notify-only grace hold arms, which this page has no way to explain. So the
+    ordinary state renders a static `Always`, matching the reserved gutters the
+    row already draws in place of a handle and arrows: absence says "this cannot
+    be changed" once, where a disabled switch invites the reader to look for the
+    state that enables it. A stored ladder that OMITS the step still renders
+    honestly, with a one-way `Add this step back` link - there is deliberately
+    no path from here to turning it off, so nothing implies the
+    always-published error card is something the user switched on.
   - **Enablement is PRESENCE in the stored `ladder`**, which cannot represent
     where a turned-off step sat. The panel therefore holds the four-row display
     order in its draft and persists only the enabled subset; a step turned off
-    and then reloaded comes back at the end, and the editor's own copy says so.
-    The alternative was widening the wire shape to `{ kind, enabled }[]`, which
-    would have reached the host's validation and the engine's ladder walk for a
-    presentational fact.
+    and then reloaded loses its exact position, and the editor's own copy says
+    so. The alternative was widening the wire shape to `{ kind, enabled }[]`,
+    which would have reached the host's validation and the engine's ladder walk
+    for a presentational fact.
+    **A turned-off step goes as late as it can, which is NOT the end**: it is
+    placed immediately before the `notify` slot. `notify` is the terminal step -
+    the engine's ladder walk stops at the first one it reaches - so a row after
+    it can never run, and a disabled row is exactly the one a user is about to
+    turn back on. Appending past `notify` handed them a step that read as
+    enabled and was unreachable, with nothing on screen saying so; the wire
+    permits such a ladder (uniqueness and length are all it checks) and the host
+    stores it verbatim, so nothing downstream repaired it either.
+    **The display order also survives a save echo.** The echo carries back the
+    ladder that was just SENT, which encodes enablement as presence and so
+    cannot say where the turned-off steps sat - re-deriving from it moved them,
+    which made "turn a step off, let the save land, turn it back on" write a
+    ladder the user never arranged. `fallbackDisplayOrderFor` keeps the local
+    order whenever the incoming ladder is what that order already produces for
+    its enabled set, and derives afresh only when the incoming policy genuinely
+    reorders (a restore, or a policy written elsewhere). An externally authored
+    early `notify` still renders where it is stored.
   - **The Advanced per-failure matrix is collapsed by default and derived, not
     written out.** Its rows are `HOST_NOTIFICATION_STOPPED_REASONS` minus
     `EXCLUDED_FALLBACK_REASONS`, so a new failure reason gets a row the day it
@@ -1914,7 +1946,24 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     interchangeable, and the only thing that makes the "equivalent model" step
     possible - the host will not move a chat between a standard and a frontier
     model on its own guess. Each row is **provider + model family + optional
-    effort**. The provider select offers the GUI-capable harnesses only - the
+    effort**. **Effort is a select of the levels the harness's own models
+    advertise**, not free text: an unrestricted input whose only hint was a
+    placeholder made the user guess a provider-specific spelling, and a typo was
+    accepted, saved as policy, and then silently dropped at resolution - so the
+    value on screen did not mean the effort the fallback would run at. The
+    levels come from `agent.gui.listModels`' per-model `supportedReasoningEfforts`,
+    unioned across the harness's models (a row names a FAMILY, and the effort
+    applies to whichever model that family resolves to at hop time), read once
+    per DISTINCT harness in the draft through the same cache-only slots the
+    model pickers use and gated on availability. The per-row preview cannot
+    supply this: with no failed tuple the engine's walk stops at the resolved
+    slug and never reaches effort normalisation, so it returns no effort
+    information and no warnings. A stored value outside the set keeps an option
+    of its own and stays selected, marked as not offered - the same range-render
+    rule the provider select and the timings use. When nothing answers (an older
+    host, a harness the user no longer has, a cold slot) the text input stands,
+    because a select built from nothing would take away a level the user can
+    legitimately type. The provider select offers the GUI-capable harnesses only - the
     rung skips anything else with `harness-not-gui`, so a terminal-only vendor
     here would be a row the user can choose and the engine will never walk - and
     a stored id outside that set still gets an option of its own, under the same
@@ -1931,9 +1980,24 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     had groups: the host seeds on first read and marks the user, so the empty
     state offers **Restore the default groups**, which calls the RESTORE op
     rather than saving a client-built list - only the host can build the seed a
-    first read would have produced. Deleting a group offers **Undo**, and undo
-    restores the previous POLICY rather than re-appending the group, because
-    position is the one thing a user cannot retype. A new row's family starts
+    first read would have produced. Deleting a group or a row offers **Undo**,
+    and undo dispatches the INVERSE of that one removal into the current draft -
+    not the policy as it stood when the toast was raised. A toast outlives its
+    render, so a captured snapshot also reverted every unrelated setting changed
+    since it appeared (the maximum wait adjusted while the toast was still up),
+    and an older toast's Undo resurrected a row deleted after it. The inverse
+    carries the removed group or row WITH its identity and its index, so undo
+    brings back the same row rather than a lookalike, at the position it held -
+    position being the one thing a user cannot retype - and answers "already
+    back" or "its group is gone" by doing nothing.
+    **Removal hands the keyboard on.** Filtering out the focused button's own
+    subtree left focus on `document.body`: a keyboard user was returned to the
+    top of the page and a screen-reader user was told nothing, after a gesture
+    they made deliberately. `useRemovalFocus` takes an ordered list of selectors
+    and focuses the first that exists once the removal has rendered - the row
+    that takes the removed one's place, its neighbour if it was last, then the
+    `Add` control. Rows are addressed by their draft key, never by a group's
+    editable name. A new row's family starts
     EMPTY (invalid until typed, so an invented default is never saved as a
     choice) while its provider is SEEDED - a closed union with a control right
     there is a starting point, not a fabricated answer.
@@ -1949,26 +2013,84 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     arrives from somewhere other than the editor (a host echo, a revert) keeps the
     existing identities when it is structurally the list already on screen and
     re-seeds otherwise; mapping an unfamiliar list positionally would be index
-    keying by another name. GROUPS need none of this - `fallbackPolicySchema`
-    refines group ids unique, so the id is already an identity.
+    keying by another name.
+    **Groups carry one too** (`draftKey`), and the argument that they did not is
+    the one this reversed. `fallbackPolicySchema` refines group ids unique, but
+    the id is the group's editable NAME: keying the card on it changed the key
+    on every keystroke of a rename, so React destroyed the focused input after
+    the first character and blur/Enter never committed the whole name - and the
+    intermediate values a rename passes through are allowed to be duplicate or
+    empty, which a key has to survive and a unique-id argument does not cover.
+    **A REVERT keeps identities where a re-seed would not.** A refused save
+    returns the draft to `persisted`, and a rejected value edit differs from
+    what is on screen BY DEFINITION - so the structural comparison above always
+    failed, every candidate row remounted, and the field the user was still
+    typing in was destroyed by the code path whose job was to put their value
+    back. `revertKeyedGroups` asks the weaker question - same number of groups,
+    each with the same number of rows - and keeps every key when the SHAPE is
+    unchanged, because both its callers (the revert, and the read-back below)
+    restore a list this editor already held identities for. A shape change (a
+    rejected removal) has no correspondence left and re-seeds. The echo path
+    still uses the strict comparison: a restore replaces the rows wholesale and
+    is not a list this editor produced.
   - **When an edit is SAVED depends on the control kind.** Switches, selects,
     ▲▼ and buttons produce a complete value per interaction and commit
-    immediately. **Text fields (group name, model family, effort) commit on
-    BLUR or Enter**, because their intermediate states are not values anyone
-    means: "opus" passes through "o", "op", "opu", and a save per character
+    immediately. **Text fields (group name, model family, and the effort input
+    where no catalog levels are available) commit on BLUR or Enter**, because
+    their intermediate states are not values anyone means: "opus" passes through "o", "op", "opu", and a save per character
     persists three model families nobody chose and spends a catalog read per
     candidate previewing each. Local validation still runs per keystroke, so the
     inline message under a blank family appears as it goes blank rather than
     when the field is left. Enter does not also blur - the field is not a form.
-  - **A save's echo cannot overwrite a newer draft.** Every edit bumps a
-    `revision` on the draft reducer; `save-started` records which revision the
-    request carries; `save-succeeded` applies the response only if the revision
-    is unchanged. Otherwise it records that the host stored what was sent and
-    leaves the draft, its identities, its display order and any local error
-    alone - they describe a newer value the user can see, and it reaches the
-    host through its own commit. `save-failed` is deliberately NOT symmetric: a
-    refusal carries no value, it says the persisted one is in force, and that is
-    true whatever the draft has since become.
+  - **A save's echo cannot overwrite a newer draft, and TWO saves cannot be
+    confused.** Every edit bumps a `revision`; every dispatched save gets a
+    request id minted at the call site (the reducer has not run yet, so the
+    revision the request carries is not observable from there) and the reducer
+    records the pair in `pendingSaves`. A reply names its request, so it is
+    matched to the revision IT carried: the response is applied to the draft
+    only when that revision is still current, and otherwise only records that
+    the host stored what was sent.
+    `pendingSaves` is a LIST because one slot was the defect: every control here
+    can commit while another save is in flight, so start A at revision 1 and B
+    at revision 2, and B's start overwrote A's marker - when A's reply arrived
+    the reducer compared revision 2 with revision 2, decided the echo answered
+    the draft on screen, and wrote A's older policy over B's. A third edit then
+    started from that stale value and could permanently undo B. `persistedRevision`
+    guards the other direction: replies are FIFO in practice, but nothing here
+    depends on it, and an out-of-order pair would otherwise leave the OLDER
+    value in `persisted` as what the next refusal reverts to.
+    Correlating rather than serialising is deliberate: serialising would delay
+    the second request until the first settled, which changes when a commit is
+    dispatched, and the commit-on-blur/Enter rule is pinned on that being
+    synchronous with the gesture.
+  - **A failed save says only what it knows about the host's row.** Three
+    outcomes, because "your last saved settings are back on screen and still in
+    force" is a claim about the host that most failures cannot support:
+    - **refused, reverted** - the host answered and rejected the value and
+      nothing newer is on screen. Both halves of that sentence are true.
+    - **refused, kept** - the host answered and rejected an OLDER draft while
+      the user has since changed the same page. The refusal is reported; the
+      revert is not applied, because it would throw away typing the host never
+      judged, and that edit carries itself to the host through its own commit.
+    - **unknown** - the request went out and no answer came back. The host may
+      have committed and lost the reply, so nothing may be claimed. The draft
+      stands and a **read-back** settles it.
+      The line is drawn on the transport's own error classes, not on
+      `isTransientHostRpcFailure` - which merges the first and third (and folds in
+      a host-ANSWERED fatal marked `retryable`, so it used to print "couldn't
+      reach this host" about a host that had just answered).
+      `RetryableTransportError` carries an explicit "the host never dispatched
+      this request" guarantee, so "nothing was saved" is true and the revert is
+      right; any other `HostTransportFailureError` is the ambiguous post-send
+      case. At its worst the old copy told a user automatic fallback was off while
+      the host had it on.
+      The read-back is the **only** action that installs a policy this editor did
+      not send, and it is gated twice: it must name the request that went
+      unanswered, and it replaces what is on screen only while the user has not
+      edited since - so the standing rule that a later read never yanks a control
+      out from under someone mid-edit still holds. A read-back that fails leaves
+      the notice standing with its own **Check again**; a newer save supersedes
+      the ticket, so a late answer to the old episode is dropped.
   - **The per-row "resolves to" preview is an RPC, not a computation.**
     Resolving a family to a slug needs the live catalog, the provider's enabled
     and runnable state, and which account would run it - none of which the
@@ -2020,6 +2142,23 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     would refetch into a component still rendering the pre-reset draft.
     `restoreTierGroups` does not clear the marker, so its response IS what a
     later read would produce and `save-succeeded` takes it directly.
+  - **The confirmation returns the keyboard, in two halves.** `ConfirmDestructiveDialog`
+    is opened by setting `open` from a button rendered outside the dialog's own
+    root - no caller renders a `DialogTrigger` - so Radix's modal content was
+    focusing a null trigger on close, and because its handler prevents the
+    default first, the FocusScope's generic "restore what was focused before"
+    was skipped too: Escape and Cancel dropped focus on `document.body`. The
+    shared dialog now captures the opener in `onOpenAutoFocus` (the one moment
+    it is still the active element - the FocusScope dispatches that after
+    reading `document.activeElement` and before moving focus in) and restores it
+    in `onCloseAutoFocus`. That is a fix for every caller of the shared dialog,
+    not just this one.
+    It cannot cover a CONFIRMED reset, because the remount above detaches the
+    Reset button before the dialog closes - so the opener is checked for
+    `isConnected` and the surface owns that case: the panel remembers that the
+    replacement was a reset and the new Danger Zone takes focus onto its Reset
+    button as it mounts, then clears the intent so a later remount for another
+    reason (a host switch) does not steal focus onto a button nobody pressed.
   - **Two failure kinds, decided once** in `fallback/fallback-policy-draft.ts`
     rather than per control. A **local validation failure** keeps the draft in
     the control, shows the error and **sends nothing**; a **host rejection**

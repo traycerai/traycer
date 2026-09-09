@@ -167,6 +167,7 @@ import type {
   ChatRunStatus,
   ChatSubscribeClientFrame,
   LastFailedAttempt,
+  LastFallbackOutcome,
   PendingFallback,
   PendingReturn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -234,7 +235,74 @@ export interface FallbackChoiceLease {
   /** The host's token, once the ack carries one. `null` while `pending`. */
   readonly token: string | null;
   readonly status: "pending" | "held" | "refused";
+  /**
+   * The menu closed while the hold was still `pending` - so this lease OWES a
+   * release that it has no token to send yet.
+   *
+   * Menu visibility and lease lifetime are different facts, and conflating
+   * them is what froze the countdown: dropping the slot on close discarded
+   * the correlation, the ack that followed found no lease to mint into, and
+   * the host went on holding a window nobody could give back. The obligation
+   * outlives the popover instead; `dispatchPendingChoiceRelease` discharges
+   * it the moment the token arrives.
+   */
+  readonly releaseRequested: boolean;
+  /**
+   * The connection this lease was minted on, so a snapshot can tell a REAL
+   * detach from a same-subscription refresh.
+   *
+   * A snapshot is not evidence of reattachment: the host answers a resnapshot
+   * without replacing the subscriber and broadcasts one on every sibling-count
+   * change. Only a dropped connection resumes the frozen remainder host-side,
+   * and only a dropped connection moves this number - the same rule
+   * `sweepStaleRestoreSlot` and `retireBeforeConnectionEpoch` already retire
+   * their slots by.
+   */
+  readonly connectionEpoch: number;
 }
+/**
+ * A manual fallback action the HOST confirmed, for the transcript announcer.
+ *
+ * The error card's rungs are the one fallback action with no DTO behind them.
+ * A grace or waiting card's pick is visible as a `pendingFallback` state
+ * transition, so a surface watching the stream sees it happen; the error card
+ * acts on a failed ATTEMPT precisely because no traversal is live, and there
+ * is nothing on any frame that says "this switch was applied". Without a
+ * record the announcer would have to infer the outcome from the absence of
+ * something, which is the mistake `pendingFallback`'s own contract warns about.
+ *
+ * Written from the MUTATION's `onSuccess` rather than a call site's, and that
+ * is the load-bearing detail: the popover closes on `applied`, so by the time
+ * the answer arrives the component that sent it is gone. TanStack runs a
+ * `useMutation`-level callback from the Mutation in the cache, which outlives
+ * the observer; the per-call `mutate(vars, { onSuccess })` handlers do not run
+ * at all after unmount.
+ */
+export interface ConfirmedManualFallbackAction {
+  readonly hostId: string | null;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly rung: "retry" | "switch" | "wait_once";
+  /**
+   * The attempt the action named - BOTH halves, because the reuse path
+   * re-sends one persisted user message across retries, so `userMessageId`
+   * alone cannot tell an attempt from a replay of it.
+   */
+  readonly userMessageId: string;
+  readonly turnId: string;
+  /** Where a switch went. `null` for `retry` and `wait_once`, which stay put. */
+  readonly target: ChatRunSettings | null;
+  /**
+   * Monotonic per store instance - the consumer's dedupe key.
+   *
+   * A counter and not a timestamp: two identical switches must be
+   * distinguishable ("announce this one again" has to be expressible), and the
+   * store's injected test clock is frozen, so a timestamp would collide on
+   * exactly the case a dedupe key exists for.
+   */
+  readonly sequence: number;
+}
+
 type ChatSnapshotFrame = Parameters<ChatStreamCallbacks["onSnapshot"]>[0];
 type ChatWindowedSnapshotFrame = Parameters<
   ChatStreamCallbacks["onWindowedSnapshot"]
@@ -266,7 +334,7 @@ type DeferredWindowedSnapshotAux = Pick<
   | "missingWorktreePaths"
   | "managedCommands"
   | "heldUpdates"
-  // Both fallback DTOs qualify under this type's own rule: they are on the
+  // All four fallback DTOs qualify under this type's own rule: they are on the
   // windowed snapshot AND `turnStateChanged` supersedes them. Omitting them
   // here would not merely replay a stale value - it would replay it
   // PERMANENTLY, because nothing re-sends a card that has already cleared, so
@@ -275,6 +343,11 @@ type DeferredWindowedSnapshotAux = Pick<
   | "pendingFallback"
   | "pendingReturn"
   | "lastFailedAttempt"
+  // The outcome (D215) is here for the replay rule above AND for a second
+  // reason the other three do not have: it is the only one of the four with a
+  // consumer that must speak it EXACTLY ONCE. A stale replay is not a stale
+  // card there, it is a false announcement of a result that was superseded.
+  | "lastFallbackOutcome"
 >;
 
 function deferredWindowedSnapshotAuxOf(
@@ -296,6 +369,7 @@ function deferredWindowedSnapshotAuxOf(
     pendingFallback: snapshot.pendingFallback,
     pendingReturn: snapshot.pendingReturn,
     lastFailedAttempt: snapshot.lastFailedAttempt,
+    lastFallbackOutcome: snapshot.lastFallbackOutcome,
   };
 }
 type ChatSessionSetState = StoreApi<ChatSessionState>["setState"];
@@ -713,6 +787,42 @@ export interface ChatSessionState {
    */
   readonly transcriptBaselineEpoch: number;
   /**
+   * The connection generation, mirrored into state so it can be SUBSCRIBED to.
+   *
+   * Its partner is {@link transcriptBaselineEpoch}, which is set to this value
+   * when a snapshot seats. So the two together answer a question neither can
+   * answer alone: `transcriptBaselineEpoch === connectionEpoch` means the
+   * visible transcript was hydrated on the connection that is live NOW, and an
+   * inequality means THE CURRENT CONNECTION HAS NOT SEATED ITS BASELINE.
+   *
+   * That is deliberately weaker than "the client reconnected", because two
+   * different states produce the inequality and only one of them is a
+   * reconnect: a cold mount has never seated anything, and its baseline is
+   * `NO_TRANSCRIPT_BASELINE` (**-1**, not `0`) against an epoch of `0`. Both
+   * states correctly mean "do not treat what you see as live news yet", which
+   * is why one predicate serves both. A consumer that needs to tell them apart
+   * tests `transcriptBaselineEpoch === NO_TRANSCRIPT_BASELINE`; it must never
+   * infer "reconnecting" from the inequality alone.
+   *
+   * The reconnect window is short and invisible from outside, and it is exactly
+   * where a consumer can mistake reconnect history for live news.
+   *
+   * A warm remount is the case this exists for. A tile can close and reopen
+   * across an automatic reconnect while the store and transport survive: a
+   * freshly mounted consumer never personally observed the disconnect, and
+   * `snapshotLoaded` still describes the OLD connection. Comparing these two
+   * epochs is recoverable from state alone and needs no status history.
+   *
+   * MIRRORED, not authoritative. The counter itself is a closure variable
+   * written only by `bumpConnectionEpoch`, which exists so this field cannot
+   * drift from it - a `+= 1` that forgets the mirror would leave every
+   * subscriber reading a stale generation with nothing to signal the error.
+   * Deliberately NOT `snapshotLoaded`: that flag renders the cached transcript
+   * (`ChatSessionMessagesSurface`) and clearing it on reconnect would blank a
+   * transcript the reader can legitimately still see.
+   */
+  readonly connectionEpoch: number;
+  /**
    * Bumped whenever a range response seated rows the reader SCROLLED to.
    *
    * The third way transcript data reaches this client, and the one
@@ -926,6 +1036,45 @@ export interface ChatSessionState {
    */
   readonly lastFailedAttempt: LastFailedAttempt | undefined;
   /**
+   * The last CONFIRMED fallback result for the current incident
+   * (`chat.subscribe@1.9`, D215/D218), or `undefined` when there is none.
+   *
+   * Same derived-per-frame contract, same assign-straight-across rule and same
+   * BY-VALUE read as the three above. What is different is what a reader may
+   * conclude from it, and the two rules below are the host's, not this store's.
+   *
+   * **Absence is not an outcome.** The key clears when a new traversal arms, so
+   * absent means "no confirmed outcome for the current incident" - never
+   * success, cancellation or failure. Do not infer one from this key
+   * disappearing, and do not infer one from {@link pendingFallback}
+   * disappearing either: terminal success, cancel and failure are all absent
+   * there too. A consumer that treats absence as a result announces outcomes
+   * that never happened.
+   *
+   * **`sequence` is not a cross-incident counter.** It is a total order over
+   * writes to THIS slot, starting at 1 and reset when a new traversal arms, so
+   * incident B's `2` is not after incident A's `7`. It orders one incident's
+   * writes and nothing else; identity and dedupe belong to `blockId`, which is
+   * minted deterministically so a replayed phase re-derives the same string.
+   *
+   * It replaced a `revision` that could TIE. The settled notice is appended
+   * BEFORE the terminal transition commits, so a settle with no intervening
+   * transition carried the identical number as the preceding hop's `applied` -
+   * and `applied` → `applied` → `settled` is the ordinary shape, not a corner
+   * case. `sequence` is minted at the write site from the slot being replaced,
+   * so it cannot tie.
+   *
+   * Not to be confused with `PendingFallback.revision`: a different field on a
+   * different DTO, NOT renamed, and the one the cancel verb presents. Two
+   * fields named `revision` on neighbouring fallback DTOs is exactly the shape
+   * that gets one read for the other, which is half of why this one moved.
+   *
+   * `assistantMessageId` may point OUTSIDE the bounded tail - that is the whole
+   * reason the field exists - so treat it as an anchor for later hydration,
+   * never as a row readable from the frame that carried it.
+   */
+  readonly lastFallbackOutcome: LastFallbackOutcome | undefined;
+  /**
    * The shells this chat created, whatever state they are in - not a subset
    * of {@link backgroundItems}, since a shell outlives the turn that started
    * it. Carried whole by every snapshot and every `managedCommandsChanged`
@@ -1006,14 +1155,26 @@ export interface ChatSessionState {
    * engine has not granted, and the card says "countdown paused" only once the
    * DTO itself reports `choosing`. `held` carries the token every later
    * `chat.fallback.chooseTarget` presents. `refused` is a hold the host
-   * declined (a traversal that advanced under the click), and the menu closes
-   * on it rather than picking against a window it does not hold.
+   * declined, and the menu closes on it rather than picking against a window it
+   * does not hold. `refused` does NOT mean the traversal advanced: an accepted
+   * ack that mints no token lands here too (`reconcileFallbackChoiceAck`), and
+   * reopening from `choosing` is a normal path since B1.
    *
-   * Cleared by an authoritative snapshot: a snapshot means this subscriber
-   * re-attached, and subscriber detach resumes the frozen remainder host-side,
-   * so a token carried across one names a hold that no longer exists.
+   * Its lifetime is the SUBSCRIPTION's, not the popover's. A close that
+   * beats the ack leaves the obligation standing
+   * (`FallbackChoiceLease.releaseRequested`), and an authoritative frame ends
+   * the lease only on a real detach or a traversal the host says is over -
+   * `reconcileFallbackChoiceLeaseWithFrame` owns both rules.
    */
   readonly fallbackChoiceLease: FallbackChoiceLease | null;
+  /**
+   * The last manual fallback action the host confirmed, or `null`.
+   *
+   * An EVENT record rather than a piece of chat state: nothing on the wire
+   * clears it, because nothing on the wire un-happens it. Consumers dedupe on
+   * `sequence`. See {@link ConfirmedManualFallbackAction}.
+   */
+  readonly confirmedManualFallbackAction: ConfirmedManualFallbackAction | null;
   readonly restore: ChatRestoreSlot | null;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
@@ -1167,14 +1328,34 @@ export interface ChatSessionState {
    * ask for a lease. Returns the `clientActionId`, or `null` when there is
    * nothing to hold - no traversal, a traversal in a state the hold does not
    * apply to, or a hold already in flight for it.
+   *
+   * Reopening while a close's release is still owed returns the IN-FLIGHT
+   * request's id and sends no second frame; see
+   * `FallbackChoiceLease.releaseRequested`.
    */
   fallbackHoldForChoice: (traversalId: string) => string | null;
   /**
-   * Close the menu and resume the frozen remainder. A no-op unless a lease is
-   * actually `held`: a `pending` hold has no token to prove ownership with, and
-   * the host resumes on detach anyway, so there is nothing to release.
+   * Close the menu and resume the frozen remainder.
+   *
+   * Returns the release frame's `clientActionId` only when a token was
+   * actually handed back. `null` covers two different situations: a `refused`
+   * hold, which minted nothing, and a `pending` one, whose token has not
+   * arrived - the second RECORDS the obligation and discharges it on the ack
+   * rather than dropping it. The host resumes the remainder on detach, close
+   * and restart regardless, which is why it can never treat this frame as the
+   * only way a hold ends.
    */
   fallbackReleaseChoice: () => string | null;
+  /**
+   * Record a manual fallback action the host answered `applied` to.
+   *
+   * The store is a MAILBOX here, not a decider: it stamps the sequence and
+   * holds the last one. Whether an action is worth announcing, and in what
+   * words, belongs to the announcer.
+   */
+  publishConfirmedManualFallbackAction: (
+    input: Omit<ConfirmedManualFallbackAction, "sequence">,
+  ) => void;
   stopBackgroundItem: (taskId: string) => string | null;
   stopAllBackgroundItems: () => string | null;
   stopBackgroundSession: () => string | null;
@@ -2052,6 +2233,25 @@ export function createChatSessionStoreWithNotificationDependencies(
   // epoch - their ack can never arrive. Never acted on at the connection
   // event itself: a wobble that reconnects cancels nothing by itself.
   let connectionEpoch = 0;
+  /**
+   * The ONLY writer of {@link connectionEpoch}.
+   *
+   * A function rather than the two `+= 1` sites it replaces, because the
+   * counter now has a mirror in state (`ChatSessionState.connectionEpoch`) that
+   * consumers subscribe to. Two write sites and a mirror is three things to
+   * keep in step; one writer is one. A future third bump site inherits the
+   * mirror instead of silently omitting it - and an omission would be invisible
+   * from outside, since a stale generation still reads as a plausible number.
+   *
+   * Reaching `store` from out here is the file's existing shape (see the
+   * `store.getState()` calls in the handle): this closure is built before the
+   * store, but nothing calls it until long after - the bump sites are a
+   * transport status callback and a client replacement, both post-construction.
+   */
+  const bumpConnectionEpoch = (): void => {
+    connectionEpoch += 1;
+    store.setState({ connectionEpoch });
+  };
   const surfaceVisibility = new Map<string, boolean>();
 
   const pushSurfaceVisibility = (): void => {
@@ -2169,6 +2369,61 @@ export function createChatSessionStoreWithNotificationDependencies(
     return sent;
   };
 
+  // Hands a minted token back and empties the slot. Two callers, deliberately
+  // sharing one implementation: the ordinary menu close, and the ack that
+  // arrives after a close (see `FallbackChoiceLease.releaseRequested`). A
+  // second copy of the frame would be a second place for the token to go
+  // missing.
+  const sendFallbackChoiceRelease = (input: {
+    readonly set: SendActionInput["set"];
+    readonly get: SendActionInput["get"];
+    readonly traversalId: string;
+    readonly token: string;
+  }): string | null => {
+    const clientActionId = uuidv4();
+    const frame: ChatOwnerActionFrame = {
+      kind: "fallback.releaseChoice",
+      hasBinaryPayload: false,
+      epicId: options.epicId,
+      chatId: options.chatId,
+      clientActionId,
+      traversalId: input.traversalId,
+      token: input.token,
+    };
+    return sendAction({
+      set: input.set,
+      get: input.get,
+      frame,
+      pending: basicPending(clientActionId, "fallback.releaseChoice"),
+      pendingUserMessage: null,
+    });
+  };
+
+  // The release a closed menu still owes, discharged the moment the token it
+  // was waiting for exists.
+  //
+  // State-based and called after every action ack, for the same reason
+  // `maybeDispatchPendingBackgroundSessionStop` is: the arrival that completes
+  // the obligation is a frame, not a click, and the surface that took the hold
+  // is gone by then. Clearing the slot here (rather than on the eventual
+  // release ack) is what lets the next open ask for a fresh hold - the token
+  // has been handed back, so there is nothing left to correlate.
+  const dispatchPendingChoiceRelease = (
+    set: ChatSessionSetState,
+    get: ChatSessionGetState,
+  ): void => {
+    const lease = get().fallbackChoiceLease;
+    if (lease === null || !lease.releaseRequested) return;
+    if (lease.status !== "held" || lease.token === null) return;
+    set(() => ({ fallbackChoiceLease: null }));
+    sendFallbackChoiceRelease({
+      set,
+      get,
+      traversalId: lease.traversalId,
+      token: lease.token,
+    });
+  };
+
   // The graceful downgrade for a confirmed session stop whose gated command
   // settled on its own: stop the remaining rows individually so wakeups stay
   // scheduled (the confirmation's count excluded them) and rows whose stop
@@ -2250,7 +2505,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     streamGuard.next();
     // A replaced client is a new connection - the old one's `closed` status
     // event is suppressed by the generation guard, so bump here too.
-    connectionEpoch += 1;
+    bumpConnectionEpoch();
     client.close();
   };
 
@@ -2635,12 +2890,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingFallback: frame.snapshot.pendingFallback,
           pendingReturn: frame.snapshot.pendingReturn,
           lastFailedAttempt: frame.snapshot.lastFailedAttempt,
-          // A snapshot means this subscriber (re)attached, and subscriber
-          // detach resumes a frozen grace window host-side. Any lease we were
-          // holding across it names a hold that no longer exists, so it is
-          // dropped here rather than presented to `chooseTarget` as proof of
-          // something the host has already given back.
-          fallbackChoiceLease: null,
+          lastFallbackOutcome: frame.snapshot.lastFallbackOutcome,
+          // NOT unconditionally cleared, and that was the blocker: a snapshot
+          // is not a detach. See `reconcileFallbackChoiceLeaseWithFrame` for
+          // the two facts that do end a lease.
+          fallbackChoiceLease: reconcileFallbackChoiceLeaseWithFrame(
+            state.fallbackChoiceLease,
+            frame.snapshot.pendingFallback,
+            connectionEpoch,
+          ),
           managedCommands: frame.snapshot.managedCommands,
           heldUpdates: frame.snapshot.heldUpdates,
           // Drop per-item stops whose task has left the running-only list
@@ -3832,6 +4090,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingFallback: current.pendingFallback,
           pendingReturn: current.pendingReturn,
           lastFailedAttempt: current.lastFailedAttempt,
+          lastFallbackOutcome: current.lastFallbackOutcome,
         },
       };
     };
@@ -3863,8 +4122,34 @@ export function createChatSessionStoreWithNotificationDependencies(
     ): void => {
       if (!isTailHydrated(window)) {
         const records = hydratedRecords(window);
+        // D215: the OUTCOME is seated immediately, alone among the four
+        // fallback DTOs, and the asymmetry is deliberate.
+        //
+        // The other three are transcript-coupled CARD state: publishing them a
+        // beat early makes the row merge read a real row as renderer-suppressed
+        // (see `applyAuthoritativeSnapshot`'s doc). An outcome has no such
+        // coupling - it is a fact about an incident, not a row - and it has a
+        // consumer that must speak it exactly once. Holding it costs an
+        // announcement outright, because `appendFallbackNoticeBlock` publishes
+        // a SNAPSHOT and guarantees no later `turnStateChanged`: there is no
+        // second carrier to rescue a deferred snapshot-only outcome.
+        //
+        // Read the HELD aux, never `frame.snapshot`. This branch re-runs on
+        // every range response that does not complete the tail, and the stash
+        // below is guarded on the frame being NEW - so on re-entry the held aux
+        // carries the supersessions `advanceDeferredSnapshotAux` has collected
+        // and the frame carries the value it arrived with. Reading the frame
+        // here would re-apply a withdrawn outcome on each pass, which is the
+        // exact defect the aux exists to prevent.
+        const heldAux =
+          frame === deferredWindowedSnapshot
+            ? deferredWindowedSnapshotAux
+            : null;
         set({
           ...aux,
+          lastFallbackOutcome: (
+            heldAux ?? deferredWindowedSnapshotAuxOf(frame.snapshot)
+          ).lastFallbackOutcome,
           messages: records.messages,
           events: records.events,
           transcriptRowContext: records.rowContext,
@@ -4811,6 +5096,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         // write, not every growth.
         commitWholeSetSliceBudget();
         maybeDispatchPendingBackgroundSessionStop(set, get);
+        // AFTER the reduction above, never inside it: the ack this handler is
+        // processing may be the very one that mints the token a closed menu is
+        // waiting to hand back, and the frame that hands it back cannot be
+        // sent from inside a `set`.
+        dispatchPendingChoiceRelease(set, get);
       },
       onMessageAccepted: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -5058,6 +5348,18 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingFallback: frame.pendingFallback,
             pendingReturn: frame.pendingReturn,
             lastFailedAttempt: frame.lastFailedAttempt,
+            lastFallbackOutcome: frame.lastFallbackOutcome,
+            // The settle usually arrives HERE rather than as a snapshot, and
+            // this handler used not to touch the slot at all - so a traversal
+            // that ended through the commoner frame type left a dead lease
+            // standing, which the next open then read as a hold already in
+            // flight. Same reconciler as the snapshot path: one rule, two
+            // readers.
+            fallbackChoiceLease: reconcileFallbackChoiceLeaseWithFrame(
+              state.fallbackChoiceLease,
+              frame.pendingFallback,
+              connectionEpoch,
+            ),
             // Keep background-stop pending state in lockstep with the
             // running-only list: a task that has left the list settled, so its
             // Stop is no longer in flight.
@@ -5121,6 +5423,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingFallback: frame.pendingFallback,
           pendingReturn: frame.pendingReturn,
           lastFailedAttempt: frame.lastFailedAttempt,
+          // The supersession half of D215. Without this a held snapshot
+          // replays the outcome it was sent with even after this frame cleared
+          // it, and the announcer speaks a result that was withdrawn.
+          lastFallbackOutcome: frame.lastFallbackOutcome,
         }));
       },
       onBlockDelta: (frame) => {
@@ -5507,7 +5813,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // Frames dispatched on the lost connection can no longer be
           // answered. Only stamps get older here - nothing is cancelled
           // until an authoritative post-reconnect snapshot arrives.
-          connectionEpoch += 1;
+          bumpConnectionEpoch();
         }
         set((state) => {
           // Capture a fatal close so the tile can show the host's reason
@@ -5702,6 +6008,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       fatalClose: null,
       snapshotLoaded: false,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
+      connectionEpoch: 0,
       transcriptHydrationSequence: 0,
       transcriptRowContext: {},
       chat: null,
@@ -5730,9 +6037,11 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingFallback: undefined,
       pendingReturn: undefined,
       lastFailedAttempt: undefined,
+      lastFallbackOutcome: undefined,
       managedCommands: [],
       heldUpdates: [],
       fallbackChoiceLease: null,
+      confirmedManualFallbackAction: null,
       pendingBackgroundStops: {},
       pendingBackgroundStopAll: null,
       pendingBackgroundSessionStop: null,
@@ -6213,16 +6522,35 @@ export function createChatSessionStoreWithNotificationDependencies(
         // `waiting` never had a countdown; both open their menu with no hold at
         // all, so asking for one here would be asking the host to freeze
         // something that is not running.
-        if (pending.state !== "hold") return null;
-        // A hold already in flight or already granted for this traversal: a
-        // second frame would mint a second lease and orphan the first.
-        const lease = state.fallbackChoiceLease;
-        if (
-          lease !== null &&
-          lease.traversalId === traversalId &&
-          lease.status !== "refused"
-        ) {
+        //
+        // `choosing` IS admitted, and that is the reacquisition half of the
+        // blocker. The window is frozen with no deadline and no host-side
+        // timer, so a client that cannot re-ask has no way back at all - and
+        // the host is willing: it re-delivers the existing token to the SAME
+        // subscriber rather than minting a second lease. Refusing here meant a
+        // reopened menu sat on "Pausing the countdown…" for the life of the
+        // chat.
+        if (pending.state !== "hold" && pending.state !== "choosing") {
           return null;
+        }
+        const lease = state.fallbackChoiceLease;
+        if (lease !== null && lease.traversalId === traversalId) {
+          // Reopened while a close's release was still owed. The token this
+          // request would wait for is the one already in flight, so the honest
+          // answer is to WITHDRAW the obligation rather than send a second
+          // frame: a new `clientActionId` would overwrite the correlation the
+          // pending release is keyed by, and the first token would then be the
+          // orphan instead.
+          if (lease.releaseRequested && lease.status === "pending") {
+            set(() => ({
+              fallbackChoiceLease: { ...lease, releaseRequested: false },
+            }));
+            return lease.clientActionId;
+          }
+          // A hold already in flight or already granted for this traversal: a
+          // second frame would mint a second lease and orphan the first. A
+          // `refused` one falls through - there is nothing to orphan.
+          if (lease.status !== "refused") return null;
         }
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
@@ -6247,38 +6575,51 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId: sent,
             token: null,
             status: "pending",
+            releaseRequested: false,
+            connectionEpoch,
           },
         }));
         return sent;
       },
       fallbackReleaseChoice: () => {
         const lease = get().fallbackChoiceLease;
-        // Clear the slot in every case. A `pending` hold whose ack never landed
-        // and a `refused` one both leave nothing to release - the host resumes
-        // the remainder on detach, close and restart regardless, which is
-        // exactly why it can never treat this frame as the only way a hold
-        // ends - but the menu is closing either way and a stale slot would
-        // block the next open.
         if (lease === null) return null;
+        // A `pending` hold has no token to hand back YET - which is not the
+        // same as having nothing to hand back. Dropping the slot here is what
+        // stranded the window: the ack that followed found no lease to mint
+        // into, so the token the host had already committed to was discarded
+        // and the freeze became permanent. The slot stays, carrying the
+        // obligation, and `dispatchPendingChoiceRelease` discharges it.
+        if (lease.status === "pending") {
+          if (lease.releaseRequested) return null;
+          set(() => ({
+            fallbackChoiceLease: { ...lease, releaseRequested: true },
+          }));
+          return null;
+        }
+        // `held` (hand the token back) and `refused` (nothing was ever minted)
+        // both empty the slot: the menu is closing either way and a stale slot
+        // would block the next open.
         set(() => ({ fallbackChoiceLease: null }));
         if (lease.status !== "held" || lease.token === null) return null;
-        const clientActionId = uuidv4();
-        const frame: ChatOwnerActionFrame = {
-          kind: "fallback.releaseChoice",
-          hasBinaryPayload: false,
-          epicId: options.epicId,
-          chatId: options.chatId,
-          clientActionId,
-          traversalId: lease.traversalId,
-          token: lease.token,
-        };
-        return sendAction({
+        return sendFallbackChoiceRelease({
           set,
           get,
-          frame,
-          pending: basicPending(clientActionId, "fallback.releaseChoice"),
-          pendingUserMessage: null,
+          traversalId: lease.traversalId,
+          token: lease.token,
         });
+      },
+      publishConfirmedManualFallbackAction: (input) => {
+        if (disposed) return;
+        set((state) => ({
+          confirmedManualFallbackAction: {
+            ...input,
+            // Off the PREVIOUS record rather than a separate counter, so the
+            // number is a property of the sequence itself and cannot drift out
+            // of step with what is stored.
+            sequence: (state.confirmedManualFallbackAction?.sequence ?? 0) + 1,
+          },
+        }));
       },
       stopBackgroundItem: (taskId) => {
         const state = get();
@@ -7345,17 +7686,66 @@ function reconcileFallbackChoiceAck(
 ): ChatSessionState["fallbackChoiceLease"] {
   if (lease === null) return null;
   if (lease.clientActionId !== frame.clientActionId) return lease;
-  if (frame.status !== "accepted") {
-    return { ...lease, token: null, status: "refused" };
-  }
-  // An accepted hold with no token is a host that took the freeze and minted
-  // nothing - treated as a refusal, because a pick with no token to present is
-  // `choice_lease_stale` at the verb and the menu is better off closing here
-  // than offering rows that cannot be chosen.
-  if (frame.token === null) {
-    return { ...lease, token: null, status: "refused" };
+  if (frame.status !== "accepted" || frame.token === null) {
+    // An accepted hold with no token is a host that took the freeze and minted
+    // nothing - treated as a refusal, because a pick with no token to present
+    // is `choice_lease_stale` at the verb and the menu is better off closing
+    // here than offering rows that cannot be chosen.
+    //
+    // A refusal ends a pending release OBLIGATION too, and by discharging it
+    // rather than deferring it: there is no token, so there is nothing to hand
+    // back, and the surface that would have read the refusal has already
+    // closed. Dropping the slot outright leaves the next open unblocked.
+    return lease.releaseRequested
+      ? null
+      : { ...lease, token: null, status: "refused" };
   }
   return { ...lease, token: frame.token, status: "held" };
+}
+
+/**
+ * The lease slot after an AUTHORITATIVE frame (snapshot or turn-state).
+ *
+ * Two facts end a lease, and a snapshot arriving is neither of them.
+ *
+ * **The connection went away.** Subscriber detach resumes the frozen remainder
+ * host-side, so a lease minted on an older connection names a hold that no
+ * longer exists. `connectionEpoch` moves only when the client is actually gone
+ * (`closeStreamClient`, and a `reconnecting`/`closed` status) - never on a
+ * resnapshot, which the host answers without replacing the subscriber, and
+ * never on the sibling-count snapshot it broadcasts to every chat mid-switch.
+ * Clearing on every snapshot treated all three as a detach and threw away
+ * proof of a lease the host was still holding.
+ *
+ * **The traversal ended or moved past the window.** The DTO is the host's own
+ * account of it: absent means settled, a different `traversalId` means this one
+ * is over, and any state but `hold`/`choosing` means the window has been spent
+ * or committed. Applied on the turn-state path as well as the snapshot path,
+ * because the settle usually arrives as a turn-state frame - which previously
+ * did not touch the slot at all, leaving a dead lease standing.
+ *
+ * TWO call sites is the COMPLETE set, and the windowed line is not a missing
+ * third: `adaptWindowedSnapshot` turns a windowed frame into a
+ * `ChatSnapshotFrame` and hands it to the same `applyAuthoritativeSnapshot`,
+ * so that line is already covered. A call added on the windowed path would run
+ * the rule twice on one frame.
+ */
+function reconcileFallbackChoiceLeaseWithFrame(
+  lease: ChatSessionState["fallbackChoiceLease"],
+  pendingFallback: PendingFallback | undefined,
+  connectionEpoch: number,
+): ChatSessionState["fallbackChoiceLease"] {
+  if (lease === null) return null;
+  if (lease.connectionEpoch !== connectionEpoch) return null;
+  if (pendingFallback === undefined) return null;
+  if (pendingFallback.traversalId !== lease.traversalId) return null;
+  if (
+    pendingFallback.state !== "hold" &&
+    pendingFallback.state !== "choosing"
+  ) {
+    return null;
+  }
+  return lease;
 }
 
 function reconcileSessionStopAck(

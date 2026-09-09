@@ -22,7 +22,10 @@ import {
   useFallbackProfileLabels,
 } from "./fallback-identity";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
-import { useFallbackCancel } from "./use-fallback-actions";
+import {
+  IGNORE_FALLBACK_OUTCOME,
+  useFallbackCancel,
+} from "./use-fallback-actions";
 
 /**
  * The wait card: this chat is paused until an account's limit resets.
@@ -73,7 +76,10 @@ export function FallbackWaitingCard({
   readonly menu: ReactNode | null;
 }) {
   const labelFor = useFallbackProfileLabels(client, true);
-  const cancel = useFallbackCancel(client, chatId);
+  // Nothing to do with the outcome: "Stop waiting" has no follow-on
+  // navigation, and the shared toast already reports a refusal. The grace
+  // card's "Sign in instead" is the one caller that needs the answer.
+  const cancel = useFallbackCancel(client, chatId, IGNORE_FALLBACK_OUTCOME);
   const openFallbackSettings = useOpenFallbackSettings(hostId);
 
   const waiting = fallbackTupleIdentity(pending.failedTuple, labelFor);

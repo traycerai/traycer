@@ -39,6 +39,7 @@ const HOLD = pendingFallback({
   reason: "rate_limit",
   failedTuple: FAILED_CLAUDE_TUPLE,
   targetTuple: TARGET_CODEX_TUPLE,
+  impendingAction: null,
   deadline: 1_700_000_012_000,
   attempt: 1,
   maxAttempts: 3,

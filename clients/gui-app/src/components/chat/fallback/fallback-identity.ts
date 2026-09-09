@@ -1,7 +1,12 @@
 import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatRunSettings,
+  PendingFallback,
+  PendingReturn,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { FallbackModelTarget } from "@traycer/protocol/host/chat-fallback";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -205,6 +210,216 @@ export function useFallbackProfileLabels(
           : resolveFallbackProfileLabel(byId, profileId),
     [byId],
   );
+}
+
+/**
+ * A DESTINATION as every fallback surface names it.
+ *
+ * One description feeding a menu row's title, a card's headline and the
+ * transcript announcer's sentence, because those three were saying different
+ * things about one place. The card said "Switching to Terminal account" - an
+ * account name with no provider and no model - while the menu row beside it
+ * said `Codex · gpt`, the equivalence-group FAMILY rather than the model the
+ * click would actually launch. A user could not tell from either which model
+ * they were about to run, and the two surfaces disagreed about the same row.
+ */
+export interface FallbackDestinationDescription {
+  /** "Claude Code" - `PROVIDER_DISPLAY_NAMES`, never a harness id. */
+  readonly providerLabel: string;
+  /** The profile's label, "Terminal account", or a short id prefix. */
+  readonly profileLabel: string;
+  /** The RESOLVED slug when the host resolved one; the family when it did not. */
+  readonly modelLabel: string;
+  /**
+   * Whether {@link modelLabel} is a family rather than a resolved slug.
+   *
+   * Carried rather than inferred from the string, because the two are
+   * indistinguishable by inspection - `gpt-5`'s family is `gpt-5` - and a
+   * surface that wanted to qualify an unresolved name would have no way to
+   * know it needed to.
+   */
+  readonly modelIsFamily: boolean;
+  /** The effort as it was configured, or `null` when the tuple carries none. */
+  readonly effortLabel: string | null;
+}
+
+/**
+ * The effort a tuple actually carries, or `null`.
+ *
+ * Trimmed-and-emptied-to-null exactly as `resolveAgentReasoningLabel`'s own
+ * normalisation does, and rendered RAW rather than through that resolver: the
+ * resolver needs a model-catalog context these surfaces do not have, and its
+ * own answer with no catalog entry is this same string. Matching its fallback
+ * keeps a card and the turn footer from naming one effort two ways.
+ */
+function normalizedEffort(reasoningEffort: string | null): string | null {
+  if (reasoningEffort === null) return null;
+  const trimmed = reasoningEffort.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
+/**
+ * A committed run tuple as a destination - the card's and the announcer's side.
+ *
+ * A tuple's `model` IS resolved by construction: it is what the engine will
+ * launch. So `modelIsFamily` is always false here, and the asymmetry with
+ * {@link fallbackDestinationOfModelTarget} is the point rather than an
+ * oversight - only a menu candidate can still be unresolved.
+ */
+export function fallbackDestinationOfTuple(
+  tuple: ChatRunSettings,
+  labelFor: FallbackProfileLabelResolver,
+): FallbackDestinationDescription {
+  const identity = fallbackTupleIdentity(tuple, labelFor);
+  return {
+    providerLabel: identity.providerLabel,
+    profileLabel: identity.profileLabel,
+    modelLabel: identity.model,
+    modelIsFamily: false,
+    effortLabel: normalizedEffort(tuple.reasoningEffort),
+  };
+}
+
+/**
+ * A `listTargets` equivalent-model row as a destination - the menu's side.
+ *
+ * Prefers the resolved `model` and falls back to `modelFamily`, which is the
+ * whole of F7's rule: the row used to title itself with the family
+ * unconditionally, so a group named `gpt` resolving to `gpt-6-astra` offered a
+ * click whose model the user never saw. Effort comes from the row's own
+ * `reasoningEffort`, which the engine re-derived against the DESTINATION's
+ * catalog - never from the failed tuple, which may not have an equivalent
+ * there at all.
+ */
+export function fallbackDestinationOfModelTarget(
+  target: FallbackModelTarget,
+  labelFor: FallbackProfileLabelResolver,
+): FallbackDestinationDescription {
+  const model = target.model;
+  return {
+    providerLabel: fallbackHarnessLabelFor(target.harnessId),
+    profileLabel: labelFor(target.profileId),
+    modelLabel: model ?? target.modelFamily,
+    modelIsFamily: model === null,
+    effortLabel: normalizedEffort(target.reasoningEffort),
+  };
+}
+
+/**
+ * "Codex · gpt-6-astra · high" - a destination menu row's title.
+ *
+ * The provider is always named here even though the section heading groups
+ * these rows, because the heading says "Equivalent models" and not which
+ * provider each one lives on; two rows from two providers are otherwise
+ * distinguishable only by their glyph, which is decorative.
+ */
+export function fallbackDestinationRowTitle(
+  destination: FallbackDestinationDescription,
+): string {
+  return [
+    destination.providerLabel,
+    destination.modelLabel,
+    destination.effortLabel,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+}
+
+/**
+ * "Codex · gpt-6-astra · high on Terminal account" - the one sentence a card
+ * headline and the transcript announcer both name a destination with.
+ *
+ * `includeProvider` is the caller's fact, not this function's: only the caller
+ * knows what the chat is moving FROM. A same-provider account switch reading
+ * "Claude Code · … on work" would put the provider in front of a user for whom
+ * nothing about the provider changed, and a cross-provider one that omitted it
+ * would hide the only part that did.
+ */
+export function fallbackDestinationSentence(
+  destination: FallbackDestinationDescription,
+  includeProvider: boolean,
+): string {
+  const identity = [
+    includeProvider ? destination.providerLabel : null,
+    destination.modelLabel,
+    destination.effortLabel,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+  return `${identity} on ${destination.profileLabel}`;
+}
+
+/**
+ * Which pending offer a sentence is being asked for.
+ *
+ * A union rather than two functions because the announcer wants one call and
+ * one dedupe key, and because the two share every rule that matters: the
+ * destination is named the same way, and the provider clause appears iff the
+ * chat is crossing providers. What differs is only which tuple is the source
+ * and which is the destination - and for a return those are the exact reverse
+ * of the forward switch.
+ */
+export type FallbackIdentitySubject =
+  | { readonly kind: "fallback"; readonly pending: PendingFallback }
+  | { readonly kind: "return"; readonly pending: PendingReturn };
+
+/**
+ * The resolved-identity sentence for a pending fallback or a return offer.
+ *
+ * The SAME string the grace card's headline renders, which is the point of
+ * exporting it: an announcement that named a destination differently from the
+ * row the user is looking at would be a second voice describing one event.
+ *
+ * `null` for a fallback the host has not named a destination for yet - a hold
+ * whose candidate walk is still running, or a `notify` rung with nowhere to go.
+ * A return always has one: the preferred tuple is where the chat came from.
+ */
+export function fallbackResolvedIdentitySentence(
+  subject: FallbackIdentitySubject,
+  labelFor: FallbackProfileLabelResolver,
+): string | null {
+  const pair =
+    subject.kind === "return"
+      ? {
+          source: subject.pending.fallbackTuple,
+          destination: subject.pending.preferredTuple,
+        }
+      : {
+          source: subject.pending.failedTuple,
+          destination: pendingFallbackDestinationTuple(subject.pending),
+        };
+  if (pair.destination === null) return null;
+  return fallbackDestinationSentence(
+    fallbackDestinationOfTuple(pair.destination, labelFor),
+    pair.destination.harnessId !== pair.source.harnessId,
+  );
+}
+
+/**
+ * Where a pending fallback is heading, or `null`.
+ *
+ * The COMMITTED target first, the host's PREDICTION second, and the order is
+ * the contract rather than a preference: `targetTuple` is written once a
+ * destination is settled (by the user's pick or the engine's own commit),
+ * while `impendingAction.target` is what the host expects to do when the
+ * window ends. Once a destination is settled both carry it, so the fallback
+ * only ever supplies an answer where there would otherwise be none.
+ *
+ * That "otherwise none" was the whole of the cancel window until the host
+ * began publishing a plan: the frame carried `targetTuple: null` for the
+ * entire hold, because the engine resolved and committed only after expiry -
+ * so a card could count down at the user without ever saying what it was
+ * counting down to.
+ *
+ * The single place that decision is made, so the card, the menu and the
+ * transcript announcer cannot end up naming three different destinations.
+ */
+function pendingFallbackDestinationTuple(
+  pending: PendingFallback,
+): ChatRunSettings | null {
+  if (pending.targetTuple !== null) return pending.targetTuple;
+  const impending = pending.impendingAction;
+  return impending === null ? null : impending.target;
 }
 
 /**

@@ -15,10 +15,8 @@ const COMPACT_WEEKS_CUTOFF_MS = 4 * WEEK_MS;
  * to THIS clock, so sibling rows reading a different cadence (or none) are not
  * re-rendered.
  *
- * A factory rather than two copies of the same fifteen lines. There are two
- * cadences in this module and there is exactly one place where starting,
- * stopping and sampling are decided - which also means a fix to the lifecycle
- * cannot land on one cadence and miss the other.
+ * Both cadences share this lifecycle so a sampling or cleanup fix applies to
+ * each of them.
  */
 interface SharedClock {
   /** For `useSyncExternalStore`'s subscribe argument. Starts the interval on
@@ -26,7 +24,7 @@ interface SharedClock {
   readonly subscribe: (listener: () => void) => () => void;
   /** Monotonic tick count - the store snapshot, not a time. */
   readonly getSnapshot: () => number;
-  /** The instant sampled at the last fire (or at module load / clock start). */
+  /** The instant sampled at construction, subscription, or the last fire. */
   readonly sampledNow: () => number;
 }
 
@@ -45,6 +43,32 @@ export function createSharedClock(intervalMs: number): SharedClock {
   // every interval fire and whenever the clock is (re)started.
   let sampledNow = Date.now();
   const listeners = new Set<() => void>();
+  let refreshGeneration = 0;
+  let pendingRefreshGeneration: number | null = null;
+  let lastNotifiedTick = tick;
+
+  const notifyListeners = (): void => {
+    lastNotifiedTick = tick;
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+
+  const notifySubscriptionRefresh = (): void => {
+    if (pendingRefreshGeneration !== null) return;
+    const generation = ++refreshGeneration;
+    pendingRefreshGeneration = generation;
+    // One immediate sweep preserves correction of an already-mounted sibling.
+    // Further subscriptions refresh their snapshot synchronously, but share
+    // one trailing sweep of the final sample at the next microtask checkpoint.
+    // N mounts therefore cost at most two sweeps, even across N milliseconds.
+    queueMicrotask(() => {
+      if (pendingRefreshGeneration !== generation) return;
+      pendingRefreshGeneration = null;
+      if (lastNotifiedTick !== tick) notifyListeners();
+    });
+    notifyListeners();
+  };
 
   const startIfNeeded = (): void => {
     if (intervalHandle !== null) return;
@@ -52,14 +76,15 @@ export function createSharedClock(intervalMs: number): SharedClock {
     intervalHandle = window.setInterval(() => {
       tick += 1;
       sampledNow = Date.now();
-      for (const listener of listeners) {
-        listener();
-      }
+      notifyListeners();
     }, intervalMs);
   };
 
   const stopIfIdle = (): void => {
     if (listeners.size > 0) return;
+    // A queued microtask cannot be cancelled. Invalidate its generation so it
+    // cannot notify a later batch after this clock has stopped and restarted.
+    pendingRefreshGeneration = null;
     if (intervalHandle === null) return;
     window.clearInterval(intervalHandle);
     intervalHandle = null;
@@ -68,15 +93,9 @@ export function createSharedClock(intervalMs: number): SharedClock {
   return {
     subscribe: (listener) => {
       listeners.add(listener);
-      // Captured BEFORE `startIfNeeded`, which re-samples whenever it starts
-      // the interval. THIS is the value the newcomer's render actually read,
-      // and it is the only correct thing to compare against: the first version
-      // of the guard below tested `now > sampledNow` after `startIfNeeded` had
-      // already advanced it, so the two were always equal, no tick was bumped,
-      // and D170's "a 5s window paints 6s" came straight back. Its own test
-      // caught it; the mass-mount count did not, because a freshly constructed
-      // clock is sampled at the instant its first subscriber arrives and never
-      // exercises the stale case at all.
+      // Capture BEFORE startIfNeeded: its resample would otherwise hide the
+      // change from the snapshot guard and leave the first render one tick
+      // stale. The comparison must use the sample that render actually saw.
       const sampleTheRenderSaw = sampledNow;
       startIfNeeded();
       // A new subscriber's FIRST render already happened, and it read whatever
@@ -93,22 +112,11 @@ export function createSharedClock(intervalMs: number): SharedClock {
       // after subscribe for exactly this case, a store that moved between
       // render and effect.
       //
-      // Every listener is notified, not just this one. The tick is shared, so
-      // waking only the newcomer would leave its siblings rendering an older
-      // sample against a snapshot that has already moved past theirs - two rows
-      // in one popover disagreeing about what time it is until the next fire.
-      //
-      // Guarded on the clock having actually MOVED, which is what stops that
-      // notify-everyone from being quadratic. A mass mount - 300 worktree rows
-      // in one commit - subscribes 300 times inside the same millisecond, and
-      // unguarded the k-th subscriber wakes k listeners: ~45,000 calls to
-      // correct nothing. Here the FIRST of those rows bumps the tick and the
-      // other 299 find the sample already current, so the commit costs one
-      // notification. They are not left stale by that: `useSyncExternalStore`
-      // re-reads `getSnapshot` after subscribing and re-renders anyone whose
-      // tick moved between render and effect, which is precisely their case.
-      // The notify-everyone loop is therefore for listeners already mounted -
-      // the ones React has no reason to re-check.
+      // Every listener must eventually observe the refreshed sample. The
+      // broadcast is coalesced independently of millisecond timing; the sample
+      // and snapshot correction are not, since the newcomer needs them before
+      // subscribe returns. Existing consumers catch the final sample in the
+      // trailing sweep, without waiting for the next interval fire.
       //
       // `>` rather than `!==` so a backwards system-clock jump does not thrash
       // every listener; the sample simply stands until the next fire re-takes
@@ -117,9 +125,7 @@ export function createSharedClock(intervalMs: number): SharedClock {
       if (now > sampleTheRenderSaw) {
         sampledNow = now;
         tick += 1;
-        for (const subscribed of listeners) {
-          subscribed();
-        }
+        notifySubscriptionRefresh();
       }
       return () => {
         listeners.delete(listener);

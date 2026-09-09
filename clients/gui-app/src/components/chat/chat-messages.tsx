@@ -116,14 +116,46 @@ import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import type { ChatAnnouncementKind } from "@/stores/chats/chat-announcements";
-import { useChatAnnouncements } from "@/stores/chats/chat-announcements";
-import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  createFallbackAnnouncementObserver,
+  fallbackNoticeAnnouncements,
+  fallbackOutcomeAnnouncement,
+  fallbackReturnAnnouncement,
+  fallbackTraversalAnnouncement,
+  NO_TRANSCRIPT_BASELINE,
+  useChatAnnouncementQueue,
+  useChatAnnouncements,
+  type ChatAnnouncement,
+  type ChatAnnouncementKind,
+  type FallbackAnnouncement,
+  type FallbackAnnouncementObserver,
+  type FallbackAnnouncementPlan,
+} from "@/stores/chats/chat-announcements";
+import {
+  fallbackDestinationOfTuple,
+  fallbackDestinationSentence,
+  fallbackResolvedIdentitySentence,
+  useFallbackProfileLabels,
+  type FallbackProfileLabelResolver,
+} from "@/components/chat/fallback/fallback-identity";
+import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+  ConfirmedManualFallbackAction,
+} from "@/stores/chats/chat-session-store";
+import { useStore } from "zustand";
+import type {
+  BackgroundItem,
+  FallbackImpendingAction,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
   use,
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useInsertionEffect,
   useMemo,
@@ -941,6 +973,286 @@ function announcementTextFor(
     default:
       return `${taskTitle} received a background completion.`;
   }
+}
+
+interface ChatAnnouncementScope {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string | null;
+}
+
+interface ChatLiveAnnouncementsProps extends ChatAnnouncementScope {
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly baselineEpoch: number;
+  readonly hydrationSequence: number;
+  readonly coldRewrittenMessageIds: ReadonlySet<string>;
+  readonly visible: boolean;
+  readonly taskTitle: string;
+  readonly completion: ChatAnnouncement | null;
+}
+
+function fallbackPlanForAnnouncement(
+  action: FallbackImpendingAction | null,
+  destination: string | null,
+): FallbackAnnouncementPlan | null {
+  if (action === null) return null;
+  let kind: FallbackAnnouncementPlan["action"];
+  if (action.pending !== null) {
+    kind = "checking";
+  } else if (action.rung === "profile" || action.rung === "tier") {
+    kind = "switch";
+  } else {
+    kind = action.rung;
+  }
+  return {
+    planId: action.planId,
+    action: kind,
+    destination,
+    resumesAt: action.resumesAt,
+  };
+}
+
+interface ManualFallbackAnnouncementObservation {
+  readonly sequence: number;
+  readonly announcement: FallbackAnnouncement | null;
+}
+
+function observeManualFallbackAction(
+  manual: ConfirmedManualFallbackAction | null,
+  scope: ChatAnnouncementScope,
+  lastSequence: number,
+  labelFor: FallbackProfileLabelResolver,
+): ManualFallbackAnnouncementObservation {
+  if (
+    manual === null ||
+    manual.hostId !== scope.hostId ||
+    manual.epicId !== scope.epicId ||
+    manual.chatId !== scope.chatId
+  ) {
+    return { sequence: lastSequence, announcement: null };
+  }
+  const newManual = manual.sequence > lastSequence;
+  const sequence = Math.max(lastSequence, manual.sequence);
+  if (!newManual || manual.rung !== "switch" || manual.target === null) {
+    return { sequence, announcement: null };
+  }
+  return {
+    sequence,
+    announcement: {
+      key: JSON.stringify([
+        "manual",
+        manual.hostId,
+        manual.epicId,
+        manual.chatId,
+        manual.userMessageId,
+        manual.turnId,
+        manual.sequence,
+      ]),
+      text: `Switched this chat to ${fallbackDestinationSentence(
+        fallbackDestinationOfTuple(manual.target, labelFor),
+        true,
+      )}.`,
+    },
+  };
+}
+
+function ChatFallbackAnnouncementSource(
+  props: ChatLiveAnnouncementsProps & {
+    readonly hostId: string;
+    readonly handle: ChatSessionStoreHandle;
+    readonly enqueue: (texts: ReadonlyArray<string>) => void;
+    readonly reset: () => void;
+  },
+) {
+  const { handle, enqueue, reset } = props;
+  const client = useHostClientForHostId(props.hostId);
+  const hasFallback = useStore(
+    handle.store,
+    (state) =>
+      state.pendingFallback !== undefined ||
+      state.pendingReturn !== undefined ||
+      state.confirmedManualFallbackAction?.rung === "switch",
+  );
+  const labelFor = useFallbackProfileLabels(
+    client,
+    props.visible && hasFallback,
+  );
+  const observerRef = useRef<FallbackAnnouncementObserver | null>(null);
+  const lastManualSequence = useRef(0);
+  const notices = useMemo(
+    () => fallbackNoticeAnnouncements(props.messages),
+    [props.messages],
+  );
+  const residentMessageIds = useMemo(
+    () => new Set(props.messages.map((message) => message.id)),
+    [props.messages],
+  );
+
+  const observeState = useEffectEvent((state: ChatSessionState) => {
+    const observer = observerRef.current;
+    if (observer === null) return;
+    const pending = state.pendingFallback;
+    const targetIdentity =
+      pending === undefined
+        ? null
+        : fallbackResolvedIdentitySentence(
+            { kind: "fallback", pending },
+            labelFor,
+          );
+    const plan = fallbackPlanForAnnouncement(
+      pending?.impendingAction ?? null,
+      targetIdentity,
+    );
+    const returning = state.pendingReturn;
+    const preferredIdentity =
+      returning === undefined
+        ? null
+        : fallbackResolvedIdentitySentence(
+            { kind: "return", pending: returning },
+            labelFor,
+          );
+    const manual = observeManualFallbackAction(
+      state.confirmedManualFallbackAction,
+      props,
+      lastManualSequence.current,
+      labelFor,
+    );
+    lastManualSequence.current = manual.sequence;
+    // A store rebase can precede React's new transcript props. Do not pair
+    // that epoch with the OLD rows, or its history would arrive as live news.
+    // Transport `open` can also precede its authoritative snapshot. The
+    // subscribed connection epoch detects this even after a warm remount
+    // whose observer never saw the disconnect.
+    const ready =
+      props.visible &&
+      state.connectionStatus === "open" &&
+      state.snapshotLoaded &&
+      state.transcriptBaselineEpoch === state.connectionEpoch &&
+      props.baselineEpoch !== NO_TRANSCRIPT_BASELINE &&
+      props.baselineEpoch === state.transcriptBaselineEpoch;
+    if (!ready) reset();
+    const next = observer.observe({
+      ready,
+      baselineEpoch: props.baselineEpoch,
+      hydrationSequence: props.hydrationSequence,
+      coldRewrittenMessageIds: props.coldRewrittenMessageIds,
+      residentMessageIds,
+      traversal: fallbackTraversalAnnouncement({
+        pending,
+        plan,
+        failedIdentity:
+          pending === undefined
+            ? ""
+            : fallbackDestinationSentence(
+                fallbackDestinationOfTuple(pending.failedTuple, labelFor),
+                true,
+              ),
+        targetIdentity,
+        now: Date.now(),
+      }),
+      returnOffer:
+        preferredIdentity === null
+          ? null
+          : fallbackReturnAnnouncement(returning, preferredIdentity),
+      liveOutcome: fallbackOutcomeAnnouncement(state.lastFallbackOutcome),
+      notices,
+      manualOutcome: manual.announcement,
+    });
+    enqueue(next.map((entry) => entry.text));
+  });
+
+  useLayoutEffect(() => {
+    observerRef.current = createFallbackAnnouncementObserver();
+    lastManualSequence.current = 0;
+    reset();
+    observeState(handle.store.getState());
+    // Observe the store itself: React may batch hold, choosing and switching
+    // into one render, and the initiating popover can unmount before success.
+    return handle.store.subscribe((state, prior) => {
+      if (
+        state.pendingFallback !== prior.pendingFallback ||
+        state.pendingReturn !== prior.pendingReturn ||
+        state.lastFallbackOutcome !== prior.lastFallbackOutcome ||
+        state.confirmedManualFallbackAction !==
+          prior.confirmedManualFallbackAction ||
+        state.connectionEpoch !== prior.connectionEpoch ||
+        state.connectionStatus !== prior.connectionStatus ||
+        state.snapshotLoaded !== prior.snapshotLoaded ||
+        state.transcriptBaselineEpoch !== prior.transcriptBaselineEpoch
+      ) {
+        observeState(state);
+      }
+    });
+  }, [handle, reset]);
+
+  useLayoutEffect(() => {
+    observeState(handle.store.getState());
+  }, [
+    handle,
+    notices,
+    residentMessageIds,
+    props.baselineEpoch,
+    props.hydrationSequence,
+    props.coldRewrittenMessageIds,
+    props.visible,
+    labelFor,
+  ]);
+  return null;
+}
+
+function ChatLiveAnnouncements(props: ChatLiveAnnouncementsProps) {
+  const handle = useExistingChatSessionHandle(
+    props.epicId,
+    props.chatId,
+    props.hostId,
+  );
+  const { announcement, enqueue, reset } = useChatAnnouncementQueue();
+  const lastCompletion = useRef<number | null>(null);
+  const observeCompletion = useEffectEvent((rebase: boolean) => {
+    if (rebase) {
+      lastCompletion.current = props.completion?.sequence ?? null;
+      reset();
+      return;
+    }
+    const completion = props.completion;
+    if (completion === null || completion.sequence === lastCompletion.current) {
+      return;
+    }
+    lastCompletion.current = completion.sequence;
+    if (props.visible) {
+      enqueue([announcementTextFor(props.taskTitle, completion.kind)]);
+    }
+  });
+  useLayoutEffect(() => {
+    observeCompletion(true);
+  }, [props.baselineEpoch, props.visible]);
+  useLayoutEffect(() => {
+    observeCompletion(false);
+  }, [props.completion]);
+
+  return (
+    <>
+      {handle !== null && props.hostId !== null ? (
+        <ChatFallbackAnnouncementSource
+          {...props}
+          hostId={props.hostId}
+          handle={handle}
+          enqueue={enqueue}
+          reset={reset}
+        />
+      ) : null}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {props.visible && announcement !== null ? (
+          <span key={announcement.sequence}>{announcement.text}</span>
+        ) : null}
+      </div>
+    </>
+  );
 }
 
 function ChatMessagesInner(props: ChatMessagesInnerProps) {
@@ -2618,36 +2930,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     scrollToEnd,
   ]);
 
-  // --- Accessibility (decision #24): polite turn-completion announcement ----
+  // --- Transcript completion signal (decision #24) -------------------------
 
-  // Liveness is NOT inferred here: `useChatAnnouncements` reads the store's
-  // transcript baseline (which connection hydrated these rows) and reports
-  // the semantic transition. This layer only renders it.
+  // The transcript observer uses the store's provenance to identify live
+  // completions. They feed both the shared region and the "New reply" latch;
+  // the separate fallback observer never changes that latch.
   const announcement = useChatAnnouncements({
     messages,
     baselineEpoch,
     coldRewrittenMessageIds,
     hydrationSequence,
   });
-  // The rendered sentence is FROZEN when the announcement is made, not
-  // recomputed per render: `taskTitle` is live (a chat is auto-titled right
-  // after its first turn, and can be renamed any time). Recomputing would
-  // rewrite the text inside the already-announced live-region node, and a
-  // screen reader re-announces on content change - a phantom completion for
-  // a rename. A later announcement re-freezes with the title current then.
-  const [renderedAnnouncement, setRenderedAnnouncement] = useState<{
-    readonly sequence: number;
-    readonly text: string;
-  } | null>(null);
-  if (
-    announcement !== null &&
-    renderedAnnouncement?.sequence !== announcement.sequence
-  ) {
-    setRenderedAnnouncement({
-      sequence: announcement.sequence,
-      text: announcementTextFor(taskTitle, announcement.kind),
-    });
-  }
   useLayoutEffect(() => {
     if (announcement === null) return;
     // Decision #10/#16: turn completion below the fold stays anchored - no
@@ -2758,15 +3051,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             />
           ) : null}
         </div>
-        <div aria-live="polite" className="sr-only">
-          {renderedAnnouncement === null ? null : (
-            // Keyed by the deriver's monotonic sequence so consecutive
-            // identical announcements still mutate the live region.
-            <span key={renderedAnnouncement.sequence}>
-              {renderedAnnouncement.text}
-            </span>
-          )}
-        </div>
+        <ChatLiveAnnouncements
+          epicId={props.epicId}
+          chatId={taskId}
+          hostId={props.hostId}
+          messages={messages}
+          baselineEpoch={baselineEpoch}
+          hydrationSequence={hydrationSequence}
+          coldRewrittenMessageIds={coldRewrittenMessageIds}
+          visible={visible}
+          taskTitle={taskTitle}
+          completion={announcement}
+        />
       </ActivityGroupOpenStoreProvider>
     </ChatOpenStoreScopeProvider>
   );

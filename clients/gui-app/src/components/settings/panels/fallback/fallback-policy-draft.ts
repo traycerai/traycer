@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/host/fallback-policy";
 import {
   reconcileKeyedGroups,
+  revertKeyedGroups,
   toKeyedGroups,
   type KeyedGroup,
 } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
@@ -82,8 +83,8 @@ export interface FallbackPolicyDraftState {
   readonly keyedTierGroups: readonly KeyedGroup[];
   /** Set by a local validation failure. Nothing was sent. */
   readonly localError: string | null;
-  /** Set by a rejected save. `draft` has been returned to `persisted`. */
-  readonly hostError: string | null;
+  /** Set by a save that did not succeed. See {@link FallbackSaveNotice}. */
+  readonly hostError: FallbackSaveNotice | null;
   /**
    * The group the most recent edit came from - where this panel's one status
    * line renders, whether that line is an error or "Saving…".
@@ -94,7 +95,6 @@ export interface FallbackPolicyDraftState {
    * all five groups at once.
    */
   readonly activeField: FallbackPolicyField | null;
-  readonly saveInFlight: boolean;
   /**
    * Bumped by every `edited`. Identifies WHICH draft a save is carrying.
    *
@@ -107,13 +107,130 @@ export interface FallbackPolicyDraftState {
    */
   readonly revision: number;
   /**
-   * The revision the in-flight save is carrying, or `null` when none is.
+   * Every save that has been sent and not yet answered, oldest first.
    *
-   * Captured at `save-started` rather than derived at `save-succeeded`, because
-   * by then the only thing that can be observed is the CURRENT revision, which
-   * is exactly the fact under question.
+   * A LIST, not the single `savingRevision` this replaced, and the difference is
+   * the whole of FC3. Every control on this page can commit while another save
+   * is in flight, so two are ordinary: start A at revision 1, start B at
+   * revision 2. One slot meant B's start overwrote A's marker, so when A's reply
+   * arrived the reducer compared revision 2 against revision 2, decided the echo
+   * answered the draft on screen, and wrote A's older policy over B's. A third
+   * edit then started from that stale value and could permanently undo B.
+   *
+   * Correlating instead of serialising is deliberate: serialising would delay
+   * the second request until the first settled, which changes WHEN a commit is
+   * dispatched. Nothing about FC3 needs that, and the commit-on-blur/Enter rule
+   * (D181) is pinned on the dispatch being synchronous with the gesture.
    */
-  readonly savingRevision: number | null;
+  readonly pendingSaves: readonly PendingFallbackSave[];
+  /**
+   * The revision whose reply produced {@link FallbackPolicyDraftState.persisted}.
+   *
+   * Guards the OTHER direction of the same race. Replies are FIFO in practice,
+   * but nothing in this reducer depends on that, and if B's reply is processed
+   * before A's then A - the older value - would otherwise land in `persisted`
+   * and become what the next refusal reverts to.
+   */
+  readonly persistedRevision: number;
+  /**
+   * The save whose outcome the host never told us, or `null`.
+   *
+   * Set only by a `save-failed` carrying {@link FallbackSaveNotice} outcome
+   * `"unknown"` - a transport failure after the request was dispatched, where
+   * the host may well have committed and lost the reply. It is the read-back's
+   * ticket: a `reconciled` naming any other request is an answer to an episode
+   * that has already been superseded, and is dropped.
+   */
+  readonly unknownSave: UnknownFallbackSave | null;
+}
+
+/** One dispatched, unanswered save. */
+export interface PendingFallbackSave {
+  readonly requestId: number;
+  /** The revision the request carries - captured at `save-started`, because by
+   * reply time the only observable revision is the current one, which is
+   * exactly the fact under question. */
+  readonly revision: number;
+}
+
+export interface UnknownFallbackSave {
+  readonly requestId: number;
+  /** The revision at the moment the outcome became unknown. The read-back may
+   * adopt the host's policy into `draft` only while this is still current. */
+  readonly revision: number;
+}
+
+/**
+ * What a failed save is allowed to CLAIM, which is not the same question as
+ * what went wrong.
+ *
+ * The panel used to answer every failure with "your last saved settings are
+ * back on screen and still in force". That is a statement about the host's
+ * stored row, and a dropped socket is not evidence for it: the request may have
+ * been committed and only the reply lost. Saying it anyway is at its worst
+ * exactly where it matters most - the user turns automatic fallback off, the
+ * reply is lost, and the page tells them it is off while the host has it on.
+ *
+ *  - `refused-reverted` - the host answered and rejected the value, and nothing
+ *    newer was on screen, so the control was returned to what is stored. Both
+ *    halves of the old sentence are true.
+ *  - `refused-kept` - the host answered and rejected an OLDER draft while the
+ *    user has since changed the same page. The refusal is real and worth
+ *    saying; the revert is not, because it would throw away typing the host
+ *    never judged.
+ *  - `unknown` - the request reached the wire and no answer came back. Nothing
+ *    may be claimed about what is stored until a read-back says.
+ */
+export type FallbackSaveNoticeOutcome =
+  | "refused-reverted"
+  | "refused-kept"
+  | "unknown";
+
+export interface FallbackSaveNotice {
+  readonly message: string;
+  readonly outcome: FallbackSaveNoticeOutcome;
+}
+
+/**
+ * What the CLASSIFIER at the call site decided, before the reducer knows
+ * whether a revert applies. Kept separate from
+ * {@link FallbackSaveNoticeOutcome} so neither can be passed where the other
+ * belongs: only the reducer can tell `refused-reverted` from `refused-kept`,
+ * and only the caller can tell `refused` from `unknown`.
+ */
+export type FallbackSaveFailureOutcome = "refused" | "unknown";
+
+/** Whether any save is awaiting a reply. One source of truth for the spinner. */
+export function fallbackSaveInFlight(state: FallbackPolicyDraftState): boolean {
+  return state.pendingSaves.length > 0;
+}
+
+/**
+ * Identifies a save across its own round trip.
+ *
+ * Minted at the call site rather than read off the reducer, because `commit`
+ * dispatches `edited` and `save-started` back to back and cannot observe the
+ * revision the first one produced - the reducer has not run yet. The id is the
+ * handle; the reducer pairs it with the revision itself.
+ */
+let nextSaveRequestId = 0;
+
+export function createFallbackSaveRequestId(): number {
+  nextSaveRequestId += 1;
+  return nextSaveRequestId;
+}
+
+/**
+ * Named rather than inlined into the union below because its arm is the only
+ * one with three outcomes, so it lives in {@link applySaveFailed} instead of in
+ * the reducer's `switch`.
+ */
+export interface FallbackSaveFailedAction {
+  readonly type: "save-failed";
+  readonly requestId: number;
+  readonly message: string;
+  readonly field: FallbackPolicyField;
+  readonly outcome: FallbackSaveFailureOutcome;
 }
 
 export type FallbackPolicyDraftAction =
@@ -140,21 +257,57 @@ export type FallbackPolicyDraftAction =
   // Carries its own field rather than inheriting whatever `edited` last set:
   // the reset has no `edited` before it, so an inherited `activeField` would
   // leave its spinner rendering under some other group - or nowhere.
-  | { readonly type: "save-started"; readonly field: FallbackPolicyField }
-  | { readonly type: "save-succeeded"; readonly policy: FallbackPolicy }
   | {
-      readonly type: "save-failed";
-      readonly message: string;
+      readonly type: "save-started";
       readonly field: FallbackPolicyField;
+      readonly requestId: number;
+    }
+  | {
+      readonly type: "save-succeeded";
+      readonly requestId: number;
+      readonly policy: FallbackPolicy;
+    }
+  | FallbackSaveFailedAction
+  /**
+   * The authoritative read-back after a save whose outcome was unknown.
+   *
+   * The ONLY action that installs a policy this editor did not send, and it is
+   * gated twice for that reason: it must name the request that went unanswered
+   * (`requestId`), and it may replace what is on screen only while the user has
+   * not edited since. The reducer's standing rule - a later read never yanks a
+   * control out from under someone mid-edit - is intact; this is the one state
+   * where NOT reading back means leaving a false claim on the page.
+   */
+  | {
+      readonly type: "reconciled";
+      readonly requestId: number;
+      readonly policy: FallbackPolicy;
     };
 
 /**
  * The editor's row order for a stored policy.
  *
- * Enabled steps first, in the order the ladder stores them, then the steps that
- * are turned off in the canonical order. That second half is the reload
- * behaviour {@link FallbackPolicyDraftState.displayOrder} documents: a disabled
- * step has no stored position to restore, so it goes to the end.
+ * Enabled steps in the order the ladder stores them, and the steps that are
+ * turned off in the canonical order - placed **before the `notify` slot**, not
+ * after the whole ladder. That second half is the reload behaviour
+ * {@link FallbackPolicyDraftState.displayOrder} documents: a disabled step has
+ * no stored position to restore, so it goes as late as it can.
+ *
+ * As late as it can is not the END, and that distinction is the whole point.
+ * `notify` is the terminal step - the engine's ladder walk stops at the first
+ * one it reaches - so a row sitting after it is a row that can never run. A
+ * disabled step is exactly the row a user is about to turn back ON, and
+ * appending it past `notify` handed them a step that reads as enabled and is
+ * unreachable, with nothing on screen saying so. The wire format permits such
+ * a ladder (`fallbackPolicySchema` checks length and uniqueness only) and the
+ * host stores it verbatim, so nothing downstream repairs it either.
+ *
+ * An externally authored early `notify` still renders where it is stored: the
+ * enabled steps keep their ladder order either side of it, and only the
+ * disabled placeholders - which have no stored position to be honest about -
+ * move to just before it. A ladder with no `notify` at all needs no insertion
+ * point, and the canonical order already ends with `notify`, so the disabled
+ * block lands correctly by itself.
  */
 export function fallbackDisplayOrder(
   ladder: readonly FallbackRungKind[],
@@ -163,7 +316,39 @@ export function fallbackDisplayOrder(
   // through `fallbackPolicySchema`, whose refine already rejects a repeated
   // step, so a guard here would be a branch no input can reach.
   const disabled = FALLBACK_RUNG_KINDS.filter((rung) => !ladder.includes(rung));
-  return [...ladder, ...disabled];
+  const notifyAt = ladder.indexOf("notify");
+  if (notifyAt === -1) return [...ladder, ...disabled];
+  return [...ladder.slice(0, notifyAt), ...disabled, ...ladder.slice(notifyAt)];
+}
+
+/**
+ * The row order to render for a policy that arrived from the host, given the
+ * order the editor is currently showing.
+ *
+ * The question this answers is NOT "what order does this ladder imply" -
+ * {@link fallbackDisplayOrder} answers that, and answering it here is the
+ * defect. A save echo carries back the ladder that was just SENT, which
+ * encodes enablement as PRESENCE and therefore cannot say where the turned-off
+ * steps sat. Re-deriving from it moved them, so the sequence "turn a step off,
+ * let the echo land, turn it back on" wrote a ladder in an order the user
+ * never arranged.
+ *
+ * So: if the incoming ladder is what the order on screen ALREADY produces for
+ * that set of enabled steps, the two agree about everything the ladder can
+ * express and the local order is the strictly better-informed one - it also
+ * knows where the disabled steps go. Keep it. Otherwise the incoming policy
+ * genuinely reorders the ladder (a restore, or a policy written elsewhere) and
+ * the local order is describing something else; derive afresh.
+ */
+export function fallbackDisplayOrderFor(
+  displayOrder: readonly FallbackRungKind[],
+  ladder: readonly FallbackRungKind[],
+): readonly FallbackRungKind[] {
+  const projected = fallbackLadderFrom(displayOrder, new Set(ladder));
+  const agrees =
+    projected.length === ladder.length &&
+    projected.every((rung, at) => rung === ladder[at]);
+  return agrees ? displayOrder : fallbackDisplayOrder(ladder);
 }
 
 /**
@@ -294,10 +479,103 @@ export function createFallbackPolicyDraftState(
     localError: null,
     hostError: null,
     activeField: null,
-    saveInFlight: false,
     revision: 0,
-    savingRevision: null,
+    pendingSaves: [],
+    persistedRevision: 0,
+    unknownSave: null,
   };
+}
+
+/**
+ * The three things a failed save can mean, and the only arm of the reducer that
+ * lives outside its `switch`.
+ *
+ * Extracted because it carries three outcomes of its own: inlined, the reducer
+ * exceeded the repo's complexity ceiling, and the arm that most needed reading
+ * as a unit was the one buried deepest in the statement.
+ */
+function applySaveFailed(
+  state: FallbackPolicyDraftState,
+  action: FallbackSaveFailedAction,
+): FallbackPolicyDraftState {
+  const pending = pendingSaveFor(state, action.requestId);
+  if (pending === null) return state;
+  const pendingSaves = withoutPendingSave(state, action.requestId);
+  // The host never answered, so nothing may be claimed about what it
+  // stored - including the claim that the old value is still in force. The
+  // draft stays exactly as it is (it may BE what was committed), and the
+  // read-back this records a ticket for is what settles it.
+  if (action.outcome === "unknown") {
+    return {
+      ...state,
+      pendingSaves,
+      localError: null,
+      hostError: { message: action.message, outcome: "unknown" },
+      activeField: action.field,
+      unknownSave: {
+        requestId: action.requestId,
+        revision: pending.revision,
+      },
+    };
+  }
+  // The host answered and refused an OLDER draft than the one on screen.
+  // The refusal is real and is reported; the revert is not applied, because
+  // it would throw away an edit the host never judged - and that edit will
+  // carry itself to the host through its own commit.
+  if (pending.revision !== state.revision) {
+    return {
+      ...state,
+      pendingSaves,
+      hostError: { message: action.message, outcome: "refused-kept" },
+      activeField: action.field,
+    };
+  }
+  // The revert is the whole point: the host refused this value, so leaving
+  // it on screen would show a setting that is not in force. The draft is
+  // recoverable from the message, which names what was refused.
+  return {
+    ...state,
+    pendingSaves,
+    draft: state.persisted,
+    // Same rule as the echo: a revert restores the persisted VALUES, and
+    // the order on screen already agrees with them wherever it can, so
+    // re-deriving would move the disabled rows for a refusal that said
+    // nothing about the order.
+    displayOrder: fallbackDisplayOrderFor(
+      state.displayOrder,
+      state.persisted.ladder,
+    ),
+    // The rows revert with the draft KEEPING THEIR IDENTITIES wherever the
+    // shape is unchanged - see `revertKeyedGroups`. A rejected value edit
+    // must not remount the field the user is still typing in.
+    keyedTierGroups: revertKeyedGroups(
+      state.keyedTierGroups,
+      state.persisted.tierGroups,
+    ),
+    localError: null,
+    hostError: { message: action.message, outcome: "refused-reverted" },
+    activeField: action.field,
+  };
+}
+
+/** The pending entry a reply names, or `null` if it has already been settled. */
+function pendingSaveFor(
+  state: FallbackPolicyDraftState,
+  requestId: number,
+): PendingFallbackSave | null {
+  return (
+    state.pendingSaves.find((pending) => pending.requestId === requestId) ??
+    null
+  );
+}
+
+function withoutPendingSave(
+  state: FallbackPolicyDraftState,
+  requestId: number,
+): readonly PendingFallbackSave[] {
+  return state.pendingSaves.filter(
+    (pending) => pending.requestId !== requestId,
+  );
 }
 
 export function fallbackPolicyDraftReducer(
@@ -349,39 +627,61 @@ export function fallbackPolicyDraftReducer(
     case "save-started":
       return {
         ...state,
-        saveInFlight: true,
         hostError: null,
         activeField: action.field,
         // The commit path dispatches `edited` immediately before this, so the
         // revision read here is the one the request carries. `restore` and
         // `reset` have no `edited` before them and capture the unchanged
         // revision, which is correct: they send no draft.
-        savingRevision: state.revision,
+        pendingSaves: [
+          ...state.pendingSaves,
+          { requestId: action.requestId, revision: state.revision },
+        ],
+        // A new save supersedes an unresolved one: whatever this request
+        // answers is a fresher fact about the host's row than a read-back of
+        // the previous attempt could be, so the read-back's ticket is torn up
+        // and a `reconciled` naming it is dropped.
+        unknownSave: null,
       };
-    case "save-succeeded":
+    case "save-succeeded": {
+      const pending = pendingSaveFor(state, action.requestId);
+      // A reply to a request this state has already settled - it cannot say
+      // which draft it answers, so it says nothing.
+      if (pending === null) return state;
+      const pendingSaves = withoutPendingSave(state, action.requestId);
+      // The host really did store what was sent, and that fact survives even
+      // when the echo may not be written to the draft. It is only refused where
+      // an even newer reply has already landed, which would make this an older
+      // value overwriting a newer `persisted`.
+      const persisted =
+        pending.revision >= state.persistedRevision
+          ? { persisted: action.policy, persistedRevision: pending.revision }
+          : {
+              persisted: state.persisted,
+              persistedRevision: state.persistedRevision,
+            };
       // The echo answers a draft that has since moved on: the user edited
-      // something while this save was in flight. Record that the host stored
-      // what was sent - it did - but leave the draft, its identities and its
-      // display order alone, because those describe a NEWER value the user can
-      // see. `localError` and `activeField` are untouched for the same reason:
-      // they may belong to that later edit. The later edit carries itself to the
-      // host through its own commit.
-      if (
-        state.savingRevision !== null &&
-        state.savingRevision !== state.revision
-      ) {
-        return {
-          ...state,
-          persisted: action.policy,
-          saveInFlight: false,
-          savingRevision: null,
-        };
+      // something while this save was in flight. Leave the draft, its
+      // identities and its display order alone, because those describe a NEWER
+      // value the user can see. `localError` and `activeField` are untouched
+      // for the same reason: they may belong to that later edit. The later edit
+      // carries itself to the host through its own commit.
+      if (pending.revision !== state.revision) {
+        return { ...state, ...persisted, pendingSaves };
       }
       return {
         ...state,
-        persisted: action.policy,
+        ...persisted,
+        pendingSaves,
         draft: action.policy,
-        displayOrder: fallbackDisplayOrder(action.policy.ladder),
+        // NOT `fallbackDisplayOrder(action.policy.ladder)`. The echo is the
+        // ladder we sent, which cannot carry where the turned-off steps sat,
+        // so re-deriving from it moved them - and moved them past the terminal
+        // `notify`, where turning one back on produced a step that never runs.
+        displayOrder: fallbackDisplayOrderFor(
+          state.displayOrder,
+          action.policy.ladder,
+        ),
         // The host's echo of what was sent, in the ordinary case - the same
         // rows, so the same identities. A restore returns a DIFFERENT list and
         // re-seeds, which is correct: those are not the rows that were there.
@@ -392,36 +692,50 @@ export function fallbackPolicyDraftReducer(
         localError: null,
         hostError: null,
         activeField: null,
-        saveInFlight: false,
-        savingRevision: null,
       };
+    }
     case "save-failed":
-      // The revert is the whole point: the host refused this value, so leaving
-      // it on screen would show a setting that is not in force. The draft is
-      // recoverable from the message, which names what was refused.
-      //
-      // No revision check here, unlike `save-succeeded`. The two cases are not
-      // symmetric: a success has a value to write and the question is WHICH
-      // value is newer, while a refusal has none - it says the persisted value
-      // is the one in force, and that is true whatever the draft has since
-      // become. The ticket specifies the revert, and a refused edit the user has
-      // typed over would otherwise leave a setting on screen the host rejected.
+      return applySaveFailed(state, action);
+    case "reconciled": {
+      // Not the read-back this state is waiting for - a superseded episode's
+      // answer, or one that raced a newer save's `save-started`.
+      if (
+        state.unknownSave === null ||
+        state.unknownSave.requestId !== action.requestId
+      ) {
+        return state;
+      }
+      // The host's own row, which outranks anything this editor believed about
+      // it. `persistedRevision` follows the current revision because a
+      // read-back is the freshest fact available, not an echo to be ordered.
+      const reconciled = {
+        persisted: action.policy,
+        persistedRevision: state.revision,
+        unknownSave: null,
+      };
+      // The user has typed since the save went unanswered. Their draft stands -
+      // the standing rule that a read never yanks a control out from under
+      // someone mid-edit applies here too - and the notice is cleared because
+      // the panel is no longer making an unverified claim: `persisted` is now
+      // authoritative, and their next commit settles the rest.
+      if (state.revision !== state.unknownSave.revision) {
+        return { ...state, ...reconciled, hostError: null };
+      }
       return {
         ...state,
-        draft: state.persisted,
-        displayOrder: fallbackDisplayOrder(state.persisted.ladder),
-        // The rows revert with the draft. A refused edit that never touched
-        // model groups leaves them alone by the same comparison that keeps them
-        // through an unrelated save.
-        keyedTierGroups: reconcileKeyedGroups(
+        ...reconciled,
+        draft: action.policy,
+        displayOrder: fallbackDisplayOrderFor(
+          state.displayOrder,
+          action.policy.ladder,
+        ),
+        keyedTierGroups: revertKeyedGroups(
           state.keyedTierGroups,
-          state.persisted.tierGroups,
+          action.policy.tierGroups,
         ),
         localError: null,
-        hostError: action.message,
-        activeField: action.field,
-        saveInFlight: false,
-        savingRevision: null,
+        hostError: null,
       };
+    }
   }
 }

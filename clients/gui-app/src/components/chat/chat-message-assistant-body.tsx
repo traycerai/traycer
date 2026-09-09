@@ -39,6 +39,7 @@ import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import { PlanSegment } from "./segments/plan-segment";
 import { ProviderNoticeSegment } from "./segments/provider-notice-segment";
 import { FallbackWaitResumedMarker } from "@/components/chat/fallback/fallback-notice-attribution";
+import { manualRungAnchorSegmentId } from "@/components/chat/fallback/fallback-action-anchor";
 import { ReasoningSegment } from "./segments/reasoning-segment";
 import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
@@ -139,6 +140,15 @@ export function AssistantMessageBody({
       }),
     [activityTimelineTurnState, backgroundToolBlockIds, segments],
   );
+  // Derived from the timeline the rows are drawn from, not from `segments`, so
+  // an error the renderer never mounts can never be named the anchor. Memoised
+  // on the same identity the timeline is: this walk is O(rows) and re-running
+  // it on every countdown tick of an unrelated card would be the cost the
+  // timeline's own cache exists to avoid.
+  const manualRungAnchorId = useMemo(
+    () => manualRungAnchorSegmentId(timeline),
+    [timeline],
+  );
   // A content-less boundary row's own segments never carry copyable text
   // (the reply lives on an earlier row in the same turn, before the trailing
   // steer bubble) - fall back to the turn-wide text `withTurnCompletion`
@@ -238,7 +248,17 @@ export function AssistantMessageBody({
             // the chat has since switched away from. `null` on legacy turns with
             // no metadata; the affordance then falls back to the section root.
             harnessId={meta?.provider ?? null}
-            turnId={turnId}
+            // ONE row, not every error row on the turn. A failed turn routinely
+            // carries several error blocks that all share this `turnId` - the
+            // queue-pause notice the host appends beside the failure, a
+            // non-terminal extension error before the real terminal - and
+            // handing the id to each of them rendered a full recovery group
+            // under each, including under "Resume the queue to send them",
+            // where Retry retried the failed prompt instead. The anchor names
+            // the block that describes the failed ATTEMPT; every other row
+            // gets `null`, which is the same answer a row with no turn
+            // identity already gets.
+            turnId={item.id === manualRungAnchorId ? turnId : null}
           />
         );
       })}

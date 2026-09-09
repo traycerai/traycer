@@ -826,6 +826,98 @@ export const pendingFallbackStateSchema = z.enum([
 export type PendingFallbackState = z.infer<typeof pendingFallbackStateSchema>;
 
 /**
+ * The ladder rung an impending action will take (`chat.subscribe@1.9`).
+ *
+ * `retry` is here even though it is not a ladder rung: during the transient
+ * pre-retry series the thing that happens when the countdown ends IS another
+ * attempt on the same tuple, and a client asking "what happens next" wants that
+ * answer in the same field as the others rather than by inferring it from
+ * `state`.
+ */
+export const fallbackImpendingRungSchema = z.enum([
+  /** The same tuple, again - the transient pre-retry series. */
+  "retry",
+  /** The same provider, a different account. */
+  "profile",
+  /** An equivalent model from the user's own groups, usually elsewhere. */
+  "tier",
+  /** Park until the failed tuple's verified reset boundary. */
+  "wait",
+  /** Nothing left to try: stop and say so. */
+  "notify",
+]);
+export type FallbackImpendingRung = z.infer<typeof fallbackImpendingRungSchema>;
+
+/** Why the host cannot name a destination yet (`chat.subscribe@1.9`). */
+export const fallbackImpendingPendingSchema = z.enum([
+  /** The candidate walk has not produced an answer. */
+  "resolving",
+  /** A provider reset probe is in flight and may change the plan. */
+  "awaiting_reset_check",
+]);
+export type FallbackImpendingPending = z.infer<
+  typeof fallbackImpendingPendingSchema
+>;
+
+/**
+ * What the host will do when the current countdown ends (`chat.subscribe@1.9`).
+ *
+ * ## The contract, in one sentence
+ *
+ * This is what happens when `pendingFallback.deadline` elapses - during
+ * `retrying` another attempt on the same tuple, during `hold` the ladder rung
+ * the cursor is on, walked forward past rungs that cannot be taken.
+ *
+ * ## Why it exists
+ *
+ * The whole point of the grace window is that the user can stop what is about
+ * to happen. Before this the frame carried `targetTuple: null` for the entire
+ * hold - the host resolved and COMMITTED its destination only after expiry - so
+ * the card could say "deciding what to do in 12s" and nothing else. A cancel
+ * window that will not say what it is cancelling is a countdown, not a choice.
+ *
+ * ## `impendingAction.target` versus `targetTuple`
+ *
+ * `targetTuple` is where the chat is GOING - written when a destination has
+ * been chosen, by the user or by the host's own commit. This is the host's
+ * PREDICTION, published before anything is committed. Once a destination is
+ * settled both carry it, so a surface that reads only this one is still right.
+ */
+export const fallbackImpendingActionSchema = z.object({
+  /**
+   * The identity of this plan, opaque and for comparison only.
+   *
+   * Changes if and only if `rung`, `target`, `targetModelFamily`, `resumesAt`
+   * or `pending` change. A `siblingSwitching` change, a `revision` bump that
+   * moved nothing else, and every countdown tick all carry the SAME value -
+   * which is what lets a screen-reader announcer speak a plan once instead of
+   * once per frame, without diffing four fields itself and getting the
+   * "unchanged" case subtly wrong.
+   */
+  planId: z.string(),
+  rung: fallbackImpendingRungSchema,
+  /**
+   * Where a switch would move the chat. `null` for `wait`, `notify` and
+   * `retry`, which move nothing, and while `pending` is non-null.
+   */
+  target: chatRunSettingsSchema.nullable(),
+  /**
+   * The equivalence-group family a `tier` hop matched, when it differs from the
+   * resolved `target.model`. `null` on every other rung, and `null` when the
+   * group names the resolved slug itself - so a row rendering "family · model"
+   * never says the same word twice.
+   */
+  targetModelFamily: z.string().nullable(),
+  /** When a `wait` rung would resume, epoch ms. `null` on every other rung. */
+  resumesAt: z.number().nullable(),
+  /** `null` once the plan is fully resolved. */
+  pending: fallbackImpendingPendingSchema.nullable(),
+});
+export type FallbackImpendingAction = z.infer<
+  typeof fallbackImpendingActionSchema
+>;
+
+/**
  * The live fallback traversal on this chat, derived from the durable record
  * (`chat.subscribe@1.9`).
  *
@@ -859,8 +951,29 @@ export const pendingFallbackSchema = z.object({
   reason: z.string(),
   /** The tuple that failed. Never the chat's current settings, which a hop may already have moved. */
   failedTuple: chatRunSettingsSchema,
-  /** The tuple a switch is heading for, once one is chosen. */
+  /**
+   * The tuple a switch is heading for, once one is COMMITTED.
+   *
+   * Null during the grace hold, and that no longer means the destination is
+   * unknown: since F5 the host publishes its intended destination on
+   * `impendingAction.target` while the hold is still cancellable. Read this
+   * field for "where the chat has been moved", `impendingAction.target` for
+   * "where it is about to move" - a card that waits for this one to render a
+   * destination shows nothing for the entire window the user could act in.
+   */
   targetTuple: chatRunSettingsSchema.nullable(),
+  /**
+   * What the host will do when this window ends - published DURING the hold and
+   * before any settings commit. `null` only when the host can name no takeable
+   * rung at all, which is a traversal about to settle as exhausted.
+   *
+   * Required-and-nullable rather than optional: `1.9` is the live line and the
+   * host always sets this key, so `null` is a fact ("nothing is takeable")
+   * rather than an absence a reader has to distinguish from an older host. Every
+   * released `1.0`-`1.8` line drops the whole `pendingFallback` container at the
+   * projector's explicit-delete sites, so a nested key never reaches one.
+   */
+  impendingAction: fallbackImpendingActionSchema.nullable(),
   /**
    * When the current state's countdown ends, epoch ms.
    *
@@ -982,6 +1095,48 @@ export type PendingReturn = z.infer<typeof pendingReturnSchema>;
  * frame so an `undefined` VALUE clears a card that is no longer offered - the
  * `pendingReturn` contract exactly (D102/D115).
  */
+/**
+ * Why a failed attempt is not offering a wait (`chat.subscribe@1.9`).
+ *
+ * HOST-AUTHORED, every value. A client must not derive any of these from the
+ * failure payload: the host is the only party that knows the user's wait cap,
+ * whether a boundary was VERIFIED rather than estimated, whether a reset probe
+ * is running, and whether the attempt's replay envelope survives.
+ */
+export const fallbackWaitDispositionSchema = z.enum([
+  /** A wait is on offer - `wait_once` is in `eligibleRungs`. */
+  "eligible",
+  /**
+   * A provider reset probe for THIS attempt is in flight. Transient by
+   * construction, and asserted only while one is actually running - never as a
+   * placeholder for "the host has not looked".
+   */
+  "checking",
+  /**
+   * No verified reset boundary exists for the failed tuple: the provider named
+   * none, or what exists is a gauge estimate. A wait on a guessed boundary
+   * parks a chat on nothing, which is the one thing the wait rung may not do.
+   */
+  "no_verified_reset",
+  /**
+   * A verified boundary exists but is further out than the longest wait the
+   * user's policy allows. `failure.resetsAt` carries that boundary - the
+   * failure payload is read WITHOUT a cap, because when a limit resets is a
+   * fact and whether to wait for it is a decision.
+   */
+  "beyond_cap",
+  /**
+   * The failed attempt's replay envelope is not available, so no wait can be
+   * armed for it whatever the provider says. The envelope carries the billing
+   * account the attempt ran under and the error block a waiting row anchors to;
+   * arming without it would re-dispatch billed to the wrong account.
+   */
+  "attempt_unavailable",
+]);
+export type FallbackWaitDisposition = z.infer<
+  typeof fallbackWaitDispositionSchema
+>;
+
 export const lastFailedAttemptSchema = z.object({
   /** The persisted user message the attempt ran. */
   userMessageId: z.string(),
@@ -1030,8 +1185,132 @@ export const lastFailedAttemptSchema = z.object({
    * button would be re-deciding eligibility by another name.
    */
   eligibleRungs: z.array(z.enum(["retry", "switch", "wait_once"])),
+  /**
+   * Why `wait_once` is absent from {@link eligibleRungs}, or `eligible` when it
+   * is present (`chat.subscribe@1.9`).
+   *
+   * ONE host decision, not a second opinion: the host computes this and
+   * `eligibleRungs` in the same pass, so `eligible` holds if and only if
+   * `wait_once` is in the array.
+   *
+   * ## Why the host has to say this
+   *
+   * Four different situations used to render as the same missing button, and
+   * the only thing a card could reason from was `failure.resetsAt` - which is
+   * PRESENT for a boundary beyond the user's cap and ABSENT for one the host
+   * never verified. So the two states a user can actually do something about
+   * (raise the cap; wait for the provider to report a boundary) looked
+   * identical, and the state where a wait is genuinely impossible looked like
+   * the state where it is merely far away.
+   *
+   * Rendering rule: explain when this is not `eligible`, and never infer any of
+   * these from the failure payload. `beyond_cap` is the one value that pairs
+   * with `failure.resetsAt` - the boundary IS known, and the payload carries it
+   * uncapped - so a card may name the time and point at Settings. The cap
+   * itself deliberately never reaches the client, for the reason
+   * {@link eligibleRungs} gives.
+   */
+  waitDisposition: fallbackWaitDispositionSchema,
 });
 export type LastFailedAttempt = z.infer<typeof lastFailedAttemptSchema>;
+
+/**
+ * Which automatic outcome the host CONFIRMED (D215).
+ *
+ * One member per caller of the host's notice funnel
+ * (`appendFallbackNoticeBlock`) - the enum is closed against the FUNNEL, not
+ * against a curated subset, so a new appender cannot ship without widening
+ * this. `return_unavailable` and `return_limited` are two members rather than
+ * one because they are two different statements: the preferred provider is
+ * gone, versus it is still rate limited. `superseded` is D134's row for a
+ * traversal the user's own `agent.configure` ended - not a failure, but an
+ * outcome all the same.
+ */
+export const fallbackOutcomeKindSchema = z.enum([
+  "applied",
+  "wait_resumed",
+  "switched_back",
+  "return_unavailable",
+  "return_limited",
+  "settled",
+  "superseded",
+]);
+export type FallbackOutcomeKind = z.infer<typeof fallbackOutcomeKindSchema>;
+
+export const fallbackOutcomeDetailSchema = z.object({
+  label: z.string(),
+  value: z.string(),
+});
+export type FallbackOutcomeDetail = z.infer<typeof fallbackOutcomeDetailSchema>;
+
+/**
+ * The last automatic fallback outcome the host confirmed, independent of
+ * whether the transcript row carrying its notice is still in the bounded tail
+ * (D215).
+ *
+ * ## Why this key exists at all
+ *
+ * Every automatic outcome is written as a provider-notice block appended to
+ * `record.failed.assistantMessageId` and broadcast as a snapshot. That row is
+ * the FAILED turn's row, so on a chat that has kept talking it falls out of the
+ * bounded tail - and a consumer that must SPEAK a confirmed outcome then never
+ * receives the notice body at all. Transcript residency is not a channel.
+ *
+ * ## Absence is not an outcome
+ *
+ * The key is cleared when a new traversal arms. Absent therefore means "no
+ * confirmed outcome for the current incident" - it never means success,
+ * cancellation or failure. Do not infer an outcome from this key
+ * disappearing, and do not infer one from `pendingFallback` disappearing
+ * either: terminal success, cancel and failure are all absent there too.
+ */
+export const lastFallbackOutcomeSchema = z.object({
+  /**
+   * The notice block's id: `<prefix>:<traversalId>[:<hop>]`, minted
+   * deterministically so a replayed phase re-derives the same string and the
+   * funnel's idempotence makes it unique for the life of the outcome. THE
+   * dedupe key for a consumer that must speak an outcome exactly once.
+   */
+  blockId: z.string(),
+  /**
+   * The assistant row the notice was appended to. May be OUTSIDE the bounded
+   * tail - that is the whole reason this key exists - so treat it as an anchor
+   * for later hydration, never as a row that can be read from this frame.
+   */
+  assistantMessageId: z.string(),
+  kind: fallbackOutcomeKindSchema,
+  title: z.string(),
+  /**
+   * The notice's explanatory sentence, or `null` when the title is the whole
+   * statement.
+   *
+   * Not decorative, and not droppable: `return_unavailable`, `return_limited`,
+   * `settled` and `superseded` carry their reason HERE and nowhere else. For
+   * `superseded` the host picks between two sentences on the settlement's own
+   * `heldCount`, so without this field a consumer cannot tell a settle that
+   * paused the user's queue from one that did not.
+   */
+  message: z.string().nullable(),
+  details: z.array(fallbackOutcomeDetailSchema),
+  /**
+   * A counter over writes to this slot, starting at 1 and reset when a new
+   * traversal arms.
+   *
+   * Deliberately NOT the traversal's revision, which cannot order these: the
+   * settled notice is written BEFORE the terminal transition commits, so a
+   * settle with no transition between it and the preceding hop carries the
+   * identical revision, and a consumer ordering by it would see a tie where
+   * there is a real sequence.
+   *
+   * It orders writes within ONE incident and nothing else - it restarts across
+   * the clear, so `2` on this incident is not "after" `7` on the last. It is
+   * not an identity either: {@link blockId} is, and it is globally unique, so a
+   * consumer that dedupes on `blockId` needs nothing from this field, and one
+   * that asks "is this frame newer than what I hold" gets a total order.
+   */
+  sequence: z.number().int().positive(),
+});
+export type LastFallbackOutcome = z.infer<typeof lastFallbackOutcomeSchema>;
 
 export const chatSnapshotSchema = z.object({
   chat: chatSchema,
@@ -1118,10 +1397,21 @@ export const chatSnapshotSchema = z.object({
   // (`chat.subscribe@1.9`). Same optionality contract as `pendingFallback`, and
   // stripped by the same pre-1.9 projection.
   pendingReturn: pendingReturnSchema.optional(),
-  // The failed attempt the error card's rungs act on, or absent when the host
-  // would not admit a rung (`chat.subscribe@1.9`, D152). Same optionality
-  // contract and the same pre-1.9 strip as the two above.
+  // The failed attempt the error card's rungs act on, or absent when the chat
+  // is not in the state those rungs are for at all (`chat.subscribe@1.9`,
+  // D152). NOT "absent when the host would not admit a rung" - that was true
+  // until F6, and `waitDisposition` falsified it: the DTO's job now includes
+  // saying why a rung is WITHHELD, so it is present in exactly the cases where
+  // `eligibleRungs` is missing one. Same optionality contract and the same
+  // pre-1.9 strip as the two above.
   lastFailedAttempt: lastFailedAttemptSchema.optional(),
+  // The last CONFIRMED automatic outcome (`chat.subscribe@1.9`, D215). A
+  // FOURTH explicit key on the same 1.9 gate and the same pre-1.9 strip. Unlike
+  // the three above it is not derived from the live traversal - it outlives the
+  // traversal that produced it and is cleared by the next ARM, because its
+  // whole job is to be readable after the incident's transcript row has left
+  // the bounded tail.
+  lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -1170,6 +1460,11 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
   // that kept its last value would offer Retry on a turn that has since
   // succeeded, which is the exact defect D122 closed on the host side.
   lastFailedAttempt: lastFailedAttemptSchema.optional(),
+  // The last confirmed automatic outcome (D215). The clearing rule is the same
+  // in mechanism and OPPOSITE in timing: an absent key clears, but this one is
+  // cleared by the next ARM rather than by the traversal ending - a settled
+  // traversal's outcome is exactly what a consumer still needs to speak.
+  lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
 });
 
 /**
@@ -3170,6 +3465,13 @@ export const chatWindowedSnapshotSchema = z.object({
    * actually receives, so a field added only to the full shape reaches nobody.
    */
   lastFailedAttempt: lastFailedAttemptSchema.optional(),
+  /**
+   * The last confirmed automatic outcome (D215), on both snapshot shapes for
+   * the same reason as the three above - and it matters MORE here than for
+   * them, because the windowed payload is precisely the shape whose bounded
+   * tail drops the notice row this key exists to survive.
+   */
+  lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
   /**
    * The epoch every ordinal in this session is relative to. The host advances
    * it only when an ordinal no longer names the row it named before; appends

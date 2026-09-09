@@ -6,7 +6,10 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LastFailedAttempt } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  FallbackWaitDisposition,
+  LastFailedAttempt,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatFallbackListTargetsResponse } from "@traycer/protocol/host/chat-fallback";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -30,14 +33,37 @@ const USER_MESSAGE_ID = "user-msg-attempt";
 const RESETS_AT = new Date(2026, 5, 15, 15, 0, 0).getTime();
 
 const harness = vi.hoisted(() => {
-  type Slice = { lastFailedAttempt: LastFailedAttempt | undefined };
-  let state: Slice = { lastFailedAttempt: undefined };
+  // The published confirmed actions, in order. The announcer reads this slot
+  // for real; here it is a recorder so a case can assert what was published.
+  const publishedActions: unknown[] = [];
+  // `publishConfirmedManualFallbackAction` is part of the slice, not an extra
+  // on the double: the component reaches it through
+  // `handle.store.getState()`, so a slice that omits it fails as
+  // "publishConfirmedManualFallbackAction is not a function" thrown INSIDE
+  // `use-confirmed-manual-action.ts` - a fixture gap wearing a production
+  // stack trace, which is the same class as the under-modelled `onSuccess`
+  // below.
+  type Slice = {
+    lastFailedAttempt: LastFailedAttempt | undefined;
+    publishConfirmedManualFallbackAction: (input: unknown) => void;
+  };
+  const initialSlice = (): Slice => ({
+    lastFailedAttempt: undefined,
+    publishConfirmedManualFallbackAction: (input: unknown): void => {
+      publishedActions.push(input);
+    },
+  });
+  let state: Slice = initialSlice();
   const listeners = new Set<() => void>();
   const store = {
     getState: (): Slice => state,
-    getInitialState: (): Slice => ({ lastFailedAttempt: undefined }),
-    setState: (next: Slice): Slice => {
-      state = next;
+    getInitialState: (): Slice => initialSlice(),
+    // MERGES, because zustand's `setState` merges shallowly and the call sites
+    // here pass only `{ lastFailedAttempt }`. A replacing double would drop
+    // the action above on the first `setState` and reintroduce exactly the
+    // failure this slice was widened to fix - silently, one call later.
+    setState: (next: Partial<Slice>): Slice => {
+      state = { ...state, ...next };
       for (const listener of listeners) {
         listener();
       }
@@ -55,6 +81,7 @@ const harness = vi.hoisted(() => {
     openSettings: vi.fn(),
     toast: vi.fn(),
     store,
+    publishedActions,
     listCalls: [] as Array<{
       readonly enabled: boolean;
       readonly selector: unknown;
@@ -106,7 +133,7 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
     _client: unknown,
     args: {
       readonly onSuccess:
-        | ((response: { readonly outcome: string }) => void)
+        | ((response: { readonly outcome: string }, variables: unknown) => void)
         | undefined;
     },
   ) => ({
@@ -115,7 +142,10 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
       opts:
         | {
             readonly onSuccess:
-              | ((response: { readonly outcome: string }) => void)
+              | ((
+                  response: { readonly outcome: string },
+                  variables: unknown,
+                ) => void)
               | undefined;
           }
         | undefined,
@@ -125,11 +155,23 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
       if (result === null) return;
       // TanStack runs the hook-level onSuccess in addition to the per-call
       // one. The Switch-vs-toast pin depends on both firing.
+      //
+      // BOTH receive `vars` as the second argument, because that is TanStack's
+      // real signature - `onSuccess(data, variables, context)` - and the
+      // hook-level handler reads it: the confirmed-action record is built from
+      // `variables.rung` / `.userMessageId` / `.turnId` / `.target`, which the
+      // response does not carry. Passing only `result` here modelled the
+      // callback too narrowly, and the omission was invisible for as long as
+      // nothing read the second parameter; the moment the record landed it
+      // surfaced as `TypeError: Cannot read properties of undefined (reading
+      // 'rung')` thrown INSIDE `use-fallback-actions.ts`, which reads as a
+      // production bug rather than a fixture gap. Model the full signature even
+      // where a parameter is currently unread.
       if (args.onSuccess !== undefined) {
-        args.onSuccess(result);
+        args.onSuccess(result, vars);
       }
       if (opts !== undefined && opts.onSuccess !== undefined) {
-        opts.onSuccess(result);
+        opts.onSuccess(result, vars);
       }
     },
     isPending: false,
@@ -146,6 +188,7 @@ function positiveAttempt(input: {
   readonly reason: "rate_limit" | "auth";
   readonly eligibleRungs: ReadonlyArray<"retry" | "switch" | "wait_once">;
   readonly resetsAt: number | undefined;
+  readonly waitDisposition: FallbackWaitDisposition;
 }): LastFailedAttempt {
   return lastFailedAttempt({
     userMessageId: input.userMessageId,
@@ -159,6 +202,7 @@ function positiveAttempt(input: {
             resetsAtSource: "provider",
           },
     eligibleRungs: input.eligibleRungs,
+    waitDisposition: input.waitDisposition,
   });
 }
 
@@ -190,6 +234,10 @@ describe("FallbackManualRungActions", () => {
     harness.listCalls = [];
     harness.listData = undefined;
     harness.mutationResult = null;
+    // In place, not reassigned: the recorder closure captured this array when
+    // the slice was built, so a fresh array here would be written to by
+    // nothing and every later assertion would read an empty list.
+    harness.publishedActions.length = 0;
     seedAttempt(undefined);
   });
 
@@ -205,6 +253,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     renderActions(TURN_ID);
@@ -229,6 +278,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: [],
         resetsAt: RESETS_AT,
+        waitDisposition: "no_verified_reset",
       }),
     );
     renderActions(TURN_ID);
@@ -260,6 +310,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     renderActions("turn-b");
@@ -274,6 +325,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     renderActions(TURN_ID);
@@ -293,6 +345,7 @@ describe("FallbackManualRungActions", () => {
         reason: "auth",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     renderActions(TURN_ID);
@@ -310,6 +363,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     const { unmount } = renderActions(TURN_ID);
@@ -327,6 +381,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: undefined,
+        waitDisposition: "eligible",
       }),
     );
     const second = renderActions(TURN_ID);
@@ -341,6 +396,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ["retry", "switch"],
         resetsAt: RESETS_AT,
+        waitDisposition: "no_verified_reset",
       }),
     );
     renderActions(TURN_ID);
@@ -357,6 +413,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     renderActions(TURN_ID);
@@ -395,6 +452,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     harness.listData = listTargetsResponse({
@@ -407,6 +465,7 @@ describe("FallbackManualRungActions", () => {
           harnessId: "codex",
           modelFamily: "gpt-5",
           model: "gpt-5",
+          reasoningEffort: null,
           profileId: TARGET_CODEX_TUPLE.profileId,
           severity: "ok",
           usedPercent: 10,
@@ -455,6 +514,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     harness.listData = listTargetsResponse({
@@ -467,6 +527,7 @@ describe("FallbackManualRungActions", () => {
           harnessId: "codex",
           modelFamily: "gpt-5",
           model: "gpt-5",
+          reasoningEffort: null,
           profileId: TARGET_CODEX_TUPLE.profileId,
           severity: "ok",
           usedPercent: 10,
@@ -502,6 +563,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     harness.listData = listTargetsResponse({
@@ -514,6 +576,7 @@ describe("FallbackManualRungActions", () => {
           harnessId: "codex",
           modelFamily: "gpt-5",
           model: "gpt-5",
+          reasoningEffort: null,
           profileId: TARGET_CODEX_TUPLE.profileId,
           severity: "ok",
           usedPercent: 10,
@@ -548,6 +611,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     const refusal = describeFallbackOutcome("rung_unavailable");
@@ -569,6 +633,7 @@ describe("FallbackManualRungActions", () => {
         reason: "rate_limit",
         eligibleRungs: ALL_RUNGS,
         resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
     const refusal = describeFallbackOutcome("rung_unavailable");

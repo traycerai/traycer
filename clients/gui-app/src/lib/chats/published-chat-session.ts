@@ -266,6 +266,15 @@ export function publishedChatSessionState(
     // snapshot that established it, so the transcript is absorbed as
     // baseline history and nothing in it is ever announced as live.
     transcriptBaselineEpoch: 0,
+    // Equal to the baseline above, and that equality is the point: a published
+    // copy is frozen, so its transcript is by definition the one its (absent)
+    // connection seated. A consumer gating on `baseline === connectionEpoch`
+    // therefore reads READY here rather than stalling forever on a reconnect
+    // that can never arrive.
+    connectionEpoch: 0,
+    // Never acted, so nothing was ever confirmed. Distinct from "an action
+    // happened and we lost the record": there is no action path here at all.
+    confirmedManualFallbackAction: null,
     // Frozen, so nothing hydrates and this never moves.
     transcriptHydrationSequence: 0,
     transcriptRowContext: {},
@@ -346,6 +355,12 @@ export function publishedChatSessionState(
     // transcript it froze ends in a failure. Absent, not empty: empty would
     // say "the host looked and admitted nothing", and nothing looked.
     lastFailedAttempt: undefined,
+    // Nothing ever confirmed an outcome for a frozen copy, and absence is the
+    // honest value rather than a gap: on a live frame `undefined` already means
+    // "no confirmed outcome for the current incident", and a published copy has
+    // no incident at all. A consumer that must speak an outcome exactly once
+    // therefore says nothing here, which is correct.
+    lastFallbackOutcome: undefined,
     fallbackChoiceLease: null,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,
@@ -390,6 +405,10 @@ export function publishedChatSessionState(
     stopTurn: () => null,
     fallbackHoldForChoice: () => null,
     fallbackReleaseChoice: () => null,
+    // A no-op for the same reason as its neighbours: a published copy cannot
+    // run a manual rung, so nothing can ever confirm one. The announcer reads
+    // `confirmedManualFallbackAction` (null below) and stays silent.
+    publishConfirmedManualFallbackAction: () => undefined,
     stopBackgroundItem: () => null,
     stopAllBackgroundItems: () => null,
     stopBackgroundSession: () => null,

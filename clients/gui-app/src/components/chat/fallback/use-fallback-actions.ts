@@ -11,6 +11,7 @@ import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mut
 import { chatFallbackMutationKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 import { describeFallbackOutcome } from "./fallback-copy";
+import type { ConfirmedManualActionPublisher } from "./use-confirmed-manual-action";
 
 /**
  * The fallback verbs, as mutations.
@@ -80,16 +81,35 @@ export function toastFallbackOutcome(response: {
 export function useFallbackCancel(
   client: HostClient<HostRpcRegistry> | null,
   chatId: string,
+  /**
+   * The host's answer, delivered even if the card has gone.
+   *
+   * A cancel that APPLIES settles the traversal, and the settled frame clears
+   * `pendingFallback` - which unmounts the very card the button is on. So a
+   * caller that needs to act on the outcome cannot use a
+   * `mutate(vars, { onSuccess })` handler: those belong to the observer and do
+   * not run after unmount, and the one outcome that matters is precisely the
+   * one that guarantees it. This runs from the mutation itself.
+   *
+   * Required rather than optional so a caller with nothing to do says so.
+   */
+  onOutcome: (outcome: FallbackActionOutcome) => void,
 ): FallbackActionResult<"chat.fallback.cancel"> {
   return useHostScopedMutationForClient(client, {
     method: "chat.fallback.cancel",
     mutationKey: chatFallbackMutationKeys.cancel(chatId),
     errorMessage: "Couldn't stop the fallback.",
     invalidateMethods: [],
-    onSuccess: toastFallbackOutcome,
+    onSuccess: (data) => {
+      toastFallbackOutcome(data);
+      onOutcome(data.outcome);
+    },
     captureContext: undefined,
   });
 }
+
+/** For a cancel whose caller has nothing to do with the outcome. */
+export const IGNORE_FALLBACK_OUTCOME = (): void => undefined;
 
 export function useFallbackChooseTarget(
   client: HostClient<HostRpcRegistry> | null,
@@ -110,16 +130,39 @@ export function useFallbackChooseTarget(
 export function useFallbackRunManualRung(
   client: HostClient<HostRpcRegistry> | null,
   chatId: string,
+  /**
+   * Where a CONFIRMED action is recorded for the transcript announcer.
+   *
+   * A required parameter rather than something this module reaches for
+   * itself: the publisher is bound to a `(epicId, chatId, hostId)` triple the
+   * call site holds and this hook does not, and taking it here keeps the
+   * fallback verbs free of the chat-session registry.
+   */
+  onConfirmed: ConfirmedManualActionPublisher,
 ): FallbackActionResult<"chat.fallback.runManualRung"> {
   return useHostScopedMutationForClient(client, {
     method: "chat.fallback.runManualRung",
     mutationKey: chatFallbackMutationKeys.runManualRung(chatId),
     errorMessage: "Couldn't retry this message.",
     invalidateMethods: [],
-    // The ONE verb with no hook-level report, and the reason is the call sites
-    // rather than the verb: it serves three rungs, and only two of them have
-    // nowhere to write a refusal. See `toastFallbackOutcome`.
-    onSuccess: undefined,
+    // Still no hook-level REPORT - that stays at the two call sites, because
+    // this verb serves three rungs and only two of them have nowhere to write
+    // a refusal (see `toastFallbackOutcome`). What is here instead is a
+    // RECORD, and it has to be here rather than at those call sites: this
+    // callback belongs to the Mutation in the query cache, so it runs after
+    // the popover has unmounted, and a `mutate(vars, { onSuccess })` handler
+    // does not run at all then. The surface that sends a switch is normally
+    // gone by the time the host answers - closing on `applied` is what the
+    // pick DOES - and the announcement is owed regardless.
+    onSuccess: (data, variables) => {
+      if (data.outcome !== "applied") return;
+      onConfirmed({
+        rung: variables.rung,
+        userMessageId: variables.userMessageId,
+        turnId: variables.turnId,
+        target: variables.target,
+      });
+    },
     captureContext: undefined,
   });
 }

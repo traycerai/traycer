@@ -2,11 +2,19 @@
  * Docs: see ../SETTINGS.md (Fallback).
  * Update that file whenever this settings surface changes.
  */
-import { useCallback, useReducer, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
 import {
   HostRpcError,
-  isTransientHostRpcFailure,
+  HostTransportFailureError,
+  RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -29,6 +37,7 @@ import { useFallbackPolicyResetMutation } from "@/hooks/providers/use-fallback-p
 import { useFallbackPolicyRestoreTierGroupsMutation } from "@/hooks/providers/use-fallback-policy-restore-tier-groups-mutation";
 import { useFallbackPolicyPreviewTierGroupsQuery } from "@/hooks/providers/use-fallback-policy-preview-tier-groups-query";
 import { useFallbackSettingsProfileLabels } from "@/components/settings/panels/fallback/fallback-profile-labels";
+import { useFallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { providerSupportsManagedProfiles } from "@/components/settings/panels/provider-settings-tabs";
 import { FallbackLadderEditor } from "@/components/settings/panels/fallback/fallback-ladder-editor";
@@ -37,17 +46,24 @@ import { FallbackOverridesMatrix } from "@/components/settings/panels/fallback/f
 import { FallbackDangerZone } from "@/components/settings/panels/fallback/fallback-danger-zone";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 import {
+  applyGroupsInverse,
   keyedGroupsMatch,
+  withTierGroups,
+  type FallbackGroupsInverse,
   type KeyedGroup,
 } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
 import {
   createFallbackPolicyDraftState,
+  createFallbackSaveRequestId,
   fallbackLadderFrom,
   fallbackPolicyDraftReducer,
+  fallbackSaveInFlight,
   moveFallbackRung,
   validateFallbackPolicyDraft,
   type FallbackPolicyDraftState,
   type FallbackPolicyField,
+  type FallbackSaveFailureOutcome,
+  type FallbackSaveNoticeOutcome,
 } from "@/components/settings/panels/fallback/fallback-policy-draft";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
@@ -138,6 +154,31 @@ function FallbackSettingsPanelBody(props: {
    * response.
    */
   const [resetGeneration, setResetGeneration] = useState(0);
+  /**
+   * Whether the NEXT mount of the editor should put focus back on Reset.
+   *
+   * Separate from `resetGeneration` rather than derived from it (`> 0` would do
+   * for the first reset and then never turn off, so a later host switch - which
+   * also remounts, through the other half of the key - would steal focus onto a
+   * button nobody pressed). The editor clears it once it has been honoured.
+   */
+  const [returnFocusToReset, setReturnFocusToReset] = useState(false);
+
+  /**
+   * The authoritative read of what the host actually has, for the one case that
+   * needs one: a save whose reply was lost. Everything else on this page is
+   * seeded once and never re-reads, which is what stops a background refetch
+   * yanking a control out from under someone mid-edit.
+   */
+  const refetchPolicy =
+    useCallback(async (): Promise<FallbackPolicy | null> => {
+      const result = await query.refetch();
+      return result.data?.policy ?? null;
+    }, [query]);
+
+  const clearResetFocusIntent = useCallback((): void => {
+    setReturnFocusToReset(false);
+  }, []);
 
   if (query.isError) {
     return (
@@ -172,7 +213,15 @@ function FallbackSettingsPanelBody(props: {
       inFlightCount={query.data.inFlightCount}
       storedPolicyUnreadable={query.data.storedPolicyUnreadable}
       hostLabel={scope.host === null ? null : scope.hostLabel}
+      refetchPolicy={refetchPolicy}
+      returnFocusToReset={returnFocusToReset}
+      onFocusReturned={clearResetFocusIntent}
       onPolicyReplaced={() => {
+        // The remount below unmounts the Reset button the confirmation dialog
+        // captured as its opener, so the shared dialog's own restoration has
+        // nowhere to go. Focus follows the control across the replacement
+        // instead of falling to the document body.
+        setReturnFocusToReset(true);
         setResetGeneration((generation) => generation + 1);
       }}
     />
@@ -184,6 +233,10 @@ function FallbackPolicyEditor(props: {
   readonly inFlightCount: number;
   readonly storedPolicyUnreadable: boolean;
   readonly hostLabel: string | null;
+  /** Re-reads the host's own policy. Only the unknown-outcome path calls it. */
+  readonly refetchPolicy: () => Promise<FallbackPolicy | null>;
+  readonly returnFocusToReset: boolean;
+  readonly onFocusReturned: () => void;
   readonly onPolicyReplaced: () => void;
 }): ReactNode {
   const {
@@ -191,6 +244,9 @@ function FallbackPolicyEditor(props: {
     inFlightCount,
     storedPolicyUnreadable,
     hostLabel,
+    refetchPolicy,
+    returnFocusToReset,
+    onFocusReturned,
     onPolicyReplaced,
   } = props;
   const compact = useSettingsDensity() === "compact";
@@ -202,6 +258,21 @@ function FallbackPolicyEditor(props: {
     initialPolicy,
     createFallbackPolicyDraftState,
   );
+  const [reconcileInFlight, setReconcileInFlight] = useState(false);
+  /**
+   * The latest reducer state, for the handlers that run LONG after the render
+   * that created them.
+   *
+   * Exactly one kind of handler needs this: an "Undo" on a removal toast. The
+   * toast outlives the render it was raised from, and a callback closing over
+   * `state` would apply its inverse to the draft as it stood at deletion time -
+   * which is the whole-snapshot behaviour that undo is being fixed to stop
+   * doing. Every other handler here runs from an event on the current render.
+   */
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   /**
    * The per-row "resolves to" verdicts, asked for only while the groups on
@@ -230,6 +301,9 @@ function FallbackPolicyEditor(props: {
   // Resolved once for the whole editor: one providers read builds one label
   // map, rather than each card rebuilding it (D190).
   const profileLabelFor = useFallbackSettingsProfileLabels();
+  // Same shape, same reason: one model-catalog read per distinct harness in the
+  // draft serves every row's Effort control.
+  const effortOptions = useFallbackEffortOptions(state.draft.tierGroups);
 
   const previewQuery = useFallbackPolicyPreviewTierGroupsQuery(
     keyedGroupsMatch(state.keyedTierGroups, state.persisted.tierGroups)
@@ -264,13 +338,37 @@ function FallbackPolicyEditor(props: {
   );
 
   /**
+   * The read-back that settles a save whose outcome the host never reported.
+   *
+   * Driven from the failure itself rather than from an effect: the request that
+   * went unanswered is right here, and an effect watching for the state to
+   * contain one would be a second trigger for the same episode. A read-back
+   * that fails leaves the notice standing with its own "Check again", which is
+   * the honest state - we still do not know.
+   */
+  const reconcileUnknownSave = useCallback(
+    async (requestId: number): Promise<void> => {
+      setReconcileInFlight(true);
+      try {
+        const policy = await refetchPolicy();
+        if (policy === null) return;
+        dispatch({ type: "reconciled", requestId, policy });
+      } finally {
+        setReconcileInFlight(false);
+      }
+    },
+    [refetchPolicy],
+  );
+
+  /**
    * The one write path. Every control reaches the host through this and nothing
-   * else, which is what makes the ticket's two failure kinds a property of the
+   * else, which is what makes the ticket's three save outcomes a property of the
    * panel rather than of whichever control happened to be edited:
    *
    *  - invalid draft: kept on screen with its error, and NOTHING is sent;
-   *  - host rejection: the reducer reverts to the persisted value and prints
-   *    the host's reason.
+   *  - host rejection: the reducer reverts to the persisted value (unless the
+   *    draft has moved on since) and prints the host's reason;
+   *  - no answer at all: the draft stands and a read-back settles it.
    */
   const commit = useCallback(
     (
@@ -284,21 +382,67 @@ function FallbackPolicyEditor(props: {
     ): void => {
       dispatch({ type: "edited", policy: next, field, keyedTierGroups });
       if (validateFallbackPolicyDraft(next).kind === "invalid") return;
-      dispatch({ type: "save-started", field });
+      // Minted here rather than read back off the reducer: the `edited` above
+      // has not been applied yet, so the revision this request carries is not
+      // observable from this side. The id is the handle the reducer pairs with
+      // it, and it is what lets two in-flight saves be told apart.
+      const requestId = createFallbackSaveRequestId();
+      dispatch({ type: "save-started", field, requestId });
       void setMutation
         .mutateAsync({ policy: next })
         .then((response) => {
-          dispatch({ type: "save-succeeded", policy: response.policy });
+          dispatch({
+            type: "save-succeeded",
+            requestId,
+            policy: response.policy,
+          });
         })
         .catch((error: unknown) => {
+          const failure = classifyFallbackSaveFailure(error);
           dispatch({
             type: "save-failed",
-            message: fallbackSaveErrorMessage(error),
+            requestId,
+            message: failure.message,
             field,
+            outcome: failure.outcome,
           });
+          if (failure.outcome === "unknown") {
+            void reconcileUnknownSave(requestId).catch(() => {
+              // Deliberately nothing. A read-back that fails leaves the notice
+              // standing with its own "Check again" - we still do not know -
+              // which is reached by NOT dispatching `reconciled`, and that has
+              // already happened by the time this runs.
+              //
+              // This arm is the documented state rather than defensiveness.
+              // `refetchPolicy` reads `result.data`, and TanStack's `refetch()`
+              // resolves with an error-carrying result instead of rejecting, so
+              // today the failure path returns `null` and never reaches here.
+              // That is a library default, not a guarantee of ours: without
+              // this, the promise `void` discards would surface a rejection the
+              // renderer never handles instead of the notice promised above.
+            });
+          }
         });
     },
-    [setMutation],
+    [setMutation, reconcileUnknownSave],
+  );
+
+  /**
+   * "Undo" on a removal toast: the inverse of that one removal, applied to the
+   * draft as it stands NOW rather than to the snapshot the toast was raised
+   * from. See `FallbackGroupsInverse`.
+   */
+  const undoGroupsChange = useCallback(
+    (inverse: FallbackGroupsInverse): void => {
+      const current = stateRef.current;
+      const groups = applyGroupsInverse(current.keyedTierGroups, inverse);
+      // Nothing to put back - the row is already there, or the group holding it
+      // has since been deleted. A commit here would be a save with no change in
+      // it.
+      if (groups === current.keyedTierGroups) return;
+      commit(withTierGroups(current.draft, groups), "tierGroups", groups);
+    },
+    [commit],
   );
 
   /**
@@ -320,38 +464,92 @@ function FallbackPolicyEditor(props: {
    * subsequent read would produce and the editor can take it directly.
    */
   const restoreDefaultGroups = useCallback((): void => {
-    dispatch({ type: "save-started", field: "tierGroups" });
+    const requestId = createFallbackSaveRequestId();
+    dispatch({ type: "save-started", field: "tierGroups", requestId });
     void restoreMutation
       .mutateAsync({})
       .then((response) => {
-        dispatch({ type: "save-succeeded", policy: response.policy });
+        dispatch({
+          type: "save-succeeded",
+          requestId,
+          policy: response.policy,
+        });
       })
       .catch((error: unknown) => {
+        const failure = classifyFallbackSaveFailure(error);
         dispatch({
           type: "save-failed",
-          message: fallbackSaveErrorMessage(error),
+          requestId,
+          message: failure.message,
           field: "tierGroups",
+          outcome: failure.outcome,
         });
+        if (failure.outcome === "unknown") {
+          void reconcileUnknownSave(requestId).catch(() => {
+            // Nothing, for the reason spelled out at the `commit()` call site:
+            // a read-back that fails leaves the notice standing with its own
+            // "Check again", and an unowned rejection would replace that
+            // honest state with a renderer error nobody handles.
+          });
+        }
       });
-  }, [restoreMutation]);
+  }, [restoreMutation, reconcileUnknownSave]);
 
   const resetAll = useCallback((): void => {
-    dispatch({ type: "save-started", field: "danger" });
+    const requestId = createFallbackSaveRequestId();
+    dispatch({ type: "save-started", field: "danger", requestId });
     void resetMutation
       .mutateAsync({})
       .then(() => {
         onPolicyReplaced();
       })
       .catch((error: unknown) => {
+        const failure = classifyFallbackSaveFailure(error);
         dispatch({
           type: "save-failed",
-          message: fallbackSaveErrorMessage(error),
+          requestId,
+          message: failure.message,
           field: "danger",
+          outcome: failure.outcome,
         });
+        if (failure.outcome === "unknown") {
+          void reconcileUnknownSave(requestId).catch(() => {
+            // Nothing, for the reason spelled out at the `commit()` call site:
+            // a read-back that fails leaves the notice standing with its own
+            // "Check again", and an unowned rejection would replace that
+            // honest state with a renderer error nobody handles.
+          });
+        }
       });
-  }, [resetMutation, onPolicyReplaced]);
+  }, [resetMutation, onPolicyReplaced, reconcileUnknownSave]);
+
+  const checkSaveOutcomeAgain = useCallback((): void => {
+    const unknown = stateRef.current.unknownSave;
+    if (unknown === null) return;
+    // The "Check again" button, so this is the call a person reaches
+    // DELIBERATELY - and the one whose failure the standing notice already
+    // describes. Same guard and same reason as the `commit()` call site.
+    void reconcileUnknownSave(unknown.requestId).catch(() => {
+      // Nothing: the notice and its "Check again" stay exactly as they are,
+      // which is the honest state when the read-back could not answer either.
+    });
+  }, [reconcileUnknownSave]);
 
   const enabledRungs = new Set(state.draft.ladder);
+  const saveInFlight = fallbackSaveInFlight(state);
+  const saveStatusFor = (
+    field: FallbackPolicyField,
+    className: string,
+  ): ReactNode => (
+    <FallbackSaveStatus
+      state={state}
+      field={field}
+      className={className}
+      saveInFlight={saveInFlight}
+      reconcileInFlight={reconcileInFlight}
+      onCheckAgain={checkSaveOutcomeAgain}
+    />
+  );
 
   return (
     <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
@@ -375,11 +573,7 @@ function FallbackPolicyEditor(props: {
             />
           }
         />
-        <FallbackSaveStatus
-          state={state}
-          field="enabled"
-          className="px-5 pb-4"
-        />
+        {saveStatusFor("enabled", "px-5 pb-4")}
         <div className="border-b border-border/40 px-5 py-4 last:border-b-0">
           {state.draft.enabled ? null : (
             <p className="mb-3 text-ui-sm text-muted-foreground">
@@ -422,7 +616,7 @@ function FallbackPolicyEditor(props: {
             }}
             profileStepHint={<ProfileStepHint />}
           />
-          <FallbackSaveStatus state={state} field="ladder" className="mt-3" />
+          {saveStatusFor("ladder", "mt-3")}
         </div>
       </SettingsGroup>
       <FallbackBehaviorGroup
@@ -430,13 +624,7 @@ function FallbackPolicyEditor(props: {
         onChange={(next) => {
           commit(next, "behavior", null);
         }}
-        status={
-          <FallbackSaveStatus
-            state={state}
-            field="behavior"
-            className="px-5 pb-4"
-          />
-        }
+        status={saveStatusFor("behavior", "px-5 pb-4")}
       />
       <FallbackTierGroupsEditor
         policy={state.draft}
@@ -448,6 +636,7 @@ function FallbackPolicyEditor(props: {
         // inputs that question needs.
         preview={previewQuery.data?.candidates ?? null}
         labelFor={profileLabelFor}
+        effortOptions={effortOptions}
         previewPending={previewQuery.isFetching}
         onChange={(next, groups) => {
           editDraft(next, "tierGroups", groups);
@@ -455,15 +644,13 @@ function FallbackPolicyEditor(props: {
         onCommit={(next, groups) => {
           commit(next, "tierGroups", groups);
         }}
+        onUndo={undoGroupsChange}
         onRestoreDefaults={restoreDefaultGroups}
-        restorePending={restoreMutation.isPending}
-        status={
-          <FallbackSaveStatus
-            state={state}
-            field="tierGroups"
-            className="mt-3"
-          />
-        }
+        // Also while an ordinary save is in flight: a restore replaces the whole
+        // list, and starting one on top of an unanswered `set` would leave two
+        // answers about the same rows racing each other into the draft.
+        restorePending={restoreMutation.isPending || saveInFlight}
+        status={saveStatusFor("tierGroups", "mt-3")}
       />
       <FallbackOverridesMatrix
         policy={state.draft}
@@ -474,25 +661,15 @@ function FallbackPolicyEditor(props: {
         onChange={(next) => {
           commit(next, "overrides", null);
         }}
-        status={
-          <FallbackSaveStatus
-            state={state}
-            field="overrides"
-            className="mt-3"
-          />
-        }
+        status={saveStatusFor("overrides", "mt-3")}
       />
       <FallbackDangerZone
         hostLabel={hostLabel}
-        isPending={state.saveInFlight}
+        isPending={saveInFlight}
         onConfirm={resetAll}
-        status={
-          <FallbackSaveStatus
-            state={state}
-            field="danger"
-            className="px-5 pb-4"
-          />
-        }
+        focusResetOnMount={returnFocusToReset}
+        onFocusApplied={onFocusReturned}
+        status={saveStatusFor("danger", "px-5 pb-4")}
       />
     </div>
   );
@@ -557,8 +734,13 @@ function FallbackSaveStatus(props: {
   readonly field: FallbackPolicyField;
   /** Alignment for the group this is rendered inside; groups differ. */
   readonly className: string;
+  readonly saveInFlight: boolean;
+  /** A read-back is running, so "Check again" is already answered. */
+  readonly reconcileInFlight: boolean;
+  readonly onCheckAgain: () => void;
 }): ReactNode {
-  const { localError, hostError, activeField, saveInFlight } = props.state;
+  const { localError, hostError, activeField } = props.state;
+  const { saveInFlight, reconcileInFlight, onCheckAgain } = props;
   // One status line for the whole panel, rendered under the group that was
   // last edited - which is where the person is looking, and where a message
   // about "your edit" has to be to mean anything.
@@ -578,14 +760,32 @@ function FallbackSaveStatus(props: {
   }
   if (hostError !== null) {
     return (
-      <p
+      <div
         role="alert"
         className={cn("text-ui-sm text-destructive", props.className)}
         data-testid="fallback-host-error"
       >
-        {hostError} Your last saved settings are back on screen and still in
-        force.
-      </p>
+        {hostError.message} {saveNoticeConsequence(hostError.outcome)}
+        {hostError.outcome === "unknown" ? (
+          <Button
+            type="button"
+            variant="link"
+            className="ml-1 h-auto p-0 text-ui-sm"
+            disabled={reconcileInFlight}
+            onClick={onCheckAgain}
+            data-testid="fallback-check-again"
+          >
+            Check again
+            {reconcileInFlight ? (
+              <AgentSpinningDots
+                className="ml-1"
+                testId={undefined}
+                variant="orbit"
+              />
+            ) : null}
+          </Button>
+        ) : null}
+      </div>
     );
   }
   if (saveInFlight) {
@@ -652,21 +852,69 @@ function ProfileStepHint(): ReactNode {
 }
 
 /**
- * A refused save is not always a refusal.
+ * What follows the failure's own sentence, and it is the only part that makes a
+ * claim about the HOST.
  *
- * A transport failure says nothing about the value - the host never judged it -
- * so reporting it as a rejected setting would send someone editing a policy
- * that was fine. The two arms are worth keeping apart because they have
- * different fixes: retry, versus change the value.
+ * Kept beside the outcome union rather than inlined per branch so the three
+ * arms are read together: the difference between them is the whole of FC7.
  */
-function fallbackSaveErrorMessage(error: unknown): string {
+function saveNoticeConsequence(outcome: FallbackSaveNoticeOutcome): string {
+  switch (outcome) {
+    case "refused-reverted":
+      return "Your last saved settings are back on screen and still in force.";
+    case "refused-kept":
+      return "The changes you have made since are still on screen and haven't been saved yet.";
+    case "unknown":
+      return "What's on screen is your change, not a confirmed setting - it may or may not have been saved.";
+  }
+}
+
+/**
+ * A refused save is not always a refusal, and "nothing was saved" is a claim
+ * about the host that most failures cannot support.
+ *
+ * The three arms are the three things the client actually knows, and the
+ * transport's own error classes already draw the line:
+ *
+ *  - `RetryableTransportError` carries an explicit "the host never dispatched
+ *    this request" guarantee (it is the class `createRetryingMessenger` keys
+ *    its replay off, which is only safe because of that guarantee), so
+ *    "nothing was saved" is TRUE and the revert is right.
+ *  - any other `HostTransportFailureError` is the ambiguous case: the frame
+ *    went out and no answer came back. The host may have committed and lost
+ *    the reply. Claiming the old value is still in force here is at its worst
+ *    exactly where it matters - the user turns automatic fallback OFF, the
+ *    reply is lost, and the page tells them it is off while the host has it
+ *    on. So the draft stands and a read-back settles it.
+ *  - anything else came back FROM the host, which judged the value. That is a
+ *    refusal, whatever its cause, and reverting is right.
+ *
+ * `isTransientHostRpcFailure` is deliberately not used: it merges the first
+ * two arms, which is the defect, and it also folds in a host-ANSWERED fatal
+ * marked `retryable` - which used to print "couldn't reach this host" about a
+ * host that had just answered.
+ */
+function classifyFallbackSaveFailure(error: unknown): {
+  readonly message: string;
+  readonly outcome: FallbackSaveFailureOutcome;
+} {
   if (!(error instanceof HostRpcError)) {
-    return "Couldn't save these settings.";
+    return { message: "Couldn't save these settings.", outcome: "refused" };
   }
-  if (isTransientHostRpcFailure(error)) {
-    return "Couldn't reach this host, so nothing was saved.";
+  if (error instanceof RetryableTransportError) {
+    return {
+      message: "Couldn't reach this host, so nothing was saved.",
+      outcome: "refused",
+    };
   }
-  return `Couldn't save: ${error.message}`;
+  if (error instanceof HostTransportFailureError) {
+    return {
+      message:
+        "Lost contact with this host before it answered, so we can't tell whether this was saved.",
+      outcome: "unknown",
+    };
+  }
+  return { message: `Couldn't save: ${error.message}`, outcome: "refused" };
 }
 
 function FallbackPanelSkeleton(): ReactNode {

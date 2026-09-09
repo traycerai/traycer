@@ -1,11 +1,30 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import type {
+  ChatRunSettings,
+  LastFallbackOutcome,
+  PendingFallback,
+  PendingReturn,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ProviderNoticeDetail } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ChatMessage } from "@/stores/composer/chat-store";
+import {
+  DONT_SWITCH_LABEL,
+  FRESH_SESSION_HELPER,
+  STOP_WAITING_LABEL,
+  queuedMessagesMovingText,
+  queuedMessagesReturningText,
+} from "@/components/chat/fallback/fallback-copy";
+import { formatClockTime } from "@/lib/relative-time";
 
 /**
- * Polite-announcement deriver for the chat transcript (decision #24).
+ * Polite announcements for transcript completions and fallback lifecycle.
  *
- * The announcement question is "what just happened for this reader", and the
- * only hard part is separating a LIVE arrival from transcript history. This
+ * `useChatAnnouncements` derives turn/background completion (decision #24).
+ * The fallback observer derives host plan transitions and confirmed outcomes.
+ * The renderer queues both into one persistent region; only the completion
+ * signal also drives the "New reply" latch.
+ *
+ * Transcript completion must distinguish a LIVE arrival from history. Its
  * deriver never infers that from row shape - not from sorted position, not
  * from completion recency, not from timestamp comparisons, all of which are
  * undecidable for cases the projector legitimately produces (a background
@@ -32,7 +51,7 @@ import type { ChatMessage } from "@/stores/composer/chat-store";
  *   row that reaches a settled state - or whose background-completion digest
  *   changes - is news, again regardless of position or timestamp.
  *
- * That leaves announcement selection a pure function of per-row semantic
+ * That leaves completion selection a pure function of per-row semantic
  * state keyed by row id, with no cross-row comparisons and no tie-breaking.
  */
 
@@ -46,8 +65,9 @@ export interface ChatAnnouncement {
    * Monotonic per-transcript counter. Two consecutive announcements can be
    * identical in every other respect (same row, same wall-clock stamp, same
    * copy) when a second background task settles in the same millisecond, so
-   * the live region must key its child on this to guarantee a DOM mutation -
-   * without one, React reuses the node and a screen reader stays silent.
+   * consumers distinguish them by this counter. The shared live-region queue
+   * assigns its own sequence to completion and fallback sentences together,
+   * ensuring repeated text still replaces the region's child node.
    */
   readonly sequence: number;
   readonly kind: ChatAnnouncementKind;
@@ -175,9 +195,9 @@ export interface ChatAnnouncementsInput {
    * row is genuinely new - the reader has never seen it - but the store
    * deliberately drops the live delta (the persisted host body carries it at
    * the next hydration), so the row first becomes observable across a
-   * hydration and takes the history path. The completion is then announced
-   * NOWHERE: `useChatAnnouncements` is the only `aria-live` path for the
-   * transcript, so a screen-reader user simply never learns of it.
+   * hydration and takes the history path. This hook supplies background
+   * completion speech; without the exemption that live update is never
+   * announced when the row becomes available again.
    */
   readonly coldRewrittenMessageIds: ReadonlySet<string>;
 }
@@ -282,4 +302,431 @@ export function useChatAnnouncements(
   }, [messages, baselineEpoch, coldRewrittenMessageIds, hydrationSequence]);
 
   return announcement;
+}
+
+/** A sentence frozen at the semantic transition, independent of display ticks. */
+export interface FallbackAnnouncement {
+  readonly key: string;
+  readonly text: string;
+}
+
+/** The semantic key uses host plan/state identity, never countdowns or labels. */
+export interface FallbackTraversalAnnouncement {
+  readonly traversalId: string;
+  readonly revision: number;
+  readonly semanticKey: string;
+  readonly text: string;
+}
+
+/** A resolved host plan, with identity text supplied by the card's formatter. */
+export interface FallbackAnnouncementPlan {
+  readonly planId: string;
+  readonly action: "switch" | "retry" | "wait" | "notify" | "checking";
+  readonly destination: string | null;
+  readonly resumesAt: number | null;
+}
+
+function fallbackTupleAnnouncementKey(tuple: ChatRunSettings | null): string {
+  if (tuple === null) return "none";
+  return JSON.stringify([
+    tuple.harnessId,
+    tuple.model,
+    tuple.reasoningEffort,
+    tuple.profileId,
+  ]);
+}
+
+function cancelOpportunityText(deadline: number | null, now: number): string {
+  const action = `Select ${DONT_SWITCH_LABEL} to cancel.`;
+  if (deadline === null) return action;
+  const seconds = Math.max(0, Math.ceil((deadline - now) / 1_000));
+  if (seconds === 0) return `The fallback is due now. ${action}`;
+  return `You have ${seconds} ${seconds === 1 ? "second" : "seconds"} to cancel. ${action}`;
+}
+
+function fallbackPlanText(
+  plan: FallbackAnnouncementPlan | null,
+  failedIdentity: string,
+): string {
+  if (plan === null || plan.action === "notify") {
+    return "No fallback destination is available. The chat will stop and keep the error visible.";
+  }
+  if (plan.action === "checking") {
+    return "The host is checking the next fallback action.";
+  }
+  switch (plan.action) {
+    case "switch":
+      return plan.destination === null
+        ? "The host is checking the next destination."
+        : `The chat will switch to ${plan.destination}.`;
+    case "retry":
+      return `The chat will retry on ${failedIdentity}.`;
+    case "wait":
+      return plan.resumesAt === null
+        ? `The host is checking when ${failedIdentity} can resume.`
+        : `The chat will wait for ${failedIdentity} and resume at ${formatClockTime(plan.resumesAt)}.`;
+  }
+}
+
+function fallbackHoldText(
+  pending: PendingFallback,
+  plan: FallbackAnnouncementPlan | null,
+  failedIdentity: string,
+  now: number,
+): string {
+  const parts = [fallbackPlanText(plan, failedIdentity)];
+  if (plan?.action === "switch" && plan.destination !== null) {
+    parts.push(FRESH_SESSION_HELPER);
+    const moving = queuedMessagesMovingText(pending.queuedItemsMoving);
+    if (moving !== null) parts.push(moving);
+  }
+  parts.push(cancelOpportunityText(pending.deadline, now));
+  return parts.join(" ");
+}
+
+export function fallbackTraversalAnnouncement(input: {
+  readonly pending: PendingFallback | undefined;
+  readonly plan: FallbackAnnouncementPlan | null;
+  readonly failedIdentity: string;
+  readonly targetIdentity: string | null;
+  readonly now: number;
+}): FallbackTraversalAnnouncement | null {
+  const { pending, plan, failedIdentity, targetIdentity, now } = input;
+  // The transient retry row already announces its attempts. This persistent
+  // path owns the intervention window and its subsequent lifecycle.
+  if (pending === undefined || pending.state === "retrying") return null;
+  let text: string;
+  switch (pending.state) {
+    case "hold":
+      text = fallbackHoldText(pending, plan, failedIdentity, now);
+      break;
+    case "choosing":
+      text = `Fallback countdown paused. ${fallbackPlanText(plan, failedIdentity)} Choose a destination or close the menu to resume the countdown.`;
+      break;
+    case "switching": {
+      const destination = targetIdentity ?? plan?.destination ?? null;
+      text =
+        destination === null
+          ? "The host is preparing the provider switch."
+          : `Switching this chat to ${destination}.`;
+      break;
+    }
+    case "waiting": {
+      const resume =
+        pending.deadline === null
+          ? "The host will resume when the verified reset is ready."
+          : `Resuming at ${formatClockTime(pending.deadline)}.`;
+      text = `Waiting for ${failedIdentity}. ${resume} Select ${STOP_WAITING_LABEL} to cancel.`;
+      break;
+    }
+  }
+  return {
+    traversalId: pending.traversalId,
+    revision: pending.revision,
+    // No display labels, tick, deadline, queued count or sibling count here.
+    // The host plan id changes when its action or destination changes.
+    semanticKey: JSON.stringify([
+      pending.state,
+      plan?.planId ?? null,
+      plan === null ? fallbackTupleAnnouncementKey(pending.targetTuple) : null,
+    ]),
+    text,
+  };
+}
+
+export function fallbackReturnAnnouncement(
+  pending: PendingReturn | undefined,
+  preferredIdentity: string,
+): FallbackTraversalAnnouncement | null {
+  if (pending === undefined) return null;
+  const returning = queuedMessagesReturningText(pending.queuedItemsMoving);
+  const parts = [
+    `${preferredIdentity} is available again. You can switch back or stay on the current provider.`,
+    `Switching back applies to your next message${returning ?? ""}.`,
+    FRESH_SESSION_HELPER,
+  ];
+  return {
+    traversalId: pending.traversalId,
+    revision: pending.revision,
+    semanticKey: JSON.stringify([
+      pending.offeredAt,
+      fallbackTupleAnnouncementKey(pending.preferredTuple),
+    ]),
+    text: parts.join(" "),
+  };
+}
+
+export interface FallbackNoticeAnnouncement extends FallbackAnnouncement {
+  readonly messageId: string;
+}
+
+function fallbackNoticeText(
+  title: string,
+  message: string | null,
+  details: ReadonlyArray<ProviderNoticeDetail>,
+): string {
+  const parts = [title];
+  if (message !== null) parts.push(message);
+  for (const detail of details) {
+    switch (detail.label) {
+      case "To":
+      case "Staying on":
+      case "Now on":
+      case "Provider":
+      case "Preferred":
+      case "Failed on":
+      case "Tried":
+      case "Detail":
+        parts.push(`${detail.label}: ${detail.value}`);
+    }
+  }
+  return parts.reduce((text, part) => {
+    const separator = /[.!?]$/.test(text) ? " " : ". ";
+    return `${text}${separator}${part}`;
+  });
+}
+
+/** Confirmed host metadata reaches this path even when its row is unloaded. */
+export function fallbackOutcomeAnnouncement(
+  outcome: LastFallbackOutcome | undefined,
+): FallbackNoticeAnnouncement | null {
+  if (outcome === undefined) return null;
+  return {
+    key: `notice:${outcome.blockId}`,
+    messageId: outcome.assistantMessageId,
+    text: fallbackNoticeText(outcome.title, outcome.message, outcome.details),
+  };
+}
+
+/** Only host-authored prose is spoken; a notice kind alone is not an outcome. */
+export function fallbackNoticeAnnouncements(
+  messages: ReadonlyArray<ChatMessage>,
+): ReadonlyArray<FallbackNoticeAnnouncement> {
+  const notices: FallbackNoticeAnnouncement[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const segment of message.segments) {
+      if (
+        segment.kind !== "provider_notice" ||
+        segment.parentId !== null ||
+        segment.status !== "completed"
+      ) {
+        continue;
+      }
+      if (
+        segment.noticeKind !== "fallback_applied" &&
+        segment.noticeKind !== "fallback_settled" &&
+        segment.noticeKind !== "fallback_wait_resumed"
+      ) {
+        continue;
+      }
+      notices.push({
+        key: `notice:${segment.id}`,
+        messageId: message.id,
+        text: fallbackNoticeText(
+          segment.title,
+          segment.message,
+          segment.details,
+        ),
+      });
+    }
+  }
+  return notices;
+}
+
+export interface FallbackAnnouncementsInput {
+  /** Visible, connected, and past the first authoritative snapshot. */
+  readonly ready: boolean;
+  readonly baselineEpoch: number;
+  readonly hydrationSequence: number;
+  readonly coldRewrittenMessageIds: ReadonlySet<string>;
+  readonly residentMessageIds: ReadonlySet<string>;
+  readonly traversal: FallbackTraversalAnnouncement | null;
+  readonly returnOffer: FallbackTraversalAnnouncement | null;
+  /** Host outcome metadata, independent of transcript range hydration. */
+  readonly liveOutcome: FallbackNoticeAnnouncement | null;
+  readonly notices: ReadonlyArray<FallbackNoticeAnnouncement>;
+  /** A confirmed manual result, correlated to this host, chat and attempt. */
+  readonly manualOutcome: FallbackAnnouncement | null;
+}
+
+export interface FallbackAnnouncementObserver {
+  readonly observe: (
+    input: FallbackAnnouncementsInput,
+  ) => ReadonlyArray<FallbackAnnouncement>;
+}
+
+interface ObservedFallbackTraversal {
+  readonly revision: number;
+  readonly semanticKey: string;
+}
+
+/**
+ * Observes semantic news for one mounted chat. The input adapter owns copy and
+ * protocol interpretation; this owns provenance and one-time delivery. Keeping
+ * it independent of React also lets a store subscription observe intermediate
+ * transitions that React may render together.
+ */
+export function createFallbackAnnouncementObserver(): FallbackAnnouncementObserver {
+  let baselineEpoch: number | null = null;
+  let hydrationSequence: number | null = null;
+  let residentMessageIds: ReadonlySet<string> = new Set();
+  let wasReady = false;
+  const traversals = new Map<string, ObservedFallbackTraversal>();
+  const seenTransitions = new Set<string>();
+  // A body first seen through history stays history on subsequent renders.
+  // It does not consume a later independently confirmed outcome: a range
+  // reply can arrive before the snapshot carrying that outcome's metadata.
+  const seenNoticeBodies = new Set<string>();
+  // Block ids unite delivered notices, confirmed outcomes and absorbed
+  // baselines across row replacement, hydration and reconnect.
+  const consumedNotices = new Set<string>();
+  const seenManualOutcomes = new Set<string>();
+
+  return {
+    observe: (input) => {
+      const changedEpoch = baselineEpoch !== input.baselineEpoch;
+      const absorb = changedEpoch || !wasReady || !input.ready;
+      const hydrating = hydrationSequence !== input.hydrationSequence;
+      const priorResidentMessageIds = residentMessageIds;
+      baselineEpoch = input.baselineEpoch;
+      hydrationSequence = input.hydrationSequence;
+      residentMessageIds = input.residentMessageIds;
+      wasReady = input.ready;
+      // A reconnect changes provenance, not block or traversal identity.
+      // Retain consumed keys even when the new baseline omits their cold rows.
+
+      const announcements: FallbackAnnouncement[] = [];
+      const observeTraversal = (
+        source: "fallback" | "return",
+        next: FallbackTraversalAnnouncement | null,
+      ): void => {
+        if (next === null) return;
+        const traversalKey = JSON.stringify([source, next.traversalId]);
+        const prior = traversals.get(traversalKey);
+        // Replayed older frames must not rewind our idea of the live state.
+        if (prior !== undefined && next.revision < prior.revision) return;
+        traversals.set(traversalKey, {
+          revision: next.revision,
+          semanticKey: next.semanticKey,
+        });
+        const key = JSON.stringify([
+          source,
+          next.traversalId,
+          next.revision,
+          next.semanticKey,
+        ]);
+        const seen = seenTransitions.has(key);
+        seenTransitions.add(key);
+        // A revision can move because of bookkeeping alone. Conversely, a
+        // later hold after choosing is news even if the plan is the same.
+        if (seen || absorb || prior?.semanticKey === next.semanticKey) return;
+        announcements.push({ key, text: next.text });
+      };
+      observeTraversal("fallback", input.traversal);
+      observeTraversal("return", input.returnOffer);
+
+      const liveOutcome = input.liveOutcome;
+      if (liveOutcome !== null && !consumedNotices.has(liveOutcome.key)) {
+        consumedNotices.add(liveOutcome.key);
+        if (!absorb) {
+          announcements.push({ key: liveOutcome.key, text: liveOutcome.text });
+        }
+      }
+      for (const notice of input.notices) {
+        const seen = seenNoticeBodies.has(notice.key);
+        seenNoticeBodies.add(notice.key);
+        if (absorb) {
+          consumedNotices.add(notice.key);
+          continue;
+        }
+        if (seen || consumedNotices.has(notice.key)) continue;
+        if (
+          hydrating &&
+          !priorResidentMessageIds.has(notice.messageId) &&
+          !input.coldRewrittenMessageIds.has(notice.messageId)
+        ) {
+          continue;
+        }
+        consumedNotices.add(notice.key);
+        announcements.push({ key: notice.key, text: notice.text });
+      }
+
+      const outcome = input.manualOutcome;
+      if (outcome !== null && !seenManualOutcomes.has(outcome.key)) {
+        seenManualOutcomes.add(outcome.key);
+        if (!absorb) announcements.push(outcome);
+      }
+      return announcements;
+    },
+  };
+}
+
+interface RenderedChatAnnouncement {
+  readonly sequence: number;
+  readonly text: string;
+}
+
+interface ChatAnnouncementQueue {
+  readonly announcement: RenderedChatAnnouncement | null;
+  readonly enqueue: (texts: ReadonlyArray<string>) => void;
+  readonly reset: () => void;
+}
+
+/** Keeps every transition React batches before the live region commits. */
+export function useChatAnnouncementQueue(): ChatAnnouncementQueue {
+  const [announcement, setAnnouncement] =
+    useState<RenderedChatAnnouncement | null>(null);
+  const pending = useRef<RenderedChatAnnouncement[]>([]);
+  const sequence = useRef(0);
+  const generation = useRef(0);
+  const scheduled = useRef(false);
+
+  const reset = useCallback(() => {
+    generation.current += 1;
+    pending.current = [];
+    scheduled.current = false;
+    setAnnouncement(null);
+  }, []);
+
+  const enqueue = useCallback((texts: ReadonlyArray<string>) => {
+    if (texts.length === 0) return;
+    for (const text of texts) {
+      sequence.current += 1;
+      pending.current.push({ sequence: sequence.current, text });
+    }
+    if (scheduled.current) return;
+    scheduled.current = true;
+    const queuedGeneration = generation.current;
+    queueMicrotask(() => {
+      if (queuedGeneration !== generation.current) return;
+      scheduled.current = false;
+      const last = pending.current.at(-1);
+      if (last === undefined) return;
+      setAnnouncement({
+        sequence: last.sequence,
+        text: pending.current.map((entry) => entry.text).join(" "),
+      });
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (announcement === null) return;
+    // A later microtask can add news before this commit. Consume only what
+    // the region actually rendered, leaving that later news in the queue.
+    pending.current = pending.current.filter(
+      (entry) => entry.sequence > announcement.sequence,
+    );
+  }, [announcement]);
+
+  useLayoutEffect(
+    () => () => {
+      generation.current += 1;
+      pending.current = [];
+      scheduled.current = false;
+    },
+    [],
+  );
+
+  return { announcement, enqueue, reset };
 }

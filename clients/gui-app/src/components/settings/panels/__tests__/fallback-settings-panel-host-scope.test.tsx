@@ -110,6 +110,18 @@ vi.mock(
     }),
   }),
 );
+// The Effort control's catalog read is out of this suite's scope, and
+// `useFallbackEffortOptions` calls `useHostClient()`, which throws outside a
+// `<HostRuntimeProvider>` (`src/lib/host/runtime.ts:125`). Zero options is the
+// documented "no answer" state that keeps the free-text Effort input, which is
+// what this suite's assertions already expect - none of them touches Effort.
+vi.mock(
+  "@/components/settings/panels/fallback/fallback-effort-options",
+  () => ({
+    useFallbackEffortOptions: () => () => [],
+  }),
+);
+
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: undefined }),
 }));

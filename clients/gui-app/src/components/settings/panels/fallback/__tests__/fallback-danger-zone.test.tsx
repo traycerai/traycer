@@ -17,6 +17,8 @@ describe("FallbackDangerZone - confirm dialog scope", () => {
         hostLabel="Anurag's MacBook"
         isPending={false}
         onConfirm={vi.fn()}
+        focusResetOnMount={false}
+        onFocusApplied={vi.fn()}
         status={null}
       />,
     );
@@ -32,6 +34,8 @@ describe("FallbackDangerZone - confirm dialog scope", () => {
         hostLabel={null}
         isPending={false}
         onConfirm={vi.fn()}
+        focusResetOnMount={false}
+        onFocusApplied={vi.fn()}
         status={null}
       />,
     );
@@ -53,6 +57,8 @@ describe("FallbackDangerZone - confirm dialog scope", () => {
         hostLabel="Local host"
         isPending={false}
         onConfirm={onConfirm}
+        focusResetOnMount={false}
+        onFocusApplied={vi.fn()}
         status={null}
       />,
     );
@@ -60,5 +66,47 @@ describe("FallbackDangerZone - confirm dialog scope", () => {
     expect(onConfirm).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FallbackDangerZone - F26 focus return after a confirmed reset", () => {
+  it("focusResetOnMount focuses the Reset button on mount and calls onFocusApplied exactly once", () => {
+    const onFocusApplied = vi.fn();
+    render(
+      <FallbackDangerZone
+        hostLabel="Local host"
+        isPending={false}
+        onConfirm={vi.fn()}
+        focusResetOnMount
+        onFocusApplied={onFocusApplied}
+        status={null}
+      />,
+    );
+    // Falsification: delete the `resetButtonRef.current?.focus()` call in the
+    // mount effect (`fallback-danger-zone.tsx`) - this would leave focus
+    // wherever it started (`document.body` in this harness) instead of on
+    // Reset.
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Reset" }),
+    );
+    expect(onFocusApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it("focusResetOnMount: false focuses nothing and never calls onFocusApplied", () => {
+    const onFocusApplied = vi.fn();
+    render(
+      <FallbackDangerZone
+        hostLabel="Local host"
+        isPending={false}
+        onConfirm={vi.fn()}
+        focusResetOnMount={false}
+        onFocusApplied={onFocusApplied}
+        status={null}
+      />,
+    );
+    expect(document.activeElement).not.toBe(
+      screen.getByRole("button", { name: "Reset" }),
+    );
+    expect(onFocusApplied).not.toHaveBeenCalled();
   });
 });

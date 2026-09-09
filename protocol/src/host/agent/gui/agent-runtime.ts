@@ -1505,6 +1505,25 @@ export const AUTH_ERROR_CODE = "auth";
 export const ENV_CREDENTIAL_AUTH_ERROR_CODE = "auth_env_credential";
 
 /**
+ * `code` on the error block the host appends beside a queue pause, when the
+ * pause was caused by the turn above it ending in an error.
+ *
+ * Shared rather than host-private because a renderer has to tell this block
+ * apart from the PROVIDER failure on the same assistant row, and no other field
+ * can do it: both carry `failure: null` whenever the adapter emitted no typed
+ * failure, and both are `type: "error"` under one `turnId`. A surface that
+ * cannot distinguish them attaches the failed turn's recovery actions to the
+ * "resume the queue to send them" notice, so "Retry" underneath that sentence
+ * replays the failed prompt instead of resuming the queue.
+ *
+ * Beside {@link ENV_CREDENTIAL_AUTH_ERROR_CODE} for the same reason that one is
+ * here: it is a stable code the host stamps and the renderer keys on, and a
+ * second copy of the string in the client is a contract nobody would notice
+ * drifting.
+ */
+export const QUEUE_PAUSED_AFTER_ERROR_CODE = "QUEUE_PAUSED_AFTER_ERROR";
+
+/**
  * Upserts the image resolution record for a markdown-referenced image in an
  * assistant message (`chat.subscribe@1.6`) - both the initial resolution and
  * any later mid-turn watcher change (see the shared image ingestion

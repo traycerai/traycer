@@ -37,6 +37,17 @@ function chatRunSettingsFixture(model: string) {
   };
 }
 
+function fallbackImpendingActionFixture() {
+  return {
+    planId: "plan-1",
+    rung: "profile" as const,
+    target: chatRunSettingsFixture("claude-opus-5"),
+    targetModelFamily: null,
+    resumesAt: null,
+    pending: null,
+  };
+}
+
 function pendingFallbackFixture() {
   return {
     traversalId: "traversal-1",
@@ -45,6 +56,12 @@ function pendingFallbackFixture() {
     reason: "rate_limited",
     failedTuple: chatRunSettingsFixture("gpt-5"),
     targetTuple: chatRunSettingsFixture("claude-opus-5"),
+    // F5 (D202's sibling item): the impending-action preview, additive on
+    // `pendingFallbackSchema` since `chat.subscribe@1.9`. Populated, not
+    // `null` - a `null` here would make every "strips the KEY" assertion in
+    // Half 2 below pass whether or not the nested field was ever projected
+    // away, since the container itself is what those assertions delete.
+    impendingAction: fallbackImpendingActionFixture(),
     deadline: 1_700_000_000_000,
     graceRemainingMs: 5_000,
     attempt: 2,
@@ -437,6 +454,11 @@ function lastFailedAttemptFixture() {
     // All three, so the round-trip carries a populated array. The EMPTY case is
     // a distinct fact (host admitted nothing) and is pinned separately.
     eligibleRungs: ["retry", "switch", "wait_once"],
+    // F6: `eligible` is the one value that AGREES with `eligibleRungs`
+    // above carrying `wait_once` - the two are one host decision, so a
+    // fixture pairing `wait_once` with any other disposition would be
+    // asserting a state the producer cannot emit.
+    waitDisposition: "eligible" as const,
   };
 }
 

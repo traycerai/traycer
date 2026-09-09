@@ -1,10 +1,13 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useRef, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  FallbackImpendingAction,
+  PendingFallback,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import { Button } from "@/components/ui/button";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { useGraceCountdown } from "@/lib/relative-time";
+import { formatClockTime, useGraceCountdown } from "@/lib/relative-time";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -20,10 +23,13 @@ import {
   siblingSwitchingText,
 } from "./fallback-copy";
 import {
+  fallbackResolvedIdentitySentence,
   fallbackTupleIdentity,
   useFallbackProfileLabels,
 } from "./fallback-identity";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
+import type { FallbackActionOutcome } from "@traycer/protocol/host/chat-fallback";
 import { useFallbackCancel } from "./use-fallback-actions";
 
 /**
@@ -71,21 +77,48 @@ export function FallbackGraceCard({
   readonly menu: ReactNode | null;
 }) {
   const labelFor = useFallbackProfileLabels(client, true);
-  const cancel = useFallbackCancel(client, chatId);
+  // The sign-in navigation, armed by the click and run by the host's answer -
+  // or `null` when the cancel in flight is a plain "Don't switch".
+  //
+  // A ref and not state, because nothing renders from it, and because the
+  // thing that reads it may run after this component is gone: an APPLIED
+  // cancel settles the traversal, the settled frame clears `pendingFallback`,
+  // and that unmounts this card. The closure survives; the component does not.
+  const pendingSignInRef = useRef<(() => void) | null>(null);
+  const onCancelOutcome = useCallback((outcome: FallbackActionOutcome) => {
+    const navigate = pendingSignInRef.current;
+    // Disarmed on EVERY outcome, not just the applied one. A refusal that left
+    // it armed would send the user to Settings on the NEXT cancel they made -
+    // one they never asked to navigate from.
+    pendingSignInRef.current = null;
+    if (outcome !== "applied" || navigate === null) return;
+    navigate();
+  }, []);
+  const cancel = useFallbackCancel(client, chatId, onCancelOutcome);
   const openFallbackSettings = useOpenFallbackSettings(hostId);
   const { openSettings } = useSystemTabModalActions();
 
   const failed = fallbackTupleIdentity(pending.failedTuple, labelFor);
-  const target =
-    pending.targetTuple === null
-      ? null
-      : fallbackTupleIdentity(pending.targetTuple, labelFor);
+  // The whole destination, not just its account. "Switching to Terminal
+  // account" named the one field that is identical on both sides of a
+  // cross-provider hop and omitted the provider, the model and the effort -
+  // every part that actually changes. The shared helper is what keeps this
+  // sentence and the menu row the user clicked from describing one place two
+  // ways, and it is the same string the transcript announcer speaks.
+  const targetLabel = fallbackResolvedIdentitySentence(
+    { kind: "fallback", pending },
+    labelFor,
+  );
   const reasonLabel = fallbackReasonLabelFor(pending.reason);
   // "Sign in instead" belongs only to a signed-out traversal: for any other
   // reason it would send the user to fix an account that is working.
   const signedOut = pending.reason === "auth";
 
   const onCancel = useCallback(() => {
+    // Disarm first. A sign-in click whose cancel died in transport never
+    // reaches `onCancelOutcome`, so without this a plain "Don't switch"
+    // afterwards would inherit its navigation.
+    pendingSignInRef.current = null;
     cancel.mutate({
       epicId,
       chatId,
@@ -95,37 +128,66 @@ export function FallbackGraceCard({
   }, [cancel, chatId, epicId, pending.revision, pending.traversalId]);
 
   const onSignInInstead = useCallback(() => {
-    // Cancel FIRST, then open sign-in. Signing in is a multi-second trip
-    // through Settings, and without the cancel the countdown would expire and
-    // switch the chat while the user was in the middle of fixing the account
-    // they had just chosen to keep.
-    onCancel();
-    // The gate is on the PROVIDER id, the focus is written with the HARNESS id.
-    // `providerId === null` means this harness has no provider-CLI account to
-    // sign into, so there is nothing for Settings to open; everywhere else the
-    // tuple's own harness is the right key, and re-deriving it from the
-    // provider would be a round trip that can only lose.
-    if (failed.providerId === null) return;
-    const focus = useProvidersFocusStore.getState();
-    const profileId = pending.failedTuple.profileId;
-    if (profileId !== null) {
-      focus.setProfileFocus({
-        harnessId: failed.harnessId,
-        hostId,
-        profileId,
-        startSignIn: true,
-      });
-    } else {
-      focus.setFocusHarnessId(failed.harnessId);
-    }
-    openSettings({ section: "providers", resetToGeneral: false });
+    // Cancel FIRST and navigate only once the host has APPLIED it. Signing in
+    // is a multi-second trip through Settings, so an uncancelled countdown
+    // would expire and switch the chat while the user was fixing the account
+    // they had just chosen to keep - which is exactly what calling the
+    // mutation and opening Settings in the same breath allowed: the host
+    // legitimately refuses a stale cancel, and the refusal arrived to a card
+    // the user could no longer see, behind Settings, with the traversal still
+    // running.
+    //
+    // No second message here on the refusal path. `useFallbackCancel` already
+    // reports every non-`applied` outcome through the shared toast and a
+    // transport failure through its `errorMessage`, and TanStack runs the
+    // hook's `onSuccess` in ADDITION to this one - so saying anything would
+    // report one refusal twice.
+    pendingSignInRef.current = () => {
+      // The chat's OWN host, on both branches. The managed-profile branch
+      // carries it through `setProfileFocus`, but the ambient branch below
+      // writes only a harness id - `setFocusHarnessId` explicitly clears the
+      // host halves - so a signed-out Terminal account on host B used to open
+      // sign-in on whichever host Settings last showed. This is the same carry
+      // every other fallback settings link makes.
+      carryViewedHostIntoSettingsScope(hostId);
+      // The gate is on the PROVIDER id, the focus is written with the HARNESS
+      // id. `providerId === null` means this harness has no provider-CLI
+      // account to sign into, so there is nothing for Settings to open;
+      // everywhere else the tuple's own harness is the right key, and
+      // re-deriving it from the provider would be a round trip that can only
+      // lose.
+      if (failed.providerId === null) return;
+      const focus = useProvidersFocusStore.getState();
+      const profileId = pending.failedTuple.profileId;
+      if (profileId !== null) {
+        focus.setProfileFocus({
+          harnessId: failed.harnessId,
+          hostId,
+          profileId,
+          startSignIn: true,
+        });
+      } else {
+        focus.setFocusHarnessId(failed.harnessId);
+      }
+      openSettings({ section: "providers", resetToGeneral: false });
+    };
+    cancel.mutate({
+      epicId,
+      chatId,
+      traversalId: pending.traversalId,
+      revision: pending.revision,
+    });
   }, [
+    cancel,
+    chatId,
+    epicId,
     failed.harnessId,
     failed.providerId,
     hostId,
-    onCancel,
     openSettings,
     pending.failedTuple.profileId,
+    pending.revision,
+    pending.traversalId,
   ]);
 
   const queuedText = queuedMessagesMovingText(pending.queuedItemsMoving);
@@ -167,8 +229,9 @@ export function FallbackGraceCard({
 
       <FallbackGraceHeadline
         state={pending.state}
-        targetLabel={target?.profileLabel ?? null}
+        targetLabel={targetLabel}
         deadline={pending.deadline}
+        impendingAction={pending.impendingAction}
       />
 
       <div className="text-ui-xs text-muted-foreground">
@@ -223,10 +286,13 @@ function FallbackGraceHeadline({
   state,
   targetLabel,
   deadline,
+  impendingAction,
 }: {
   readonly state: PendingFallback["state"];
   readonly targetLabel: string | null;
   readonly deadline: number | null;
+  /** The host's plan for when this window ends. `null` when nothing is takeable. */
+  readonly impendingAction: FallbackImpendingAction | null;
 }) {
   // Subscribed HERE and not in the card: this component is the only thing on
   // screen that changes between ticks, so the once-a-second wake repaints one
@@ -256,13 +322,19 @@ function FallbackGraceHeadline({
     );
   }
   if (targetLabel === null) {
-    // A hold with no target yet: `notify` is a rung like any other, and the
-    // user still gets the window and the menu. Saying "switching to" here would
-    // name a destination that does not exist.
+    // No destination named - but that is now three different situations, and
+    // the host says which. Before `impendingAction` the frame carried
+    // `targetTuple: null` for the WHOLE hold (the engine resolved and
+    // committed only after expiry), so this generic line was all the card
+    // could ever say: a cancel window that would not say what it was
+    // cancelling. It is still the right line for a plan the host has not
+    // finished resolving, and the wrong one for a plan it has.
     return (
       <div className="text-ui-sm">
-        This turn failed.
-        {countdown === null ? "" : ` Deciding what to do in ${countdown}.`}
+        {impendingHeadline(impendingAction)}
+        {countdown === null
+          ? ""
+          : ` ${impendingCountdownClause(impendingAction, countdown)}`}
       </div>
     );
   }
@@ -272,4 +344,69 @@ function FallbackGraceHeadline({
       {countdown === null ? "" : ` in ${countdown}`}
     </div>
   );
+}
+
+/**
+ * What the host will do when this window ends, in words.
+ *
+ * Reached only when there is no destination to name, so every arm here is a
+ * rung that HAS no destination (`wait`, `notify`, `retry`) or a plan still
+ * being resolved. A rung with a target renders the destination sentence
+ * instead, which is the branch above.
+ */
+function impendingHeadline(action: FallbackImpendingAction | null): string {
+  // `null` is the host saying nothing is takeable - a traversal about to
+  // settle as exhausted. Saying "deciding" would promise a decision that is
+  // not coming.
+  if (action === null) return "This turn failed. Nothing else to try.";
+  // A plan still being resolved. The honest line is the one the card always
+  // used to show, and it is honest HERE and nowhere else: the host really has
+  // not decided yet.
+  if (action.pending !== null) return "This turn failed.";
+  switch (action.rung) {
+    case "wait":
+      return action.resumesAt === null
+        ? "This turn failed. This chat will wait for the limit to reset."
+        : `This turn failed. This chat will wait until ${formatClockTime(action.resumesAt)}.`;
+    case "notify":
+      return "This turn failed. Nothing else to try.";
+    case "retry":
+      return "This turn failed. Trying the same account again.";
+    // Both destination rungs reach here only with no resolved target - the
+    // headline above has it otherwise - so there is nothing more specific to
+    // say than that a move is coming.
+    case "profile":
+    case "tier":
+      return "This turn failed. Switching to another account.";
+  }
+}
+
+/**
+ * The countdown clause, in the VERB of the thing that is about to happen.
+ *
+ * Separate from the headline because the two say different things, and the
+ * distinction is the point of the cancel window: a plan the host has not
+ * resolved is still being DECIDED, and one it has is simply due. "Deciding
+ * what to do in 12s" over a named plan would suggest the window buys a
+ * decision that has already been made - which is the opposite of what the
+ * user needs to know, since what the window actually buys is the chance to
+ * stop it.
+ */
+function impendingCountdownClause(
+  action: FallbackImpendingAction | null,
+  countdown: string,
+): string {
+  if (action === null) return `Stopping in ${countdown}.`;
+  if (action.pending !== null) return `Deciding what to do in ${countdown}.`;
+  switch (action.rung) {
+    case "wait":
+      return `Waiting starts in ${countdown}.`;
+    case "retry":
+      return `Retrying in ${countdown}.`;
+    case "notify":
+      return `Stopping in ${countdown}.`;
+    case "profile":
+    case "tier":
+      return `Switching in ${countdown}.`;
+  }
 }

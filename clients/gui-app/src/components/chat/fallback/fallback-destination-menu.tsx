@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   ChatFallbackListTargetsResponse,
@@ -22,16 +22,20 @@ import {
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 import {
+  DESTINATION_MENU_DIALOG_LABEL,
   EQUIVALENT_MODELS_HEADING,
   FINDING_DESTINATIONS_LABEL,
+  HOST_UNREACHABLE_LABEL,
   NO_DESTINATIONS_LABEL,
+  NO_SELECTABLE_DESTINATIONS_LABEL,
   OTHER_PROFILES_HEADING,
   PAUSING_COUNTDOWN_LABEL,
   RECOMMENDED_LABEL,
   describeListTargetsOutcome,
 } from "./fallback-copy";
 import {
-  fallbackHarnessLabelFor,
+  fallbackDestinationOfModelTarget,
+  fallbackDestinationRowTitle,
   fallbackKnownHarnessFor,
   useFallbackProfileLabels,
 } from "./fallback-identity";
@@ -129,9 +133,15 @@ export function FallbackDestinationMenu({
    * Two states reach it, and reading the name as "still loading" is what got
    * the second one wrong once: the grace card's `fallback.holdForChoice` is in
    * flight, **or** the host refused it. A refused hold is not a transient state
-   * on the way to a held one; it means the traversal moved on, so every row the
-   * menu could draw would be a pick that could only answer
-   * `traversal_advanced`.
+   * on the way to a held one - no token was minted, so the menu holds no window
+   * and every row it could draw would be a pick against a freeze nobody owns.
+   *
+   * Deliberately NOT "the traversal moved on". That was one cause stated as the
+   * only one, and it is no longer even the common one: an ACCEPTED ack carrying
+   * no token also lands here (`reconcileFallbackChoiceAck` - the host took the
+   * freeze and minted nothing), and since B1 made reopening from `choosing` a
+   * normal path, a refusal no longer implies the window is gone. What the menu
+   * can say is that it has nothing to list; why is the host's to report.
    *
    * It suppresses the FETCH, not just the rows, and that is the point: listing
    * destinations under a countdown that is still running would offer a choice
@@ -139,8 +149,12 @@ export function FallbackDestinationMenu({
    * that this menu renders after the ack carries the lease AND the DTO reports
    * `choosing`; this is the half the menu can enforce.
    *
-   * While it is set, {@link refusal} - not the pausing label - is what the body
-   * says, whenever the caller has one.
+   * While it is set AND the caller has a {@link refusal}, the body says
+   * NOTHING: the refusal is rendered once, above, by the element that is both
+   * the visible line and the live region, and `MenuBody`'s `preparing` arm
+   * yields to it rather than repeating the pausing label underneath. One fact,
+   * one element (D213) - an earlier revision printed it twice, which announced
+   * it twice and double-matched `getByText`.
    */
   readonly preparing: boolean;
   /** A refusal the caller's verb answered, rendered inline before it closes. */
@@ -166,6 +180,7 @@ export function FallbackDestinationMenu({
   const labelFor = useFallbackProfileLabels(client, listing);
   const data = targets.data;
   const failedTuple = data?.failedTuple ?? null;
+  const headerId = useId();
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -176,24 +191,70 @@ export function FallbackDestinationMenu({
       </PopoverTrigger>
       <PopoverContent
         align="start"
+        // Radix gives this content `role="dialog"`, so it reached the
+        // accessibility tree as an UNNAMED dialog - announced as "dialog" and
+        // nothing else, which tells a screen-reader user that something opened
+        // and not what. The header, when there is one, is its description
+        // rather than a loose paragraph: the consequences of a pick are the
+        // one thing that must be heard before the rows are.
+        aria-label={DESTINATION_MENU_DIALOG_LABEL}
+        aria-describedby={header === null ? undefined : headerId}
         className="flex w-full max-w-[min(90vw,26rem)] flex-col gap-2 p-2 text-ui-sm"
       >
         {header === null ? null : (
-          <div className="px-1 text-ui-xs text-muted-foreground">{header}</div>
-        )}
-        {/*
-         * Suppressed while `preparing`, because the body renders the refusal
-         * there instead. The two states are different: a menu that IS listing
-         * shows its refusal above the rows it is still showing (the error
-         * card's stale-pick case), while a menu that never became entitled has
-         * no rows and the refusal IS its whole content. Rendering the line in
-         * both places would print it twice on the second.
-         */}
-        {refusal === null || preparing ? null : (
-          <div className="px-1 text-ui-xs text-amber-700 dark:text-amber-300">
-            {refusal}
+          <div id={headerId} className="px-1 text-ui-xs text-muted-foreground">
+            {header}
           </div>
         )}
+        {/*
+         * The refusal, in ONE element that is both the visible line and the
+         * live region.
+         *
+         * Persistent and empty until there is something to say, which is the
+         * whole mechanism: a region mounted at the same moment its text
+         * appears announces nothing, because assistive tech reports CHANGES
+         * within a region it was already observing. Refusals here deliberately
+         * bypass the toast layer, so before this the inline line was the only
+         * feedback and a screen reader never learnt of it at all.
+         *
+         * One element rather than a visible line plus an `sr-only` copy. A
+         * second hidden copy is not a neutral addition: it says the same
+         * sentence twice into the accessibility tree, and it is also visible
+         * to `getByText`, so it turns every existing single-match query into a
+         * double match. The lesson was not "the tests were too strict".
+         *
+         * It is also why {@link MenuBody} renders nothing at all while
+         * `preparing` with a refusal in hand: this line is the refusal now, and
+         * "Pausing the countdown…" underneath it would be the menu
+         * contradicting itself in two adjacent lines.
+         */}
+        <div
+          role="status"
+          aria-live="polite"
+          className="px-1 text-ui-xs text-amber-700 empty:hidden dark:text-amber-300"
+        >
+          {refusal}
+        </div>
+        {/*
+         * READINESS, and only readiness - the one state with no visible
+         * equivalent to duplicate. The popup can open showing "Pausing the
+         * countdown…" with no focusable rows at all, and when the rows arrive
+         * nothing changes that a screen reader is looking at; every other
+         * state is a sentence the body already renders, and announcing those
+         * from here would be the duplication this region is careful to avoid.
+         *
+         * No focus movement anywhere. The fix for a silent popup is not to
+         * start stealing focus.
+         */}
+        <div role="status" aria-live="polite" className="sr-only">
+          {menuReadinessAnnouncement({
+            preparing,
+            refusal,
+            isPending: targets.isPending,
+            isError: targets.isError,
+            data,
+          })}
+        </div>
         <MenuBody
           data={data}
           preparing={preparing}
@@ -209,6 +270,46 @@ export function FallbackDestinationMenu({
       </PopoverContent>
     </Popover>
   );
+}
+
+/**
+ * How many destinations became available, or `""` for every state that has a
+ * visible sentence of its own.
+ *
+ * The empty string is the important half of the contract: this region says
+ * NOTHING while the menu is preparing, loading, refused, unreachable or moved
+ * on, because each of those already renders a line the reader can find. A
+ * region that echoed them would say each sentence twice into the
+ * accessibility tree - and, being real DOM, would double every `getByText` in
+ * this component's suite, which is how the duplication announced itself.
+ *
+ * Counts SELECTABLE rows rather than rows: "3 destinations available" over a
+ * list where none can be clicked would be this region contradicting every row
+ * under it, which is the same defect F12 fixed in the visible half.
+ */
+function menuReadinessAnnouncement(input: {
+  readonly preparing: boolean;
+  readonly refusal: string | null;
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly data: ChatFallbackListTargetsResponse | undefined;
+}): string {
+  if (input.refusal !== null) return "";
+  if (input.preparing || input.isPending) return "";
+  if (input.isError || input.data === undefined) return "";
+  if (describeListTargetsOutcome(input.data.outcome) !== null) return "";
+  const failedTuple = input.data.failedTuple;
+  const selectable =
+    input.data.profileTargets.filter((target) =>
+      profileRowSelectable(target, failedTuple),
+    ).length + input.data.modelTargets.filter(modelRowSelectable).length;
+  // Not silent at zero: "nothing to choose from" is a readiness answer, and the
+  // one a user waiting on a spinner most needs. The visible half says it in
+  // different words, next to the recovery actions.
+  if (selectable === 0) return "No destinations are available to choose.";
+  return selectable === 1
+    ? "1 destination available to choose."
+    : `${selectable} destinations available to choose.`;
 }
 
 function MenuBody({
@@ -243,9 +344,12 @@ function MenuBody({
     // only one of them is true at a time: "Pausing the countdown…" beside
     // "Couldn't pause the countdown" would be the menu contradicting itself in
     // two adjacent lines, and the refusal is the more specific fact.
-    return (
+    //
+    // The refusal is now rendered ONCE, by the status region above, so this
+    // arm yields the space rather than printing it a second time.
+    return refusal !== null ? null : (
       <div className="px-1 py-2 text-ui-xs text-muted-foreground">
-        {refusal ?? PAUSING_COUNTDOWN_LABEL}
+        {PAUSING_COUNTDOWN_LABEL}
       </div>
     );
   }
@@ -263,7 +367,7 @@ function MenuBody({
     return (
       <div className="flex flex-col gap-2 px-1 py-2">
         <span className="text-ui-xs text-muted-foreground">
-          Couldn&apos;t reach this chat&apos;s host just now.
+          {HOST_UNREACHABLE_LABEL}
         </span>
         <FallbackNoticeSettingsLink />
       </div>
@@ -279,26 +383,84 @@ function MenuBody({
 
   const hasRows =
     data.profileTargets.length > 0 || data.modelTargets.length > 0;
-  if (!hasRows) {
+  // "Rows exist" and "a destination is SELECTABLE" are different facts, and
+  // treating the first as the second is what left a menu full of disabled rows
+  // with no way out: no "nothing available" sentence, no Retry / Wait
+  // alternative, and no Settings link - a popover that explained, at length,
+  // why the user could not do any of the things it was offering.
+  //
+  // `picking` is deliberately NOT part of this: a menu does not become empty
+  // because a pick is in flight. The rows' own `disabled` ORs it back in.
+  const hasSelectableRow =
+    data.profileTargets.some((target) =>
+      profileRowSelectable(target, failedTuple),
+    ) || data.modelTargets.some(modelRowSelectable);
+  if (!hasSelectableRow) {
     return (
-      <div className="flex flex-col gap-2 px-1 py-2">
-        <span className="text-ui-xs text-muted-foreground">
-          {/*
-           * The host's own words when it gave them. `modelTargetsSkip` sits
-           * BESIDE the array rather than inside it because it describes the
-           * absence of candidates rather than a candidate - and `no-group`, the
-           * commonest ineligibility, is exactly the case a generic sentence
-           * would fail. Rendered verbatim per the contract: `label` is always
-           * safe to show, and re-wording it here would be a second voice.
-           */}
-          {data.modelTargetsSkip?.label ?? NO_DESTINATIONS_LABEL}
-        </span>
-        {emptyStateActions}
-        <FallbackNoticeSettingsLink />
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 px-1 py-2">
+          <span className="text-ui-xs text-muted-foreground">
+            {/*
+             * The host's own words when it gave them. `modelTargetsSkip` sits
+             * BESIDE the array rather than inside it because it describes the
+             * absence of candidates rather than a candidate - and `no-group`,
+             * the commonest ineligibility, is exactly the case a generic
+             * sentence would fail. Rendered verbatim per the contract: `label`
+             * is always safe to show, and re-wording it here would be a second
+             * voice.
+             */}
+            {data.modelTargetsSkip?.label ??
+              (hasRows
+                ? NO_SELECTABLE_DESTINATIONS_LABEL
+                : NO_DESTINATIONS_LABEL)}
+          </span>
+          {emptyStateActions}
+          <FallbackNoticeSettingsLink />
+        </div>
+        {/*
+         * The rows still render underneath when there ARE any. Each carries
+         * the host's own reason for being unusable, and those explanations are
+         * the most useful thing on screen for deciding what to do next - the
+         * defect was never that they were shown, it was that they were the
+         * ONLY thing shown.
+         */}
+        {hasRows ? (
+          <TargetSections
+            data={data}
+            failedTuple={failedTuple}
+            labelFor={labelFor}
+            picking={picking}
+            onPick={onPick}
+          />
+        ) : null}
       </div>
     );
   }
 
+  return (
+    <TargetSections
+      data={data}
+      failedTuple={failedTuple}
+      labelFor={labelFor}
+      picking={picking}
+      onPick={onPick}
+    />
+  );
+}
+
+function TargetSections({
+  data,
+  failedTuple,
+  labelFor,
+  picking,
+  onPick,
+}: {
+  readonly data: ChatFallbackListTargetsResponse;
+  readonly failedTuple: ChatRunSettings | null;
+  readonly labelFor: (profileId: string | null) => string;
+  readonly picking: boolean;
+  readonly onPick: (target: ChatRunSettings) => void;
+}) {
   return (
     <div className="flex flex-col gap-2">
       {data.profileTargets.length === 0 ? null : (
@@ -357,6 +519,30 @@ function MenuBody({
  * `failedTuple: null` has nothing to swap into, and sending a half-built tuple
  * would be worse than offering nothing.
  */
+/**
+ * Whether a sibling-account row is one the user could actually pick.
+ *
+ * Extracted so the ROW's `disabled` and the MENU's "is anything selectable"
+ * question are answered by one function rather than two that agree today. They
+ * did not agree before: the menu counted array length and the row counted
+ * three separate conditions, so a menu of unusable rows called itself
+ * populated. `picking` stays out of it deliberately - see `hasSelectableRow`.
+ */
+function profileRowSelectable(
+  target: FallbackProfileTarget,
+  failedTuple: ChatRunSettings | null,
+): boolean {
+  if (!target.selectable) return false;
+  if (failedTuple === null) return false;
+  return !skipIsCurrentDeadEvidence(target.skip);
+}
+
+/** The equivalent-model row's half of {@link profileRowSelectable}'s rule. */
+function modelRowSelectable(target: FallbackModelTarget): boolean {
+  if (target.target === null) return false;
+  return !skipIsCurrentDeadEvidence(target.skip);
+}
+
 function ProfileRow({
   target,
   failedTuple,
@@ -368,11 +554,7 @@ function ProfileRow({
   readonly picking: boolean;
   readonly onPick: (target: ChatRunSettings) => void;
 }) {
-  const disabled =
-    picking ||
-    !target.selectable ||
-    failedTuple === null ||
-    skipIsCurrentDeadEvidence(target.skip);
+  const disabled = picking || !profileRowSelectable(target, failedTuple);
   return (
     <TargetRow
       disabled={disabled}
@@ -404,12 +586,11 @@ function ModelRow({
   readonly onPick: (target: ChatRunSettings) => void;
 }) {
   const tuple = target.target;
-  // `selectable` is documented as exactly `target !== null`, and this reads the
-  // tuple rather than the flag: a row with nothing to send cannot be clicked
-  // whatever the flag says, and the narrowing is what lets `onPick` take a
-  // non-null tuple.
-  const disabled =
-    picking || tuple === null || skipIsCurrentDeadEvidence(target.skip);
+  // `selectable` is documented as exactly `target !== null`, and the shared
+  // predicate reads the tuple rather than the flag: a row with nothing to send
+  // cannot be clicked whatever the flag says. The null check stays HERE as
+  // well, because it is what narrows `tuple` for `onPick`.
+  const disabled = picking || !modelRowSelectable(target);
   // `null` for a harness this build has never heard of - the row still renders,
   // named by its wire id, just without a glyph. The alternative would be a cast
   // of the open wire string into `GuiHarnessId`.
@@ -426,7 +607,13 @@ function ModelRow({
           <HarnessIcon harnessId={knownHarness} className="size-3" />
         )
       }
-      title={`${fallbackHarnessLabelFor(target.harnessId)} · ${target.modelFamily}`}
+      // The RESOLVED model and its effort, with the family only as the
+      // fallback for a candidate the host stopped resolving. Titling by
+      // `modelFamily` unconditionally meant a group named `gpt` offered a
+      // click that would launch `gpt-6-astra`, and the row never said so.
+      title={fallbackDestinationRowTitle(
+        fallbackDestinationOfModelTarget(target, labelFor),
+      )}
       recommended={false}
       severity={target.severity}
       usedPercent={target.usedPercent}
@@ -477,6 +664,14 @@ function TargetRow({
             {RECOMMENDED_LABEL}
           </span>
         ) : null}
+        {/*
+         * Text first, bar second. The bar is `aria-hidden` decoration; this
+         * span is what the row actually says about its headroom, so it is part
+         * of the button's accessible name rather than a tooltip or a colour.
+         */}
+        <span className="shrink-0 text-ui-xs tabular-nums text-muted-foreground">
+          {usageStatusText(severity, usedPercent)}
+        </span>
         <UsageMeter severity={severity} usedPercent={usedPercent} />
       </span>
       {note === null ? null : (
@@ -513,6 +708,46 @@ const METER_SEVERITY_BY_WIRE_ID: ReadonlyMap<string, RateLimitWindowSeverity> =
     ["near_limit", "running_low"],
     ["hard_limit", "limited"],
   ]);
+
+/**
+ * The words for each severity - the SAME ones the profile rate-limit banner
+ * uses for the same account.
+ *
+ * Borrowed rather than invented so a row here and that account's row in the
+ * composer read alike; two vocabularies for one gauge is two things for a user
+ * to learn about one fact.
+ */
+const METER_STATUS_TEXT: Readonly<Record<RateLimitWindowSeverity, string>> = {
+  healthy: "Healthy",
+  running_low: "Running low",
+  limited: "Limited",
+};
+
+/**
+ * The row's usage, as TEXT.
+ *
+ * The bar beside it is `aria-hidden` and colour-only, so without this a
+ * screen-reader user could not tell a healthy account from one at 97%, and a
+ * sighted user with no colour vision could not either. The meter stays
+ * decorative; this is the actual statement.
+ *
+ * `null` usage is "not checked" and never "0%", which is the same rule the bar
+ * follows by drawing nothing - and the distinction AX3 asks for explicitly. A
+ * gauge nobody read and a gauge that read zero are opposite facts, and "0%"
+ * for the first one says the account has all its headroom left when we have no
+ * idea whether it has any.
+ */
+function usageStatusText(severity: string, usedPercent: number | null): string {
+  const mapped = METER_SEVERITY_BY_WIRE_ID.get(severity);
+  const status = mapped === undefined ? null : METER_STATUS_TEXT[mapped];
+  if (usedPercent === null) {
+    return status === null
+      ? "Usage not checked"
+      : `${status} · usage not checked`;
+  }
+  const used = `${Math.round(rateLimitWindowFillPercent(usedPercent))}% used`;
+  return status === null ? used : `${status} · ${used}`;
+}
 
 function UsageMeter({
   severity,

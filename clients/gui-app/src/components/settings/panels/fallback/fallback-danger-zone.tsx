@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,20 @@ export interface FallbackDangerZoneProps {
   readonly hostLabel: string | null;
   readonly isPending: boolean;
   readonly onConfirm: () => void;
+  /**
+   * Take focus onto Reset as this mounts.
+   *
+   * The other half of the shared dialog's focus return, and it exists because
+   * that half cannot cover this case: a CONFIRMED reset replaces the whole
+   * editor, so the Reset button the dialog captured as its opener is detached
+   * by the time the dialog closes. The panel remembers that the replacement was
+   * a reset and this puts the keyboard back on the control that started it -
+   * the same place a cancelled dialog leaves it.
+   */
+  readonly focusResetOnMount: boolean;
+  /** Clears the intent above, so a later remount for another reason - a host
+   * switch - does not steal focus onto a button nobody pressed. */
+  readonly onFocusApplied: () => void;
   readonly status: ReactNode;
 }
 
@@ -35,8 +49,21 @@ export interface FallbackDangerZoneProps {
  * true half, and the smaller true statement beats the tidier false one.
  */
 export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
-  const { hostLabel, isPending, onConfirm, status } = props;
+  const {
+    hostLabel,
+    isPending,
+    onConfirm,
+    focusResetOnMount,
+    onFocusApplied,
+    status,
+  } = props;
   const [confirming, setConfirming] = useState(false);
+  const resetButtonRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!focusResetOnMount) return;
+    resetButtonRef.current?.focus();
+    onFocusApplied();
+  }, [focusResetOnMount, onFocusApplied]);
   return (
     <SettingsGroup
       title="Danger Zone"
@@ -51,6 +78,7 @@ export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
           <Button
             type="button"
             variant="destructive"
+            ref={resetButtonRef}
             disabled={isPending}
             onClick={() => {
               setConfirming(true);

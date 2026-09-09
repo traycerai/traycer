@@ -9,10 +9,21 @@ import {
 import {
   keyedCandidate,
   moveKeyedCandidate,
+  type FallbackGroupsInverse,
+  type KeyedCandidate,
   type KeyedGroup,
 } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
 import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/fallback/fallback-profile-labels";
+import {
+  FALLBACK_ADD_MODEL_ATTRIBUTE,
+  FALLBACK_CANDIDATE_REMOVE_ATTRIBUTE,
+  FALLBACK_GROUP_DELETE_ATTRIBUTE,
+  focusSelector,
+  useRemovalFocus,
+} from "@/components/settings/panels/fallback/fallback-removal-focus";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import type { AgentReasoningEffortOption } from "@traycer/protocol/host/index";
+import type { FallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -46,12 +57,19 @@ export interface FallbackTierGroupCardProps {
    * so one providers read builds one label map (D190).
    */
   readonly labelFor: FallbackSettingsProfileLabel;
+  /**
+   * The effort levels a harness advertises. Threaded like `labelFor` rather
+   * than resolved per card: one catalog read serves every row.
+   */
+  readonly effortOptions: FallbackEffortOptions;
   /** A text keystroke: the draft moves, nothing is saved. */
   readonly onChange: (next: KeyedGroup) => void;
   /** A completed edit, to save - every control but a text field, and a text
    * field's blur or Enter. */
   readonly onCommit: (next: KeyedGroup) => void;
   readonly onDelete: () => void;
+  /** The inverse of a row removal, for the panel to apply to the current draft. */
+  readonly onUndo: (inverse: FallbackGroupsInverse) => void;
   /**
    * The harness a NEW row starts on when this group has no row to copy from.
    *
@@ -79,9 +97,11 @@ export function FallbackTierGroupCard(
     group,
     preview,
     labelFor,
+    effortOptions,
     onChange,
     onCommit,
     onDelete,
+    onUndo,
     defaultHarnessId,
   } = props;
   // An explicit length check rather than `candidates[0]?.harnessId`: a new row
@@ -91,10 +111,12 @@ export function FallbackTierGroupCard(
     group.candidates.length > 0
       ? group.candidates[0].value.harnessId
       : defaultHarnessId;
+  const { containerRef, focusAfterRemoval } = useRemovalFocus();
   return (
     <div
       className="rounded-lg border border-border/60 p-4"
       data-testid={`fallback-tier-group-${group.id}`}
+      ref={containerRef}
     >
       <div className="flex flex-wrap items-center gap-2">
         <Input
@@ -115,6 +137,9 @@ export function FallbackTierGroupCard(
           type="button"
           variant="ghost"
           className="h-8 px-2 text-ui-sm text-muted-foreground"
+          // Addressed by the editor's focus handoff after a sibling group is
+          // deleted - by this group's DRAFT KEY, never by its editable name.
+          {...{ [FALLBACK_GROUP_DELETE_ATTRIBUTE]: group.draftKey }}
           onClick={onDelete}
         >
           Delete group
@@ -131,10 +156,16 @@ export function FallbackTierGroupCard(
           <li key={candidate.key}>
             <CandidateRow
               candidate={candidate.value}
+              // The row's identity, threaded so its Remove button can be
+              // ADDRESSED by a sibling's focus handoff. Not the index: after a
+              // removal the indices shift, which is precisely the moment the
+              // handoff runs.
+              removeKey={candidate.key}
               index={index}
               candidateCount={group.candidates.length}
               preview={previewFor(preview, index)}
               labelFor={labelFor}
+              effortOptions={effortOptions}
               onChange={(next) => {
                 onChange(withCandidateAt(group, index, next));
               }}
@@ -148,26 +179,38 @@ export function FallbackTierGroupCard(
                 });
               }}
               onRemove={() => {
-                // Undo restores the previous GROUP rather than re-appending the
-                // row, for the same reason the group-level undo restores the
-                // previous policy: re-adding would put it back at the end, and
-                // its position in the group is load-bearing (the rung walks
-                // this order) as well as being the one thing a user cannot
-                // recover by retyping. Restoring the group also restores the
-                // row's original key, so undo returns the same row rather than
-                // a lookalike.
-                const previous = group;
+                // The Remove button that had focus is inside the row about to
+                // be filtered out: hand the keyboard to the row that takes its
+                // place, its neighbour if this was the last, or "Add a model"
+                // once the group is empty.
+                focusAfterRemoval([
+                  ...candidateRemoveSelectors(group.candidates, index),
+                  `[${FALLBACK_ADD_MODEL_ATTRIBUTE}]`,
+                ]);
                 onCommit({
                   ...group,
                   candidates: group.candidates.filter((_, at) => at !== index),
                 });
+                // The INVERSE of this one removal, applied to the draft as it
+                // stands when Undo is pressed - not this group as it stands
+                // now, which is a snapshot that would also revert whatever the
+                // user changed while the toast was up. `candidate` carries its
+                // own key, so the row comes back as the same row rather than a
+                // lookalike, at the index it held: its position is load-bearing
+                // (the rung walks this order) and is the one thing a user
+                // cannot recover by retyping.
                 toast.success(
                   `Removed ${candidate.value.modelFamily.trim() === "" ? "the empty row" : `“${candidate.value.modelFamily}”`}`,
                   {
                     action: {
                       label: "Undo",
                       onClick: () => {
-                        onCommit(previous);
+                        onUndo({
+                          kind: "candidate",
+                          groupDraftKey: group.draftKey,
+                          candidate,
+                          index,
+                        });
                       },
                     },
                   },
@@ -181,6 +224,7 @@ export function FallbackTierGroupCard(
         type="button"
         variant="link"
         className="mt-2 h-auto p-0 text-ui-sm"
+        {...{ [FALLBACK_ADD_MODEL_ATTRIBUTE]: "" }}
         onClick={() => {
           onCommit({
             ...group,
@@ -208,6 +252,44 @@ export function FallbackTierGroupCard(
       </Button>
     </div>
   );
+}
+
+/**
+ * Where focus goes when the row at `index` is removed, most-preferred first.
+ *
+ * The NEXT row before the previous one, for the same reason as the group-level
+ * handoff: it is the row that takes the removed one's place, so the keyboard
+ * stays where the user was looking.
+ */
+function candidateRemoveSelectors(
+  candidates: readonly KeyedCandidate[],
+  index: number,
+): readonly string[] {
+  return [
+    ...candidateRemoveSelectorAt(candidates, index + 1),
+    ...candidateRemoveSelectorAt(candidates, index - 1),
+  ];
+}
+
+/**
+ * One selector, or none when `index` is off either end.
+ *
+ * The range check is explicit rather than `candidates[index] === undefined`
+ * because `noUncheckedIndexedAccess` is off in `tsconfig.app.json`: an index
+ * read is typed as the element even where it yields `undefined` at runtime, so
+ * the comparison reads to the type-checker as a test between types that cannot
+ * overlap. `.at()` would type it honestly but answers the WRONG element - a
+ * negative index wraps to the end of the list, which for the first row means
+ * the row furthest from it and, when it is the only row, the row being removed.
+ */
+function candidateRemoveSelectorAt(
+  candidates: readonly KeyedCandidate[],
+  index: number,
+): readonly string[] {
+  if (index < 0 || index >= candidates.length) return [];
+  return [
+    focusSelector(FALLBACK_CANDIDATE_REMOVE_ATTRIBUTE, candidates[index].key),
+  ];
 }
 
 /**
@@ -276,10 +358,12 @@ function previewFor(
 
 function CandidateRow(props: {
   readonly candidate: TierCandidate;
+  readonly removeKey: string;
   readonly index: number;
   readonly candidateCount: number;
   readonly preview: TierCandidatePreview | null;
   readonly labelFor: FallbackSettingsProfileLabel;
+  readonly effortOptions: FallbackEffortOptions;
   readonly onChange: (next: TierCandidate) => void;
   readonly onCommit: (next: TierCandidate) => void;
   readonly onMove: (toIndex: number) => void;
@@ -287,10 +371,12 @@ function CandidateRow(props: {
 }): ReactNode {
   const {
     candidate,
+    removeKey,
     index,
     candidateCount,
     preview,
     labelFor,
+    effortOptions,
     onChange,
     onCommit,
     onMove,
@@ -321,23 +407,16 @@ function CandidateRow(props: {
           }}
           {...commitCurrent}
         />
-        <Input
-          value={candidate.reasoningEffort ?? ""}
-          aria-label="Effort"
-          placeholder="any effort"
-          className="h-8 w-full max-w-[14ch]"
-          onChange={(event) => {
-            // Empty means "no effort constraint", which the wire encodes as
-            // `null` - NOT as an empty string, which the schema refuses. The
-            // control cannot express the refused value at all, so this is the
-            // one normalisation worth doing at the edit site.
-            const next = event.target.value;
-            onChange({
-              ...candidate,
-              reasoningEffort: next.trim() === "" ? null : next,
-            });
+        <EffortControl
+          reasoningEffort={candidate.reasoningEffort}
+          options={effortOptions(candidate.harnessId)}
+          onChange={(next) => {
+            onChange({ ...candidate, reasoningEffort: next });
           }}
-          {...commitCurrent}
+          onCommit={(next) => {
+            onCommit({ ...candidate, reasoningEffort: next });
+          }}
+          commitCurrent={commitCurrent}
         />
         <div className="flex-1" />
         <MoveButton
@@ -359,6 +438,7 @@ function CandidateRow(props: {
           variant="ghost"
           className="size-7 p-0 text-muted-foreground"
           aria-label={`Remove ${candidate.modelFamily || "model"}`}
+          {...{ [FALLBACK_CANDIDATE_REMOVE_ATTRIBUTE]: removeKey }}
           onClick={props.onRemove}
         >
           <X className="size-3.5" aria-hidden />
@@ -368,6 +448,105 @@ function CandidateRow(props: {
     </div>
   );
 }
+
+/**
+ * The reasoning effort this row runs at.
+ *
+ * A `Select` of the levels the harness's own models advertise, which is what
+ * the agreed UX specified and what every other effort picker in the app
+ * renders. It replaced an unrestricted text input whose only hint was a
+ * placeholder: a user had to know a provider-specific spelling already, and a
+ * typo was accepted, saved as policy, and then silently dropped at resolution -
+ * so the value on screen did not mean the effort the fallback would run at.
+ *
+ * Two states, and the difference between them is "no answer" versus "an answer
+ * that happens to be empty":
+ *
+ *  - **the catalog answered.** Its levels, plus "Any effort" for the `null`
+ *    that means no constraint. A STORED value outside the set keeps an option
+ *    of its own and stays selected, labelled as not offered - the same rule
+ *    {@link HarnessSelect} applies to an unknown harness, and for the same
+ *    reason: silently rewriting a stored value on a page someone opened to read
+ *    is worse than showing them what is actually saved.
+ *  - **nothing answered** - an older host, a harness the user no longer has, a
+ *    cold catalog slot. Then the text input stands, because a `Select` built
+ *    from nothing would offer only "Any effort" and would take away a level the
+ *    user can legitimately type.
+ */
+function EffortControl(props: {
+  readonly reasoningEffort: string | null;
+  readonly options: readonly AgentReasoningEffortOption[];
+  readonly onChange: (next: string | null) => void;
+  readonly onCommit: (next: string | null) => void;
+  /** The blur/Enter props the text fallback shares with the family input. */
+  readonly commitCurrent: {
+    readonly onBlur: () => void;
+    readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  };
+}): ReactNode {
+  const { reasoningEffort, options, onChange, onCommit, commitCurrent } = props;
+  if (options.length === 0) {
+    return (
+      <Input
+        value={reasoningEffort ?? ""}
+        aria-label="Effort"
+        placeholder="any effort"
+        className="h-8 w-full max-w-[14ch]"
+        onChange={(event) => {
+          // Empty means "no effort constraint", which the wire encodes as
+          // `null` - NOT as an empty string, which the schema refuses. The
+          // control cannot express the refused value at all, so this is the
+          // one normalisation worth doing at the edit site.
+          const next = event.target.value;
+          onChange(next.trim() === "" ? null : next);
+        }}
+        {...commitCurrent}
+      />
+    );
+  }
+  const stored = reasoningEffort;
+  const unsupported =
+    stored !== null && !options.some((option) => option.id === stored);
+  return (
+    <Select
+      // `ANY_EFFORT_VALUE`, not "": Radix treats an empty string as "no value"
+      // and would render the placeholder for a choice the user made.
+      value={stored ?? ANY_EFFORT_VALUE}
+      onValueChange={(next) => {
+        onCommit(next === ANY_EFFORT_VALUE ? null : next);
+      }}
+    >
+      <SelectTrigger className="h-8 w-full max-w-[16ch]" aria-label="Effort">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ANY_EFFORT_VALUE}>Any effort</SelectItem>
+        {options.map((option) => (
+          <SelectItem key={option.id} value={option.id}>
+            {option.label}
+          </SelectItem>
+        ))}
+        {unsupported ? (
+          <SelectItem value={stored} data-testid="fallback-effort-unsupported">
+            {stored} - not offered here
+          </SelectItem>
+        ) : null}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * The Select's stand-in for `null`.
+ *
+ * A sentinel rather than the empty string because Radix's `Select` reads `""`
+ * as "nothing selected" and falls back to the placeholder, which would make a
+ * deliberate "no effort constraint" look like an unanswered field. It never
+ * reaches the wire - `onValueChange` maps it back to `null` - and it cannot
+ * collide with a real level id, which the catalog draws from a provider's own
+ * vocabulary.
+ */
+const ANY_EFFORT_VALUE = "__any-effort__";
 
 /**
  * Which provider this row's model runs on.
