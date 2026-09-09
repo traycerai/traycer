@@ -4656,13 +4656,44 @@ describe("useRenderedMessages turn.stopped", () => {
   });
 
   it.each([
-    ["in_turn", false, true, true],
-    ["in_turn", true, true, true],
-    ["in_turn", false, false, false],
-    ["turn_start", false, false, false],
+    {
+      placement: "in_turn",
+      withLaterProse: false,
+      includeStart: true,
+      showFooter: true,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "in_turn",
+      withLaterProse: true,
+      includeStart: true,
+      showFooter: true,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "in_turn",
+      withLaterProse: false,
+      includeStart: false,
+      showFooter: false,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "turn_start",
+      withLaterProse: false,
+      includeStart: false,
+      showFooter: false,
+      turnHasOnlyAutonomousResumeSegments: true,
+    },
   ] as const)(
-    "uses the correct lifecycle for %s placement, later prose=%s, start proof=%s",
-    (placement, withLaterProse, includeStart, showFooter) => {
+    "uses the correct lifecycle for each placement case",
+    (testCase) => {
+      const {
+        placement,
+        withLaterProse,
+        includeStart,
+        showFooter,
+        turnHasOnlyAutonomousResumeSegments,
+      } = testCase;
       const turnId = `turn-explicit-${placement}-${withLaterProse}`;
       const assistant = {
         ...assistantMessage(turnId, 10_000),
@@ -4727,6 +4758,9 @@ describe("useRenderedMessages turn.stopped", () => {
       );
       expect(row?.elapsedStartedAt ?? row?.createdAt).toBe(10_000);
       expect(row?.showCompletionFooter).toBe(showFooter);
+      expect(row?.turnHasOnlyAutonomousResumeSegments).toBe(
+        turnHasOnlyAutonomousResumeSegments,
+      );
       if (showFooter) {
         expect(row?.completedAt).toBe(15_000);
       }

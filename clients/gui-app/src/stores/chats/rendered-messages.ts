@@ -2700,7 +2700,11 @@ function withTurnCompletion(
   );
   const turnHasOnlyAutonomousResumeSegments =
     turnReplySegments.length > 0 &&
-    turnReplySegments.every((segment) => segment.kind === "autonomous_resume");
+    turnReplySegments.every(
+      (segment) =>
+        segment.kind === "autonomous_resume" &&
+        segment.deliveryPlacement !== "in_turn",
+    );
   const stopped: ChatMessageStoppedInfo | null =
     input.stopped === null
       ? null
