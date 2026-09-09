@@ -7,7 +7,24 @@
   color: var(--sidebar-foreground);
 }
 
-/* Floating surfaces share the glass setting. */
+/*
+ * One glass layer per floating surface. Custom Floating UI/Tiptap surfaces
+ * join the same contract as the Radix wrappers through their stable markers.
+ *
+ * `.glass-with-insets::before` joins this list too: it is the SECOND glass
+ * layer a `glass-with-insets` surface needs, painted as a pseudo-element sat
+ * behind the surface's own content (see the `isolation: isolate` +
+ * `z-index: -1` rule below) instead of on the surface's own background. A
+ * surface using `glass-with-insets` already turned off ITS OWN
+ * `background-color`/`backdrop-filter` so nested overlays and sticky insets
+ * can sample the real page backdrop through it; `isolation: isolate` gives
+ * that surface its own stacking context so the `::before` layer composites
+ * UNDER the surface's content but ABOVE whatever is behind the surface in the
+ * page, and `z-index: -1` is what places it there within that isolated
+ * context - without the isolation, a plain negative z-index would escape the
+ * surface's own stacking context and paint behind unrelated page content
+ * instead.
+ */
 [data-slot="dialog-content"],
 [data-slot="alert-dialog-content"],
 [data-slot="popover-content"],

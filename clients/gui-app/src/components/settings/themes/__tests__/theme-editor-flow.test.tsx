@@ -20,7 +20,7 @@ import type { ThemeDefinition } from "@/lib/themes/theme-definition";
 function resetThemeStores(): void {
   window.localStorage.clear();
   useThemeLibraryStore.setState({
-    version: 1,
+    version: 2,
     themes: [],
     selected: { light: null, dark: null },
     glassOpacity: 100,

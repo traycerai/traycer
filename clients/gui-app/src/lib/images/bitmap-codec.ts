@@ -20,9 +20,9 @@ export async function decodeBitmap(blob: Blob): Promise<DecodedBitmap> {
 export function createBitmapCanvas(
   width: number,
   height: number,
-): HTMLCanvasElement {
+): HTMLCanvasElement | OffscreenCanvas {
   if (typeof document === "undefined") {
-    throw new Error("This browser cannot encode images for stashing.");
+    return new OffscreenCanvas(width, height);
   }
   const canvas = document.createElement("canvas");
   canvas.width = width;

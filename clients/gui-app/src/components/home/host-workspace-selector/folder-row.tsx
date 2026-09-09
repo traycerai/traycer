@@ -159,7 +159,8 @@ function FolderRowIcon(props: { readonly item: WorkspaceRunItem }) {
         icon,
         scope: appearance.scope,
         assetRefreshKey: appearance.assetRefreshKey,
-        iconRejected: appearance.appearance?.issues.includes("icon") ?? false,
+        iconRejected:
+          appearance.appearance?.invalidFields.includes("icon") ?? false,
       }}
       fallbackIcon={null}
     />

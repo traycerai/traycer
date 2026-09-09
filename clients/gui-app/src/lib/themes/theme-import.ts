@@ -270,11 +270,18 @@ function applyWorkbenchColors(
 ): void {
   for (const [token, candidates] of Object.entries(WORKBENCH_COLORS)) {
     if (!isThemeToken(token)) continue;
-    const key = candidates.find(
-      (candidate) => workbenchColor(theme, candidate) !== undefined,
-    );
-    if (key === undefined) continue;
-    const value = key === "editor.background" ? canvas : theme.colors[key];
+    let key: string | undefined;
+    let resolved: string | undefined;
+    for (const candidate of candidates) {
+      const color = workbenchColor(theme, candidate);
+      if (color !== undefined) {
+        key = candidate;
+        resolved = color;
+        break;
+      }
+    }
+    if (key === undefined || resolved === undefined) continue;
+    const value = key === "editor.background" ? canvas : resolved;
     const surface = FOREGROUND_SURFACES[token];
     let base = canvas;
     if (surface) base = colors[surface] ?? canvas;
@@ -324,7 +331,7 @@ function convertVsCodeTheme(
   );
   applyWorkbenchColors(theme, colors, canvas);
   ensureReadableText(colors, canvas);
-  ensureVisibleThemeBorders(colors);
+  const visibleBorders = ensureVisibleThemeBorders(colors);
   return themeDefinitionSchema.parse({
     version: 1,
     id: crypto.randomUUID(),
@@ -335,7 +342,7 @@ function convertVsCodeTheme(
     ).slice(0, 80),
     appearance,
     base: "neutral",
-    colors,
+    colors: { ...colors, ...visibleBorders },
     syntax: {
       colors: Object.fromEntries(
         Object.entries(theme.colors).filter(([, color]) => color !== "default"),

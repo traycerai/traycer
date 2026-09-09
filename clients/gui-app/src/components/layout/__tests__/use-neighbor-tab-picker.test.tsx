@@ -57,6 +57,7 @@ function epicHeaderTab(tabId: string, epicId: string, name: string): HeaderTab {
     canClose: true,
     canDuplicate: true,
     canOpenInNewWindow: true,
+    repositoryIdentity: null,
   };
 }
 

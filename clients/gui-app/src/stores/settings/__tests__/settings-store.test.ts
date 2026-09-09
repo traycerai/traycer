@@ -892,6 +892,7 @@ describe("useSettingsStore", () => {
       style: "dither",
       intensity: 0.8,
       tintWithAccent: false,
+      name: "wallpaper.png",
     } satisfies StartPageWallpaper;
     useSettingsStore.getState().setStartPageWallpaper(wallpaper);
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
@@ -958,6 +959,7 @@ describe("useSettingsStore", () => {
       style: "grain",
       intensity: 0.6,
       tintWithAccent: true,
+      name: null,
     });
   });
 
@@ -970,6 +972,7 @@ describe("useSettingsStore", () => {
       style: "dither",
       intensity: 0.5,
       tintWithAccent: true,
+      name: null,
     });
   });
 

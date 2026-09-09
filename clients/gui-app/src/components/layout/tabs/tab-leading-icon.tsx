@@ -1,23 +1,35 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
-import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
+import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { HeaderTabRepositoryIdentity, TabIcon } from "@/stores/tabs/types";
 import { RepositoryIdentityIcon } from "./repository-identity";
 
+function hasResolvedIcon(
+  identity: HeaderTabRepositoryIdentity,
+): identity is HeaderTabRepositoryIdentity & {
+  readonly icon: NonNullable<HeaderTabRepositoryIdentity["icon"]>;
+} {
+  return identity.icon !== null;
+}
+
+/**
+ * Takes `indicatorState` as a resolved prop rather than reading
+ * `NotificationIndicatorsContext` itself - both callers (the strip's
+ * `TabItem` and the drag ghost's `HeaderTabDragOverlay`) already have it
+ * resolved by the time they render this, and the drag ghost in particular
+ * cannot reach that context at all (it renders in a sibling subtree of the
+ * strip - see `tab-strip-drag-overlay.tsx`).
+ */
 export function TabLeadingIcon(props: {
   readonly icon: TabIcon | null;
-  readonly identity?: HeaderTabRepositoryIdentity;
+  readonly identity: HeaderTabRepositoryIdentity | null;
   readonly titleGenerationPending: boolean;
   readonly activityStatus: EpicActivityStatus;
+  readonly indicatorState: NotificationIndicatorState;
   readonly tabId: string;
-  readonly epicId: string | null;
 }) {
-  const identity = props.identity ?? null;
-  const indicatorState = useSurfaceNotificationIndicatorState(
-    { epicId: props.epicId ?? props.tabId },
-    null,
-  );
+  const identity = props.identity;
   let defaultIcon: React.ReactNode = null;
   if (props.titleGenerationPending) {
     defaultIcon = (
@@ -38,7 +50,7 @@ export function TabLeadingIcon(props: {
         className="inline-flex size-3.5 shrink-0 items-center justify-center"
       >
         <NotificationIndicatorIcon
-          state={indicatorState}
+          state={props.indicatorState}
           running={
             props.activityStatus === "idle" ? false : props.activityStatus
           }
@@ -52,7 +64,7 @@ export function TabLeadingIcon(props: {
           agentSurface="gui"
         />
       </span>
-      {identity !== null && identity.icon !== null ? (
+      {identity !== null && hasResolvedIcon(identity) ? (
         <span
           data-slot="tab-repository-icon"
           className="inline-flex size-5 shrink-0 items-center justify-center"

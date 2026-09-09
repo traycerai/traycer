@@ -1,10 +1,7 @@
 import { createElement, lazy } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import {
-  epicHasUnsyncedEdits,
-  getEpicSessionHostId,
-} from "@/lib/registries/epic-session-registry";
+import { epicHasUnsyncedEdits } from "@/lib/registries/epic-session-registry";
 import { buildNestedFocusSearchPatch } from "@/lib/epic-nested-focus-route";
 import { epicPathname, epicTabRoute } from "@/lib/routes";
 import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
@@ -24,14 +21,30 @@ const epicSurface = lazy(() =>
 );
 
 /**
+ * `build()`'s input: the epic-canvas source record plus the `hostId` the
+ * caller already resolved. `hostId` is NOT re-derived in here from
+ * `getEpicSessionHostId` - it is a projection of the open-epic registry, and
+ * `useHeaderTabForRef` / `useHeaderTabs`' projection already subscribe to
+ * that registry via `useSyncExternalStore` so they re-render on a session
+ * re-point. Reading it a second time inside `build()` would create a second,
+ * unsubscribed source for the same fact: correct the instant `build()` runs,
+ * stale the moment the session re-points without also touching this
+ * `EpicViewTab`. One caller resolves it, `build()` only stamps it.
+ */
+interface EpicTabBuildSource {
+  readonly view: EpicViewTab;
+  readonly hostId: string | null;
+}
+
+/**
  * Module for `kind: "epic"` tabs. Data lives in the epic-canvas
  * store's `tabsById`; `build()` projects a `EpicViewTab` into the
  * flat `HeaderTab` variant. Close routes through the epic-canvas store
  * so visible header order and canvas restoration stay consistent.
  */
-export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
+export const epicTabModule: TabKindModule<"epic", EpicTabBuildSource> = {
   kind: "epic",
-  build: (source) => {
+  build: ({ view: source, hostId }) => {
     const closeLocked = isTabCloseLocked({
       kind: "epic",
       id: source.tabId,
@@ -44,13 +57,14 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       kind: "epic",
       id: source.tabId,
       epicId: source.epicId,
-      hostId: getEpicSessionHostId(source.epicId),
+      hostId,
       route: epicPathname({ tabId: source.tabId, epicId: source.epicId }),
       name: source.name,
       icon: null,
       canClose: !closeLocked,
       canDuplicate: !structurallyLocked,
       canOpenInNewWindow: !structurallyLocked,
+      repositoryIdentity: null,
     };
   },
   descriptor: {

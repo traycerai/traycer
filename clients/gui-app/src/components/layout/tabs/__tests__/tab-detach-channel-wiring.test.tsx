@@ -86,6 +86,7 @@ const EPIC_TAB: HeaderTab = {
   canClose: true,
   canDuplicate: true,
   canOpenInNewWindow: true,
+  repositoryIdentity: null,
 };
 
 function withRouter(harness: () => ReactNode) {

@@ -44,12 +44,15 @@ const SCRIPT_REVIEW_SAVED_CLOSE_MS = 650;
 export function ScriptsReviewDialog(props: {
   readonly title: string;
   readonly description: string;
-  // `null` together to omit the path block entirely - the "Worktree
-  // environment" dialog drops it for a staged new-branch target, since the
-  // branch name it would show is now redundant with Branch naming's own
-  // effective-branch preview (core-flows/worktree-environment-layered-settings).
-  readonly pathLabel: string | null;
-  readonly pathValue: string | null;
+  /**
+   * `null` to omit the path block entirely - the "Worktree environment"
+   * dialog drops it for a staged new-branch target, since the branch name it
+   * would show is now redundant with Branch naming's own effective-branch
+   * preview (core-flows/worktree-environment-layered-settings). One slot
+   * instead of two independently-nullable `pathLabel`/`pathValue` props: the
+   * two were never set or omitted independently, so the type says so.
+   */
+  readonly path: { readonly label: string; readonly value: string } | null;
   readonly scriptSeed: RepoScriptsSeed | null;
   // `true` while the seed is still being fetched (e.g. reading a source branch's
   // committed scripts). The fields are replaced by a spinner so the editor never
@@ -141,7 +144,7 @@ export function ScriptsReviewDialog(props: {
                 Setup &amp; teardown scripts
               </h3>
             ) : null}
-            <ScriptsPathRow label={props.pathLabel} value={props.pathValue} />
+            <ScriptsPathRow path={props.path} />
             {props.scriptsNote !== null ? (
               <p className="text-ui-xs text-muted-foreground">
                 {props.scriptsNote}
@@ -304,17 +307,16 @@ function useScriptsReviewSave(props: {
 }
 
 function ScriptsPathRow(props: {
-  readonly label: string | null;
-  readonly value: string | null;
+  readonly path: { readonly label: string; readonly value: string } | null;
 }): ReactNode {
-  if (props.label === null || props.value === null) return null;
+  if (props.path === null) return null;
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-ui-xs font-medium text-muted-foreground">
-        {props.label}
+        {props.path.label}
       </span>
       <code className="rounded-md bg-foreground/5 px-2.5 py-2 font-mono text-code-xs text-foreground wrap-anywhere select-all">
-        {props.value}
+        {props.path.value}
       </code>
     </div>
   );

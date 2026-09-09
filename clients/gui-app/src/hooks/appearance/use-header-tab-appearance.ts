@@ -40,7 +40,8 @@ export function useHeaderTabAppearance(
   const hostId = resolved.scope?.hostId ?? null;
   const canonicalSourceRoot = resolved.scope?.canonicalSourceRoot ?? null;
   const assetRefreshKey = resolved.assetRefreshKey;
-  const iconRejected = resolved.appearance?.issues.includes("icon") ?? false;
+  const iconRejected =
+    resolved.appearance?.invalidFields.includes("icon") ?? false;
   return useMemo(() => {
     if (tab === null || (tab.kind !== "draft" && tab.kind !== "epic")) {
       return tab;

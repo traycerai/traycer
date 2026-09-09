@@ -450,7 +450,11 @@ function memoizedEpicHeaderTab(
   const cached = epicHeaderTabCache.get(source);
   const cachedTab = cached?.get(key);
   if (cachedTab !== undefined) return cachedTab;
-  const tab = { ...TAB_KINDS.epic.build(source), hostId };
+  // `hostId` is resolved by the caller (the registry subscription above) and
+  // handed to `build()` as an explicit input - never computed a second time
+  // inside `build()` and then spread over. See `EpicTabBuildSource` in
+  // `kinds/epic.tsx`.
+  const tab = TAB_KINDS.epic.build({ view: source, hostId });
   const next = cached ?? new Map<EpicHeaderTabCacheKey, HeaderTab>();
   next.set(key, tab);
   epicHeaderTabCache.set(source, next);

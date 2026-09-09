@@ -16,17 +16,102 @@ import type {
 import {
   EPIC_CANVAS_DND_SOURCE_TYPES,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  isRecord,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
-import type { TabRef } from "@/stores/tabs/types";
+import type { HeaderTabRepositoryIdentity, TabRef } from "@/stores/tabs/types";
 import type {
   DropPosition,
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import type { RootCreatePanelId } from "@/stores/epics/left-panel-store";
+import {
+  EMPTY_NOTIFICATION_INDICATOR_STATE,
+  type NotificationIndicatorState,
+} from "@/stores/notifications/notification-indicator-state";
+
+/**
+ * Render-ready values the drag ghost (`HeaderTabDragOverlay`) needs but
+ * cannot re-derive at drag start without a `workspace.getAppearance` host
+ * RPC and a notifications query - `repositoryIdentity` and `indicatorState`
+ * are already resolved a few pixels away, in the strip item that IS the drag
+ * source, at the moment the gesture begins. Captured ONCE there (see
+ * `tab-strip-item.tsx`'s `useHeaderTabDnd`, which attaches this to the
+ * dnd-kit drag payload) and read back here at drag start - the same
+ * resolve-once-at-drag-start treatment `activeOverlayTile` already gets for
+ * canvas tiles.
+ *
+ * Both fields CAN change while a gesture is still in flight (a repository
+ * colour edit, a newly-arrived approval) and this snapshot will not reflect
+ * that - deliberately: a header-tab drag is a short gesture, and re-deriving
+ * either value live would reopen exactly the round trip this exists to
+ * avoid. Activity status and title-generation are NOT carried here because
+ * they cost nothing to keep live - `HeaderTabDragOverlay` still reads them
+ * through their own free `useSyncExternalStore` hooks every frame.
+ */
+export interface HeaderTabDragGhost {
+  readonly repositoryIdentity: HeaderTabRepositoryIdentity | null;
+  readonly indicatorState: NotificationIndicatorState;
+}
+
+function isHeaderTabRepositoryIdentity(
+  value: unknown,
+): value is HeaderTabRepositoryIdentity {
+  if (!isRecord(value)) return false;
+  return (
+    (value.color === null || typeof value.color === "string") &&
+    // ponytail: shallow-checked (record-or-null, not the full discriminated
+    // `icon.kind` union / `scope` shape) - this payload never crosses a real
+    // serialization boundary (same dnd-kit `data` reference the source
+    // component built), so a deep re-validation buys nothing a malformed
+    // value wouldn't already survive as harmlessly (the ghost skips the logo
+    // for that one gesture). Upgrade to full field checks if this payload
+    // ever starts crossing a process/window boundary.
+    (value.icon === null || isRecord(value.icon)) &&
+    (value.scope === null || isRecord(value.scope)) &&
+    typeof value.assetRefreshKey === "number" &&
+    typeof value.iconRejected === "boolean"
+  );
+}
+
+function isNotificationIndicatorState(
+  value: unknown,
+): value is NotificationIndicatorState {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.unreadFailure === "boolean" &&
+    typeof value.pendingFork === "boolean" &&
+    typeof value.pendingApproval === "boolean" &&
+    typeof value.pendingInterview === "boolean" &&
+    typeof value.unreadDone === "boolean"
+  );
+}
+
+/**
+ * Reads the ghost snapshot a header-tab draggable attached to its dnd-kit
+ * `data` payload. `null` only when the payload carries no `ghost` key at all
+ * (not a header-tab drag, or a drag begun before a hot reload swapped this
+ * module) - a malformed individual field degrades to its empty value instead
+ * of discarding the whole ghost, so a partially-stale payload still shows
+ * whatever part of it parsed.
+ */
+export function readHeaderTabDragGhost(
+  value: unknown,
+): HeaderTabDragGhost | null {
+  if (!isRecord(value) || !isRecord(value.ghost)) return null;
+  const { repositoryIdentity, indicatorState } = value.ghost;
+  return {
+    repositoryIdentity: isHeaderTabRepositoryIdentity(repositoryIdentity)
+      ? repositoryIdentity
+      : null,
+    indicatorState: isNotificationIndicatorState(indicatorState)
+      ? indicatorState
+      : EMPTY_NOTIFICATION_INDICATOR_STATE,
+  };
+}
 
 function matchingArtifactDropPreviewEqual(
   left: NonNullable<EpicCanvasDropPreview>,
@@ -168,6 +253,7 @@ function isDragStateIdle(state: EpicDndState): boolean {
     state.activeSource === null &&
     state.activeOverlayTile === null &&
     state.activeHeaderTab === null &&
+    state.activeHeaderTabGhost === null &&
     state.dropPreview === null &&
     state.headerStripDropIndex === null &&
     state.headerStripDragState === null &&
@@ -193,6 +279,13 @@ interface EpicDndState {
   readonly activeOverlayTile: EpicCanvasTileRef | null;
   /** Header-tab reorder source, null when no header-tab drag is active. */
   readonly activeHeaderTab: HeaderTabDragData | null;
+  /**
+   * Render-ready ghost enrichment for `activeHeaderTab`, resolved ONCE at
+   * drag start from the drag source's own dnd-kit payload (see
+   * `HeaderTabDragGhost` above) - content-derived, never re-resolved during
+   * the gesture, mirroring `activeOverlayTile`.
+   */
+  readonly activeHeaderTabGhost: HeaderTabDragGhost | null;
   /** Current canvas-side drop preview (strip / body / empty-shell / rail). */
   readonly dropPreview: EpicCanvasDropPreview;
   /**
@@ -256,6 +349,7 @@ interface EpicDndState {
   readonly headerTabDragStarted: (
     tab: HeaderTabDragData,
     sourceWidth: number | null,
+    ghost: HeaderTabDragGhost | null,
   ) => void;
   readonly dropPreviewChanged: (preview: EpicCanvasDropPreview) => void;
   readonly headerStripDropIndexChanged: (index: number | null) => void;
@@ -286,6 +380,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   activeSource: null,
   activeOverlayTile: null,
   activeHeaderTab: null,
+  activeHeaderTabGhost: null,
   dropPreview: null,
   headerStripDropIndex: null,
   headerStripDragState: null,
@@ -303,6 +398,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeSource: source,
       activeOverlayTile: overlayTile,
       activeHeaderTab: null,
+      activeHeaderTabGhost: null,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,
@@ -317,11 +413,12 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       reparentRootViewTabId: null,
     });
   },
-  headerTabDragStarted: (tab, sourceWidth) => {
+  headerTabDragStarted: (tab, sourceWidth, ghost) => {
     set({
       activeSource: null,
       activeOverlayTile: null,
       activeHeaderTab: tab,
+      activeHeaderTabGhost: ghost,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,
@@ -410,6 +507,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeSource: null,
       activeOverlayTile: null,
       activeHeaderTab: null,
+      activeHeaderTabGhost: null,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,
@@ -487,6 +585,10 @@ export function useHeaderStripDropIndex(): number | null {
 
 export function useActiveHeaderTab(): HeaderTabDragData | null {
   return useEpicDndStore((s) => s.activeHeaderTab);
+}
+
+export function useActiveHeaderTabGhost(): HeaderTabDragGhost | null {
+  return useEpicDndStore((s) => s.activeHeaderTabGhost);
 }
 
 export function useHeaderStripOffsets(): ReadonlyMap<string, number> {

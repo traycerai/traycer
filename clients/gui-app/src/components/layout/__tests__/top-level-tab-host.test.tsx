@@ -33,6 +33,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
+
+type EpicHeaderTab = Extract<HeaderTab, { readonly kind: "epic" }>;
 import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
@@ -816,7 +818,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
   }
 
   it("activates the hosted record's OWN owning epic tab, not a fixed one", () => {
-    const tabA: HeaderTab = {
+    const tabA: EpicHeaderTab = {
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
@@ -827,6 +829,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
+      repositoryIdentity: null,
     };
     const tabB: HeaderTab = { ...tabA, id: "epic-b", epicId: "epic-b" };
     const tabsByRefKey = new Map([
@@ -854,7 +857,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
   });
 
   it("does not re-activate the already-focused owning tab", () => {
-    const tabA: HeaderTab = {
+    const tabA: EpicHeaderTab = {
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
@@ -865,6 +868,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
+      repositoryIdentity: null,
     };
     const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
     const activeItem: StripItem = {
@@ -887,7 +891,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
   });
 
   it("respects defaultPrevented, a null activator, and a target outside any hosted record", () => {
-    const tabA: HeaderTab = {
+    const tabA: EpicHeaderTab = {
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
@@ -898,6 +902,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
+      repositoryIdentity: null,
     };
     const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
     const activeItem: StripItem | null = null;

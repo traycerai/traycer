@@ -335,7 +335,13 @@ function liveWorktreeBinding(): WorktreeBinding {
   };
 }
 
-const PRE_CREATE_CONTEXT: WorktreeScriptsContext = {
+type StagingWorktreeScriptsContext = Extract<
+  WorktreeScriptsContext,
+  { readonly kind: "staging" }
+>;
+
+const PRE_CREATE_CONTEXT: StagingWorktreeScriptsContext = {
+  kind: "staging",
   epicId: "",
   hostId: "host-a",
   ownerId: null,
@@ -347,6 +353,7 @@ const PRE_CREATE_CONTEXT: WorktreeScriptsContext = {
 };
 
 const IN_EPIC_CONTEXT: WorktreeScriptsContext = {
+  kind: "staging",
   epicId: "epic-1",
   hostId: "host-a",
   ownerId: "chat-1",

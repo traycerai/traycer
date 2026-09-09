@@ -93,6 +93,18 @@ function readEpicHost(tab: HeaderTab | null): string | null {
   return tab.hostId;
 }
 
+/** `repositoryIdentity` only exists on the "epic"/"draft" members of the `HeaderTab` union. */
+function readRepositoryColor(tab: HeaderTab | null | undefined): string | null {
+  if (
+    tab === null ||
+    tab === undefined ||
+    (tab.kind !== "epic" && tab.kind !== "draft")
+  ) {
+    return null;
+  }
+  return tab.repositoryIdentity?.color ?? null;
+}
+
 function resetClient(client: MockClient): void {
   client.requestWithSignal.mockReset();
   client.request.mockReset();
@@ -145,15 +157,14 @@ function appearanceResponse(
   color: string,
 ): WorkspaceGetAppearanceResponse {
   return {
-    appearances: [
-      {
-        workspacePath,
-        canonicalSourceRoot: workspacePath,
-        status: "present",
-        appearance: { version: 1, color },
-        issues: [],
-      },
-    ],
+    appearance: {
+      workspacePath,
+      canonicalSourceRoot: workspacePath,
+      status: "present",
+      appearance: { version: 1, color },
+      invalidFields: [],
+      messages: [],
+    },
   };
 }
 
@@ -311,7 +322,7 @@ describe("useHeaderTabAppearance + useHeaderTabForRef: creation seed to session-
 
     expect(readEpicHost(result.current)).toBeNull();
     await waitFor(() =>
-      expect(result.current?.repositoryIdentity?.color).toBe("#111111"),
+      expect(readRepositoryColor(result.current)).toBe("#111111"),
     );
     // The binding query served the pre-seeded cache entry alone - it is
     // DISABLED while create-seed pending, so it must never hit the network,
@@ -337,7 +348,7 @@ describe("useHeaderTabAppearance + useHeaderTabForRef: creation seed to session-
 
     expect(readEpicHost(result.current)).toBe("host-real");
     await waitFor(() =>
-      expect(result.current?.repositoryIdentity?.color).toBe("#222222"),
+      expect(readRepositoryColor(result.current)).toBe("#222222"),
     );
     expect(realRoute.listBindings).toHaveBeenCalledWith(
       { epicId },

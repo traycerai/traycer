@@ -38,16 +38,10 @@ export function TabRepositorySettingsDialog(props: {
     ) ?? null;
   const context = useMemo<WorktreeScriptsContext>(
     () => ({
+      kind: "repository",
       epicId: props.epicId,
       hostId,
-      ownerId: null,
-      ownerKind: null,
-      binding: null,
-      // A slot nothing stages into: this surface never proposes a worktree, so
-      // the scripts edit resolves to the repo's own file.
-      stagingKey: { surface: "landing", hostId, draftId: null },
       hostClient,
-      regenerateBranchNameForWorkspace: () => null,
     }),
     [props.epicId, hostId, hostClient],
   );

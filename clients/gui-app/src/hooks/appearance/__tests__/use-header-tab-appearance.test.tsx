@@ -43,7 +43,7 @@ interface FakeResolved {
       readonly color: string;
       readonly icon?: HeaderTabRepositoryIdentity["icon"];
     };
-    readonly issues: readonly string[];
+    readonly invalidFields: readonly ("color" | "icon")[];
   } | null;
   readonly scope: AppearanceScope | null;
   readonly assetRefreshKey: number;
@@ -55,7 +55,7 @@ function resolved(
   assetRefreshKey: number,
 ): FakeResolved {
   return {
-    appearance: { appearance: { color }, issues: [] },
+    appearance: { appearance: { color }, invalidFields: [] },
     scope,
     assetRefreshKey,
   };
@@ -113,6 +113,7 @@ function epicTab(args: {
     canClose: true,
     canDuplicate: true,
     canOpenInNewWindow: true,
+    repositoryIdentity: null,
   };
 }
 
@@ -125,7 +126,17 @@ function draftTab(id: string): Extract<HeaderTab, { kind: "draft" }> {
     icon: null,
     canDuplicate: false,
     canOpenInNewWindow: true,
+    repositoryIdentity: null,
   };
+}
+
+function repositoryIdentityOf(
+  tab: HeaderTab | null | undefined,
+): HeaderTabRepositoryIdentity | null {
+  if (tab === null || tab === undefined) return null;
+  return tab.kind === "epic" || tab.kind === "draft"
+    ? tab.repositoryIdentity
+    : null;
 }
 
 function settingsTab(): Extract<HeaderTab, { kind: "settings" }> {
@@ -232,8 +243,8 @@ describe("useHeaderTabAppearance: draft source (real store + real resolvePrimary
     const a = renderHook(() => useHeaderTabAppearance(draftTab("draft-a")));
     const b = renderHook(() => useHeaderTabAppearance(draftTab("draft-b")));
 
-    expect(a.result.current?.repositoryIdentity?.color).toBe("#111111");
-    expect(b.result.current?.repositoryIdentity?.color).toBe("#222222");
+    expect(repositoryIdentityOf(a.result.current)?.color).toBe("#111111");
+    expect(repositoryIdentityOf(b.result.current)?.color).toBe("#222222");
   });
 
   it("updates only the draft whose primary folder actually changed, via the real setDraftWorkspacePrimary action", () => {
@@ -261,8 +272,8 @@ describe("useHeaderTabAppearance: draft source (real store + real resolvePrimary
 
     const a = renderHook(() => useHeaderTabAppearance(draftTab("draft-a")));
     const b = renderHook(() => useHeaderTabAppearance(draftTab("draft-b")));
-    expect(a.result.current?.repositoryIdentity?.color).toBe("#111111");
-    expect(b.result.current?.repositoryIdentity?.color).toBe("#222222");
+    expect(repositoryIdentityOf(a.result.current)?.color).toBe("#111111");
+    expect(repositoryIdentityOf(b.result.current)?.color).toBe("#222222");
 
     act(() => {
       useLandingDraftStore
@@ -270,9 +281,9 @@ describe("useHeaderTabAppearance: draft source (real store + real resolvePrimary
         .setDraftWorkspacePrimary("draft-a", "/repo-a-2");
     });
 
-    expect(a.result.current?.repositoryIdentity?.color).toBe("#333333");
+    expect(repositoryIdentityOf(a.result.current)?.color).toBe("#333333");
     // Untouched draft's own resolution is unaffected by the other's primary change.
-    expect(b.result.current?.repositoryIdentity?.color).toBe("#222222");
+    expect(repositoryIdentityOf(b.result.current)?.color).toBe("#222222");
   });
 });
 
@@ -288,7 +299,7 @@ describe("useHeaderTabAppearance: rejected icon issue", () => {
           color: "#445566",
           icon: { kind: "image", path: "appearance/logo.webp" },
         },
-        issues: ["icon"],
+        invalidFields: ["icon"],
       },
       scope: scopeFor("/repo"),
       assetRefreshKey: 1,
@@ -297,8 +308,8 @@ describe("useHeaderTabAppearance: rejected icon issue", () => {
 
     const { result } = renderHook(() => useHeaderTabAppearance(tab));
 
-    expect(result.current?.repositoryIdentity?.iconRejected).toBe(true);
-    expect(result.current?.repositoryIdentity?.icon).toEqual({
+    expect(repositoryIdentityOf(result.current)?.iconRejected).toBe(true);
+    expect(repositoryIdentityOf(result.current)?.icon).toEqual({
       kind: "image",
       path: "appearance/logo.webp",
     });
@@ -317,7 +328,7 @@ describe("useHeaderTabAppearance: neutral passthrough", () => {
     const { result } = renderHook(() => useHeaderTabAppearance(tab));
 
     expect(result.current).toBe(tab);
-    expect(result.current?.repositoryIdentity).toBeUndefined();
+    expect(repositoryIdentityOf(result.current)).toBeNull();
   });
 
   it("passes a non-draft/epic tab through unchanged", () => {

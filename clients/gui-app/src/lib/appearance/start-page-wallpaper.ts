@@ -1,4 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 import { processStartPageWallpaperImage } from "./appearance-image-processing";
 import {
   pinGlobalAppearanceBlob,
@@ -11,8 +15,15 @@ import {
  * The personal start-page wallpaper. Exactly one image exists per
  * installation, so it needs no content-addressed name: a fixed key in the
  * global (account-independent) scope of the appearance blob store, pinned so
- * cache eviction can never take the one image the user chose. The settings
- * store holds its style and intensity; the bytes live only here.
+ * cache eviction can never take the one image the user chose.
+ *
+ * The bytes live in the appearance blob store; every other fact about the
+ * wallpaper - style, intensity, tint, and the chosen file's name - lives on
+ * the settings store's `StartPageWallpaper` row. Two stores, but ONE user
+ * action (choosing an image, removing it) always writes both, and only
+ * through the two entry points below. Nothing else in the app writes either
+ * half on its own, so "wallpaper set" and "wallpaper bytes present" can
+ * never drift apart.
  */
 const START_PAGE_WALLPAPER_KEY = "start-page-wallpaper";
 
@@ -37,10 +48,11 @@ function invalidateStartPageWallpaper(): void {
 }
 
 /**
- * Validates the chosen file, re-encodes it to the wallpaper budget, and stores
- * it under its original file name (a `File` survives IndexedDB's structured
- * clone, so the settings row can name the image without a settings-store field
- * shadowing the bytes).
+ * Validates the chosen file, re-encodes it to the wallpaper budget, and
+ * stores the bytes and the settings row together. Keeps the style/intensity/
+ * tint the user already picked if a wallpaper was already set; a first
+ * choice seeds their defaults. The name always updates to the newly chosen
+ * file, in the same write.
  */
 export async function chooseStartPageWallpaper(
   file: File,
@@ -48,19 +60,27 @@ export async function chooseStartPageWallpaper(
 ): Promise<void> {
   const processed = await processStartPageWallpaperImage(file, signal);
   signal.throwIfAborted();
-  await saveStartPageWallpaper(
-    new File([processed.blob], file.name, { type: processed.blob.type }),
-  );
+  try {
+    await writeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY, processed.blob);
+    await pinGlobalAppearanceBlob(START_PAGE_WALLPAPER_KEY);
+  } finally {
+    invalidateStartPageWallpaper();
+  }
+  const current = useSettingsStore.getState().startPageWallpaper;
+  useSettingsStore.getState().setStartPageWallpaper({
+    style: current?.style ?? "dither",
+    intensity: current?.intensity ?? DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
+    tintWithAccent: current?.tintWithAccent ?? true,
+    name: file.name,
+  });
 }
 
-export async function saveStartPageWallpaper(blob: Blob | null): Promise<void> {
+/** Clears both the settings row and the stored bytes. */
+export async function removeStartPageWallpaper(): Promise<void> {
+  useSettingsStore.getState().setStartPageWallpaper(null);
   try {
-    if (blob === null)
-      await removeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY);
-    else await writeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY, blob);
-    await pinGlobalAppearanceBlob(
-      blob === null ? null : START_PAGE_WALLPAPER_KEY,
-    );
+    await removeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY);
+    await pinGlobalAppearanceBlob(null);
   } finally {
     invalidateStartPageWallpaper();
   }
@@ -69,7 +89,7 @@ export async function saveStartPageWallpaper(blob: Blob | null): Promise<void> {
 export interface StartPageWallpaperImage {
   /** Object URL for the stored bytes, or `null` while loading / when unset. */
   readonly url: string | null;
-  /** The file name it was chosen under, when the stored blob carries one. */
+  /** The file name it was chosen under, when one is stored. */
   readonly name: string | null;
 }
 
@@ -77,6 +97,9 @@ const NO_WALLPAPER: StartPageWallpaperImage = { url: null, name: null };
 
 export function useStartPageWallpaperImage(): StartPageWallpaperImage {
   const version = useSyncExternalStore(subscribe, readRevision, readRevision);
+  const name = useSettingsStore(
+    (state) => state.startPageWallpaper?.name ?? null,
+  );
   const [image, setImage] = useState<StartPageWallpaperImage>(NO_WALLPAPER);
   useEffect(() => {
     let objectUrl: string | null = null;
@@ -90,15 +113,12 @@ export function useStartPageWallpaperImage(): StartPageWallpaperImage {
           return;
         }
         objectUrl = URL.createObjectURL(blob);
-        setImage({
-          url: objectUrl,
-          name: blob instanceof File ? blob.name : null,
-        });
+        setImage({ url: objectUrl, name });
       });
     return () => {
       cancelled = true;
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     };
-  }, [version]);
+  }, [version, name]);
   return image;
 }

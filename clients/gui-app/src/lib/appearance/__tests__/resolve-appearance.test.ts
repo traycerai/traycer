@@ -11,7 +11,8 @@ function read(
     workspacePath: "/repo",
     canonicalSourceRoot: "/repo/.git-root",
     appearance: null,
-    issues: [],
+    invalidFields: [],
+    messages: [],
     ...overrides,
   };
 }
@@ -47,14 +48,15 @@ describe("mergeAppearanceRead", () => {
       status: "malformed",
       canonicalSourceRoot: "/repo/.git-root",
       appearance: null,
-      issues: ["appearance.json is not valid JSON"],
+      invalidFields: [],
+      messages: ["appearance.json is not valid JSON"],
     });
 
     const merged = mergeAppearanceRead(next, previous);
     expect(merged.appearance).toEqual(previous.appearance);
     // Non-appearance fields come from the NEW read, not the snapshot.
     expect(merged.status).toBe("malformed");
-    expect(merged.issues).toEqual(next.issues);
+    expect(merged.messages).toEqual(next.messages);
   });
 
   it("falls back to the previous snapshot on 'unavailable' too", () => {
@@ -121,7 +123,7 @@ describe("mergeAppearanceRead", () => {
     const next = read({
       status: "present",
       appearance: { version: 1, color: "#445566" },
-      issues: [],
+      invalidFields: [],
     });
 
     expect(mergeAppearanceRead(next, null).appearance).toEqual(next.appearance);
@@ -142,7 +144,7 @@ describe("mergeAppearanceRead", () => {
         version: 1,
         icon: { kind: "emoji", value: "\u{1f680}" },
       },
-      issues: ["color"],
+      invalidFields: ["color"],
     });
 
     const merged = mergeAppearanceRead(next, previous);
@@ -166,7 +168,7 @@ describe("mergeAppearanceRead", () => {
     const next = read({
       status: "present",
       appearance: { version: 1 },
-      issues: ["icon"],
+      invalidFields: ["icon"],
     });
 
     expect(mergeAppearanceRead(next, previous).appearance?.icon).toEqual(
@@ -187,7 +189,7 @@ describe("mergeAppearanceRead", () => {
     const next = read({
       status: "present",
       appearance: { version: 1, icon: freshIcon },
-      issues: ["icon"],
+      invalidFields: ["icon"],
     });
 
     expect(mergeAppearanceRead(next, previous).appearance?.icon).toEqual(
@@ -199,7 +201,7 @@ describe("mergeAppearanceRead", () => {
     const next = read({
       status: "present",
       appearance: { version: 1, color: "#112233" },
-      issues: ["icon"],
+      invalidFields: ["icon"],
     });
 
     expect(mergeAppearanceRead(next, null).appearance).toEqual(next.appearance);
@@ -213,7 +215,7 @@ describe("mergeAppearanceRead", () => {
     const next = read({
       status: "present",
       appearance: { version: 1, color: "#445566" },
-      issues: ["color"],
+      invalidFields: ["color"],
     });
 
     expect(mergeAppearanceRead(next, previous).appearance?.color).toBe(
@@ -240,7 +242,7 @@ describe("mergeAppearanceRead", () => {
         version: 1,
         icon: { kind: "emoji", value: "\u{1f680}" },
       },
-      issues: ["color"],
+      invalidFields: ["color"],
     });
 
     const merged = mergeAppearanceRead(next, previous);
@@ -262,7 +264,8 @@ describe("mergeAppearanceRead", () => {
     const next = read({
       status: "malformed",
       appearance: null,
-      issues: ["appearance.json is not valid JSON"],
+      invalidFields: [],
+      messages: ["appearance.json is not valid JSON"],
     });
 
     expect(mergeAppearanceRead(next, previous).appearance).toEqual(

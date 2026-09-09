@@ -1,4 +1,5 @@
 import { MAX_APPEARANCE_ICON_BYTES } from "@traycer/protocol/host/workspace/appearance-schemas";
+import { MAX_APPEARANCE_ICON_EDGE } from "@traycer/protocol/host/workspace/appearance-asset-policy";
 import { imageSize } from "image-size";
 import {
   canonicalImageMimeType,
@@ -13,7 +14,6 @@ import {
 
 export const APPEARANCE_INPUT_MAX_BYTES = 20 * 1024 * 1024;
 const APPEARANCE_INPUT_MAX_PIXELS = 50_000_000;
-export const APPEARANCE_ICON_MAX_EDGE = 256;
 const APPEARANCE_WALLPAPER_MAX_EDGE = 2560;
 /** The start-page wallpaper never leaves this machine, so it can be generous. */
 const MAX_START_PAGE_WALLPAPER_BYTES = 4 * 1024 * 1024;
@@ -53,6 +53,35 @@ function rampSample(ramp: AppearanceRamp, tone: number, channel: number) {
 }
 
 /**
+ * Shared 8x8 ordered-Bayer traversal for both dither variants below: walks
+ * every pixel, computes the tile threshold, hands the pixel off to `paint`,
+ * then forces alpha opaque. `paint` is the only place the two variants
+ * differ - how a pixel's quantized tone gets written back.
+ */
+function ditherWalk(
+  pixels: ImageData,
+  levels: number,
+  paint: (
+    data: Uint8ClampedArray,
+    offset: number,
+    threshold: number,
+    steps: number,
+  ) => void,
+): void {
+  const steps = Math.max(2, Math.round(levels)) - 1;
+  const data = pixels.data;
+  for (let y = 0; y < pixels.height; y += 1) {
+    const bayerRow = (y % 8) * 8;
+    for (let x = 0; x < pixels.width; x += 1) {
+      const offset = (y * pixels.width + x) * 4;
+      const threshold = (BAYER_8[bayerRow + (x % 8)] + 0.5) / 64 - 0.5;
+      paint(data, offset, threshold, steps);
+      data[offset + 3] = 255;
+    }
+  }
+}
+
+/**
  * In place, whole-buffer, pure: luminance through an 8x8 ordered Bayer
  * quantization into `levels` tones, each tone painted from `ramp`. Sized for a
  * low-resolution canvas the caller upscales with `image-rendering: pixelated`.
@@ -62,25 +91,17 @@ export function ditherRows(
   levels: number,
   ramp: AppearanceRamp,
 ): void {
-  const steps = Math.max(2, Math.round(levels)) - 1;
-  const data = pixels.data;
-  for (let y = 0; y < pixels.height; y += 1) {
-    const bayerRow = (y % 8) * 8;
-    for (let x = 0; x < pixels.width; x += 1) {
-      const offset = (y * pixels.width + x) * 4;
-      const luminance =
-        (0.2126 * data[offset] +
-          0.7152 * data[offset + 1] +
-          0.0722 * data[offset + 2]) /
-        255;
-      const threshold = (BAYER_8[bayerRow + (x % 8)] + 0.5) / 64 - 0.5;
-      const quantized = Math.round(luminance ** 1.1 * steps + threshold);
-      const tone = Math.max(0, Math.min(steps, quantized)) / steps;
-      for (let channel = 0; channel < 3; channel += 1)
-        data[offset + channel] = rampSample(ramp, tone, channel);
-      data[offset + 3] = 255;
-    }
-  }
+  ditherWalk(pixels, levels, (data, offset, threshold, steps) => {
+    const luminance =
+      (0.2126 * data[offset] +
+        0.7152 * data[offset + 1] +
+        0.0722 * data[offset + 2]) /
+      255;
+    const quantized = Math.round(luminance ** 1.1 * steps + threshold);
+    const tone = Math.max(0, Math.min(steps, quantized)) / steps;
+    for (let channel = 0; channel < 3; channel += 1)
+      data[offset + channel] = rampSample(ramp, tone, channel);
+  });
 }
 
 /**
@@ -89,23 +110,15 @@ export function ditherRows(
  * own colours instead of being repainted onto a ramp.
  */
 export function ditherRowsPerChannel(pixels: ImageData, levels: number): void {
-  const steps = Math.max(2, Math.round(levels)) - 1;
-  const data = pixels.data;
-  for (let y = 0; y < pixels.height; y += 1) {
-    const bayerRow = (y % 8) * 8;
-    for (let x = 0; x < pixels.width; x += 1) {
-      const offset = (y * pixels.width + x) * 4;
-      const threshold = (BAYER_8[bayerRow + (x % 8)] + 0.5) / 64 - 0.5;
-      for (let channel = 0; channel < 3; channel += 1) {
-        const quantized = Math.round(
-          (data[offset + channel] / 255) * steps + threshold,
-        );
-        data[offset + channel] =
-          (Math.max(0, Math.min(steps, quantized)) / steps) * 255;
-      }
-      data[offset + 3] = 255;
+  ditherWalk(pixels, levels, (data, offset, threshold, steps) => {
+    for (let channel = 0; channel < 3; channel += 1) {
+      const quantized = Math.round(
+        (data[offset + channel] / 255) * steps + threshold,
+      );
+      data[offset + channel] =
+        (Math.max(0, Math.min(steps, quantized)) / steps) * 255;
     }
-  }
+  });
 }
 
 export async function yieldImageWork(signal: AbortSignal): Promise<void> {
@@ -127,6 +140,9 @@ export async function validateAppearanceImage(blob: Blob): Promise<void> {
       "Choose a PNG, JPEG, or WebP image with a matching file format.",
     );
   }
+  // Bounds pixel count from the declared header BEFORE `createImageBitmap`
+  // allocates anything, so a decompression-bomb image is rejected without
+  // ever being decoded.
   const dimensions = imageSize(new Uint8Array(await blob.arrayBuffer()));
   validateDimensions(dimensions);
 }
@@ -146,15 +162,6 @@ function validateDimensions(image: {
       "Choose an image with valid dimensions, no larger than 50 megapixels.",
     );
   }
-}
-
-function processingCanvas(
-  width: number,
-  height: number,
-): HTMLCanvasElement | OffscreenCanvas {
-  return typeof document === "undefined"
-    ? new OffscreenCanvas(width, height)
-    : createBitmapCanvas(width, height);
 }
 
 async function encodeCanvas(
@@ -188,7 +195,7 @@ async function renderCandidate(
 ): Promise<ProcessedAppearanceImage | null> {
   const width = Math.max(1, Math.round(args.image.width * args.scale));
   const height = Math.max(1, Math.round(args.image.height * args.scale));
-  const canvas = processingCanvas(width, height);
+  const canvas = createBitmapCanvas(width, height);
   try {
     const context = canvas.getContext("2d");
     if (context === null)
@@ -220,6 +227,9 @@ async function normalizeAppearanceImage(
   const image = await decodeBitmap(blob);
   try {
     signal.throwIfAborted();
+    // Re-check against the DECODED bitmap, not just the declared header: the
+    // pre-decode check above is a fast reject on a lying/oversized header,
+    // this one is the guarantee that actually held once the browser decoded it.
     validateDimensions(image);
     const scale = Math.min(
       1,
@@ -248,7 +258,7 @@ export function processAppearanceImage(
   return normalizeAppearanceImage(
     blob,
     {
-      maxEdge: APPEARANCE_ICON_MAX_EDGE,
+      maxEdge: MAX_APPEARANCE_ICON_EDGE,
       maxBytes: MAX_APPEARANCE_ICON_BYTES,
     },
     signal,

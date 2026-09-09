@@ -16,7 +16,6 @@ import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { getBuiltinThemeColors } from "@/lib/themes/builtin-palettes";
 import {
   themeTokenNames,
-  ensureVisibleThemeBorders,
   type ThemeDefinition,
 } from "@/lib/themes/theme-definition";
 
@@ -105,7 +104,6 @@ function applyFromState(): void {
   const root = window.document.documentElement;
   for (const token of themeTokenNames) root.style.removeProperty(`--${token}`);
   const colors = { ...getBuiltinThemeColors(preset, mode), ...custom?.colors };
-  if (custom?.syntax) ensureVisibleThemeBorders(colors);
   for (const [token, color] of Object.entries(colors)) {
     root.style.setProperty(`--${token}`, color);
   }

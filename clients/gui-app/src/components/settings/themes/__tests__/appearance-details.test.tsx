@@ -10,7 +10,7 @@ vi.mock("@/hooks/runner/use-runner-installed-fonts-query", () => ({
 function resetThemeLibrary(): void {
   window.localStorage.clear();
   useThemeLibraryStore.setState({
-    version: 1,
+    version: 2,
     themes: [],
     selected: { light: null, dark: null },
     glassOpacity: 100,

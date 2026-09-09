@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { MAX_APPEARANCE_ICON_BYTES } from "./appearance-asset-policy";
 
-export const MAX_APPEARANCE_ICON_BYTES = 256 * 1024;
+export { MAX_APPEARANCE_ICON_BYTES };
 export const appearanceAssetPathSchema = z
   .string()
   .regex(/^appearance\/[A-Za-z0-9_-]+\.(?:png|jpg|jpeg|webp)$/);
@@ -47,16 +48,19 @@ export const workspaceAppearanceReadSchema = z.object({
   // An unrecognized `version` reads as `malformed`: the host has one schema.
   status: z.enum(["present", "absent", "non-git", "unavailable", "malformed"]),
   appearance: workspaceAppearanceSchema.nullable(),
-  issues: z.array(z.string()),
+  // Machine field names (a client can key `invalidFields.includes("icon")`).
+  invalidFields: z.array(z.enum(["color", "icon"])),
+  // Human-readable sentences, for surfaces that just render a reason.
+  messages: z.array(z.string()),
 });
 export type WorkspaceAppearanceRead = z.infer<
   typeof workspaceAppearanceReadSchema
 >;
 export const workspaceGetAppearanceRequestSchema = z.object({
-  workspacePaths: z.array(z.string().min(1).max(4096)).min(1).max(32),
+  workspacePath: z.string().min(1).max(4096),
 });
 export const workspaceGetAppearanceResponseSchema = z.object({
-  appearances: z.array(workspaceAppearanceReadSchema),
+  appearance: workspaceAppearanceReadSchema,
 });
 export type WorkspaceGetAppearanceRequest = z.infer<
   typeof workspaceGetAppearanceRequestSchema

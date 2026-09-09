@@ -36,7 +36,7 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
     // the end - a SECOND never-resolving GET here would make that await hang
     // forever. Only the FIRST (captured above) needs to stay pending.
     route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([appearanceRead({ workspacePath: "/repo" })]),
+      getAppearanceResponse(appearanceRead({ workspacePath: "/repo" })),
     );
     // Checked from INSIDE the write's own dispatch, not after the whole
     // mutation settles - the final state alone would also pass if only
@@ -163,13 +163,13 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
     fullSupport(manifests, "host-a");
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValueOnce(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: "/repo/root",
           appearance: { version: 1, color: "#111111" },
         }),
-      ]),
+      ),
     );
     // The mutation's own `onSuccess` issues an `invalidateQueries` refetch at
     // the end - simulate it landing while offline, so the only way the
@@ -272,13 +272,13 @@ describe("useWorkspaceSetAppearance: cancellation, write-through, invalidation, 
     // the pre-clear appearance. Bounded, immediately-awaited act.
     await act(async () => {
       staleGet.resolve(
-        getAppearanceResponse([
+        getAppearanceResponse(
           appearanceRead({
             workspacePath: "/repo",
             canonicalSourceRoot: "/repo/root",
             appearance: { version: 1, color: "#111111" },
           }),
-        ]),
+        ),
       );
       await Promise.resolve();
       await Promise.resolve();

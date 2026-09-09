@@ -27,44 +27,61 @@ import {
 
 /**
  * The surface-level context a scripts edit needs to resolve its save target.
- * Pre-create surfaces (landing / launcher / fork) pass `epicId: ""`,
- * `ownerId: null`, `binding: null` - the edit can only ride the staged intent or
- * write the repo's own file (Local). In-epic surfaces pass the real owner + live
- * binding so an edit can target a bound worktree's own
- * `.traycer/environment.json`.
+ *
+ * `"staging"` is a picker surface (landing / launcher / fork, or an in-epic
+ * surface): the edit can ride a staged worktree intent, an existing bound
+ * worktree, or fall through to the repo's own file (Local). Pre-create
+ * pickers pass `epicId: ""`, `ownerId: null`, `binding: null`; in-epic
+ * surfaces pass the real owner + live binding so an edit can target a bound
+ * worktree's own `.traycer/environment.json`.
+ *
+ * `"repository"` is a header tab's "Repository settings…" - it names a
+ * repo root directly, with no picker and nothing staged, so it carries only
+ * what that edit actually needs (`epicId`, `hostId`, `hostClient`) instead
+ * of a `"staging"` shape filled with nulls and a sentinel staging key that
+ * happened to be tolerated.
  */
-export interface WorktreeScriptsContext {
-  readonly epicId: string;
-  /**
-   * The host whose checkout this dialog is editing. Only the repository
-   * identity section needs it by id (its read/write hooks are host-keyed);
-   * scripts continue to ride `hostClient`.
-   */
-  readonly hostId: string | null;
-  readonly ownerId: string | null;
-  readonly ownerKind: WorktreeBindingOwnerKind | null;
-  readonly binding: WorktreeBinding | null;
-  readonly stagingKey: WorktreeStagingKey;
-  readonly hostClient: HostClient<HostRpcRegistry> | null;
-  /**
-   * Composes the branch name `workspacePath` would get for `prefixState` at
-   * `suffix` - the SAME production composition path (multi-repo repository
-   * slugging + truncation included) real branch staging uses, given an
-   * explicit caller-supplied suffix instead of a fresh random one. Branch
-   * naming's live preview and its Apply/Remove candidate capture both call
-   * this with the SAME stable suffix, so whatever candidate is displayed is
-   * exactly what "Use new prefix" later stages - never a second, independent
-   * random pick. Deliberately synchronous and independent of the
-   * summary-invalidation refetch a save also triggers - that refetch lands
-   * on its own time and this must not wait on it. `null` when the workspace
-   * isn't known to the picker.
-   */
-  readonly regenerateBranchNameForWorkspace: (
-    workspacePath: string,
-    freshRepoBranchPrefix: RepoBranchPrefixState,
-    suffix: string,
-  ) => string | null;
-}
+export type WorktreeScriptsContext =
+  | {
+      readonly kind: "staging";
+      readonly epicId: string;
+      /**
+       * The host whose checkout this dialog is editing. Only the repository
+       * identity section needs it by id (its read/write hooks are
+       * host-keyed); scripts continue to ride `hostClient`.
+       */
+      readonly hostId: string | null;
+      readonly ownerId: string | null;
+      readonly ownerKind: WorktreeBindingOwnerKind | null;
+      readonly binding: WorktreeBinding | null;
+      readonly stagingKey: WorktreeStagingKey;
+      readonly hostClient: HostClient<HostRpcRegistry> | null;
+      /**
+       * Composes the branch name `workspacePath` would get for `prefixState`
+       * at `suffix` - the SAME production composition path (multi-repo
+       * repository slugging + truncation included) real branch staging
+       * uses, given an explicit caller-supplied suffix instead of a fresh
+       * random one. Branch naming's live preview and its Apply/Remove
+       * candidate capture both call this with the SAME stable suffix, so
+       * whatever candidate is displayed is exactly what "Use new prefix"
+       * later stages - never a second, independent random pick.
+       * Deliberately synchronous and independent of the
+       * summary-invalidation refetch a save also triggers - that refetch
+       * lands on its own time and this must not wait on it. `null` when the
+       * workspace isn't known to the picker.
+       */
+      readonly regenerateBranchNameForWorkspace: (
+        workspacePath: string,
+        freshRepoBranchPrefix: RepoBranchPrefixState,
+        suffix: string,
+      ) => string | null;
+    }
+  | {
+      readonly kind: "repository";
+      readonly epicId: string;
+      readonly hostId: string | null;
+      readonly hostClient: HostClient<HostRpcRegistry> | null;
+    };
 
 /** The folder a scripts edit targets, captured when the footer is clicked. */
 export interface WorktreeScriptsTarget {
@@ -151,17 +168,20 @@ function WorktreeScriptsDialogBody(props: {
   const stageBranchName = useWorktreeIntentStagingStore(
     (s) => s.stageBranchName,
   );
-  const stagedEntry = useWorktreeIntentStagingStore(
-    (s) =>
-      s.intentByKey[worktreeStagingKeyString(context.stagingKey)]?.entries.find(
-        (entry) => entry.workspacePath === workspacePath,
-      ) ?? null,
+  const stagedEntry = useWorktreeIntentStagingStore((s) =>
+    context.kind === "staging"
+      ? (s.intentByKey[
+          worktreeStagingKeyString(context.stagingKey)
+        ]?.entries.find((entry) => entry.workspacePath === workspacePath) ??
+        null)
+      : null,
   );
   const effectiveStagedEntry = useHeldStagedEntry(stagedEntry, workspacePath);
-  const bindingEntry =
-    context.binding?.entries.find(
-      (entry) => entry.workspacePath === workspacePath,
-    ) ?? null;
+  // A "repository" context names a repo root directly - there is no picker
+  // binding to consult, so the edit always resolves to Local (the source
+  // repo's own env file), same as a "staging" context with no staged entry
+  // and no bound worktree.
+  const bindingEntry = resolveBindingEntry(context, workspacePath);
 
   const resolved = resolveScriptsTarget({
     stagedEntry: effectiveStagedEntry,
@@ -289,8 +309,15 @@ function WorktreeScriptsDialogBody(props: {
       resolved.kind === "new-branch-worktree" ||
       resolved.kind === "checkout-branch-worktree"
     ) {
-      // Staging a worktree intent is a synchronous store write that cannot fail.
-      stageScripts(context.stagingKey, workspacePath, scripts);
+      // Only a "staging" context ever resolves to a staged worktree branch -
+      // `stagedEntry` above is always null for "repository", so `resolved`
+      // can only land here when `context.kind === "staging"`. Narrowed
+      // explicitly rather than asserted, since nothing else proves it to the
+      // type checker.
+      if (context.kind === "staging") {
+        // Staging a worktree intent is a synchronous store write that cannot fail.
+        stageScripts(context.stagingKey, workspacePath, scripts);
+      }
       return Promise.resolve();
     }
     const targetPath =
@@ -329,8 +356,7 @@ function WorktreeScriptsDialogBody(props: {
         canSave: identity.canSave,
         save: identity.save,
       }}
-      pathLabel={descriptor.pathLabel}
-      pathValue={descriptor.pathValue}
+      path={descriptor.path}
       scriptSeed={scriptSeed}
       seedPending={seedPending}
       errorNote={
@@ -463,11 +489,16 @@ function RepositoryDefaultsSlot(props: {
         currentProposedBranchName={props.currentProposedBranchName}
         activeRegenerateCandidate={regenerateOffer?.candidate ?? null}
         composeCandidateBranch={(prefixState, suffix) =>
-          context.regenerateBranchNameForWorkspace(
-            workspacePath,
-            prefixState,
-            suffix,
-          )
+          // A "repository" context names a repo root directly - there is no
+          // picker landscape of staged worktrees to compose a candidate
+          // against, so it never has a live branch to preview.
+          context.kind === "staging"
+            ? context.regenerateBranchNameForWorkspace(
+                workspacePath,
+                prefixState,
+                suffix,
+              )
+            : null
         }
         // `cancel !== null` means Branch naming just entered editing - a
         // stale offer from the PREVIOUS save/remove must not keep showing
@@ -505,11 +536,17 @@ function RepositoryDefaultsSlot(props: {
           previousProposal={regenerateOffer.previousProposal}
           onDismiss={() => setRegenerateOffer(null)}
           onConfirm={() => {
-            props.stageBranchName(
-              context.stagingKey,
-              workspacePath,
-              regenerateOffer.candidate,
-            );
+            // `regenerateOffer` is only ever set from `stagedEntryHasNewBranch`
+            // above, which is always false for a "repository" context (its
+            // `stagedEntry` is always null) - so this only runs for
+            // "staging". Narrowed explicitly rather than asserted.
+            if (context.kind === "staging") {
+              props.stageBranchName(
+                context.stagingKey,
+                workspacePath,
+                regenerateOffer.candidate,
+              );
+            }
             setRegenerateOffer(null);
           }}
         />
@@ -602,6 +639,23 @@ type ResolvedScriptsTarget =
   // An existing worktree on disk (adopted, or the live in-epic binding).
   | { readonly kind: "existing-worktree"; readonly worktreePath: string }
   | { readonly kind: "local" };
+
+/**
+ * A "repository" context names a repo root directly - there is no picker
+ * binding to consult, so the edit always resolves to Local (the source
+ * repo's own env file), same as a "staging" context with no bound worktree.
+ */
+function resolveBindingEntry(
+  context: WorktreeScriptsContext,
+  workspacePath: string,
+): WorktreeBindingEntry | null {
+  if (context.kind !== "staging") return null;
+  return (
+    context.binding?.entries.find(
+      (entry) => entry.workspacePath === workspacePath,
+    ) ?? null
+  );
+}
 
 /**
  * Resolve which worktree (if any) a scripts edit targets, by the same precedence
@@ -734,14 +788,12 @@ function describeTarget(input: {
   readonly resolved: ResolvedScriptsTarget;
   readonly workspacePath: string;
 }): {
-  readonly pathLabel: string | null;
-  readonly pathValue: string | null;
+  readonly path: { readonly label: string; readonly value: string } | null;
   readonly scriptsNote: string;
 } {
   if (input.resolved.kind === "existing-worktree") {
     return {
-      pathLabel: "Worktree path",
-      pathValue: input.resolved.worktreePath,
+      path: { label: "Worktree path", value: input.resolved.worktreePath },
       scriptsNote: "Changes apply to this worktree only.",
     };
   }
@@ -751,22 +803,19 @@ function describeTarget(input: {
     // - the branch name it would show is already covered by Branch naming's
     // own effective-branch preview above.
     return {
-      pathLabel: null,
-      pathValue: null,
+      path: null,
       scriptsNote:
         "Saved for the new worktree. Setup runs when the agent starts.",
     };
   }
   if (input.resolved.kind === "checkout-branch-worktree") {
     return {
-      pathLabel: "Existing branch",
-      pathValue: input.resolved.branchName,
+      path: { label: "Existing branch", value: input.resolved.branchName },
       scriptsNote: "Saved for the new worktree created from this branch.",
     };
   }
   return {
-    pathLabel: "Folder",
-    pathValue: input.workspacePath,
+    path: { label: "Folder", value: input.workspacePath },
     scriptsNote:
       "Saved in this checkout. Commit the environment file to share these scripts.",
   };

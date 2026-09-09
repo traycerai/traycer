@@ -206,6 +206,7 @@ function stagedWorktreeIntent(
 }
 
 const PRE_CREATE_CONTEXT: WorktreeScriptsContext = {
+  kind: "staging",
   epicId: "",
   hostId: "host-a",
   ownerId: null,

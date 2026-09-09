@@ -219,10 +219,15 @@ export function deriveThemeColors(
   };
 }
 
-/** VS Code borders can be transparent or match surfaces that differ in Traycer. */
+/**
+ * VS Code borders can be transparent or match surfaces that differ in
+ * Traycer. Returns only the tokens it had to fix up, rather than mutating
+ * `colors` in place, so a caller decides when and how to merge them.
+ */
 export function ensureVisibleThemeBorders(
   colors: ThemeDefinition["colors"],
-): void {
+): Partial<Record<ThemeToken, string>> {
+  const overrides: Partial<Record<ThemeToken, string>> = {};
   for (const token of ["canvas-border", "border", "input"] as const) {
     const surfaces = (
       token === "canvas-border"
@@ -231,17 +236,19 @@ export function ensureVisibleThemeBorders(
     ).filter((color): color is string => color !== undefined);
     const original = colors[token];
     if (!original || surfaces.length === 0) continue;
-    const visible = (color: string) =>
-      surfaces.every((surface) => wcagContrast(color, surface) >= 1.3);
+    // Loop-invariant across every step below: the surfaces a candidate is
+    // judged against, and the minimum contrast a color reaches over them.
+    const minSurfaceContrast = (color: string) =>
+      Math.min(...surfaces.map((surface) => wcagContrast(color, surface)));
+    const visible = (color: string) => minSurfaceContrast(color) >= 1.3;
     if (visible(original)) continue;
     const source = rgb(parse(original));
     if (!source) continue;
-    const ink = ["#ffffff", "#000000"].sort(
-      (a, b) =>
-        Math.min(...surfaces.map((surface) => wcagContrast(b, surface))) -
-        Math.min(...surfaces.map((surface) => wcagContrast(a, surface))),
-    )[0];
-    const channel = ink === "#ffffff" ? 1 : 0;
+    const channel =
+      minSurfaceContrast("#ffffff") > minSurfaceContrast("#000000") ? 1 : 0;
+    // Track the best candidate seen in case no step reaches full visibility.
+    let bestCandidate = original;
+    let bestContrast = minSurfaceContrast(original);
     for (let step = 1; step <= 20; step += 1) {
       const amount = step / 20;
       const candidate = formatHex8({
@@ -250,8 +257,20 @@ export function ensureVisibleThemeBorders(
         g: source.g + (channel - source.g) * amount,
         b: source.b + (channel - source.b) * amount,
       });
-      colors[token] = candidate;
-      if (visible(candidate)) break;
+      if (visible(candidate)) {
+        bestCandidate = candidate;
+        break;
+      }
+      const candidateContrast = minSurfaceContrast(candidate);
+      if (candidateContrast > bestContrast) {
+        bestCandidate = candidate;
+        bestContrast = candidateContrast;
+      }
     }
+    // Either the step that reached visibility, or - if the loop exhausted
+    // without one - the highest-contrast candidate found, as an explicit
+    // fallback rather than silently keeping the invisible original.
+    overrides[token] = bestCandidate;
   }
+  return overrides;
 }

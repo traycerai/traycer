@@ -140,6 +140,15 @@ export interface StartPageWallpaper {
    * channel on its own, so the image keeps its own colours.
    */
   readonly tintWithAccent: boolean;
+  /**
+   * The chosen file's name, or `null` when none is stored. Lives here rather
+   * than beside the bytes (the appearance blob store) so metadata is all in
+   * one place; `lib/appearance/start-page-wallpaper.ts` writes this row and
+   * the blob together from a single entry point per user action, which is
+   * what makes it safe to keep here without risking a name left over for an
+   * image that is gone.
+   */
+  readonly name: string | null;
 }
 
 export interface SettingsState {
@@ -674,6 +683,9 @@ function parseStartPageWallpaper(value: unknown): StartPageWallpaper | null {
         : DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
     tintWithAccent:
       typeof value.tintWithAccent === "boolean" ? value.tintWithAccent : true,
+    // Untrusted input (a chosen file's name): cap its length the way theme
+    // names and other user-authored strings are capped elsewhere.
+    name: typeof value.name === "string" ? value.name.slice(0, 256) : null,
   };
 }
 
@@ -845,8 +857,24 @@ function resolvePersistedAgentTabSurfacing(
   return DEFAULT_AGENT_TAB_SURFACING;
 }
 
-window.addEventListener("storage", (event) => {
-  if (event.key === null || event.key === persistKey(STORE_KEYS.settings)) {
-    void useSettingsStore.persist.rehydrate();
-  }
-});
+let crossWindowSyncInstalled = false;
+
+/**
+ * Rehydrate this store when another window writes its persisted key (or
+ * clears storage entirely - a `null` event key). Exported and guarded
+ * (idempotent, no-op outside a DOM) rather than a bare module-scope
+ * `window.addEventListener`, so it is callable from app bootstrap and from a
+ * test without relying on import order to have wired it up.
+ */
+export function initSettingsCrossWindowSync(): void {
+  if (crossWindowSyncInstalled) return;
+  if (typeof window === "undefined") return;
+  crossWindowSyncInstalled = true;
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === persistKey(STORE_KEYS.settings)) {
+      void useSettingsStore.persist.rehydrate();
+    }
+  });
+}
+
+initSettingsCrossWindowSync();

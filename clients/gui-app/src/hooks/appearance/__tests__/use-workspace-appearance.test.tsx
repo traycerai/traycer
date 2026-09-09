@@ -53,23 +53,23 @@ describe("useWorkspaceAppearance: independent drafts and late results", () => {
     // Resolve B first, then A - later arrival must never land in the other's slot.
     act(() => {
       draftB.resolve(
-        getAppearanceResponse([
+        getAppearanceResponse(
           appearanceRead({
             workspacePath: "/draft-b",
             canonicalSourceRoot: "/repo/b",
           }),
-        ]),
+        ),
       );
     });
     await waitFor(() => expect(b.result.current.query.isSuccess).toBe(true));
     act(() => {
       draftA.resolve(
-        getAppearanceResponse([
+        getAppearanceResponse(
           appearanceRead({
             workspacePath: "/draft-a",
             canonicalSourceRoot: "/repo/a",
           }),
-        ]),
+        ),
       );
     });
     await waitFor(() => expect(a.result.current.query.isSuccess).toBe(true));
@@ -97,13 +97,13 @@ describe("useWorkspaceAppearance: independent drafts and late results", () => {
       return oldPending.promise;
     });
     route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: "/repo/acct-2",
           appearance: { version: 1, color: "#aaaaaa" },
         }),
-      ]),
+      ),
     );
 
     const { result } = renderHook(
@@ -132,13 +132,13 @@ describe("useWorkspaceAppearance: independent drafts and late results", () => {
     // retroactively land in the CURRENT (acct-2) slot.
     act(() => {
       oldPending.resolve(
-        getAppearanceResponse([
+        getAppearanceResponse(
           appearanceRead({
             workspacePath: "/repo",
             canonicalSourceRoot: "/repo/acct-1-stale",
             appearance: { version: 1, color: "#111111" },
           }),
-        ]),
+        ),
       );
     });
     await Promise.resolve();
@@ -157,14 +157,14 @@ describe("useWorkspaceAppearance: canEdit (partial vs whole malformed)", () => {
     fullSupport(manifests, "host-a");
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           status: "malformed",
           appearance: { version: 1, color: "#112233" },
-          issues: ["icon"],
+          invalidFields: ["icon"],
         }),
-      ]),
+      ),
     );
     const { Wrapper } = makeWrapper();
 
@@ -187,14 +187,15 @@ describe("useWorkspaceAppearance: canEdit (partial vs whole malformed)", () => {
     fullSupport(manifests, "host-a");
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           status: "malformed",
           appearance: null,
-          issues: ["appearance.json is not valid JSON"],
+          invalidFields: [],
+          messages: ["appearance.json is not valid JSON"],
         }),
-      ]),
+      ),
     );
     const { Wrapper } = makeWrapper();
 
@@ -217,7 +218,7 @@ describe("useWorkspaceAppearance: canEdit (partial vs whole malformed)", () => {
     readOnlySupport(manifests, "host-a");
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([appearanceRead({ workspacePath: "/repo" })]),
+      getAppearanceResponse(appearanceRead({ workspacePath: "/repo" })),
     );
     const { Wrapper } = makeWrapper();
 
@@ -242,13 +243,13 @@ describe("useWorkspaceAppearance: canonical-null unavailable retains the previou
     fullSupport(manifests, "host-a");
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValueOnce(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: "/repo/root",
           appearance: { version: 1, color: "#445566" },
         }),
-      ]),
+      ),
     );
     const { Wrapper, queryClient } = makeWrapper();
 
@@ -265,14 +266,14 @@ describe("useWorkspaceAppearance: canonical-null unavailable retains the previou
     );
 
     route.getAppearance.mockResolvedValueOnce(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: null,
           status: "unavailable",
           appearance: null,
         }),
-      ]),
+      ),
     );
     await act(async () => {
       await queryClient.refetchQueries({ queryKey: ["host"] });
@@ -299,9 +300,7 @@ describe("useWorkspaceAppearance: assetRefreshKey (bytes can change under an unc
       workspacePath: "/repo",
       canonicalSourceRoot: "/repo/root",
     });
-    route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([identicalRead]),
-    );
+    route.getAppearance.mockResolvedValue(getAppearanceResponse(identicalRead));
     const { Wrapper, queryClient } = makeWrapper();
 
     const { result } = renderHook(
@@ -358,15 +357,16 @@ describe("useWorkspaceAppearance: canonical fallback via a fresh disk read", () 
     );
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: "/repo/root",
           status: "malformed",
           appearance: null,
-          issues: ["appearance.json is not valid JSON"],
+          invalidFields: [],
+          messages: ["appearance.json is not valid JSON"],
         }),
-      ]),
+      ),
     );
     const { Wrapper } = makeWrapper();
 
@@ -411,14 +411,14 @@ describe("useWorkspaceAppearance: canonical fallback via a fresh disk read", () 
     fullSupport(manifests, "host-a");
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: "/repo/root",
           status: "unavailable",
           appearance: null,
         }),
-      ]),
+      ),
     );
     const { Wrapper } = makeWrapper();
 
@@ -443,15 +443,16 @@ describe("useWorkspaceAppearance: canonical fallback via a fresh disk read", () 
     fullSupport(manifests, "host-a");
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValue(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           canonicalSourceRoot: "/repo/root",
           status: "malformed",
           appearance: null,
-          issues: ["appearance.json is not valid JSON"],
+          invalidFields: [],
+          messages: ["appearance.json is not valid JSON"],
         }),
-      ]),
+      ),
     );
     const diskRead = deferred<WorkspaceAppearanceRead | null>();
     const readSnapshotSpy = vi
@@ -494,7 +495,7 @@ describe("useWorkspaceAppearance: authoritative clears", () => {
     fullSupport(manifests, "host-a");
     const route = routeByMethod(clientA);
     route.getAppearance.mockResolvedValueOnce(
-      getAppearanceResponse([appearanceRead({ workspacePath: "/repo" })]),
+      getAppearanceResponse(appearanceRead({ workspacePath: "/repo" })),
     );
     const { Wrapper, queryClient } = makeWrapper();
 
@@ -519,14 +520,14 @@ describe("useWorkspaceAppearance: authoritative clears", () => {
     );
 
     route.getAppearance.mockResolvedValueOnce(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/repo",
           status: "absent",
           canonicalSourceRoot: null,
           appearance: null,
         }),
-      ]),
+      ),
     );
     await act(async () => {
       await queryClient.refetchQueries({ queryKey: ["host"] });
@@ -660,12 +661,12 @@ describe("useEpicAppearanceSource: primary binding selection and the optimistic 
     };
     routeA.listBindings.mockResolvedValue(bindingsResponse);
     routeB.getAppearance.mockResolvedValue(
-      getAppearanceResponse([
+      getAppearanceResponse(
         appearanceRead({
           workspacePath: "/primary",
           canonicalSourceRoot: "/primary",
         }),
-      ]),
+      ),
     );
     const { Wrapper } = makeWrapper();
 
@@ -686,7 +687,7 @@ describe("useEpicAppearanceSource: primary binding selection and the optimistic 
     // through the primary row, never default to the caller's host once a
     // primary is known.
     expect(routeB.getAppearance).toHaveBeenCalledWith(
-      { workspacePaths: ["/primary"] },
+      { workspacePath: "/primary" },
       expect.anything(),
     );
     expect(routeA.getAppearance).not.toHaveBeenCalled();

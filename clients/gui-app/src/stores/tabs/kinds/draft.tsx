@@ -41,6 +41,7 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
     icon: LayersPlus,
     canDuplicate: false,
     canOpenInNewWindow: true,
+    repositoryIdentity: null,
   }),
   descriptor: {
     kind: "draft",

@@ -23,6 +23,13 @@ const BAND_ROWS = 64;
 const RESIZE_DEBOUNCE_MS = 100;
 
 /**
+ * A single reusable probe canvas for `paintColor`'s sRGB conversion, instead
+ * of a fresh 1x1 `<canvas>` per call - `resolveRamp` calls it twice per
+ * repaint, and a repaint can run on every debounced resize.
+ */
+let colorProbeCanvas: HTMLCanvasElement | null = null;
+
+/**
  * The personal start-page wallpaper. `photo` and `grain` are the image itself
  * under CSS; `dither` repaints it onto a low-resolution canvas upscaled with
  * `image-rendering: pixelated`, so the treatment is a render-time property of
@@ -113,6 +120,11 @@ function DitheredWallpaper(props: {
       timer = window.setTimeout(paint, RESIZE_DEBOUNCE_MS);
     };
     image.onload = paint;
+    // A broken/unreachable URL never fires `onload`, so without this the
+    // canvas would just sit blank (or stale) with nothing explaining why.
+    // Same "leave the last frame up" outcome as an aborted render - there is
+    // no broken-image placeholder to paint onto a dither canvas.
+    image.onerror = () => undefined;
     image.src = url;
     const observer = new ResizeObserver(schedule);
     observer.observe(canvas);
@@ -121,6 +133,7 @@ function DitheredWallpaper(props: {
       observer.disconnect();
       if (timer !== null) clearTimeout(timer);
       image.onload = null;
+      image.onerror = null;
     };
   }, [url, intensity, tint, tintWithAccent, themeRevision]);
 
@@ -145,8 +158,14 @@ async function renderDither(
   if (image.naturalWidth === 0 || image.naturalHeight === 0) return;
   const context = canvas.getContext("2d");
   if (context === null) return;
-  const ramp = style.tintWithAccent ? resolveRamp(canvas, style.tint) : null;
-  if (style.tintWithAccent && ramp === null) return;
+  // Tint is off by default (`ramp` stays `null`, meaning "dither each RGB
+  // channel"); only bail when a tint was actually requested but couldn't be
+  // resolved, tested once rather than twice.
+  let ramp: AppearanceRamp | null = null;
+  if (style.tintWithAccent) {
+    ramp = resolveRamp(canvas, style.tint);
+    if (ramp === null) return;
+  }
   canvas.width = width;
   canvas.height = height;
   const cover = Math.max(
@@ -226,10 +245,12 @@ function mixColor(
 function paintColor(value: string): AppearanceRampColor | null {
   const trimmed = value.trim();
   if (trimmed === "") return null;
-  const probe = document.createElement("canvas");
-  probe.width = 1;
-  probe.height = 1;
-  const context = probe.getContext("2d");
+  if (colorProbeCanvas === null) {
+    colorProbeCanvas = document.createElement("canvas");
+    colorProbeCanvas.width = 1;
+    colorProbeCanvas.height = 1;
+  }
+  const context = colorProbeCanvas.getContext("2d");
   if (context === null) return null;
   context.fillStyle = "#000000";
   context.fillStyle = trimmed;

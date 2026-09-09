@@ -10,11 +10,39 @@ import {
   readAppearanceBlob,
   writeAppearanceBlob,
   captureAppearanceSession,
-  isAppearanceSessionCurrent,
   type AppearanceScope,
 } from "@/lib/appearance/appearance-cache";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+/**
+ * The real model this hook renders is `(scope, path) -> bytes | rejected |
+ * loading`, split across five pieces of state because each answers a
+ * different question the render needs:
+ *  - `rejectedUrl` - a live-stream URL whose FETCH (network) failed; compared
+ *    against the current `liveUrl` so a later successful fetch of a
+ *    different URL isn't shadowed by an old rejection.
+ *  - `failedResolution` - the (identity, url) pair `reportDecodeFailure`
+ *    condemned; compared against the currently DISPLAYED (identity, url) so
+ *    the condemnation applies only while that exact lease is still showing.
+ *  - `retained` - the in-memory bytes of a live candidate that passed
+ *    `validateAppearanceAssetBlob`, kept so `cachedFetcher` doesn't have to
+ *    wait on `writeAppearanceBlob`'s IndexedDB round-trip to serve them back.
+ *  - `displayed` (ref, not state - it must never itself trigger a render) -
+ *    the (identity, url) actually committed to the DOM as of the last
+ *    effect flush. `reportDecodeFailure` reads it to ignore a report that
+ *    arrives from a PREVIOUSLY committed render (e.g. an `<img>` whose error
+ *    handler fires after the hook already moved on to a newer lease) - a
+ *    plain state variable can't express "as of the last commit" the way a
+ *    ref written from a `useEffect` can.
+ *  - `cachedFetcher` (memo, not state) - the fetch function
+ *    `useImageBlobUrlState` drives; only its cache key changes, not its
+ *    identity as a function.
+ * All five were audited for redundancy (see FIX 6 of the appearance
+ * code-review pass); none collapses into another without losing (a) "never
+ * expose a live URL directly, only a validated blob" or (b) the stale-report
+ * guard above, so this is the documented-in-place shape rather than a
+ * reducer rewrite.
+ */
 export interface AppearanceAssetState {
   readonly url: string | null;
   readonly status: "empty" | "loading" | "ready" | "unavailable";
@@ -93,7 +121,11 @@ export function useAppearanceAsset(args: {
     focused,
     refreshKey: args.refreshKey,
   });
-  const identity = appearanceAssetKey(scope, JSON.stringify([accessiblePath]));
+  // `accessiblePath` is a single already-regex-constrained path (or `null`
+  // when nothing is selected/accessible) - pass it straight through as the
+  // identity; `appearanceAssetKey` is the only place that composes it into a
+  // key, so it is stringified exactly once.
+  const identity = appearanceAssetKey(scope, accessiblePath ?? "none");
   const [rejectedUrl, setRejectedUrl] = useState<string | null>(null);
   const [failedResolution, setFailedResolution] = useState<{
     identity: string;
@@ -121,7 +153,7 @@ export function useAppearanceAsset(args: {
           await validateAppearanceAssetBlob(blob);
         }
         signal.throwIfAborted();
-        if (!isAppearanceSessionCurrent(scope?.accountId ?? null, session))
+        if (!session.isCurrent(scope?.accountId ?? null))
           throw new Error("Appearance session changed.");
         return {
           bytes: new Uint8Array(await blob.arrayBuffer()),
@@ -157,10 +189,7 @@ export function useAppearanceAsset(args: {
         await loadAppearanceAssetValidation();
       controller.signal.throwIfAborted();
       await validateAppearanceAssetBlob(blob);
-      if (
-        controller.signal.aborted ||
-        !isAppearanceSessionCurrent(scope.accountId, session)
-      )
+      if (controller.signal.aborted || !session.isCurrent(scope.accountId))
         return;
       // Never expose the generic stream URL: only this admitted blob gets a display lease.
       setRetained({ identity, sourceUrl: liveUrl, blob });

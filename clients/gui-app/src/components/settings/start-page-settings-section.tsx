@@ -6,13 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
   chooseStartPageWallpaper,
-  saveStartPageWallpaper,
+  removeStartPageWallpaper,
   useStartPageWallpaperImage,
 } from "@/lib/appearance/start-page-wallpaper";
 import { trackSettingChanged } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import {
-  DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
   useSettingsStore,
   type StartPageWallpaperStyle,
 } from "@/stores/settings/settings-store";
@@ -66,13 +65,6 @@ export function StartPageSettingsSection() {
       .then(() => {
         if (controller.signal.aborted) return;
         trackSettingChanged("appearance", "startPageWallpaper");
-        if (wallpaper === null) {
-          setWallpaper({
-            style: "dither",
-            intensity: DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
-            tintWithAccent: true,
-          });
-        }
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -91,8 +83,7 @@ export function StartPageSettingsSection() {
     abortRef.current?.abort();
     setBusy(false);
     trackSettingChanged("appearance", "startPageWallpaper");
-    setWallpaper(null);
-    void saveStartPageWallpaper(null).catch((error: unknown) => {
+    void removeStartPageWallpaper().catch((error: unknown) => {
       toast.error(
         error instanceof Error
           ? error.message
@@ -141,7 +132,7 @@ export function StartPageSettingsSection() {
             >
               Choose image…
             </Button>
-            {wallpaper === null && image.url === null ? null : (
+            {wallpaper === null ? null : (
               <Button type="button" variant="ghost" size="sm" onClick={remove}>
                 Remove
               </Button>
@@ -151,71 +142,76 @@ export function StartPageSettingsSection() {
       />
 
       {wallpaper === null ? null : (
-        <SettingsRow
-          label="Style"
-          control={
-            <div className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5">
-              {STYLES.map((style) => (
-                <button
-                  key={style.id}
-                  type="button"
-                  aria-pressed={wallpaper.style === style.id}
-                  onClick={() => {
-                    trackSettingChanged("appearance", "startPageWallpaper");
-                    setWallpaper({ ...wallpaper, style: style.id });
+        <>
+          <SettingsRow
+            label="Style"
+            control={
+              <div className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5">
+                {STYLES.map((style) => (
+                  <button
+                    key={style.id}
+                    type="button"
+                    aria-pressed={wallpaper.style === style.id}
+                    onClick={() => {
+                      trackSettingChanged("appearance", "startPageWallpaper");
+                      setWallpaper({ ...wallpaper, style: style.id });
+                    }}
+                    className={cn(
+                      "rounded-sm px-3 py-1 text-ui-sm transition-colors",
+                      wallpaper.style === style.id
+                        ? "bg-card text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {style.label}
+                  </button>
+                ))}
+              </div>
+            }
+          />
+
+          {wallpaper.style === "photo" ? null : (
+            <SettingsRow
+              label="Intensity"
+              control={
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  aria-label="Intensity"
+                  value={Math.round(wallpaper.intensity * 100)}
+                  onChange={(event) => {
+                    setWallpaper({
+                      ...wallpaper,
+                      intensity: event.target.valueAsNumber / 100,
+                    });
                   }}
-                  className={cn(
-                    "rounded-sm px-3 py-1 text-ui-sm transition-colors",
-                    wallpaper.style === style.id
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {style.label}
-                </button>
-              ))}
-            </div>
-          }
-        />
-      )}
-
-      {wallpaper === null || wallpaper.style === "photo" ? null : (
-        <SettingsRow
-          label="Intensity"
-          control={
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              aria-label="Intensity"
-              value={Math.round(wallpaper.intensity * 100)}
-              onChange={(event) => {
-                setWallpaper({
-                  ...wallpaper,
-                  intensity: event.target.valueAsNumber / 100,
-                });
-              }}
-              className="w-[min(40vw,10rem)] accent-primary"
+                  onPointerUp={() =>
+                    trackSettingChanged("appearance", "startPageWallpaper")
+                  }
+                  className="w-[min(40vw,10rem)] accent-primary"
+                />
+              }
             />
-          }
-        />
-      )}
+          )}
 
-      {wallpaper === null || wallpaper.style !== "dither" ? null : (
-        <SettingsRow
-          label="Use accent color"
-          control={
-            <Switch
-              checked={wallpaper.tintWithAccent}
-              onCheckedChange={(next) => {
-                trackSettingChanged("appearance", "startPageWallpaperTint");
-                setWallpaper({ ...wallpaper, tintWithAccent: next });
-              }}
-              aria-label="Use accent color"
+          {wallpaper.style !== "dither" ? null : (
+            <SettingsRow
+              label="Use accent color"
+              control={
+                <Switch
+                  checked={wallpaper.tintWithAccent}
+                  onCheckedChange={(next) => {
+                    trackSettingChanged("appearance", "startPageWallpaperTint");
+                    setWallpaper({ ...wallpaper, tintWithAccent: next });
+                  }}
+                  aria-label="Use accent color"
+                />
+              }
             />
-          }
-        />
+          )}
+        </>
       )}
 
       <SettingsRow

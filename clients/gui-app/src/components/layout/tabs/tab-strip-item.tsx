@@ -60,7 +60,11 @@ import {
   leaderDigitFor,
   leaderHint,
 } from "@/components/ui/leader-digit-shortcuts";
-import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  useTopLevelStripPairPreview,
+  type HeaderTabDragGhost,
+} from "@/components/epic-canvas/dnd/dnd-store";
+import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import {
   useHeaderTabDisplacementTransition,
   TAB_CLASS_BASE,
@@ -71,7 +75,7 @@ import { useTabRepositorySettings } from "@/components/layout/tabs/tab-repositor
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
-import type { HeaderTab } from "@/stores/tabs/types";
+import { tabRepositoryIdentity, type HeaderTab } from "@/stores/tabs/types";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
@@ -173,11 +177,25 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     isTaskPinPending,
     onSetTaskPinned,
   } = props;
+  const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
+  const repositoryIdentity = tabRepositoryIdentity(tab);
+  // Read once here rather than inside `TabLeadingIcon`, so the SAME resolved
+  // value can also ride the drag payload below - the strip item is the drag
+  // source, and at the moment a drag starts it already holds everything the
+  // ghost needs.
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId: tabEpicId ?? tab.id },
+    null,
+  );
+  const dragGhost = useMemo<HeaderTabDragGhost>(
+    () => ({ repositoryIdentity, indicatorState }),
+    [repositoryIdentity, indicatorState],
+  );
   const {
     ref: dndRef,
     listeners,
     isDragging,
-  } = useHeaderTabDnd(tab.kind, tab.id, dnd);
+  } = useHeaderTabDnd(tab.kind, tab.id, dnd, dragGhost);
   const tabRef = useRef<HTMLDivElement | null>(null);
   const scrollActiveTabIntoView = useCallback(
     (element: HTMLDivElement | null) => {
@@ -194,7 +212,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const modifier = useTabLeaderModifierForIndex(index);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
   const liveEpicTitle = useRegisteredEpicTitle(tabEpicId);
   const titleGenerationPending = useRegisteredEpicTitleGenerating(tabEpicId);
   const activityStatus = useEpicActivityStatus(tabEpicId);
@@ -427,25 +444,22 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             side="left"
           />
           {chrome === "own" ? (
-            <TabChrome
-              isActive={isActive}
-              color={tab.repositoryIdentity?.color}
-            />
+            <TabChrome isActive={isActive} color={repositoryIdentity?.color} />
           ) : (
             <SplitMemberChrome
               focused={isActive}
-              color={tab.repositoryIdentity?.color}
+              color={repositoryIdentity?.color}
             />
           )}
           <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
           <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
             <TabLeadingIcon
               icon={tab.icon}
-              identity={tab.repositoryIdentity}
+              identity={repositoryIdentity}
               titleGenerationPending={titleGenerationPending}
               activityStatus={activityStatus}
+              indicatorState={indicatorState}
               tabId={tab.id}
-              epicId={tabEpicId}
             />
             {rename.isEditing ? (
               <input
@@ -537,16 +551,24 @@ function useHeaderTabDnd(
   tabKind: HeaderTabKind,
   tabId: string,
   config: HeaderTabDndConfig | null,
+  ghost: HeaderTabDragGhost,
 ): UseHeaderTabDndReturn {
-  const dragData = useMemo<HeaderTabDragData>(
+  const dragData = useMemo<
+    HeaderTabDragData & { readonly ghost: HeaderTabDragGhost }
+  >(
     () => ({
       kind: HEADER_TAB_DND_TYPE,
       stripItemId: config?.stripItemId ?? `member:${tabKind}:${tabId}`,
       tabKind,
       tabId,
       index: config?.index ?? 0,
+      // Render-ready enrichment for the drag ghost - read once, right here,
+      // where the strip already holds it resolved. `root-dnd-provider.tsx`
+      // reads it back via `readHeaderTabDragGhost` at drag start, so the
+      // overlay never re-derives it with a host RPC / notifications query.
+      ghost,
     }),
-    [config, tabId, tabKind],
+    [config, tabId, tabKind, ghost],
   );
   // A `tab:` strip item is already unique per tab, so it keys on the tab id
   // alone. A split member shares its tab id with nothing but must stay distinct

@@ -13,6 +13,7 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { duplicateEpicTab } from "@/lib/commands/actions/duplicate-tab";
 import { useAppearanceHeaderStripItem } from "@/stores/tabs/use-header-tabs";
 import type { HeaderStripItem } from "@/stores/tabs/use-header-tabs";
+import { tabRepositoryIdentity } from "@/stores/tabs/types";
 
 const mocks = vi.hoisted(() => ({
   useEpicAppearanceSource: vi.fn(),
@@ -79,7 +80,8 @@ function appearanceResultFor(color: string, root: string) {
       status: "present" as const,
       revision: "r",
       appearance: { version: 1 as const, color },
-      issues: [],
+      invalidFields: [],
+      messages: [],
       editable: true,
       assetRefreshKey: 1,
     },
@@ -95,7 +97,7 @@ function memberColor(
   if (item === null || item.kind !== "split") return undefined;
   const member = side === "left" ? item.left : item.right;
   return member.kind === "tab"
-    ? member.tab.repositoryIdentity?.color
+    ? tabRepositoryIdentity(member.tab)?.color
     : undefined;
 }
 

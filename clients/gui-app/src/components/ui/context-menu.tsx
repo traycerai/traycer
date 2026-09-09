@@ -3,6 +3,7 @@ import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
@@ -168,8 +169,12 @@ function ContextMenuSubContent({
   // A submenu opens sideways from a row that is itself already near an edge, so
   // it is the surface most likely to need the clamp its parent content has.
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  // Same boundary fallback as `DropdownMenuSubContent`: with no explicit
+  // container, Radix portals to `document.body`, which can land the submenu
+  // outside a dialog's own stacking context.
+  const dialogBoundary = useDialogOverlayBoundaryEl();
   return (
-    <ContextMenuPrimitive.Portal>
+    <ContextMenuPrimitive.Portal container={dialogBoundary ?? undefined}>
       <ContextMenuPrimitive.SubContent
         ref={ref}
         data-slot="context-menu-sub-content"

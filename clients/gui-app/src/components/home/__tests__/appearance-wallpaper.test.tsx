@@ -92,6 +92,7 @@ describe("AppearanceWallpaper", () => {
           style: "dither",
           intensity: 0.6,
           tintWithAccent: false,
+          name: "wallpaper.png",
         }}
         url="blob:wallpaper"
         tint={null}

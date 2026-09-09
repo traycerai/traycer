@@ -10,7 +10,6 @@ import {
 } from "@/hooks/appearance/use-workspace-appearance";
 import type { AppearanceScope } from "@/lib/appearance/appearance-cache";
 import { prepareAppearanceImage } from "@/lib/appearance/appearance-image-preparation";
-import { bytesToBase64 } from "@/lib/composer/image-base64";
 
 export type RepositoryIcon = NonNullable<WorkspaceAppearance["icon"]>;
 
@@ -160,22 +159,11 @@ export function useRepoIdentityDraft(args: {
     setImageError(null);
     setBusy(true);
     void prepareAppearanceImage(file, controller.signal)
-      .then(async (prepared) => {
-        const mediaType = prepared.blob.type;
-        if (
-          mediaType !== "image/png" &&
-          mediaType !== "image/jpeg" &&
-          mediaType !== "image/webp"
-        )
-          throw new Error("Choose a PNG, JPEG, or WebP image.");
-        const dataBase64 = bytesToBase64(
-          new Uint8Array(await prepared.blob.arrayBuffer()),
-        );
-        controller.signal.throwIfAborted();
+      .then((prepared) => {
         setLogo({
           path: prepared.path,
           url: URL.createObjectURL(prepared.blob),
-          upload: { mediaType, dataBase64 },
+          upload: prepared.upload,
         });
         edit((previous) => ({
           ...previous,

@@ -21,22 +21,25 @@ export function mergeAppearanceRead(
   )
     return { ...read, appearance: cached };
   const merged = { ...appearance };
-  retainInvalidField(merged, cached, read.issues, "color");
-  retainInvalidField(merged, cached, read.issues, "icon");
+  retainInvalidField(merged, cached, read.invalidFields, "color");
+  retainInvalidField(merged, cached, read.invalidFields, "icon");
   return { ...read, appearance: merged };
 }
 
-function retainInvalidField<Key extends "color" | "icon">(
+function retainInvalidField(
   appearance: WorkspaceAppearance,
   cached: WorkspaceAppearance | null,
-  issues: readonly string[],
-  field: Key,
+  invalidFields: readonly ("color" | "icon")[],
+  field: "color" | "icon",
 ): void {
-  const previous = cached?.[field];
-  if (
-    issues.includes(field) &&
-    appearance[field] === undefined &&
-    previous !== undefined
-  )
-    appearance[field] = previous;
+  if (!invalidFields.includes(field)) return;
+  if (field === "color") {
+    const previous = cached?.color;
+    if (appearance.color === undefined && previous !== undefined)
+      appearance.color = previous;
+    return;
+  }
+  const previous = cached?.icon;
+  if (appearance.icon === undefined && previous !== undefined)
+    appearance.icon = previous;
 }

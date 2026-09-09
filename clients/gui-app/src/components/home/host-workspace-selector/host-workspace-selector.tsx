@@ -1212,6 +1212,7 @@ function HomeWorkspaceRows(props: {
   );
   const scriptsContext = useMemo<WorktreeScriptsContext>(
     () => ({
+      kind: "staging",
       epicId: "",
       hostId: props.activeHostId,
       ownerId: null,
@@ -3191,6 +3192,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   const scriptsContext = useMemo<WorktreeScriptsContext>(
     () => ({
+      kind: "staging",
       epicId: surface.epicId,
       hostId: props.activeHostId,
       ownerId: surface.ownerId,

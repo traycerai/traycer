@@ -25,7 +25,10 @@ import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
 import { useHeaderTabForRef } from "@/stores/tabs/use-header-tabs";
-import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  useActiveHeaderTabGhost,
+  useEpicDndStore,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   WORKSPACE_FOLDER_DND_TYPE,
@@ -189,8 +192,14 @@ function HeaderTabOverlayChip(props: {
     kind: props.tab.tabKind,
     id: props.tab.tabId,
   });
+  // Resolved ONCE at drag start from the strip item's own drag payload - see
+  // `HeaderTabDragGhost` in `dnd-store.ts`. Carries `repositoryIdentity` and
+  // the notification badge state so `HeaderTabDragOverlay` never re-opens a
+  // `workspace.getAppearance` RPC or a notifications query to redraw a tab
+  // that is already resolved and painted in the strip.
+  const ghost = useActiveHeaderTabGhost();
   if (tab === null) return null;
-  return <HeaderTabDragOverlay tab={tab} width={props.width} />;
+  return <HeaderTabDragOverlay tab={tab} ghost={ghost} width={props.width} />;
 }
 
 function EpicCanvasNodeDragOverlay(props: {

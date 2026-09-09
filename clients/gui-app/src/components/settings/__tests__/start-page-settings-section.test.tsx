@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const wallpaperMocks = vi.hoisted(() => ({
   image: { url: null as string | null, name: null as string | null },
   choose: vi.fn(),
-  save: vi.fn(),
+  remove: vi.fn(),
   toastError: vi.fn(),
 }));
 
@@ -16,7 +16,7 @@ vi.mock("sonner", () => ({ toast: { error: wallpaperMocks.toastError } }));
 
 vi.mock("@/lib/appearance/start-page-wallpaper", () => ({
   chooseStartPageWallpaper: wallpaperMocks.choose,
-  saveStartPageWallpaper: wallpaperMocks.save,
+  removeStartPageWallpaper: wallpaperMocks.remove,
   useStartPageWallpaperImage: () => wallpaperMocks.image,
 }));
 
@@ -34,7 +34,13 @@ describe("StartPageSettingsSection", () => {
   beforeEach(() => {
     wallpaperMocks.image = { url: null, name: null };
     wallpaperMocks.choose.mockReset().mockResolvedValue(undefined);
-    wallpaperMocks.save.mockReset().mockResolvedValue(undefined);
+    // The real `removeStartPageWallpaper` clears the settings row itself
+    // (see FIX 3: one entry point owns both writes) - mirror that here so a
+    // test observes the same "immediate" state the real module produces.
+    wallpaperMocks.remove.mockReset().mockImplementation(() => {
+      useSettingsStore.setState({ startPageWallpaper: null });
+      return Promise.resolve();
+    });
     wallpaperMocks.toastError.mockReset();
     useSettingsStore.setState({
       startPageWallpaper: null,
@@ -64,6 +70,7 @@ describe("StartPageSettingsSection", () => {
         style: "dither",
         intensity: 0.6,
         tintWithAccent: true,
+        name: "ridge.png",
       },
     });
     render(<StartPageSettingsSection />);
@@ -93,6 +100,7 @@ describe("StartPageSettingsSection", () => {
         style: "photo",
         intensity: 0.6,
         tintWithAccent: true,
+        name: "ridge.png",
       },
     });
     render(<StartPageSettingsSection />);
@@ -111,6 +119,7 @@ describe("StartPageSettingsSection", () => {
         style: "grain",
         intensity: 0.6,
         tintWithAccent: true,
+        name: "ridge.png",
       },
     });
     render(<StartPageSettingsSection />);
@@ -130,6 +139,7 @@ describe("StartPageSettingsSection", () => {
         style: "dither",
         intensity: 0.6,
         tintWithAccent: true,
+        name: "ridge.png",
       },
     });
     render(<StartPageSettingsSection />);
@@ -145,8 +155,9 @@ describe("StartPageSettingsSection", () => {
       }),
     );
     wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
-    wallpaperMocks.save.mockImplementation(() => {
+    wallpaperMocks.remove.mockImplementation(() => {
       wallpaperMocks.image = { url: null, name: null };
+      useSettingsStore.setState({ startPageWallpaper: null });
       return Promise.resolve();
     });
     useSettingsStore.setState({
@@ -154,6 +165,7 @@ describe("StartPageSettingsSection", () => {
         style: "dither",
         intensity: 0.6,
         tintWithAccent: true,
+        name: "ridge.png",
       },
     });
     render(<StartPageSettingsSection />);
@@ -188,13 +200,14 @@ describe("StartPageSettingsSection", () => {
 
   it("surfaces a failed removal", async () => {
     const error = new Error("storage unavailable");
-    wallpaperMocks.save.mockRejectedValue(error);
+    wallpaperMocks.remove.mockRejectedValue(error);
     wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
     useSettingsStore.setState({
       startPageWallpaper: {
         style: "photo",
         intensity: 0.6,
         tintWithAccent: true,
+        name: "ridge.png",
       },
     });
     render(<StartPageSettingsSection />);

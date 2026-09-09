@@ -162,15 +162,16 @@ export function appearanceRead(
     canonicalSourceRoot: "/repo/root",
     status: "present",
     appearance: { version: 1, color: "#112233" },
-    issues: [],
+    invalidFields: [],
+    messages: [],
     ...overrides,
   };
 }
 
 export function getAppearanceResponse(
-  reads: readonly WorkspaceAppearanceRead[],
+  read: WorkspaceAppearanceRead,
 ): WorkspaceGetAppearanceResponse {
-  return { appearances: [...reads] };
+  return { appearance: read };
 }
 
 export function requireSignal(signal: AbortSignal | null): AbortSignal {

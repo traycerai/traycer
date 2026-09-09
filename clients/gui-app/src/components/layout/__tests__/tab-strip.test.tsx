@@ -620,6 +620,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       // Dragging rightward onto B: the dragged tab's centre is on B's
       // approach (left) half, so the merge is live immediately with the
@@ -663,6 +664,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       dndStore.headerStripDragStateChanged({
         kind: "reorder",
@@ -696,6 +698,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       // Dragging leftward back onto B: the dragged tab's centre is on B's
       // approach (right) half, so the dragged tab would take the pair's

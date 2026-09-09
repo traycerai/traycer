@@ -81,6 +81,7 @@ function draftHeaderTab(draftId: string): HeaderTab {
     icon: null,
     canDuplicate: false,
     canOpenInNewWindow: false,
+    repositoryIdentity: null,
   };
 }
 
@@ -282,6 +283,7 @@ describe("useCloseTabFlow", () => {
         canClose: true,
         canDuplicate: true,
         canOpenInNewWindow: true,
+        repositoryIdentity: null,
       });
     });
 
@@ -330,6 +332,7 @@ describe("useCloseTabFlow", () => {
         canClose: true,
         canDuplicate: true,
         canOpenInNewWindow: true,
+        repositoryIdentity: null,
       });
     });
 

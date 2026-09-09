@@ -62,7 +62,8 @@ function appearanceRead(
     workspacePath: "/repo",
     status: "present",
     appearance: { version: 1, color: "#112233" },
-    issues: [],
+    invalidFields: [],
+    messages: [],
     ...overrides,
   };
 }
@@ -500,10 +501,10 @@ describe("appearance-cache: account isolation and session guards", () => {
     const { cache, authStore } = await loadAppearanceCache();
     signIn(authStore, "acct-1");
     const session = cache.captureAppearanceSession();
-    expect(cache.isAppearanceSessionCurrent("acct-1", session)).toBe(true);
+    expect(session.isCurrent("acct-1")).toBe(true);
 
     signIn(authStore, "acct-2");
-    expect(cache.isAppearanceSessionCurrent("acct-1", session)).toBe(false);
+    expect(session.isCurrent("acct-1")).toBe(false);
   });
 
   it("invalidates a captured session across a sign-out and sign-back-in to the SAME account", async () => {
@@ -514,7 +515,7 @@ describe("appearance-cache: account isolation and session guards", () => {
     signOut(authStore);
     signIn(authStore, "acct-1");
 
-    expect(cache.isAppearanceSessionCurrent("acct-1", session)).toBe(false);
+    expect(session.isCurrent("acct-1")).toBe(false);
   });
 
   it("keeps a global (accountId null) session current across account switches, but not across a wipe", async () => {
@@ -523,10 +524,10 @@ describe("appearance-cache: account isolation and session guards", () => {
     const session = cache.captureAppearanceSession();
 
     signIn(authStore, "acct-2");
-    expect(cache.isAppearanceSessionCurrent(null, session)).toBe(true);
+    expect(session.isCurrent(null)).toBe(true);
 
     await cache.clearAppearanceCache();
-    expect(cache.isAppearanceSessionCurrent(null, session)).toBe(false);
+    expect(session.isCurrent(null)).toBe(false);
   });
 });
 

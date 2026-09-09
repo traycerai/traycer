@@ -1,12 +1,16 @@
 /**
  * `TabLeadingIcon` renders a repository identity icon beside the pre-existing
  * status icon. Fakes `useAppearanceAsset` (covered by
- * `use-appearance-assets.test.tsx`) and the notification-indicator state
- * (covered by its own reducer tests); proves a missing logo falls back to a
+ * `use-appearance-assets.test.tsx`); proves a missing logo falls back to a
  * neutral icon, and identity/status - including a real attention tone, not
  * just the running spinner - render and update independently.
+ *
+ * `indicatorState` is now a plain resolved prop (both real callers - the
+ * strip's `TabItem` and the drag ghost's `HeaderTabDragOverlay` - already
+ * have it resolved by render time), so tests pass it directly instead of
+ * faking a context hook.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { TabLeadingIcon } from "../tab-leading-icon";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
@@ -14,15 +18,10 @@ import type { HeaderTabRepositoryIdentity, TabIcon } from "@/stores/tabs/types";
 
 const mocks = vi.hoisted(() => ({
   useAppearanceAsset: vi.fn(),
-  useSurfaceNotificationIndicatorState: vi.fn(),
 }));
 
 vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
   useAppearanceAsset: mocks.useAppearanceAsset,
-}));
-vi.mock("@/components/notifications/notification-indicator-context", () => ({
-  useSurfaceNotificationIndicatorState:
-    mocks.useSurfaceNotificationIndicatorState,
 }));
 
 function idleState(): NotificationIndicatorState {
@@ -79,10 +78,6 @@ const DefaultTabIcon: TabIcon = (props) => (
   <svg className={props.className} data-testid="default-tab-icon" />
 );
 
-beforeEach(() => {
-  mocks.useSurfaceNotificationIndicatorState.mockReturnValue(idleState());
-});
-
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -103,8 +98,8 @@ describe("TabLeadingIcon: missing logo falls back to a neutral icon", () => {
         identity={identityWithImage()}
         titleGenerationPending={false}
         activityStatus="idle"
+        indicatorState={idleState()}
         tabId="tab-1"
-        epicId="epic-1"
       />,
     );
 
@@ -128,8 +123,8 @@ describe("TabLeadingIcon: missing logo falls back to a neutral icon", () => {
         identity={identityWithImage()}
         titleGenerationPending={false}
         activityStatus="idle"
+        indicatorState={idleState()}
         tabId="tab-2"
-        epicId="epic-2"
       />,
     );
 
@@ -152,8 +147,8 @@ describe("TabLeadingIcon: missing logo falls back to a neutral icon", () => {
         identity={identityWithRejectedImage()}
         titleGenerationPending={false}
         activityStatus="idle"
+        indicatorState={idleState()}
         tabId="tab-6"
-        epicId="epic-6"
       />,
     );
 
@@ -171,8 +166,8 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
         identity={identityWithEmoji()}
         titleGenerationPending={false}
         activityStatus="idle"
+        indicatorState={idleState()}
         tabId="tab-order"
-        epicId="epic-order"
       />,
     );
 
@@ -198,11 +193,11 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
     const { rerender } = render(
       <TabLeadingIcon
         icon={DefaultTabIcon}
-        identity={undefined}
+        identity={null}
         titleGenerationPending
         activityStatus="idle"
+        indicatorState={idleState()}
         tabId="tab-status"
-        epicId="epic-status"
       />,
     );
 
@@ -215,11 +210,11 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
     rerender(
       <TabLeadingIcon
         icon={DefaultTabIcon}
-        identity={undefined}
+        identity={null}
         titleGenerationPending={false}
         activityStatus="idle"
+        indicatorState={idleState()}
         tabId="tab-status"
-        epicId="epic-status"
       />,
     );
 
@@ -236,8 +231,8 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
         identity={identityWithEmoji()}
         titleGenerationPending={false}
         activityStatus="turn"
+        indicatorState={idleState()}
         tabId="tab-3"
-        epicId="epic-3"
       />,
     );
 
@@ -251,8 +246,8 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
         identity={identityWithEmoji()}
         titleGenerationPending={false}
         activityStatus="idle"
+        indicatorState={idleState()}
         tabId="tab-3"
-        epicId="epic-3"
       />,
     );
 
@@ -262,20 +257,18 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
   });
 
   it("renders the identity icon alongside a real attention tone, which wins over an idle running status", () => {
-    mocks.useSurfaceNotificationIndicatorState.mockReturnValue({
-      ...idleState(),
-      unreadFailure: true,
-      unreadNonTerminalFailure: true,
-    });
-
     render(
       <TabLeadingIcon
         icon={null}
         identity={identityWithEmoji()}
         titleGenerationPending={false}
         activityStatus="idle"
+        indicatorState={{
+          ...idleState(),
+          unreadFailure: true,
+          unreadNonTerminalFailure: true,
+        }}
         tabId="tab-5"
-        epicId="epic-5"
       />,
     );
 
@@ -289,11 +282,11 @@ describe("TabLeadingIcon: identity and status coexist and update independently",
     render(
       <TabLeadingIcon
         icon={null}
-        identity={undefined}
+        identity={null}
         titleGenerationPending={false}
         activityStatus="turn"
+        indicatorState={idleState()}
         tabId="tab-4"
-        epicId="epic-4"
       />,
     );
 

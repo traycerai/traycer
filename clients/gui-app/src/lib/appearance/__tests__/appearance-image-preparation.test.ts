@@ -4,7 +4,6 @@ import type { ProcessedAppearanceImage } from "../appearance-image-processing";
 
 const processingMocks = vi.hoisted(() => ({
   processAppearanceImage: vi.fn(),
-  validateAppearanceImage: vi.fn(),
 }));
 
 vi.mock("../appearance-image-processing", async (importOriginal) => {
@@ -13,7 +12,6 @@ vi.mock("../appearance-image-processing", async (importOriginal) => {
   return {
     ...actual,
     processAppearanceImage: processingMocks.processAppearanceImage,
-    validateAppearanceImage: processingMocks.validateAppearanceImage,
   };
 });
 
@@ -58,11 +56,12 @@ describe("prepareAppearanceImage", () => {
     // plain hoisted `vi.fn()`'s queued mockResolvedValue/mockRejectedValue
     // in place, so an explicit reset is what actually isolates tests here.
     processingMocks.processAppearanceImage.mockReset();
-    processingMocks.validateAppearanceImage.mockReset();
   });
 
-  it("rejects on invalid input without ever processing it", async () => {
-    processingMocks.validateAppearanceImage.mockRejectedValueOnce(
+  it("rejects on invalid input without ever hashing it", async () => {
+    // `processAppearanceImage` owns admission now: preparation does not
+    // validate the blob a second time before handing it off.
+    processingMocks.processAppearanceImage.mockRejectedValueOnce(
       new Error(
         "Choose a PNG, JPEG, or WebP image with a matching file format.",
       ),
@@ -70,11 +69,9 @@ describe("prepareAppearanceImage", () => {
     await expect(
       prepareAppearanceImage(SOURCE_BLOB, new AbortController().signal),
     ).rejects.toThrow(/matching file format/);
-    expect(processingMocks.processAppearanceImage).not.toHaveBeenCalled();
   });
 
-  it("hashes the PROCESSED bytes (not the original) and derives a content-addressed .webp path", async () => {
-    processingMocks.validateAppearanceImage.mockResolvedValueOnce(undefined);
+  it("hashes the PROCESSED bytes (not the original), derives a content-addressed .webp path, and packs the upload", async () => {
     const processedBytes = new Uint8Array([10, 20, 30]);
     processingMocks.processAppearanceImage.mockResolvedValueOnce({
       blob: new Blob([processedBytes], { type: "image/webp" }),
@@ -94,10 +91,13 @@ describe("prepareAppearanceImage", () => {
     expect(prepared.path).toBe(`appearance/${expectedHash}.webp`);
     expect(prepared.width).toBe(100);
     expect(prepared.height).toBe(80);
+    expect(prepared.upload.mediaType).toBe("image/webp");
+    expect(
+      Array.from(Buffer.from(prepared.upload.dataBase64, "base64")),
+    ).toEqual(Array.from(processedBytes));
   });
 
   it("derives a .png path when the processed result is not WebP", async () => {
-    processingMocks.validateAppearanceImage.mockResolvedValueOnce(undefined);
     processingMocks.processAppearanceImage.mockResolvedValueOnce({
       blob: new Blob([new Uint8Array([1])], { type: "image/png" }),
       width: 1,
@@ -110,6 +110,7 @@ describe("prepareAppearanceImage", () => {
     );
 
     expect(prepared.path).toBe(`appearance/${prepared.hash}.png`);
+    expect(prepared.upload.mediaType).toBe("image/png");
   });
 
   it("never processes an already-aborted request", async () => {
@@ -118,6 +119,6 @@ describe("prepareAppearanceImage", () => {
     await expect(
       prepareAppearanceImage(SOURCE_BLOB, controller.signal),
     ).rejects.toThrow("pre-aborted");
-    expect(processingMocks.validateAppearanceImage).not.toHaveBeenCalled();
+    expect(processingMocks.processAppearanceImage).not.toHaveBeenCalled();
   });
 });

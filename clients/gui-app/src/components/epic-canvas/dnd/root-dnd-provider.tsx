@@ -23,7 +23,10 @@ import {
   type PointLike,
   type RectLike,
 } from "@/components/epic-canvas/dnd/dnd";
-import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  readHeaderTabDragGhost,
+  useEpicDndStore,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import { EpicRootDragOverlayContent } from "@/components/epic-canvas/dnd/drag-overlay-chip";
 import {
   EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE,
@@ -1266,9 +1269,15 @@ export function RootDndProvider(props: RootDndProviderProps) {
           pointerX: grabPointerX(event.activatorEvent),
         });
         activeHeaderStripGeometry = geometry;
+        // The ghost enrichment (repo logo, notification badge) rides the
+        // SAME dnd-kit payload the identity fields above were just read
+        // from - the strip item that is the drag source attaches it (see
+        // `tab-strip-item.tsx`'s `useHeaderTabDnd`), so reading it here
+        // costs nothing further: no RPC, no query.
         dndStore.headerTabDragStarted(
           headerTab,
           geometry?.slots[geometry.sourceIndex]?.width ?? null,
+          readHeaderTabDragGhost(event.active.data.current),
         );
         // The move that crosses the activation distance can itself span one or
         // more tabs. dnd-kit starts the drag from that event but does not emit

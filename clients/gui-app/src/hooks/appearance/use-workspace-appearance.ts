@@ -21,8 +21,8 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
 import {
   type AppearanceScope,
+  type AppearanceSession,
   captureAppearanceSession,
-  isAppearanceSessionCurrent,
   readAppearanceSnapshot,
   readAppearanceSource,
   writeAppearanceSnapshot,
@@ -51,12 +51,10 @@ function takeAssetRefreshKey(): number {
 function appearanceReadIsCurrent(
   signal: AbortSignal,
   accountId: string | null,
-  session: number | undefined,
+  session: AppearanceSession | undefined,
 ): boolean {
   return (
-    session !== undefined &&
-    !signal.aborted &&
-    isAppearanceSessionCurrent(accountId, session)
+    session !== undefined && !signal.aborted && session.isCurrent(accountId)
   );
 }
 
@@ -181,11 +179,13 @@ export function useWorkspaceAppearance(args: {
     HostRpcRegistry,
     "workspace.getAppearance",
     ResolvedAppearanceRead | null,
-    number
+    AppearanceSession
   >({
     client,
     method: "workspace.getAppearance",
-    params: { workspacePaths: workspacePath === null ? [] : [workspacePath] },
+    // `""` is a placeholder the request schema would reject, never a value
+    // that ships: `enabled` below is false whenever `workspacePath` is null.
+    params: { workspacePath: workspacePath ?? "" },
     cacheKeyIdentity: [accountId],
     options: {
       enabled:
@@ -208,15 +208,8 @@ export function useWorkspaceAppearance(args: {
     }) => {
       if (!appearanceReadIsCurrent(signal, accountId, requestContext))
         return null;
-      const read = response.appearances.find(
-        (entry) => entry.workspacePath === workspacePath,
-      );
-      if (
-        read === undefined ||
-        accountId === null ||
-        hostId === null ||
-        workspacePath === null
-      )
+      const read = response.appearance;
+      if (accountId === null || hostId === null || workspacePath === null)
         return null;
       const previousRead =
         queryClient.getQueryData<ResolvedAppearanceRead | null>(queryKey);
@@ -313,7 +306,7 @@ export function useWorkspaceSetAppearance(args: {
   return useHostMutation<
     HostRpcRegistry,
     "workspace.setAppearance",
-    { hostId: string; accountId: string | null; session: number }
+    { hostId: string; accountId: string | null; session: AppearanceSession }
   >({
     client,
     method: "workspace.setAppearance",
@@ -337,7 +330,7 @@ export function useWorkspaceSetAppearance(args: {
         });
         if (
           context.accountId === null ||
-          !isAppearanceSessionCurrent(context.accountId, context.session)
+          !context.session.isCurrent(context.accountId)
         )
           throw new Error("The appearance editing session has ended.");
         return context;
@@ -345,7 +338,7 @@ export function useWorkspaceSetAppearance(args: {
       onSuccess: async (response, variables, context) => {
         if (
           context.accountId === null ||
-          !isAppearanceSessionCurrent(context.accountId, context.session)
+          !context.session.isCurrent(context.accountId)
         )
           return;
         await queryClient.cancelQueries({
@@ -354,8 +347,7 @@ export function useWorkspaceSetAppearance(args: {
             "workspace.getAppearance",
           ),
         });
-        if (!isAppearanceSessionCurrent(context.accountId, context.session))
-          return;
+        if (!context.session.isCurrent(context.accountId)) return;
         const read = response.appearance;
         const source = read.canonicalSourceRoot;
         if (source !== null) {
