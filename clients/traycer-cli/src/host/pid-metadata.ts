@@ -10,6 +10,7 @@ import { createCliLogger, errorFromUnknown } from "../logger";
 import { isProcessAlive } from "../store/cli-lock";
 import { hostPidMetadataPath } from "../store/paths";
 import { readProcessStartIdentity } from "../store/process-identity";
+import { isReadablePid } from "./pid-value";
 
 // Mirror of the writer contract owned by the host (the external
 // Traycer Host). Read by string path so
@@ -207,7 +208,7 @@ export async function readHostPidMetadataEvidenceAt(
   }
   const obj = parsed as Record<string, unknown>;
   if (
-    typeof obj.pid !== "number" ||
+    !isReadablePid(obj.pid) ||
     typeof obj.hostId !== "string" ||
     typeof obj.version !== "string" ||
     typeof obj.websocketUrl !== "string" ||
@@ -215,7 +216,7 @@ export async function readHostPidMetadataEvidenceAt(
   ) {
     logger.warn("Host pid metadata rejected malformed payload", {
       environment: logEnvironment,
-      hasPid: typeof obj.pid === "number",
+      hasPid: isReadablePid(obj.pid),
       hasHostId: typeof obj.hostId === "string",
       hasVersion: typeof obj.version === "string",
       hasWebsocketUrl: typeof obj.websocketUrl === "string",

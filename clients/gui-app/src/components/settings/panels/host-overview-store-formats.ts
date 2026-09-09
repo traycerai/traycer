@@ -94,6 +94,15 @@ export function hostStoreFormatRestriction(
   // Nothing reported, and the peer CAN honour the floor: leave the row alone
   // and let the host's own pre-dispatch survey refuse it authoritatively.
   if (input.storeFormats === null) return null;
+  // A move the floor does not evaluate is UNRESTRICTED, decided ONCE here so
+  // every clause below reads as the survey question it actually is.
+  // The CLI exits on `target-not-older` before it reads anything, so it never
+  // sees the disk; every clause under this point consults survey data and can
+  // therefore reach `newerStoresRestriction` for a move the CLI exempts
+  // outright. That is how a plain upgrade over a source build still serving
+  // newer stores lost its ordinary Update offer and demanded loss consent for
+  // a move that loses nothing.
+  if (!applies) return null;
   const target = resolveHostStoreFormats(input.version, input.publishedFormats);
   const chatDb = input.storeFormats.chatDb;
   // Formats FIRST, before either uncertain survey state. A target that reads
@@ -110,7 +119,6 @@ export function hostStoreFormatRestriction(
   // the CLI will hold, not always this build's own stamp - see
   // `installedSideKnowledge`.
   if (
-    applies &&
     storeFloorClearedByFormats(
       target,
       installedSideKnowledge(input.install, chatDb.current),
@@ -120,7 +128,7 @@ export function hostStoreFormatRestriction(
   }
   // Boot uncertainty is transient. Do not offer loss consent until the
   // first survey has answered, even if this target's metadata is unknown.
-  if (applies && chatDb.survey === "pending") {
+  if (chatDb.survey === "pending") {
     return {
       kind: "pending",
       reason: "Checking chat stores…",
@@ -132,14 +140,12 @@ export function hostStoreFormatRestriction(
   // target's format is unknown. A fresh RPC refusal can still override this
   // cached observation if a store appeared after the status poll.
   if (surveyCompleteAndEmpty(chatDb)) return null;
-  if (target.kind === "unknown") {
-    return applies ? unknownTargetRestriction(input.version) : null;
-  }
+  if (target.kind === "unknown") return unknownTargetRestriction(input.version);
   // A failed survey read no file, so on its own it can only ever produce
   // uncertainty; the formats-first clearance above has already excused every
   // target that reads the installed side's files anyway, so what reaches here
   // is a target the formats could not clear over stores nobody could inspect.
-  if (applies && chatDb.survey === "failed") {
+  if (chatDb.survey === "failed") {
     return unreadableStoresRestriction(input.version);
   }
   if (chatDb.onDiskMax === null || chatDb.onDiskMax <= target.formats.chatDb) {
