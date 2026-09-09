@@ -35,22 +35,33 @@ describe("<StreamSyncingBar />", () => {
     expect(screen.queryByTestId(TEST_ID)).toBeNull();
   });
 
-  it("says Syncing… and nothing stronger while the resync is young", () => {
+  it("spends no words at all while the resync is young", () => {
+    // What this reports usually lasts two to four seconds, and a word that
+    // appears and vanishes in that time reads as an alarm rather than as
+    // information - the same rule the app-wide session strip follows.
     renderBar({ syncing: true, escalated: false });
-    expect(barText()).toContain("Syncing…");
-    expect(barText()).not.toContain("Still syncing…");
+    expect(screen.queryByTestId(`${TEST_ID}-text`)).toBeNull();
     expect(screen.getByTestId(TEST_ID).dataset.syncState).toBe("syncing");
   });
 
-  it("says Still syncing… once the spell has escalated", () => {
+  it("shows Still syncing… once the spell has escalated", () => {
     renderBar({ syncing: true, escalated: true });
-    expect(barText()).toContain("Still syncing…");
+    expect(screen.getByTestId(`${TEST_ID}-text`).textContent).toBe(
+      "Still syncing…",
+    );
     expect(screen.getByTestId(TEST_ID).dataset.syncState).toBe("stalled");
   });
 
-  it("names the surface for a screen reader without showing the name", () => {
+  it("keeps the whole sentence audible in BOTH states, shown or not", () => {
+    // What a screen reader hears must not depend on which visual form is up.
+    // The ordinary state shows nothing and still announces it.
     renderBar({ syncing: true, escalated: false });
     expect(barText()).toContain("Task");
+    expect(barText()).toContain("Syncing…");
+    cleanup();
+    renderBar({ syncing: true, escalated: true });
+    expect(barText()).toContain("Task");
+    expect(barText()).toContain("Still syncing…");
   });
 
   it("announces politely and is NOT marked busy", () => {

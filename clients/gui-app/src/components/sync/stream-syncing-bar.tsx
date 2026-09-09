@@ -31,6 +31,15 @@ interface StreamSyncingBarProps {
  * connection, and it has to be distinguishable from the agent's own activity at
  * a glance on a phone.
  *
+ * The ordinary state spends NO WORDS - the bar alone. What this reports usually
+ * lasts two to four seconds, and a word that appears and vanishes in that time
+ * reads as an alarm rather than as information, which is how a row like this
+ * comes to be distrusted. The same rule the app-wide session strip follows, and
+ * for the same reason. Only the escalation, once the wait is no longer
+ * momentary, is worth a word on screen; the accessible sentence is there
+ * throughout, so what a screen reader hears never depends on which of the two
+ * states is showing.
+ *
  * The strip takes its own row rather than overlaying the content, so nothing it
  * says is painted on top of the possibly-stale text it is describing. It is
  * `shrink-0` because it lives inside the surface's header stack, where the
@@ -52,14 +61,26 @@ export function StreamSyncingBar(props: StreamSyncingBarProps): ReactNode {
       role="status"
       className="shrink-0"
     >
-      <span className="block truncate px-3 pb-1 text-ui-xs text-muted-foreground">
-        <span className="sr-only">{props.surfaceLabel}: </span>
-        {streamSyncingLabel(spell.escalated)}
+      {/* The sentence, always - and visible only once it has earned its place.
+          A reader hears the same thing in both states; the screen shows a word
+          only when the wait has gone on long enough to be worth one. */}
+      <span className="sr-only">
+        {props.surfaceLabel}: {streamSyncingLabel(spell.escalated)}
       </span>
-      {/* The bar is decoration for the word above it - it carries no semantics
-          of its own, so a reader hears the sentence once. The bound on its
-          motion holds per OUTAGE rather than per mount only because the clock
-          behind `spell` outlives this component. */}
+      {spell.escalated ? (
+        <span
+          // `aria-hidden`, because the line above already says it: without this
+          // the escalated state is announced twice.
+          aria-hidden
+          data-testid={`${props.testId}-text`}
+          className="block truncate px-3 pb-1 text-ui-xs text-muted-foreground"
+        >
+          {streamSyncingLabel(true)}
+        </span>
+      ) : null}
+      {/* The bar carries no semantics of its own, so a reader hears the sentence
+          once. The bound on its motion holds per OUTAGE rather than per mount
+          only because the clock behind `spell` outlives this component. */}
       <SyncingSweepBar
         settled={spell.escalated}
         testId={`${props.testId}-sweep`}
