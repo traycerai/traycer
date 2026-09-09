@@ -158,7 +158,8 @@ import {
   ticketArtifactSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
-import { ticketStatusSchema } from "@traycer/protocol/common/_internal/schemas";
+import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
+import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 
 /**
  * One artifact record on the records lane.
@@ -260,6 +261,13 @@ export type EpicDeletedArtifactRecord = z.infer<
  * payload matches what the released peer strict-decodes. See
  * `EpicStateStreamResolver` in the internal repo.
  */
+// The same registry record the persistence tombstones embed; resolved here
+// rather than imported from `common/_internal`, which is registry-only.
+const ticketStatusSchemaForFrozenTombstone = getRecordSchema(
+  commonRecordRegistry,
+  "ticket-status",
+  "latest",
+);
 const frozenDeletedArtifactRecordFieldsV10 = {
   id: z.string(),
   title: z.string(),
@@ -274,12 +282,12 @@ export const epicDeletedArtifactRecordSchemaV10 = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("ticket"),
     ...frozenDeletedArtifactRecordFieldsV10,
-    status: ticketStatusSchema,
+    status: ticketStatusSchemaForFrozenTombstone,
   }),
   z.object({
     kind: z.literal("story"),
     ...frozenDeletedArtifactRecordFieldsV10,
-    status: ticketStatusSchema,
+    status: ticketStatusSchemaForFrozenTombstone,
   }),
   z.object({
     kind: z.literal("review"),
