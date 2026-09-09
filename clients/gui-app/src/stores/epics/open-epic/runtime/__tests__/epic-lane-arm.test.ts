@@ -46,7 +46,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   EpicStateDeltaFrame,
   EpicStateSnapshotFrame,
@@ -175,7 +175,7 @@ function createCountingStateFactory(): CountingStateFactory {
  * breaks the fixture rather than silently drifting past it.
  */
 function stateSnapshotFrame(authorityEpoch: string): EpicStateSnapshotFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     basis: "cold",
@@ -204,7 +204,7 @@ function stateDeltaFrame(
   authorityEpoch: string,
   seq: number,
 ): EpicStateDeltaFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "delta",
     hasBinaryPayload: false,
     authorityEpoch,

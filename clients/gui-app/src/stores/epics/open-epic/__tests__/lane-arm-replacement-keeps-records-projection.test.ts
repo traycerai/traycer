@@ -28,7 +28,7 @@
  * proves the row set is DISCARDED and refilled rather than merged).
  */
 import { describe, expect, it } from "vitest";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { EpicStatusSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
@@ -128,7 +128,7 @@ function stateSnapshot(
   position: number,
   artifactRecords: readonly SpecArtifactRecordFixture[],
 ): EpicStateSnapshotFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch,

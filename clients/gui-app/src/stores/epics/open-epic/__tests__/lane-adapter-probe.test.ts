@@ -39,7 +39,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { EpicMigrationStatus } from "@traycer/protocol/host/epic/status-subscribe";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { ArtifactStreamClientFactory } from "@traycer-clients/shared/epic-lanes";
 import type { ArtifactStreamCallbacks } from "@traycer-clients/shared/host-transport/artifact-stream-client";
 import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
@@ -980,7 +980,7 @@ function stateSnapshotFrameAt(
   basis: "cold" | "resumeTooOld" | "authorityEpochChanged",
   position: number,
 ): EpicStateSnapshotFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch,

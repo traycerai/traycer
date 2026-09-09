@@ -14,6 +14,7 @@ import {
   epicStateSubscribeClientFrameSchemaV10,
   epicStateSubscribeOpenRequestSchemaV10,
   epicStateSubscribeServerFrameSchemaV10,
+  epicStateSubscribeServerFrameSchemaV11,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicDeletionAttributionSchema,
@@ -64,14 +65,17 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
  */
 
 describe("registry shape: the epic lane surface installs at the versions the split promised", () => {
-  it("installs epic.state.subscribe / epic.status.subscribe / artifact.subscribe at major 1, latestMinor 0", () => {
-    for (const method of [
-      "epic.state.subscribe",
-      "epic.status.subscribe",
-      "artifact.subscribe",
+  it("installs epic.state.subscribe / epic.status.subscribe / artifact.subscribe at major 1, each with a @1.0 line", () => {
+    // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata)
+    // after `@1.0` shipped in 1.3.0; the other two lanes are still at their
+    // first minor. All three keep `@1.0` installed for released peers.
+    for (const [method, latestMinor] of [
+      ["epic.state.subscribe", 1],
+      ["epic.status.subscribe", 0],
+      ["artifact.subscribe", 0],
     ] as const) {
       const majorLine = hostStreamRpcRegistry[method][1];
-      expect(majorLine.latestMinor).toBe(0);
+      expect(majorLine.latestMinor).toBe(latestMinor);
       expect(majorLine.versions[0].contract.schemaVersion).toEqual({
         major: 1,
         minor: 0,
@@ -1366,5 +1370,90 @@ describe("lane unaries", () => {
     expect(
       epicRetryMigrationV10.responseSchema.safeParse({ ok: false }).success,
     ).toBe(false);
+  });
+});
+
+describe("epic.state.subscribe@1.1: tombstones carry artifact metadata; @1.0 stays slim", () => {
+  // What the live session builds after #1215: a tombstone that remembers
+  // enough of the artifact to revive it. `@1.0` shipped in 1.3.0 without any
+  // of it, and a released `@1.0` peer strict-decodes the whole frame.
+  const richTicketTombstone = {
+    kind: "ticket" as const,
+    id: "ticket-1",
+    title: "A ticket",
+    deletedAt: "2026-01-01T00:00:00.000Z",
+    revision: 3,
+    folderName: "tickets",
+    parentId: "story-1",
+    createdAt: 1_000,
+    createdManually: true,
+    assignee: "user-1",
+    status: 1,
+  };
+  const richSpecTombstone = {
+    kind: "spec" as const,
+    id: "spec-1",
+    title: "A spec",
+    deletedAt: "2026-01-01T00:00:00.000Z",
+    revision: 4,
+    folderName: null,
+    parentId: null,
+    createdAt: 2_000,
+    createdManually: false,
+    assignee: null,
+    status: null,
+  };
+  const delta = {
+    kind: "delta" as const,
+    authorityEpoch: "epoch-1",
+    seq: 7,
+    artifactUpserts: [],
+    artifactTombstones: [richTicketTombstone, richSpecTombstone],
+    commentThreadUpserts: [],
+    commentThreadRemovals: [],
+    epicMeta: null,
+    roleClaims: null,
+    hasBinaryPayload: false,
+  };
+
+  it("@1.1 admits the rich tombstone on every kind", () => {
+    const parsed = epicStateSubscribeServerFrameSchemaV11.parse(delta);
+    expect(parsed).toEqual(delta);
+  });
+
+  it("reparsing a @1.1 frame through @1.0 yields exactly the 1.3.0 tombstone: metadata stripped, ticket status kept", () => {
+    // The host's per-minor projection for a `@1.0` subscriber is this reparse;
+    // a key the frozen copy does not name must not survive it, and the one key
+    // the released peer REQUIRES on a ticket must.
+    const parsed = epicStateSubscribeServerFrameSchemaV10.parse(delta);
+    expect(parsed).toEqual({
+      ...delta,
+      artifactTombstones: [
+        {
+          kind: "ticket",
+          id: "ticket-1",
+          title: "A ticket",
+          deletedAt: "2026-01-01T00:00:00.000Z",
+          revision: 3,
+          status: 1,
+        },
+        {
+          kind: "spec",
+          id: "spec-1",
+          title: "A spec",
+          deletedAt: "2026-01-01T00:00:00.000Z",
+          revision: 4,
+        },
+      ],
+    });
+  });
+
+  it("@1.0 still refuses a ticket tombstone without a status - the released peer would too", () => {
+    const { status: _dropped, ...ticketWithoutStatus } = richTicketTombstone;
+    const result = epicStateSubscribeServerFrameSchemaV10.safeParse({
+      ...delta,
+      artifactTombstones: [ticketWithoutStatus],
+    });
+    expect(result.success).toBe(false);
   });
 });

@@ -31,7 +31,7 @@
  * future edit cannot "simplify" one into the other.
  */
 import { describe, expect, it } from "vitest";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { EpicStatusSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
@@ -113,7 +113,7 @@ function stateSnapshot(
   basis: "cold" | "authorityEpochChanged",
   position: number,
 ): EpicStateSnapshotFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch,

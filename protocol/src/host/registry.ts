@@ -537,7 +537,10 @@ import {
   epicListTuiAgentsV11,
   epicListTuiAgentsV12,
 } from "@traycer/protocol/host/epic/tui-agent-records";
-import { epicStateSubscribeV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import {
+  epicStateSubscribeV10,
+  epicStateSubscribeV11,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
@@ -10070,10 +10073,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
+        },
+        // `@1.1`: tombstones carry the deleted artifact's metadata. `@1.0`
+        // shipped in 1.3.0 and is frozen at the slim tombstone; see
+        // `epicDeletedArtifactRecordSchemaV10`.
+        1: {
+          contract: epicStateSubscribeV11,
         },
       },
     },
