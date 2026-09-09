@@ -280,7 +280,7 @@ describe("host maintenance-lease (outside withRunner) - deliberately not relocat
     "host",
     "maintenance-lease",
     "--admission",
-    "uninstall-maintenance",
+    "host-uninstall-maintenance",
     "--host-home",
     "/home/alice/.traycer/host",
     "--service-uid",

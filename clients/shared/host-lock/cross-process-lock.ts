@@ -921,12 +921,27 @@ async function tryAcquireOnce(
       // A parent handle can publish a supervised child only for liveness;
       // it must nevertheless never unlink that child's record on an error
       // path. Normal protocol completion first atomically republishes the
-      // parent, then calls release. If the child died and its group/tree is
+      // parent WITH AN EMPTY PUBLICATION, which is what clears these flags,
+      // and only then calls release. If the child died and its group/tree is
       // not positively gone, retaining the lock is the fail-closed outcome.
+      //
+      // The condition is the outstanding publication ITSELF, deliberately not
+      // `current.pid !== meta.pid`. That comparison used to stand in for "the
+      // publication has not been handed back yet", which held only while a
+      // supervising parent never published its OWN pid mid-session. It does
+      // now - the maintenance lease publishes the executing process across an
+      // in-process action so the lock is attributed to whoever is actually
+      // doing the work - and a self-publication would otherwise FORGE the
+      // handback signal: a handback that fails before its rename (ENOSPC on
+      // the liveness temp, say) leaves the parent published with the group
+      // flags still set, and the failure paths that deliberately skip
+      // restoration (the win32 branch, and a POSIX reap error) rely on this
+      // guard to hold the lock. Keyed on the flags, retention survives that;
+      // keyed on the pid, release unlinked a lock whose actuator group was
+      // still alive and let the next contender in beside it.
       if (
-        current.pid !== meta.pid &&
-        (current.supervisedProcessGroupId !== undefined ||
-          current.retainOnPublisherDeath === true)
+        current.supervisedProcessGroupId !== undefined ||
+        current.retainOnPublisherDeath === true
       ) {
         return;
       }
