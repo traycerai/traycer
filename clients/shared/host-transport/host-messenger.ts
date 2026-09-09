@@ -46,12 +46,30 @@ export interface HostRequestAuthority {
    * unverified session would otherwise hand the host an authorized context to
    * spend on that user's account.
    *
+   * A LIVE READ, not a captured boolean, and that is the whole correctness of
+   * it. An authority outlives its construction: the request coordinator queues
+   * it, and `WsRpcClient` then awaits `session.dial()` before the open frame
+   * goes out. A snapshot taken at construction can therefore be sent long after
+   * the verdict moved - and a same-context demotion does NOT abort the context
+   * (that is the point of demoting in place), so the `abortSignal` fence never
+   * fires and nothing else catches it. The result was an `open` frame asserting
+   * `cloudAuthorized: true` for a session already demoted.
+   *
+   * So it is read as LATE as the frame allows - in `WsRpcClient` at the
+   * `session.send({kind: "open"})` that follows the dial. Note this is later
+   * than `bearer`, which `extractBearerOrThrowRpcError` pulls before
+   * `session.dial()`; the two are deliberately NOT level. The skew only runs
+   * one way and that way is closed: a demotion during the dial sends
+   * `cloudAuthorized: false` beside a pre-demotion bearer, which denies. The
+   * opposite pairing - a stale `true` beside a fresh bearer - is the one that
+   * would spend, and reading the verdict last is what makes it unreachable.
+   *
    * OPTIONAL, and the absence is meaningful rather than a default: an authority
    * that does not carry a verdict is one built before this existed, and the
    * host reads its silence as authorized - the same "presence is the
    * declaration" rule the wire field itself follows.
    */
-  readonly cloudAuthorized?: boolean;
+  readonly cloudAuthorized?: () => boolean;
 }
 
 /**
