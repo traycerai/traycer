@@ -364,14 +364,24 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // and a STREAMED tile has no main process in its input path at all - so
       // without this the same chords are simply lost while a tile is armed.
       //
-      // Reaching dispatch is guaranteed, not hoped for: the token came from
-      // the live binding table, so `findActionMatchForChord` matches it by
-      // construction, and none of the forwarded actions is externally handled
-      // or is `nav.back` / `nav.forward` (the two `resolveReservedAction` can
-      // still refuse). That is what lets the page-key release sit here
-      // instead of beside each dispatch - and it has to happen before the
-      // action runs, because an action that takes focus out of the tile's IME
-      // input is exactly the case where the matching keyup never arrives.
+      // Reaching dispatch is guaranteed for a CHORD token, not hoped for: it
+      // came from the live binding table, so `findActionMatchForChord` matches
+      // it by construction, and none of the forwarded actions is externally
+      // handled or is `nav.back` / `nav.forward` (the two
+      // `resolveReservedAction` can still refuse). That is what lets the
+      // page-key release sit here instead of beside each dispatch - and it has
+      // to happen before the action runs, because an action that takes focus
+      // out of the tile's IME input is exactly the case where the matching
+      // keyup never arrives.
+      //
+      // A LEADER's digit tokens (⌘1-⌘9, expanded in
+      // `reservedBrowserChordsFor`) reach `matchDigitAction` below instead,
+      // which needs an ACTIVE leader scope on top of the mask - so for those
+      // the guarantee is narrower: dispatch, or the digit is spent on nothing.
+      // It holds where it has to. The only leader rows here are the landing
+      // ones, gated on the Start Page surface, and their scope is active
+      // whenever the panel is open with a tab - which a focused panel browser
+      // guest, the state this exemption exists for, IS.
       const chord = resolveMatchingChord(event);
       if (chord !== null && readForwardedChords().has(chord)) {
         useScreencastArmedStore.getState().releasePageKeys?.();

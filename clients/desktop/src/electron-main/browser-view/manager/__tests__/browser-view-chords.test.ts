@@ -12,6 +12,22 @@ vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn() },
 }));
 
+/**
+ * The US-layout `code` for a key these tests name by its character.
+ *
+ * Electron always sends `code`, and the matcher derives its token from it, so
+ * a helper that omitted one would put every existing case on the `key`
+ * fallback and leave the real path covered only by the layout cases below.
+ * `undefined` for anything outside this map - punctuation and named keys then
+ * exercise the fallback deliberately.
+ */
+function usCodeFor(key: string): string | undefined {
+  const lower = key.toLowerCase();
+  if (/^[a-z]$/.test(lower)) return `Key${lower.toUpperCase()}`;
+  if (/^[0-9]$/.test(lower)) return `Digit${lower}`;
+  return undefined;
+}
+
 function keyDown(
   key: string,
   mods: {
@@ -21,7 +37,24 @@ function keyDown(
     readonly alt: boolean;
   },
 ): BrowserViewKeyInput {
-  return { key, ...mods, isAutoRepeat: false };
+  return { key, code: usCodeFor(key), ...mods, isAutoRepeat: false };
+}
+
+/**
+ * A keystroke named by its PHYSICAL key and the character that key produces
+ * under the reader's layout - the two disagreeing is the whole point.
+ */
+function layoutKeyDown(
+  code: string,
+  key: string,
+  mods: {
+    readonly meta: boolean;
+    readonly control: boolean;
+    readonly shift: boolean;
+    readonly alt: boolean;
+  },
+): BrowserViewKeyInput {
+  return { key, code, ...mods, isAutoRepeat: false };
 }
 
 function heldKeyDown(
@@ -33,7 +66,7 @@ function heldKeyDown(
     readonly alt: boolean;
   },
 ): BrowserViewKeyInput {
-  return { key, ...mods, isAutoRepeat: true };
+  return { key, code: usCodeFor(key), ...mods, isAutoRepeat: true };
 }
 
 const NO_MODS = {
@@ -118,6 +151,76 @@ describe("platform resolution", () => {
       chords.match(keyDown("m", { ...NO_MODS, control: true })),
     ).toMatchObject({ mod: false, ctrl: true });
     expect(chords.match(keyDown("m", { ...NO_MODS, meta: true }))).toBeNull();
+  });
+});
+
+/**
+ * A chord token names a PHYSICAL key, so the two halves of the guest-focused
+ * policy must both derive one from `code`.
+ *
+ * The table was already shared; the MATCHERS were not, and membership tests
+ * could not see it - the renderer reserved `mod+1` and this side, deriving
+ * from `input.key`, returned null for the very keystroke that produced it. So
+ * these drive the real matcher with real non-US events rather than asserting
+ * that a token is present.
+ *
+ * The AZERTY numbers are what Electron actually reports: physical `Digit1`
+ * carries `key: "&"` unshifted, `key: "!"` with Shift.
+ */
+describe("layout independence", () => {
+  const CTRL = {
+    meta: false,
+    control: true,
+    shift: false,
+    alt: false,
+  } as const;
+
+  it("matches a reserved digit from the physical key, whatever it prints", () => {
+    const chords = chordsFor(["mod+1"], "other");
+
+    expect(chords.match(keyDown("1", CTRL))).not.toBeNull();
+    // Redden: deriving the token from `input.key` returns null for both, and
+    // the shortcut is forwarded to the guest.
+    expect(chords.match(layoutKeyDown("Digit1", "&", CTRL))).not.toBeNull();
+    expect(
+      chords.match(layoutKeyDown("Digit1", "!", { ...CTRL, shift: true })),
+    ).toBeNull();
+    // Shift is part of the chord, so `mod+shift+1` is a DIFFERENT token and
+    // `mod+1` correctly declines it - the point is that it declines on the
+    // modifier, not on the character.
+    expect(
+      chordsFor(["mod+shift+1"], "other").match(
+        layoutKeyDown("Digit1", "!", { ...CTRL, shift: true }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it("matches a reserved letter from the physical key, on a layout that moves it", () => {
+    const chords = chordsFor(["mod+w"], "other");
+
+    expect(chords.match(keyDown("w", CTRL))).not.toBeNull();
+    // AZERTY puts `z` where US has `w`. Pre-existing: ⌘W never reached the
+    // tile's close on that layout, because only the digits were new.
+    expect(chords.match(layoutKeyDown("KeyW", "z", CTRL))).not.toBeNull();
+    // And the key that PRINTS `w` there is a different physical key, so it
+    // must NOT claim the chord.
+    expect(chords.match(layoutKeyDown("KeyZ", "w", CTRL))).toBeNull();
+  });
+
+  it("falls back to the character when there is no usable code", () => {
+    const chords = chordsFor(["mod+w"], "other");
+
+    // No `code` at all, and a code this map does not know: both keep today's
+    // behaviour rather than becoming a new refusal.
+    expect(
+      chords.match({
+        key: "w",
+        code: undefined,
+        ...CTRL,
+        isAutoRepeat: false,
+      }),
+    ).not.toBeNull();
+    expect(chords.match(layoutKeyDown("Lang1", "w", CTRL))).not.toBeNull();
   });
 });
 

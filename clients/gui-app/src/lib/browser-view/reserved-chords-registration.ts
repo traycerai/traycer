@@ -1,7 +1,11 @@
-import type { ChordString } from "@traycer-clients/shared/keybindings/chord-core";
+import {
+  formatChord,
+  type ChordString,
+} from "@traycer-clients/shared/keybindings/chord-core";
 import type { BrowserViewReservedChord } from "@traycer-clients/shared/platform/browser-view";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import type { ActionId } from "@/lib/keybindings/actions";
+import { ACTION_META, type ActionId } from "@/lib/keybindings/actions";
+import { parseModifierChord } from "@/lib/keybindings/chord";
 import { ignoreError } from "./ignore-error";
 
 /**
@@ -95,12 +99,24 @@ const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
 ];
 
 /**
- * The Start Page panel's own three, forwarded for the surface that created the
+ * The Start Page panel's own, forwarded for the surface that created the
  * problem: a panel browser tab is a native guest, so `terminalPolicy: "app"` -
  * which is about an xterm swallowing a chord - does nothing here and the app
  * renderer never sees the key. Without these, a reader inside a focused panel
- * browser cannot open a tab of either kind or collapse the panel, while the
- * browser-scoped rows all still work.
+ * browser cannot open a tab of either kind, collapse or maximize the panel,
+ * close its tabs or reach one by number, while the browser-scoped rows all
+ * still work.
+ *
+ * COMPLETENESS is the property, not the list. This must name every action the
+ * panel registers a handler for under the same surface gate
+ * (`landing-terminal-panel.tsx`), minus the ones a browser-scoped row already
+ * claims - `tab.new` (⌘T) and `tab.close` (⌘W), which belong to the tile - and
+ * minus the ones {@link APP_FORWARDED_ACTIONS} already covers surface-
+ * independently (`tab.next` / `tab.prev`). Round 13 added three of them and
+ * the omission of the other three was invisible for exactly the reason a
+ * mechanism-shaped rule always is: nothing compares this list against the
+ * panel's registrations. `forwards every chord the panel registers under the
+ * same surface gate` in this module's suite is that comparison.
  *
  * Forwarded only WHILE the Start Page surface is active, which is the same gate
  * the panel registers their handlers under (`useLandingTerminalSurfaceActive`).
@@ -112,7 +128,51 @@ const LANDING_FORWARDED_ACTIONS: readonly ActionId[] = [
   "app.browser.new",
   "app.terminal.new",
   "app.terminal.toggle",
+  "app.terminal.maximize",
+  "tab.close-all",
+  "tab.switch.byDigit",
 ];
+
+/**
+ * The digits a leader action reserves: `1`-`9`, the range every leader scope
+ * dispatches (`0` maps to index -1 and falls through).
+ */
+const LEADER_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+
+/**
+ * The tokens ONE forwarded action reserves, given the reader's live binding.
+ *
+ * A leader action's binding is not a chord - it is a modifier MASK (`"mod"`),
+ * matched against the digit the reader actually pressed
+ * (`matchDigitAction`). Reserving it verbatim would put a modifier-only token
+ * in main's table, which matches no keystroke, and in the streamed half's
+ * token set, which is compared against `resolveMatchingChord(event)` - a full
+ * chord like `mod+1`. Either way ⌘1-⌘9 stay the page's.
+ *
+ * So a leader expands to its nine real chords, and it expands HERE rather than
+ * at either call site. That is what keeps the table single: both halves read
+ * the rows this function returns, so a row added above is honoured natively
+ * AND streamed with no second edit, whatever its kind. The kind is read from
+ * the action's own declaration (`ACTION_META`), so nothing about this has to
+ * be restated per action either.
+ */
+function forwardedTokensFor(
+  action: ActionId,
+  chord: ChordString,
+): readonly ChordString[] {
+  if (ACTION_META[action].kind !== "digit") return [chord];
+  const mask = parseModifierChord(chord);
+  if (mask === null) return [];
+  return LEADER_DIGITS.map((digit) =>
+    formatChord({
+      mod: mask.mod,
+      ctrl: false,
+      shift: mask.shift,
+      alt: mask.alt,
+      key: String(digit),
+    }),
+  );
+}
 
 /** Which surfaces are on screen, as far as the reserved set depends on them. */
 export interface ReservedChordSurfaces {
@@ -142,11 +202,15 @@ export function reservedBrowserChordsFor(
     : APP_FORWARDED_ACTIONS;
   const forwarded = actions.flatMap((action): BrowserViewReservedChord[] => {
     const chord = bindings[action];
-    if (chord === null || browserScoped.has(chord) || seen.has(chord)) {
-      return [];
-    }
-    seen.add(chord);
-    return [{ token: chord, command: null }];
+    if (chord === null) return [];
+    // Filtered per TOKEN rather than per action, which only matters once an
+    // action reserves more than one: a leader whose ⌘3 collides with a
+    // browser-scoped row loses ⌘3, not ⌘1-⌘9.
+    return forwardedTokensFor(action, chord).flatMap((token) => {
+      if (browserScoped.has(token) || seen.has(token)) return [];
+      seen.add(token);
+      return [{ token, command: null }];
+    });
   });
   return [...BROWSER_SCOPED_CHORDS, ...forwarded];
 }

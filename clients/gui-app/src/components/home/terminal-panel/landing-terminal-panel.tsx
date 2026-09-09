@@ -669,6 +669,18 @@ export function LandingTerminalPanel(): ReactNode {
     },
     [],
   );
+  // A link the page asked to open in a new tab, on the raising tab's device
+  // and through the same serializing scope the chooser's opener uses. The
+  // openers are what dispatch the queue, so they have to be rendered.
+  //
+  // Called up here, ahead of the watched-set memo below, because that memo now
+  // reads `pendingHostIds`: a device with an unanswered ask must not have its
+  // stream released while the ask is still in flight.
+  const {
+    open: openBrowserLink,
+    openers: browserLinkOpeners,
+    pendingHostIds: pendingOpenHostIds,
+  } = useLandingBrowserOpenLink({ browserSessions });
   const activeInstanceId = useLandingPanelStore(
     (state) => state.activeInstanceId,
   );
@@ -688,10 +700,16 @@ export function LandingTerminalPanel(): ReactNode {
   // for LAST. So a panel holding streams for hosts it is showing nothing of
   // can cost the reader the tab they are actually looking at.
   //
-  // The target host is unconditional: creating a browser tab goes through that
-  // device's coordinator, so `app.browser.new` and the chooser's tab-cap count
-  // both need one mounted before the first tab exists - and both work while
-  // the panel is collapsed.
+  // The target host follows the PANE rather than the panel: creating a browser
+  // tab goes through that device's coordinator, so `app.browser.new` and the
+  // chooser's tab-cap count both need one mounted before the first tab exists,
+  // and both work while the panel is collapsed. Neither is reachable on a
+  // BACKGROUNDED page - the chords register under the same surface gate - so a
+  // retained Start Page held that stream for as long as it stayed mounted,
+  // which is indefinitely, and paid for it out of the window's allowance.
+  //
+  // Devices with an unanswered open are held regardless, which is the one
+  // thing this release must not get wrong. See `landingBrowserWatchedHostIds`.
   //
   // The tab hosts follow the PANEL, not the individual tab. A collapsed panel
   // and a backgrounded Start Page render nothing, so nothing needs a tab
@@ -735,13 +753,16 @@ export function LandingTerminalPanel(): ReactNode {
         activeBrowserHostId,
         recentlyActivatedHostIds,
         tabHostIds: browserTabs.map((tab) => tab.hostId),
+        paneVisible,
         panelWatching: panelOpen && paneVisible,
+        pendingOpenHostIds,
       }),
     [
       activeBrowserHostId,
       browserTabs,
       panelOpen,
       paneVisible,
+      pendingOpenHostIds,
       recentlyActivatedHostIds,
       target.hostId,
     ],
@@ -1531,12 +1552,6 @@ export function LandingTerminalPanel(): ReactNode {
     // alone.
     openBrowserTab({ placeholderInstanceId: claimAskedRow() });
   }, [claimAskedRow, openBrowserTab, panelOpen, setPanelOpen]);
-
-  // A link the page asked to open in a new tab, on the raising tab's device
-  // and through the same serializing scope the chooser's opener uses. The
-  // openers are what dispatch the queue, so they have to be rendered.
-  const { open: openBrowserLink, openers: browserLinkOpeners } =
-    useLandingBrowserOpenLink({ browserSessions });
 
   // The TERMINAL card's gate, reading the effective target only: capability
   // from the captured host, fail-closed on an unpinned client, and the

@@ -1,5 +1,6 @@
 import {
   isValidChordString,
+  normalizeCode,
   parseChordString,
   type ChordParts,
 } from "@traycer-clients/shared/keybindings/chord-core";
@@ -45,6 +46,17 @@ export type HostPlatform = "darwin" | "other";
  */
 export interface BrowserViewKeyInput {
   readonly key: string;
+  /**
+   * The PHYSICAL key, and the field a chord token is derived from.
+   *
+   * REQUIRED, and `undefined` is a value rather than an omission: every caller
+   * must say what the physical key was, and `undefined` is how one says there
+   * was none. Electron's `Input` always carries a real one, which is why the
+   * sole non-test caller can pass it straight through; a synthetic input with
+   * no physical key states that explicitly and takes the `key` fallback in
+   * `chordKeyFromInput`.
+   */
+  readonly code: string | undefined;
   readonly control: boolean;
   readonly meta: boolean;
   readonly shift: boolean;
@@ -110,12 +122,39 @@ export function hostSendKeyCodeForToken(key: string): string | null {
   return KEY_TO_SEND_CODE[key] ?? null;
 }
 
+/**
+ * The canonical key token for one guest keystroke.
+ *
+ * From `code` FIRST, through the same `normalizeCode` the renderer uses. A
+ * chord token names a PHYSICAL key, and `input.key` is the character that key
+ * produces under the reader's layout - so deriving from it made the two halves
+ * of this policy disagree about the very thing the shared table is supposed to
+ * make single. On AZERTY the physical `1` arrives as `key: "&"` and the
+ * physical `W` as `key: "z"`, so `mod+1` and `mod+w` both failed here while
+ * the renderer had reserved them - the app-forwarded rows were lost and the
+ * browser-scoped rows went to the guest instead of closing its tab.
+ *
+ * `key` remains the fallback for anything `normalizeCode` does not recognise,
+ * and for a caller with no `code` at all, which is exactly today's behaviour
+ * for those inputs rather than a new refusal.
+ */
+function chordKeyFromInput(input: BrowserViewKeyInput): string | null {
+  const code = input.code;
+  if (code !== undefined && code.length > 0) {
+    const normalized = normalizeCode(code);
+    if (normalized !== null) return normalized;
+  }
+  const key = input.key.trim().toLowerCase();
+  if (key.length === 0 || BARE_MODIFIER_KEYS.has(key)) return null;
+  return key;
+}
+
 function chordFromKeyEvent(
   input: BrowserViewKeyInput,
   platform: HostPlatform,
 ): ChordParts | null {
-  const key = input.key.trim().toLowerCase();
-  if (key.length === 0 || BARE_MODIFIER_KEYS.has(key)) return null;
+  const key = chordKeyFromInput(input);
+  if (key === null) return null;
   return {
     key,
     mod: platform === "darwin" ? input.meta : input.control,

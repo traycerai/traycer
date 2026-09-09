@@ -6,6 +6,7 @@ import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { isMac } from "@/lib/keybindings/platform";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { registerLeaderScope } from "@/lib/keybindings/leader-scope";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
@@ -245,6 +246,67 @@ describe("KeybindingProvider screencast armed flag", () => {
 
     expect(toggleTerminal).toHaveBeenCalledTimes(1);
     expect(consumed).toBe(false);
+    unregister();
+  });
+
+  /**
+   * The DIGIT half of the same exemption, which the chord case above cannot
+   * stand in for.
+   *
+   * A leader binds a modifier MASK (`"mod"`), and the set this exemption is
+   * compared against holds full chords resolved from the event - so a leader
+   * reserved verbatim would put `"mod"` in that set, `resolveMatchingChord`
+   * would answer `mod+1`, and ⌘1 would stay the page's while the panel held a
+   * scope for it. `reservedBrowserChordsFor` expanding the leader to its nine
+   * digits is what makes this pass, and it is the SAME expansion main replays
+   * from on the native side.
+   */
+  it("fires the panel's tab-number leader while armed, on a digit", () => {
+    const router = buildProviderRouterSource("/");
+    const switchByDigit = vi.fn();
+    const unregister = registerLeaderScope({
+      id: "test-landing-digits",
+      actions: [
+        {
+          actionId: "tab.switch.byDigit",
+          isActive: () => true,
+          dispatch: (digit) => {
+            switchByDigit(digit);
+            return true;
+          },
+          dispatchSequence: null,
+          sequenceState: null,
+        },
+      ],
+    });
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    expect(getDefaultBindings()["tab.switch.byDigit"]).toBe("mod");
+    const { releasePageKeys } = armWithReleaseSpy();
+    act(() => {
+      dispatchWindowKey("keydown", {
+        code: "Digit2",
+        key: "2",
+        ...platformModKeys(),
+      });
+    });
+
+    expect(switchByDigit).toHaveBeenCalledWith(2);
+    expect(releasePageKeys).toHaveBeenCalledTimes(1);
+
+    // And it keeps the surface gate the chord rows have: on an epic canvas the
+    // digit is the page's again.
+    act(() => {
+      useTabsStore.setState({ items: [EPIC_TAB], activeItemId: EPIC_TAB.id });
+    });
+    act(() => {
+      dispatchWindowKey("keydown", {
+        code: "Digit2",
+        key: "2",
+        ...platformModKeys(),
+      });
+    });
+    expect(switchByDigit).toHaveBeenCalledTimes(1);
     unregister();
   });
 

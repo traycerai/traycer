@@ -1,25 +1,18 @@
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
+import { LANDING_BROWSER_WATCHED_HOST_CAP } from "./landing-browser-open-reservations";
 import { defaultLandingBrowserTitle } from "./use-landing-browser-reconciliation";
 
 /**
- * How many DEVICES one open panel keeps on a browser stream at a time.
+ * Re-exported, not defined here.
  *
- * Counts hosts, not tabs - the panel puts every one of a device's browser tabs
- * in a SINGLE independent session, so a device costs one stream however many
- * rows it holds. That is the other cap's twin, and the two are about different
- * ceilings: `LANDING_BROWSER_TAB_CAP` (8, in `use-landing-browser-open-tab.tsx`)
- * restates the HOST's per-session tab limit, while this one is a budget against
- * the DESKTOP's `MAX_STREAMS_PER_WINDOW` (12, in
- * `clients/desktop/src/electron-main/browser-sessions/browser-sessions-owner.ts`).
- * A stream is a socket, a relay attach, an identity attestation and a whole
- * contributed-set replay, and the desktop refuses whichever was asked for LAST -
- * so an unbounded strip can cost the reader the tab on screen, or a task
- * canvas tile, for rows nobody is looking at.
- *
- * Four leaves the window room for the canvas tiles it also has to serve.
+ * The cap is an invariant of the reservation SET - `reserve` decides and
+ * inserts against it in one synchronous step - so it lives with the set, which
+ * every jsdom suite's setup imports and which must therefore stay a leaf. It
+ * is re-exported because this module is where the bound is read from: the
+ * selector below spends it, and its callers have always taken it from here.
  */
-export const LANDING_BROWSER_WATCHED_HOST_CAP = 4;
+export { LANDING_BROWSER_WATCHED_HOST_CAP };
 
 /**
  * How many devices the always-mounted tombstone recovery bridge puts on a
@@ -66,12 +59,20 @@ export const LANDING_BROWSER_UNWATCHED_TOOLTIP =
  * builds every row's view model against it, so the strip cannot claim a
  * dormancy or an outage for a device the panel is not actually watching.
  *
- * Two devices are pinned and always mounted:
+ * Two devices are pinned, and the first of them only while the page is ON
+ * SCREEN:
  *
  * - the routing TARGET, whether or not it has a tab: creating a browser tab
  *   goes through that device's coordinator, so `app.browser.new` and the
  *   chooser's tab-cap count both need it mounted before the first tab exists,
- *   and both work while the panel is collapsed;
+ *   and both work while the panel is COLLAPSED - which is why collapsing does
+ *   not release it. A BACKGROUNDED Start Page reaches neither: the panel
+ *   registers those handlers under `useLandingTerminalSurfaceActive`, so
+ *   nothing can ask that device for anything. The panel outlives its page's
+ *   activation, so without this the retained page holds a stream for as long
+ *   as it stays mounted - a slot against the desktop's
+ *   `MAX_STREAMS_PER_WINDOW`, which refuses whichever request came LAST, so a
+ *   canvas tile or panel opened later pays for a device nobody is watching;
  * - the ACTIVE tab's device, whose tile is the pixels on screen.
  *
  * The rest of the budget goes to the most recently ACTIVATED tab hosts, and
@@ -86,26 +87,81 @@ export function landingBrowserWatchedHostIds(args: {
   readonly recentlyActivatedHostIds: ReadonlyArray<string>;
   /** Every browser tab's device, in strip order. */
   readonly tabHostIds: ReadonlyArray<string>;
+  /** The Start Page's pane is on screen, panel open or collapsed. */
+  readonly paneVisible: boolean;
   /** The panel is open on a Start Page that is on screen. */
   readonly panelWatching: boolean;
+  /**
+   * Devices with an open this panel has not seen answered yet - both openers,
+   * queued asks included.
+   */
+  readonly pendingOpenHostIds: ReadonlyArray<string>;
 }): ReadonlyArray<string> {
   const watched: Array<string> = [];
   const add = (hostId: string | null): void => {
     if (hostId === null || watched.includes(hostId)) return;
     watched.push(hostId);
   };
-  add(args.targetHostId);
+  // Devices with an accepted, unanswered open come FIRST, ahead of even the
+  // routing target, and the order is the whole of it. Neither opener acquires
+  // its device: both read the stream from the panel's entries at the moment
+  // the mutation RUNS (`sessionsRef` / `browserSessions`). So a device dropped
+  // here mid-open loses the coordinator its own `openTab` came from - a
+  // refusal for an ask the reader made, or a tab the device really did create
+  // that this window never rowed and the tombstone drain has to clean up. That
+  // is worse than the leak, so nothing already accepted may be evicted by
+  // anything below.
+  //
+  // Ordering it after the target was a real defect and not a hypothetical: at
+  // the cap's worth of pending devices with the target elsewhere, the target
+  // took a slot and the last accepted open was dropped.
+  //
+  // NOT capped here, and that is deliberate. The cap belongs where the set is
+  // MUTATED - `reserveLandingBrowserOpen` decides and inserts in one
+  // synchronous step, so `size <= cap` is an invariant of the set rather than a
+  // claim about its callers, and truncating here could only ever undo an
+  // admission that had already been granted.
+  //
+  // A backstop whose failure mode IS the catastrophe it guards against is
+  // worse than none: the previous shape broke the loop at the cap, so a
+  // pending set that ever exceeded it lost an accepted hold - silently, and
+  // chosen by sort order rather than by age. If this list is somehow over the
+  // budget, this window now holds one stream too many, which is bounded and
+  // recoverable; it never drops a device that is still answering.
+  //
+  // What the bound is worth stating plainly, because the version this replaces
+  // was argued rather than counted: "an open is only dispatched against a
+  // device the panel had mounted, so this is a subset of what the cap already
+  // allowed" was FALSE. Being mounted at DISPATCH says nothing about the union
+  // of devices mounted at DIFFERENT times - opens on different devices run
+  // concurrently by design and nothing times them out, so twelve successive
+  // targets held twelve streams and kept all twelve after a background. That
+  // is the entire per-window allowance, spent on exactly the later canvas tile
+  // or panel this release exists to protect.
+  for (const hostId of args.pendingOpenHostIds) add(hostId);
+  if (args.paneVisible && watched.length < LANDING_BROWSER_WATCHED_HOST_CAP) {
+    add(args.targetHostId);
+  }
   // Collapsed, or a backgrounded Start Page: nothing of those devices is
-  // rendered, so nothing needs their inventory. Today's rule, unchanged.
+  // rendered, so nothing needs their inventory.
   if (!args.panelWatching) return watched;
-  add(args.activeBrowserHostId);
-  // The pinned two count against the cap - the bound is on what this window
-  // holds, not on what it holds beyond the ones it must.
+  // Cap-guarded like everything else, so the total is the cap and not the cap
+  // plus the pins. With the budget spent on unanswered opens the active row
+  // reads `not watched` rather than claiming a dormancy this window cannot
+  // see - a degraded status line, against a stream this window cannot afford.
+  if (watched.length < LANDING_BROWSER_WATCHED_HOST_CAP) {
+    add(args.activeBrowserHostId);
+  }
   for (const hostId of [...args.recentlyActivatedHostIds, ...args.tabHostIds]) {
     if (watched.length >= LANDING_BROWSER_WATCHED_HOST_CAP) break;
     add(hostId);
   }
   return watched;
+}
+
+/** The refusal a reader sees when the open budget is already spent. */
+export function landingBrowserOpenBudgetMessage(): string {
+  return `Too many devices are still opening browser tabs (${LANDING_BROWSER_WATCHED_HOST_CAP})`;
 }
 
 /**

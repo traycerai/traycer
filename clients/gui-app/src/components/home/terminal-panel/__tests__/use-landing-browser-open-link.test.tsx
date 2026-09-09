@@ -94,7 +94,7 @@ function renderOpeners(browserSessions: LandingBrowserSessionEntries): {
   // Named `…Ref` because it is written during render: the react-hooks
   // immutability rule allows that only for a ref-shaped holder.
   const resultRef: { current: LandingBrowserOpenLink } = {
-    current: { open: () => undefined, openers: null },
+    current: { open: () => undefined, openers: null, pendingHostIds: [] },
   };
   function Harness(): ReactNode {
     const link = useLandingBrowserOpenLink({ browserSessions });
@@ -968,7 +968,7 @@ describe("useLandingBrowserOpenLink", () => {
     const chooserSessions = sessionsState({ openTab: chooser.openTab });
     const popupSessions = sessionsState({ openTab: popup.openTab });
     const resultRef: { current: LandingBrowserOpenLink } = {
-      current: { open: () => undefined, openers: null },
+      current: { open: () => undefined, openers: null, pendingHostIds: [] },
     };
     const chooserOpenRef: {
       current: (request: LandingBrowserOpenRequest) => void;

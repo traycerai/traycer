@@ -16,6 +16,13 @@ import {
   useLandingPanelStore,
   type LandingBrowserTabRef,
 } from "@/stores/home/landing-panel-store";
+import { landingBrowserOpenBudgetMessage } from "./landing-browser-presentation";
+import {
+  releaseLandingBrowserOpen,
+  reserveLandingBrowserOpen,
+  useLandingBrowserOpenReservations,
+  type LandingBrowserOpenHold,
+} from "./landing-browser-open-reservations";
 import type { LandingBrowserSessionEntries } from "./landing-terminal-authority-fleet";
 import { LandingBrowserLinkOpener } from "./landing-browser-link-opener";
 import { defaultLandingBrowserTitle } from "./use-landing-browser-reconciliation";
@@ -87,6 +94,8 @@ export interface LandingBrowserOpenRequest {
 interface LandingBrowserDispatch {
   readonly request: LandingBrowserOpenRequest;
   readonly hostId: string | null;
+  /** This ask's own claim, released by whichever settle answers THIS ask. */
+  readonly hold: LandingBrowserOpenHold | null;
 }
 
 export interface LandingBrowserOpenTab {
@@ -234,9 +243,12 @@ export function useLandingBrowserOpenTab(args: {
     // a host-swap race, and here it is what lets the settle clear the right
     // latch. Reading `hostId` in `onSettled` instead would read the host of
     // whatever render the answer happened to arrive in.
-    onMutate: (dispatched): { readonly hostId: string | null } => ({
-      hostId: dispatched.hostId,
-    }),
+    onMutate: (
+      dispatched,
+    ): {
+      readonly hostId: string | null;
+      readonly hold: LandingBrowserOpenHold | null;
+    } => ({ hostId: dispatched.hostId, hold: dispatched.hold }),
     onSuccess: (tab, dispatched) => {
       onOpened(tab, dispatched.request);
     },
@@ -246,6 +258,13 @@ export function useLandingBrowserOpenTab(args: {
     onSettled: (_tab, _cause, _request, context) => {
       if (context === undefined) return;
       pendingHostsRef.current.delete(context.hostId);
+      // THIS ask's hold, from the context it was dispatched with - never "one
+      // hold for this host". Every outcome, not only success: a refusal or a
+      // rejection ends the claim exactly as an answer does. Options-level, so
+      // it still runs when the panel unmounted mid-flight, which is precisely
+      // the case where releasing by host would take a remounted panel's live
+      // hold instead.
+      releaseLandingBrowserOpen(context.hold);
     },
   });
   const isOpening = useIsMutating({ mutationKey: openTabKey }) > 0;
@@ -262,8 +281,19 @@ export function useLandingBrowserOpenTab(args: {
       // two guards disagree about which device they are talking about.
       if (isOpening) return;
       if (pendingHostsRef.current.has(hostId)) return;
+      // Budget before dispatch: once accepted, this device's stream is held
+      // until it settles, so the only place the bound can be enforced without
+      // losing a tab is here.
+      // Reserve-or-refuse, and the reservation is what the panel mounts from.
+      // A host-less ask takes none: it has no device to hold and is refused by
+      // the mutation below.
+      const hold = hostId === null ? null : reserveLandingBrowserOpen(hostId);
+      if (hostId !== null && hold === null) {
+        toast.error(landingBrowserOpenBudgetMessage());
+        return;
+      }
       pendingHostsRef.current.add(hostId);
-      mutate({ request, hostId });
+      mutate({ request, hostId, hold });
     },
     [hostId, isOpening, mutate],
   );
@@ -324,6 +354,11 @@ export interface LandingBrowserLinkRequest {
   readonly selectionRevision: number;
   /** Distinguishes a second identical ask from the first one. */
   readonly requestId: string;
+  /**
+   * This ask's own claim on its device, released by whoever removes THIS ask -
+   * its settle, or the unmount cleanup - and by nobody else.
+   */
+  readonly hold: LandingBrowserOpenHold | null;
 }
 
 /** Unanswered asks per device, in the order the page raised them. */
@@ -348,6 +383,23 @@ export interface LandingBrowserOpenLink {
    * queues exist to remove.
    */
   readonly openers: ReactNode;
+  /**
+   * Devices with an accepted, unanswered open - BOTH openers, queued asks
+   * included.
+   *
+   * Read straight off `landing-browser-open-reservations`, and deliberately not
+   * derived from this hook's queue or from the mutation cache. Those two were
+   * consulted side by side once, and the gap between them was the defect: the
+   * cache sees an ask only when its mutation is RUNNING, and a popup reaches it
+   * one commit after `open()` queues it, so a pane hidden inside that commit
+   * released a device whose popup was still coming. A hold is taken in the same
+   * synchronous step that admits the ask, so there is no such commit - and the
+   * set that bounds admission is then the same one the panel mounts from,
+   * rather than a second list that has to be argued equal to it.
+   *
+   * Surfaced here because the panel mounts from it; the openers do not read it.
+   */
+  readonly pendingHostIds: ReadonlyArray<string>;
 }
 
 /**
@@ -379,43 +431,78 @@ export function useLandingBrowserOpenLink(args: {
   // before either was dispatched - losing a popup silently, which is worse than
   // opening it late.
   const [queues, setQueues] = useState<LandingBrowserLinkQueues>({});
+  // Mirrored SYNCHRONOUSLY, unlike `queues` itself. The per-device cap below
+  // used to be enforced inside the state updater, which is the same
+  // read-a-snapshot shape as the budget check was: two asks in one batch both
+  // saw the pre-batch queue. This ref is written in `open()` itself, so the
+  // second ask of a batch sees the first.
+  const queuesRef = useRef<LandingBrowserLinkQueues>({});
+  const pendingHostIds = useLandingBrowserOpenReservations();
   const settle = useCallback((hostId: string): void => {
-    setQueues((current) => {
-      // Only a device's head is ever in flight, so the settled ask is the one
-      // that leaves - and the render that follows dispatches the next.
-      const rest = (current[hostId] ?? []).slice(1);
-      const next = { ...current };
-      if (rest.length === 0) delete next[hostId];
-      else next[hostId] = rest;
-      return next;
-    });
+    // Only a device's head is ever in flight, so the settled ask is the one
+    // that leaves - and the render that follows dispatches the next.
+    const queued = queuesRef.current[hostId] ?? [];
+    const head = queued.at(0);
+    // Releases the hold of the ask it actually REMOVES. A settle whose queue
+    // was already cleared - an unmounted panel's popup answering after a
+    // remount took a fresh hold on the same device - removes nothing and so
+    // releases nothing, instead of decrementing the live ask's claim.
+    if (head === undefined) return;
+    const rest = queued.slice(1);
+    const next = { ...queuesRef.current };
+    if (rest.length === 0) delete next[hostId];
+    else next[hostId] = rest;
+    queuesRef.current = next;
+    setQueues(next);
+    releaseLandingBrowserOpen(head.hold);
   }, []);
+  // A hook unmounted with asks still queued would otherwise hold their devices
+  // for the life of the process: those asks never settle, so nothing else ever
+  // releases them.
+  useEffect(
+    () => () => {
+      for (const pending of Object.values(queuesRef.current)) {
+        for (const ask of pending) releaseLandingBrowserOpen(ask.hold);
+      }
+      queuesRef.current = {};
+    },
+    [],
+  );
   const open = useCallback(
     (
       tab: LandingBrowserTabRef,
       url: string,
       disposition: LandingBrowserLinkDisposition,
     ): void => {
+      // Both bounds decided against the SYNCHRONOUS view, and the reservation
+      // taken in the same step as the decision - so a sibling `open()` in this
+      // same batch cannot also be told it fits.
+      const pending = queuesRef.current[tab.hostId] ?? [];
+      if (pending.length >= MAX_PENDING_LINK_OPENS_PER_HOST) return;
+      const hold = reserveLandingBrowserOpen(tab.hostId);
+      if (hold === null) {
+        toast.error(landingBrowserOpenBudgetMessage());
+        return;
+      }
       const selectionRevision =
         useLandingPanelStore.getState().selectionRevision;
-      setQueues((current) => {
-        const pending = current[tab.hostId] ?? [];
-        if (pending.length >= MAX_PENDING_LINK_OPENS_PER_HOST) return current;
-        return {
-          ...current,
-          [tab.hostId]: [
-            ...pending,
-            {
-              hostId: tab.hostId,
-              sessionId: tab.sessionId,
-              url,
-              disposition,
-              selectionRevision,
-              requestId: uuidv4(),
-            },
-          ],
-        };
-      });
+      const next: LandingBrowserLinkQueues = {
+        ...queuesRef.current,
+        [tab.hostId]: [
+          ...pending,
+          {
+            hostId: tab.hostId,
+            sessionId: tab.sessionId,
+            url,
+            disposition,
+            selectionRevision,
+            requestId: uuidv4(),
+            hold,
+          },
+        ],
+      };
+      queuesRef.current = next;
+      setQueues(next);
     },
     [],
   );
@@ -436,5 +523,5 @@ export function useLandingBrowserOpenLink(args: {
       })}
     </>
   );
-  return { open, openers };
+  return { open, openers, pendingHostIds };
 }

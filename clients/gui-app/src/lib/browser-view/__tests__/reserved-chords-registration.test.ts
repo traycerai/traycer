@@ -1,13 +1,27 @@
+/// <reference types="node" />
+
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   browserScopedChordLabel,
   reservedBrowserChordsFor,
 } from "@/lib/browser-view/reserved-chords-registration";
-import { getDefaultBindings, type ActionId } from "@/lib/keybindings/actions";
+import {
+  ACTION_IDS,
+  ACTION_META,
+  getDefaultBindings,
+  type ActionId,
+} from "@/lib/keybindings/actions";
 import type { ChordString } from "@/lib/keybindings/chord";
 import { findConflict } from "@/lib/keybindings/conflicts";
 
 type Bindings = Readonly<Record<ActionId, ChordString | null>>;
+
+function isActionId(value: string): value is ActionId {
+  return (ACTION_IDS as ReadonlyArray<string>).includes(value);
+}
 
 function bindingsWith(
   overrides: Partial<Record<ActionId, ChordString | null>>,
@@ -153,6 +167,154 @@ describe("reserved browser chords", () => {
       (row) => row.token === "mod+k",
     );
     expect(rows).toHaveLength(1);
+  });
+
+  /**
+   * The COMPLETENESS check, and the one that would have caught round 13's
+   * omission: read against the panel's ACTUAL registrations rather than
+   * against a remembered list.
+   *
+   * The panel's action ids are scanned out of its source because a list
+   * restated here is the same defect one level up - it would have been written
+   * with the same three names and agreed with the table forever. Every action
+   * it registers under `useLandingTerminalSurfaceActive` must be forwarded, or
+   * be claimed by a browser-scoped row (⌘T / ⌘W, which belong to the tile).
+   *
+   * What the scan can decide: which action ids that file names. It cannot
+   * decide that they are all under the surface gate - today every
+   * `registerDynamicActionHandler` in it sits inside an
+   * `if (!surfaceActive) return;` effect, and a future one that does not would
+   * be over-reserved here rather than under-reserved, which is the safe
+   * direction.
+   */
+  it("forwards every chord the panel registers under the same surface gate", () => {
+    // `fileURLToPath(import.meta.url)` and then `path`, not `new URL(rel,
+    // base)`: jsdom installs its own `URL`, and Node rejects one of those with
+    // "The URL must be of scheme file" whatever its href says.
+    const panelSource = readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../../components/home/terminal-panel/landing-terminal-panel.tsx",
+      ),
+      "utf8",
+    );
+    const registered = new Set<ActionId>();
+    for (const match of panelSource.matchAll(
+      /(?:registerDynamicActionHandler\(\s*|actionId:\s*)"([A-Za-z0-9.-]+)"/g,
+    )) {
+      const id = match[1];
+      if (isActionId(id)) registered.add(id);
+    }
+    // A scan that matched nothing - or that quietly matched FEWER than the
+    // panel registers - would pass every assertion below, so the count is
+    // asserted before they run. It caught its own first draft: a `[a-z0-9.-]`
+    // id class skipped `tab.switch.byDigit` for its capital D, and without
+    // this line the loop would have "verified" nine of ten registrations. A
+    // tripwire, not a spec: raise it when the panel gains a registration.
+    expect(registered.size).toBeGreaterThanOrEqual(10);
+
+    const bindings = getDefaultBindings();
+    const rows = reservedBrowserChordsFor(bindings, ON_LANDING);
+    const reserved = new Set(rows.map((row) => row.token));
+
+    for (const action of registered) {
+      const chord = bindings[action];
+      expect(chord, `${action} is unbound by default`).not.toBeNull();
+      if (chord === null) continue;
+      // A leader binds a MASK; the tokens it reserves are that mask over the
+      // nine digits it dispatches.
+      const tokens =
+        ACTION_META[action].kind === "digit"
+          ? [1, 2, 3, 4, 5, 6, 7, 8, 9].map((digit) => `${chord}+${digit}`)
+          : [chord];
+      for (const token of tokens) {
+        expect(
+          reserved.has(token),
+          `${action} (${token}) reaches the page from a focused panel browser`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // The three round 13 left out, named so a deletion from the list above reads
+  // as a deliberate change rather than as a silently shorter loop.
+  it("forwards maximize, close-all and the tab-number leader", () => {
+    const bindings = getDefaultBindings();
+    expect(bindings["app.terminal.maximize"]).toBe("mod+alt+j");
+    expect(bindings["tab.close-all"]).toBe("mod+shift+alt+w");
+    expect(bindings["tab.switch.byDigit"]).toBe("mod");
+    for (const token of ["mod+alt+j", "mod+shift+alt+w", "mod+1", "mod+9"]) {
+      expect(defaultCommandFor(token)).toBeNull();
+    }
+  });
+
+  /**
+   * A leader reserves NINE tokens, and `0` is not one of them.
+   *
+   * `tab.switch.byDigit` maps `0` to index -1 and falls through, so reserving
+   * ⌘0 would take the page's zoom-reset for an action that does nothing - and
+   * the zoom chords are the one family this table deliberately leaves to the
+   * guest handler.
+   */
+  it("expands the tab-number leader to 1-9 and stops there", () => {
+    const tokens = reservedBrowserChordsFor(
+      getDefaultBindings(),
+      ON_LANDING,
+    ).map((row) => row.token);
+    for (const digit of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+      expect(tokens).toContain(`mod+${digit}`);
+    }
+    expect(tokens).not.toContain("mod+0");
+  });
+
+  it("follows the leader to a rebound modifier, releasing the old digits", () => {
+    const rebound = bindingsWith({ "tab.switch.byDigit": "mod+shift" });
+    const tokens = reservedBrowserChordsFor(rebound, ON_LANDING).map(
+      (row) => row.token,
+    );
+    expect(tokens).toContain("mod+shift+1");
+    expect(tokens).not.toContain("mod+1");
+  });
+
+  it("leaves the leader's digits to the page while the Start Page is not on screen", () => {
+    const tokens = reservedBrowserChordsFor(getDefaultBindings(), ON_EPIC).map(
+      (row) => row.token,
+    );
+    expect(tokens).not.toContain("mod+1");
+  });
+
+  it("reserves no digits for an unbound leader", () => {
+    const unbound = bindingsWith({ "tab.switch.byDigit": null });
+    const tokens = reservedBrowserChordsFor(unbound, ON_LANDING).map(
+      (row) => row.token,
+    );
+    expect(tokens).not.toContain("mod+1");
+  });
+
+  /**
+   * One colliding digit costs that digit, not the leader.
+   *
+   * Per-action filtering would drop all nine because one of them met a
+   * browser-scoped row, which is a much bigger loss than the collision.
+   */
+  it("drops only the colliding digit when one meets a browser-scoped row", () => {
+    // `mod+l` is the address bar; a leader on plain `mod` cannot reach it, so
+    // the collision is staged from the other side - a browser row's token
+    // spelled as a digit is not possible, so rebind the leader to `alt` and
+    // collide `alt+3` through a forwarded action instead.
+    const collided = bindingsWith({
+      "tab.switch.byDigit": "alt",
+      "epic.close": "alt+3",
+    });
+    const tokens = reservedBrowserChordsFor(collided, ON_LANDING).map(
+      (row) => row.token,
+    );
+    // `epic.close` is listed first, so it takes `alt+3`; the leader keeps the
+    // other eight rather than losing the whole expansion to one `seen` hit.
+    expect(tokens.filter((token) => token === "alt+3")).toHaveLength(1);
+    for (const digit of [1, 2, 4, 5, 6, 7, 8, 9]) {
+      expect(tokens).toContain(`alt+${digit}`);
+    }
   });
 
   it("labels only the browser-scoped rows", () => {
