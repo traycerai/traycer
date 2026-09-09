@@ -338,6 +338,17 @@ function clearAllCallParams(): { readonly beforeUpdatedAt: number } {
   return hostBeforeUpdatedAtCallParams("host.notifications.clearAll");
 }
 
+function clearAllRawParams(): Record<string, unknown> {
+  const call = hostRequestMock.mock.calls.find(
+    (entry) => entry[0] === "host.notifications.clearAll",
+  );
+  const params: unknown = call === undefined ? undefined : call[1];
+  if (!isRecord(params)) {
+    throw new Error("expected host.notifications.clearAll params");
+  }
+  return params;
+}
+
 function hostBeforeUpdatedAtCallParams(
   method: "host.notifications.markAllRead" | "host.notifications.clearAll",
 ): { readonly beforeUpdatedAt: number } {
@@ -558,6 +569,12 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     // come back below the floor and strip it; the gesture waits instead.
     act(() => {
       result.current.markAllAsRead();
+    });
+    // Give the dispatch a real opportunity before reading the mock: the
+    // mutation reaches the transport on a later tick, so a synchronous read
+    // here passes whether or not the hold exists.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(
       hostRequestMock.mock.calls.some(
@@ -1052,6 +1069,89 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     await waitFor(() => {
       expect(clearAllCallParams().beforeUpdatedAt).toBeTypeOf("number");
       expect(useHostNotificationsStore.getState().byId).toEqual({});
+    });
+  });
+
+  it("sends a local home selector in cloud mode and omits it in local mode", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostDone("cloud-mode-entry", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const cloudHook = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      cloudHook.result.current.clearAll();
+    });
+
+    await waitFor(() => {
+      expect(clearAllRawParams().home).toBe("local");
+    });
+    expect(clearAllRawParams()).toHaveProperty("beforeUpdatedAt");
+
+    cleanup();
+    hostRequestMock.mockReset();
+    hostRequestMock.mockImplementation(defaultHostRequest);
+    notificationFeedMode.value = "local";
+    const localHook = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      localHook.result.current.clearAll();
+    });
+
+    await waitFor(() => {
+      expect(clearAllRawParams()).toHaveProperty("beforeUpdatedAt");
+    });
+    expect(clearAllRawParams()).not.toHaveProperty("home");
+  });
+
+  it("holds clear-all while a held cloud mode's host is re-negotiating, then dispatches", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    notificationFeedModeSettling.value = true;
+    applyHostSnapshot([hostDone("settling-entry", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { result, rerender } = renderHook(
+      () => useMergedNotificationsActions(),
+      { wrapper: createWrapper() },
+    );
+
+    // The host `clearAll` would carry `home: "local"` to a host that may come
+    // back below `@1.1` and STRIP it - a whole-origin delete wearing the shape
+    // of a partitioned one. The gesture waits instead.
+    act(() => {
+      result.current.clearAll();
+    });
+    // Give the dispatch a real opportunity first. A synchronous read of the
+    // mock straight after `act` is vacuous: the mutation reaches the transport
+    // on a later tick, so an unguarded `clearAll` would also read as absent.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.clearAll",
+      ),
+    ).toBe(false);
+
+    // Non-vacuity: release ONLY the settling flag - same mode, same snapshot,
+    // same arrangement - and the identical gesture dispatches with the
+    // selector. Changing the feed mode here as well would make the absence
+    // above unattributable.
+    notificationFeedModeSettling.value = false;
+    rerender();
+    act(() => {
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      expect(clearAllRawParams()).toMatchObject({ home: "local" });
     });
   });
 
