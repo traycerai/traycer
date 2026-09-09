@@ -38,9 +38,7 @@ describe("<SnapshotHashInlineDiff />", () => {
       />,
     );
 
-    expect(
-      screen.getByText(documentFileDiffCopy("docs/report.pdf")),
-    ).toBeTruthy();
+    expect(screen.getByText(documentFileDiffCopy("pdf"))).toBeTruthy();
     expect(state.query).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: false }),
     );
@@ -57,9 +55,7 @@ describe("<SnapshotHashInlineDiff />", () => {
       />,
     );
 
-    expect(
-      screen.getByText(documentFileDiffCopy("docs/report.docx")),
-    ).toBeTruthy();
+    expect(screen.getByText(documentFileDiffCopy("docx"))).toBeTruthy();
     expect(state.query).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: false }),
     );
@@ -76,12 +72,8 @@ describe("<SnapshotHashInlineDiff />", () => {
       />,
     );
 
-    expect(
-      screen.queryByText(documentFileDiffCopy("docs/report.pdf")),
-    ).toBeNull();
-    expect(
-      screen.queryByText(documentFileDiffCopy("docs/report.docx")),
-    ).toBeNull();
+    expect(screen.queryByText(documentFileDiffCopy("pdf"))).toBeNull();
+    expect(screen.queryByText(documentFileDiffCopy("docx"))).toBeNull();
     expect(state.query).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: true }),
     );

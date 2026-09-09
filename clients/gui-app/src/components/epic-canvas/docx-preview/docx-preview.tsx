@@ -26,14 +26,11 @@ import {
 import { renderAsync } from "docx-preview";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { appLogger } from "@/lib/logger";
+import { isFindEngineSupported } from "@/lib/find-engine/find-engine";
 import type { DocumentViewerProps } from "@/components/epic-canvas/document-preview/lazy-document-viewer";
 import { DocumentSearchBar } from "@/components/epic-canvas/document-preview/document-search-bar";
 import { DocumentPreviewToolbar } from "@/components/epic-canvas/document-preview/document-preview-toolbar";
-import {
-  DOCX_FIND_HIGHLIGHT_CSS,
-  DocxFindEngine,
-  isDocxFindSupported,
-} from "./docx-find";
+import { DOCX_FIND_HIGHLIGHT_CSS, DocxFindEngine } from "./docx-find";
 import { currentPageAmong, scrollTopForPage } from "./docx-page-position";
 
 const ZOOM_STEP = 1.1;
@@ -67,35 +64,23 @@ ${DOCX_FIND_HIGHLIGHT_CSS}
 `;
 
 /**
- * docx-preview options. Pages break where Word last paginated
+ * Where the viewer departs from docx-preview's defaults (paged layout in a
+ * `.docx-wrapper`, headers, footers and notes rendered, tracked changes and
+ * comments hidden). Pages break where Word last paginated
  * (`ignoreLastRenderedPageBreak: false`) so a Word-saved file reads as its
  * pages rather than one tall sheet. Embedded fonts are skipped: an
  * `@font-face` declared inside a shadow root does not register in Chromium,
  * so the faces would never load anyway - the document's font NAMES still
  * apply and resolve against installed fonts. `renderAltChunks` (embedded
- * HTML fragments) stays off: it is the one path that would hand the
+ * HTML fragments) is turned off: it is the one path that would hand the
  * document's own markup to the DOM verbatim. Images are inlined as data
  * URLs, which the CSP already allows and which need no blob revocation.
  */
 const RENDER_OPTIONS = {
-  className: "docx",
-  inWrapper: true,
-  ignoreWidth: false,
-  ignoreHeight: false,
   ignoreFonts: true,
-  breakPages: true,
   ignoreLastRenderedPageBreak: false,
-  renderHeaders: true,
-  renderFooters: true,
-  renderFootnotes: true,
-  renderEndnotes: true,
-  renderChanges: false,
-  renderComments: false,
   renderAltChunks: false,
   useBase64URL: true,
-  experimental: false,
-  trimXmlDeclaration: true,
-  debug: false,
 } as const;
 
 interface RenderedDocument {
@@ -125,7 +110,9 @@ export default function DocxPreview(props: DocumentViewerProps): ReactNode {
     readonly current: number;
     readonly total: number;
   } | null>(null);
-  const searchSupported = isDocxFindSupported();
+  // Old WebKit lacks the Highlight API the search paints with - the same
+  // check the find-in-page bar hides itself on.
+  const searchSupported = isFindEngineSupported();
 
   // Which automatic scale mode is in force: `"page-width"` until the user
   // zooms manually, then `null`. A resize observer re-applies the mode so

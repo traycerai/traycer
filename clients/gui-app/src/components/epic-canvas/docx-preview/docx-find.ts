@@ -13,6 +13,8 @@
  * table cells) are separated by a newline so a phrase never matches across
  * a paragraph boundary.
  */
+import { getHighlights } from "@/lib/find-engine/find-engine";
+
 const MATCH_HIGHLIGHT_NAME = "traycer-docx-find-match";
 const ACTIVE_HIGHLIGHT_NAME = "traycer-docx-find-active";
 
@@ -34,24 +36,6 @@ export const DOCX_FIND_HIGHLIGHT_CSS = `
 export interface DocxFindResult {
   readonly current: number;
   readonly total: number;
-}
-
-interface HighlightRegistry {
-  set(name: string, highlight: Highlight): void;
-  delete(name: string): void;
-}
-
-function highlightRegistry(): HighlightRegistry | null {
-  if (typeof CSS === "undefined" || typeof Highlight === "undefined") {
-    return null;
-  }
-  const registry = (CSS as { highlights?: HighlightRegistry }).highlights;
-  return registry ?? null;
-}
-
-/** Whether this engine can paint at all (old WebKit lacks the Highlight API). */
-export function isDocxFindSupported(): boolean {
-  return highlightRegistry() !== null;
 }
 
 /** One text node's place in the flattened text: its first character's offset. */
@@ -189,7 +173,7 @@ export class DocxFindEngine {
   }
 
   private paint(): void {
-    const registry = highlightRegistry();
+    const registry = getHighlights();
     if (registry === null) return;
     const others = this.ranges.filter((_, index) => index !== this.activeIndex);
     if (others.length > 0) {
@@ -206,7 +190,7 @@ export class DocxFindEngine {
   }
 
   private clearHighlights(): void {
-    const registry = highlightRegistry();
+    const registry = getHighlights();
     if (registry === null) return;
     registry.delete(MATCH_HIGHLIGHT_NAME);
     registry.delete(ACTIVE_HIGHLIGHT_NAME);

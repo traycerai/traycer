@@ -202,9 +202,9 @@ describe("asset stream 1.2 media-type widening", () => {
     // A leaked `.docx` header fails the whole discriminated-union parse on
     // every client whose parser predates 1.2, which is what obliges the host
     // resolvers to gate emission on the negotiated minor.
-    expect(assetStreamServerFrameSchema.safeParse(docxHeaderFrame).success).toBe(
-      false,
-    );
+    expect(
+      assetStreamServerFrameSchema.safeParse(docxHeaderFrame).success,
+    ).toBe(false);
     expect(
       assetStreamServerFrameSchemaV11.safeParse(docxHeaderFrame).success,
     ).toBe(false);

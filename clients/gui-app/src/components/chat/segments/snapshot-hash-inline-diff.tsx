@@ -10,7 +10,7 @@ import {
   FILE_EDIT_REASON_COPY,
   documentFileDiffCopy,
 } from "@/lib/chat/file-edit-reason-copy";
-import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { documentAssetKindOf } from "@/lib/assets/image-extension-allowlist";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 
 /**
@@ -35,14 +35,14 @@ export function SnapshotHashInlineDiff(props: {
 }) {
   // A document row always renders the copy line below - keep the blob
   // download from ever starting, not just its result from rendering.
-  const isDocument = isDocumentAssetPath(props.filePath);
+  const documentKind = documentAssetKindOf(props.filePath);
   const query = useSnapshotDiffQuery({
     // Mounted only from artifact rows/cards inside a chat TILE, and the blobs
     // these hashes address are that tab host's (D15).
     client: useTabHostClient(),
     beforeHash: props.beforeHash,
     afterHash: props.afterHash,
-    enabled: !isDocument,
+    enabled: documentKind === null,
   });
 
   const patch = useMemo(() => {
@@ -57,10 +57,10 @@ export function SnapshotHashInlineDiff(props: {
     });
   }, [query.data, props.filePath]);
 
-  if (isDocument) {
+  if (documentKind !== null) {
     return (
       <div className="text-ui-sm text-muted-foreground">
-        {documentFileDiffCopy(props.filePath)}
+        {documentFileDiffCopy(documentKind)}
       </div>
     );
   }

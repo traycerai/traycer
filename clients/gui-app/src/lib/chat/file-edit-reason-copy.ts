@@ -1,7 +1,7 @@
 import type { FileEditReason } from "@/stores/composer/chat-store";
 import {
   DOCUMENT_ASSET_LABELS,
-  documentAssetKindOf,
+  type DocumentAssetKind,
 } from "@/lib/assets/image-extension-allowlist";
 
 /**
@@ -25,12 +25,8 @@ export const FILE_EDIT_REASON_COPY: Record<FileEditReason, string> = {
  * not shown."). Snapshots retain only text content (binary captures are
  * rejected at the store), so the only documents that reach a snapshot patch
  * are ASCII-authored PDFs - and even for those, a line diff of PDF source is
- * noise, not review material. Callers only ask for paths that
- * `isDocumentAssetPath` already accepted; a non-document falls back to the
- * generic binary copy rather than a lie about its format.
+ * noise, not review material.
  */
-export function documentFileDiffCopy(filePath: string): string {
-  const kind = documentAssetKindOf(filePath);
-  if (kind === null) return FILE_EDIT_REASON_COPY.binary;
+export function documentFileDiffCopy(kind: DocumentAssetKind): string {
   return `${DOCUMENT_ASSET_LABELS[kind]} file - text diff not shown.`;
 }

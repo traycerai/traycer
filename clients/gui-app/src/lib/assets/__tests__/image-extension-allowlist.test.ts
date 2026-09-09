@@ -4,9 +4,7 @@ import {
   DOCUMENT_ASSET_LABELS,
   documentAssetKindOf,
   isDocumentAssetPath,
-  isDocxAssetPath,
   isImageAssetPath,
-  isPdfAssetPath,
   isPreviewableAssetPath,
   isSvgAssetPath,
 } from "../image-extension-allowlist";
@@ -34,24 +32,10 @@ describe("image extension allowlist", () => {
     expect(isSvgAssetPath("icons/mark")).toBe(false);
   });
 
-  it("routes PDF paths separately from images", () => {
-    expect(isPdfAssetPath("docs/report.pdf")).toBe(true);
-    expect(isPdfAssetPath("docs/report.PDF")).toBe(true);
-    // PDFs are NOT images - the two route to different renderers.
+  // Documents are NOT images - each format routes to its OWN renderer.
+  it("routes documents separately from images", () => {
     expect(isImageAssetPath("docs/report.pdf")).toBe(false);
-    expect(isPdfAssetPath("docs/report.pdf.txt")).toBe(false);
-    expect(isPdfAssetPath("docs/report")).toBe(false);
-  });
-
-  it("routes Word documents separately from PDFs and images", () => {
-    expect(isDocxAssetPath("docs/brief.docx")).toBe(true);
-    expect(isDocxAssetPath("docs/brief.DOCX")).toBe(true);
-    // Each document format has its OWN viewer, so the two predicates must
-    // never both answer for the same path.
-    expect(isPdfAssetPath("docs/brief.docx")).toBe(false);
-    expect(isDocxAssetPath("docs/report.pdf")).toBe(false);
     expect(isImageAssetPath("docs/brief.docx")).toBe(false);
-    expect(isDocxAssetPath("docs/brief.docx.txt")).toBe(false);
   });
 
   // Legacy `.doc` is the binary OLE format docx-preview cannot read - the
@@ -59,7 +43,6 @@ describe("image extension allowlist", () => {
   it("does not treat legacy .doc as a document", () => {
     expect(documentAssetKindOf("docs/legacy.doc")).toBeNull();
     expect(isDocumentAssetPath("docs/legacy.doc")).toBe(false);
-    expect(isDocxAssetPath("docs/legacy.doc")).toBe(false);
     expect(isPreviewableAssetPath("docs/legacy.doc")).toBe(false);
   });
 
@@ -68,6 +51,7 @@ describe("image extension allowlist", () => {
     expect(documentAssetKindOf("docs/report.PDF")).toBe("pdf");
     expect(documentAssetKindOf("docs/brief.docx")).toBe("docx");
     expect(documentAssetKindOf("docs/brief.DocX")).toBe("docx");
+    expect(documentAssetKindOf("docs/report.pdf.txt")).toBeNull();
     expect(documentAssetKindOf("images/logo.png")).toBeNull();
     expect(documentAssetKindOf("no-extension")).toBeNull();
   });

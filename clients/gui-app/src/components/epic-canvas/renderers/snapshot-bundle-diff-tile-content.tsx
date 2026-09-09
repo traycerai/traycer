@@ -12,7 +12,10 @@ import {
   FILE_EDIT_REASON_COPY,
   documentFileDiffCopy,
 } from "@/lib/chat/file-edit-reason-copy";
-import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
+import {
+  documentAssetKindOf,
+  isDocumentAssetPath,
+} from "@/lib/assets/image-extension-allowlist";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 import type { SnapshotBundleSectionEntry } from "@/lib/chat/snapshot-bundle-section-entries";
 import type { DiffFindMetadataUnitInput } from "@/lib/diff/diff-find";
@@ -190,10 +193,10 @@ function SnapshotBundleFileSection(props: {
   // A document row never shows a text diff, so don't line-count its bytes
   // either - an ASCII-authored PDF can be large and the count would be
   // discarded.
-  const isDocument = isDocumentAssetPath(props.entry.filePath);
+  const documentKind = documentAssetKindOf(props.entry.filePath);
   const counts = useMemo(
     () =>
-      isDocument
+      documentKind !== null
         ? { additions: 0, deletions: 0 }
         : diffLineCountsFromContents(
             props.entry.beforeContent,
@@ -202,7 +205,7 @@ function SnapshotBundleFileSection(props: {
           ),
     [
       diffViewerPreferences.ignoreWhitespace,
-      isDocument,
+      documentKind,
       props.entry.afterContent,
       props.entry.beforeContent,
     ],
@@ -269,12 +272,21 @@ function SnapshotBundleFileSection(props: {
       findFilePath={props.entry.filePath}
       bundleFindFileId={bundleFindFileId}
     >
-      <SnapshotBundleFileSectionBody
-        node={props.node}
-        entry={props.entry}
-        bundleFindFileId={bundleFindFileId}
-        diffViewerPreferences={diffViewerPreferences}
-      />
+      {documentKind !== null ? (
+        // Decided here, above the body: a document row renders a placeholder,
+        // so diffing its (possibly ASCII-authored, possibly large) contents
+        // would only stall the renderer to produce a patch nobody reads.
+        <div className="p-4 text-ui-sm text-muted-foreground">
+          {documentFileDiffCopy(documentKind)}
+        </div>
+      ) : (
+        <SnapshotBundleFileSectionBody
+          node={props.node}
+          entry={props.entry}
+          bundleFindFileId={bundleFindFileId}
+          diffViewerPreferences={diffViewerPreferences}
+        />
+      )}
     </DiffBundleFileSectionFrame>
   );
 }
@@ -328,22 +340,15 @@ function SnapshotBundleFileSectionBody(props: {
   readonly diffViewerPreferences: DiffViewerPreferences;
 }): ReactNode {
   const bundleFindRegistration = useBundleDiffFindRegistrationContext();
-  // Decided BEFORE the patch build: a document row renders a placeholder, so
-  // diffing its (possibly ASCII-authored, possibly large) contents would only
-  // stall the renderer to produce a patch nobody reads.
-  const isDocument = isDocumentAssetPath(props.entry.filePath);
   const patch = useMemo(
     () =>
-      isDocument
-        ? null
-        : buildSnapshotUnifiedPatch({
-            filePath: props.entry.filePath,
-            beforeContent: props.entry.beforeContent,
-            afterContent: props.entry.afterContent,
-            ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
-          }),
+      buildSnapshotUnifiedPatch({
+        filePath: props.entry.filePath,
+        beforeContent: props.entry.beforeContent,
+        afterContent: props.entry.afterContent,
+        ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
+      }),
     [
-      isDocument,
       props.diffViewerPreferences.ignoreWhitespace,
       props.entry.afterContent,
       props.entry.beforeContent,
@@ -351,7 +356,7 @@ function SnapshotBundleFileSectionBody(props: {
     ],
   );
   useEffect(() => {
-    if (patch === null || props.entry.reason !== "snapshot") return;
+    if (props.entry.reason !== "snapshot") return;
     bundleFindRegistration.registerLoadedPatch({
       fileId: props.bundleFindFileId,
       patch,
@@ -366,17 +371,6 @@ function SnapshotBundleFileSectionBody(props: {
     props.entry.reason,
     props.node.id,
   ]);
-
-  // `null` is exactly the document case (see the memo above); checking the
-  // patch rather than `isDocument` is what narrows it for the diff primitive
-  // below.
-  if (patch === null) {
-    return (
-      <div className="p-4 text-ui-sm text-muted-foreground">
-        {documentFileDiffCopy(props.entry.filePath)}
-      </div>
-    );
-  }
 
   if (props.entry.reason !== "snapshot") {
     return (

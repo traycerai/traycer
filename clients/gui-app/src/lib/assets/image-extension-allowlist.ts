@@ -79,14 +79,6 @@ export function isDocumentAssetPath(path: string): boolean {
   return documentAssetKindOf(path) !== null;
 }
 
-export function isPdfAssetPath(path: string): boolean {
-  return documentAssetKindOf(path) === "pdf";
-}
-
-export function isDocxAssetPath(path: string): boolean {
-  return documentAssetKindOf(path) === "docx";
-}
-
 /** Any extension the asset stream can serve - the "should this enter asset mode at all" union. */
 export function isPreviewableAssetPath(path: string): boolean {
   return isImageAssetPath(path) || isDocumentAssetPath(path);

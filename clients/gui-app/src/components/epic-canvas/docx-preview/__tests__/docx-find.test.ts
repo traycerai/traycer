@@ -10,11 +10,7 @@
  * test.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DOCX_FIND_HIGHLIGHT_CSS,
-  DocxFindEngine,
-  isDocxFindSupported,
-} from "../docx-find";
+import { DOCX_FIND_HIGHLIGHT_CSS, DocxFindEngine } from "../docx-find";
 
 class FakeHighlight {
   readonly ranges: readonly Range[];
@@ -39,22 +35,6 @@ describe("docx-find", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-  });
-
-  describe("isDocxFindSupported", () => {
-    it("is true once CSS.highlights and Highlight are both present", () => {
-      expect(isDocxFindSupported()).toBe(true);
-    });
-
-    it("is false when the Highlight constructor is missing", () => {
-      vi.stubGlobal("Highlight", undefined);
-      expect(isDocxFindSupported()).toBe(false);
-    });
-
-    it("is false when CSS.highlights is missing", () => {
-      vi.stubGlobal("CSS", {});
-      expect(isDocxFindSupported()).toBe(false);
-    });
   });
 
   it("exposes the ::highlight() rules for both the match and active highlight names", () => {

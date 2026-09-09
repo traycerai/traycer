@@ -8,12 +8,13 @@ export interface FindResult {
   readonly total: number;
 }
 
-interface SupportedHighlightsAPI {
+export interface SupportedHighlightsAPI {
   set(name: string, highlight: Highlight): void;
   delete(name: string): void;
 }
 
-function getHighlights(): SupportedHighlightsAPI | null {
+/** The CSS Custom Highlight registry, or `null` where the browser has none. */
+export function getHighlights(): SupportedHighlightsAPI | null {
   if (typeof CSS === "undefined") return null;
   const reg = (CSS as { highlights?: SupportedHighlightsAPI }).highlights;
   return reg ?? null;

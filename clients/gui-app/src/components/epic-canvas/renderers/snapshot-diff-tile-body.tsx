@@ -1,4 +1,7 @@
-import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
+import {
+  documentAssetKindOf,
+  type DocumentAssetKind,
+} from "@/lib/assets/image-extension-allowlist";
 import { documentFileDiffCopy } from "@/lib/chat/file-edit-reason-copy";
 import { memo, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useStore } from "zustand";
@@ -325,13 +328,13 @@ function SnapshotDiffTileResolved(props: {
     });
   }, [node.diff, node.id, settledCapture, updatePayload, viewTabId]);
 
-  const documentFilePath = snapshotTileDocumentPath({
+  const tileDocument = snapshotTileDocument({
     diff: node.diff,
     segmentHashes,
     hostRows,
     hostRowsComplete,
   });
-  const tileIsDocument = documentFilePath !== null;
+  const tileIsDocument = tileDocument !== null;
 
   const segmentQuery = useSnapshotDiffQuery({
     // The snapshot blobs were written by the host this TILE is bound to - the
@@ -418,7 +421,7 @@ function SnapshotDiffTileResolved(props: {
     );
   }
 
-  if (documentFilePath !== null) {
+  if (tileDocument !== null) {
     // Terminal, like every other branch: global Find still gets the file's
     // metadata (name, directory, kind) and an honest coverage note, rather
     // than a tile that simply does not exist to it.
@@ -429,13 +432,13 @@ function SnapshotDiffTileResolved(props: {
           source={createMetadataOnlyDiffTileFindSource({
             metadataUnits: snapshotDiffMetadataUnits({
               node,
-              filePaths: [documentFilePath],
+              filePaths: [tileDocument.filePath],
             }),
             coverageMessage: SNAPSHOT_DIFF_DOCUMENT_FIND_MESSAGE,
           })}
         />
         <div className="p-4 text-ui-sm text-muted-foreground">
-          {documentFileDiffCopy(documentFilePath)}
+          {documentFileDiffCopy(tileDocument.kind)}
         </div>
       </SnapshotDiffTileShell>
     );
@@ -585,21 +588,22 @@ function SnapshotDiffFindRegistration(props: {
  * (`hostRowsComplete`) - and falling through costs no fetch, because a path
  * with no row has nothing fetchable in the first place.
  */
-function snapshotTileDocumentPath(args: {
+function snapshotTileDocument(args: {
   readonly diff: SnapshotDiffTilePayload;
   readonly segmentHashes: { readonly filePath: string } | null;
   readonly hostRows: ReadonlyArray<AccumulatedChangeRow>;
   readonly hostRowsComplete: boolean;
-}): string | null {
+}): { readonly filePath: string; readonly kind: DocumentAssetKind } | null {
   const { diff } = args;
   if (diff.kind === "snapshot-cumulative-bundle") return null;
   const filePath = args.segmentHashes?.filePath ?? diff.filePath;
-  if (!isDocumentAssetPath(filePath)) return null;
+  const kind = documentAssetKindOf(filePath);
+  if (kind === null) return null;
   if (diff.kind === "snapshot-cumulative" && args.hostRowsComplete) {
     const present = args.hostRows.some((row) => row.filePath === filePath);
     if (!present) return null;
   }
-  return filePath;
+  return { filePath, kind };
 }
 
 function snapshotDiffMetadataUnits(args: {

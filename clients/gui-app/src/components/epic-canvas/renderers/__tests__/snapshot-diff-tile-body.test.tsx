@@ -446,9 +446,7 @@ describe("<SnapshotDiffTileBody />", () => {
 
     renderSnapshotTile(node);
 
-    expect(
-      screen.getByText(documentFileDiffCopy("docs/report.pdf")),
-    ).toBeTruthy();
+    expect(screen.getByText(documentFileDiffCopy("pdf"))).toBeTruthy();
     expect(
       screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeNull();
@@ -471,9 +469,7 @@ describe("<SnapshotDiffTileBody />", () => {
 
     renderSnapshotTile(node);
 
-    expect(
-      screen.getByText(documentFileDiffCopy("docs/report.docx")),
-    ).toBeTruthy();
+    expect(screen.getByText(documentFileDiffCopy("docx"))).toBeTruthy();
     expect(
       screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeNull();
@@ -503,9 +499,7 @@ describe("<SnapshotDiffTileBody />", () => {
 
     renderSnapshotTile(node);
 
-    expect(
-      screen.getByText(documentFileDiffCopy("docs/report.pdf")),
-    ).toBeTruthy();
+    expect(screen.getByText(documentFileDiffCopy("pdf"))).toBeTruthy();
     expect(
       screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeNull();
@@ -529,9 +523,7 @@ describe("<SnapshotDiffTileBody />", () => {
 
     renderSnapshotTile(node);
 
-    expect(
-      screen.getByText(documentFileDiffCopy("docs/report.pdf")),
-    ).toBeTruthy();
+    expect(screen.getByText(documentFileDiffCopy("pdf"))).toBeTruthy();
     expect(
       screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeNull();
@@ -564,9 +556,7 @@ describe("<SnapshotDiffTileBody />", () => {
     expect(
       screen.getByTestId(`snapshot-diff-unavailable-${node.id}`),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(documentFileDiffCopy("docs/report.pdf")),
-    ).toBeNull();
+    expect(screen.queryByText(documentFileDiffCopy("pdf"))).toBeNull();
   });
 
   // The PDF branch is terminal like every other branch, but it must still
