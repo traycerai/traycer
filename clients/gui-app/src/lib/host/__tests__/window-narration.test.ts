@@ -715,6 +715,37 @@ describe("deriveWindowNarration", () => {
     });
   });
 
+  /**
+   * Lane 9 item 6 (regression pin; the production code needed no change).
+   * `cold-start` is hard-coded to `variant: {kind: "offline"}` at BOTH sites
+   * in this module - the pre-serve grace above and the non-∅ arm here - so an
+   * INCOMPATIBLE lease death sitting elsewhere in the fleet can never leak
+   * through as the cold-start variant. If it ever did, `WindowHostStartupCard`
+   * ("Traycer Host didn't start") would render on top of an update-client /
+   * update-host verdict instead of the fleet-scan arms owning it.
+   */
+  it("stays offline at cold-start even with an incompatible lease elsewhere in the fleet", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: true,
+        effectiveHostId: "host-a",
+        leases: [
+          lease({ hostId: "host-a", status: "connecting", dead: null }),
+          deadLease(
+            "host-b",
+            { reason: "incompatible", detail: incompatibility({}) },
+          ),
+        ],
+        hasBeenServed: false,
+      }),
+    );
+    expect(state).toEqual({
+      kind: "narrating",
+      cause: "cold-start",
+      variant: { kind: "offline" },
+    });
+  });
+
   it("is silent once the effective host's lease is ready", () => {
     const state = deriveWindowNarration(
       baseInput({

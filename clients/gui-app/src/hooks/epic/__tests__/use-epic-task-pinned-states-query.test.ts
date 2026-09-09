@@ -95,9 +95,10 @@ describe("combineTaskPinnedStateResults", () => {
     // The map holds `TaskPinnedState`, not a bare boolean: `home` rides along
     // so a row can disable its cloud-only pin action without a second lookup.
     // No local-home set is supplied here, so `home` is absent for both.
+    // `pinnedKnown` is `true` for every resolved task - the host answered.
     expect([...pinnedStates.entries()]).toEqual([
-      ["epic-a", { pinned: true, home: undefined }],
-      ["epic-b", { pinned: false, home: undefined }],
+      ["epic-a", { pinned: true, home: undefined, pinnedKnown: true }],
+      ["epic-b", { pinned: false, home: undefined, pinnedKnown: true }],
     ]);
   });
 
@@ -116,7 +117,7 @@ describe("combineTaskPinnedStateResults", () => {
     ]);
 
     expect([...pinnedStates.entries()]).toEqual([
-      ["epic-a", { pinned: true, home: "local" }],
+      ["epic-a", { pinned: true, home: "local", pinnedKnown: true }],
     ]);
   });
 
@@ -137,7 +138,7 @@ describe("combineTaskPinnedStateResults", () => {
     ]);
 
     expect([...pinnedStates.entries()]).toEqual([
-      ["epic-a", { pinned: true, home: undefined }],
+      ["epic-a", { pinned: true, home: undefined, pinnedKnown: true }],
     ]);
   });
 });
@@ -148,7 +149,7 @@ describe("overlayLocalHomedPinnedStates", () => {
     // case (no locally-homed epics among the open tabs) must not hand
     // consumers a fresh map every render.
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map([
-      ["epic-a", { pinned: true, home: undefined }],
+      ["epic-a", { pinned: true, home: undefined, pinnedKnown: true }],
     ]);
 
     const overlaid = overlayLocalHomedPinnedStates(queried, new Set());
@@ -156,10 +157,14 @@ describe("overlayLocalHomedPinnedStates", () => {
     expect(overlaid).toBe(queried);
   });
 
-  it("adds an entry for a local-homed epic the queried host never resolved", () => {
+  it("adds an entry for a local-homed epic the queried host never resolved, with pinnedKnown false", () => {
     // The wrong-host gap this hook exists to close: the epic id never reached
     // the queried map at all, so `pinned` has no source and must fall back to
-    // filler rather than being left absent.
+    // filler rather than being left absent. `pinnedKnown: false` is what
+    // marks that fallback as a FILLER, not a reading - the flag `epic.set
+    // Pinned@1.1` made load-bearing (lane 9 item 5): a consumer that reads
+    // `pinned` while this is false is reading "nobody answered" as "not
+    // pinned".
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map();
 
     const overlaid = overlayLocalHomedPinnedStates(
@@ -168,16 +173,20 @@ describe("overlayLocalHomedPinnedStates", () => {
     );
 
     expect([...overlaid.entries()]).toEqual([
-      ["epic-local-only", { pinned: false, home: "local" }],
+      [
+        "epic-local-only",
+        { pinned: false, home: "local", pinnedKnown: false },
+      ],
     ]);
   });
 
-  it("keeps the queried `pinned` value while overriding `home` to local", () => {
+  it("keeps the queried `pinned` value while overriding `home` to local, with pinnedKnown true", () => {
     // `pinned` is a cloud-only preference the queried host answers correctly
     // regardless of ownership - only `home` is ever overridden by the
-    // session's own answer.
+    // session's own answer. `pinnedKnown` is `true` here because the queried
+    // map ALREADY had this epic - the host resolved it.
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map([
-      ["epic-both", { pinned: true, home: undefined }],
+      ["epic-both", { pinned: true, home: undefined, pinnedKnown: true }],
     ]);
 
     const overlaid = overlayLocalHomedPinnedStates(
@@ -188,12 +197,13 @@ describe("overlayLocalHomedPinnedStates", () => {
     expect(overlaid.get("epic-both")).toEqual({
       pinned: true,
       home: "local",
+      pinnedKnown: true,
     });
   });
 
   it("leaves an epic absent from `localHomedEpicIds` exactly as queried", () => {
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map([
-      ["epic-cloud", { pinned: true, home: undefined }],
+      ["epic-cloud", { pinned: true, home: undefined, pinnedKnown: true }],
     ]);
 
     const overlaid = overlayLocalHomedPinnedStates(
@@ -204,16 +214,21 @@ describe("overlayLocalHomedPinnedStates", () => {
     expect(overlaid.get("epic-cloud")).toEqual({
       pinned: true,
       home: undefined,
+      pinnedKnown: true,
     });
   });
 
   it("does not mutate the queried map it was given", () => {
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map([
-      ["epic-a", { pinned: false, home: undefined }],
+      ["epic-a", { pinned: false, home: undefined, pinnedKnown: true }],
     ]);
 
     overlayLocalHomedPinnedStates(queried, new Set(["epic-a"]));
 
-    expect(queried.get("epic-a")).toEqual({ pinned: false, home: undefined });
+    expect(queried.get("epic-a")).toEqual({
+      pinned: false,
+      home: undefined,
+      pinnedKnown: true,
+    });
   });
 });
