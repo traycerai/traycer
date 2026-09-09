@@ -244,6 +244,32 @@ describe("uninstallHost", () => {
     expect(existsSync(lockPath)).toBe(true);
   });
 
+  it("FAILS the uninstall when the attempt-record discard fails - a surviving record is the original defect, not litter", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const recordPath = updateAttemptRecordPath(hostHomeFor(ENV));
+    mkdirSync(hostHomeFor(ENV), { recursive: true });
+    writeFileSync(recordPath, JSON.stringify({ schemaVersion: 2 }));
+
+    // Reporting success here would leave a valid nonterminal record in a host
+    // home whose install is gone - which refuses the NEXT install's admission,
+    // the exact bug this seam exists to prevent. It must not be swallowed the
+    // way the best-effort directory removals are.
+    await expect(
+      uninstallHost({
+        environment: ENV,
+        purgeChannelRuntime: false,
+        verifyMutationCapability: testMutationVerifier,
+        discardAttemptRecord: async () => {
+          throw new Error(
+            "update attempt record discard was refused (lock-not-live)",
+          );
+        },
+      }),
+    ).rejects.toThrow("discard was refused");
+
+    expect(existsSync(recordPath)).toBe(true);
+  });
+
   it("reports removedStagedDir: true even when staged/ never existed", async () => {
     const { uninstallHost } = await import("../uninstall");
     mkdirSync(installDirFor(ENV), { recursive: true });

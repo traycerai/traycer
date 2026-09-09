@@ -177,17 +177,18 @@ export async function uninstallHost(
   // unlink the NEW owner's live attempt. The discard re-verifies ownership on
   // both sides of its read instead. The lock FILE stays - it is the caller's
   // live handle, not evidence.
+  // A failure here PROPAGATES, unlike the best-effort removals above. Those
+  // leave litter; this one leaves the exact defect this seam exists to
+  // prevent - a valid nonterminal record standing in a host home whose
+  // install is gone, refusing the next install's admission. Reporting a
+  // successful uninstall while that record survives is the silent version of
+  // the original bug, so the uninstall fails loudly instead.
+  //
+  // Safe to propagate for the ordinary case: `removeRecordFile` unlinks with
+  // `force`, so an absent record is a successful discard, not an error.
   if (opts.discardAttemptRecord !== null) {
     await verify();
-    try {
-      await opts.discardAttemptRecord();
-    } catch (err) {
-      logger.warn("Host uninstall failed to remove the update attempt record", {
-        environment: opts.environment,
-        errorName: errorFromUnknown(err).name,
-        errorMessage: errorFromUnknown(err).message,
-      });
-    }
+    await opts.discardAttemptRecord();
   }
 
   // The version hold names a deliberate downgrade of the install we just

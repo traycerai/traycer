@@ -1242,9 +1242,9 @@ export interface DiscardAttemptRecordForUninstallOptions {
  * (see `lock.ts`). An uninstall that lost its lock that way and then unlinked
  * would delete the NEW owner's live attempt.
  *
- * So it takes the mutation lease and re-verifies ownership on both sides of
- * the read, exactly like every other mutation here. What it deliberately does
- * NOT require is what `pruneTerminalAttemptRecord` requires - terminal
+ * So it takes the mutation lease and re-verifies ownership immediately before
+ * the unlink, exactly like every other mutation here. What it deliberately
+ * does NOT require is what `pruneTerminalAttemptRecord` requires - terminal
  * execution, elapsed retention, a matching expected identity - because an
  * uninstall is not retention policy: whatever the record says, the tree it
  * describes is going away, and the caller cannot know the identity of a park
@@ -1270,17 +1270,15 @@ export async function discardAttemptRecordForUninstall(
 
   const { lease } = leaseOutcome;
   try {
-    const preOwnership = await ownershipRejection(options.handle);
-    if (preOwnership !== null)
-      return { kind: "rejected", reason: preOwnership };
-
-    // Re-checked after the read for the same reason `pruneTerminalAttemptRecord`
-    // does it: the window that matters is the one immediately before the
-    // unlink, not the one when the caller decided to unlink.
-    const postOwnership = await ownershipRejection(options.handle);
-    if (postOwnership !== null) {
-      return { kind: "rejected", reason: postOwnership };
-    }
+    // ONE check, immediately before the unlink. `pruneTerminalAttemptRecord`
+    // checks on both sides because it reads and compares canonical identity
+    // in between; this operation deliberately reads nothing (it needs no
+    // identity - the tree is going away whatever the record says), so a
+    // second check with nothing between the two would add a failure mode
+    // (`lock-indeterminate` on either read) without adding safety. What the
+    // banner demands is a check AT the point of the write, and this is it.
+    const ownership = await ownershipRejection(options.handle);
+    if (ownership !== null) return { kind: "rejected", reason: ownership };
     return (await removeRecordFile(lease.recordPath))
       ? { kind: "discarded" }
       : { kind: "rejected", reason: "remove-failed" };
