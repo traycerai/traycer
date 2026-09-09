@@ -574,7 +574,7 @@ describe("useLandingComposerActions", () => {
 
     // The host advertises the local-first line: the same session is admitted.
     recordNegotiatedHostManifest(TEST_HOST_ID, {
-      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.create": { major: 1, minor: 1 },
     });
     let admitted: { readonly message: string } | null = { message: "unset" };
     act(() => {
@@ -595,7 +595,7 @@ describe("useLandingComposerActions", () => {
     // this create's handshake runs. The floor is what the connection carrying
     // the create answers for itself.
     expect(landingMocks.floorsRequested).toEqual([
-      { method: "epic.listTasks", version: { major: 1, minor: 6 } },
+      { method: "epic.create", version: { major: 1, minor: 1 } },
     ]);
     queryClient.clear();
   });

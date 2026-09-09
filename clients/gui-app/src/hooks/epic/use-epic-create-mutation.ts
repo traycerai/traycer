@@ -28,7 +28,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { LIST_TASKS_LOCAL_FIRST_MINOR } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import { EPIC_CREATE_LOCAL_FIRST_MINOR } from "@/lib/epic-create-admission";
 import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
 import {
   authorizesCloudCapability,
@@ -703,16 +703,22 @@ function liveOpenEpicTitle(epicId: string): string | null {
  * the floor now rides on the create's own request and the transport answers it
  * from the connection carrying the frame ({@link HostRequestOptions}).
  *
- * `epic.create` advertises no version of its own, so the subject is the
- * `epic.listTasks` line - a host on the local-first list line is the host on
- * the local-first create line. `null` for a `signed-in` session: it may spend
- * the capability whatever the peer's minor is, and pays no floor.
+ * The subject is now `epic.create`'s own line, `@1.1`. It used to be
+ * `epic.listTasks@1.6` - a proxy adopted because `epic.create` advertised no
+ * version of its own, resting on "a host on the local-first list line is the
+ * host on the local-first create line". That held, but it tied two methods'
+ * release histories together with a claim nothing enforced, and it asked the
+ * floor about a method this request does not call. Both halves are fixed by
+ * asking the method being dispatched.
+ *
+ * `null` for a `signed-in` session: it may spend the capability whatever the
+ * peer's minor is, and pays no floor.
  */
 function createRequiresLocalFirstHost(): RequiredHostMethodVersion | null {
   if (authorizesCloudCapability(useAuthStore.getState().status)) return null;
   return {
-    method: "epic.listTasks",
-    version: { major: 1, minor: LIST_TASKS_LOCAL_FIRST_MINOR },
+    method: "epic.create",
+    version: { major: 1, minor: EPIC_CREATE_LOCAL_FIRST_MINOR },
   };
 }
 

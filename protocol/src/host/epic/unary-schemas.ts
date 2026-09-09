@@ -461,7 +461,12 @@ export const createEpicRequestSchema = z.object({
 });
 export type CreateEpicRequest = z.infer<typeof createEpicRequestSchema>;
 
-export const createEpicResponseSchema = z.object({
+/**
+ * The RELEASED `epic.create@1.0` response. Frozen as its own literal object -
+ * not an alias over the live schema, which would make the freeze move every
+ * time the live line grows.
+ */
+export const createEpicResponseSchemaPre11 = z.object({
   roomInfo: tiptapRoomInfoSchema.nullable(),
   // Full list-shape `TaskLight` for the freshly-created epic so the GUI can
   // ingest it into the cloud-tasks history cache without round-tripping
@@ -478,6 +483,67 @@ export const createEpicResponseSchema = z.object({
   // stream-driven fallback remains armed. Absent / `null` when no chat was
   // folded.
   initialTurnStarted: z.boolean().nullable().optional(),
+});
+export type CreateEpicResponsePre11 = z.infer<
+  typeof createEpicResponseSchemaPre11
+>;
+
+/**
+ * Why a create can be REFUSED rather than failing.
+ *
+ * An enum rather than a free string because the client BRANCHES on it: the
+ * remedy for a local store this host cannot open is a rebind, and offering
+ * that action for some future refusal kind would be worse than offering
+ * nothing. A client that does not recognise a kind still has `message` and
+ * `remedy` to render, so widening this stays safe for the text - only the
+ * ACTION is kind-gated.
+ */
+export const epicCreateRefusalKindSchema = z.enum(["local-store-unavailable"]);
+export type EpicCreateRefusalKind = z.infer<typeof epicCreateRefusalKindSchema>;
+
+/**
+ * A create the host declined to attempt, carried as DATA.
+ *
+ * The host already knew all three of these facts and was flattening them into
+ * a thrown `RPC_ERROR` string - `LOCAL_STORE_UNAVAILABLE` is not an
+ * `RPC_ERROR_CODES` member, so the client could not recover the remedy from
+ * the prose and could only show the sentence. The open path has carried the
+ * same fact as data for a while (`SnapshotFetchError.localStoreRemedy`), and
+ * `host.rebindLocalStore` already answers with a `status: "refused"` arm
+ * carrying `message` + `remedy`; this is that shape, one method over.
+ */
+export const epicCreateRefusalSchema = z.object({
+  kind: epicCreateRefusalKindSchema,
+  /** Human-readable statement of what happened. Safe to show verbatim. */
+  message: z.string().min(1),
+  /** What the user can DO about it, e.g. stop the other host and rebind. */
+  remedy: z.string().min(1),
+});
+export type EpicCreateRefusal = z.infer<typeof epicCreateRefusalSchema>;
+
+/**
+ * `epic.create@1.1` - the released `@1.0` body plus an optional `refusal`.
+ *
+ * ADDITIVE, deliberately, rather than the discriminated `status` union
+ * `host.rebindLocalStore` uses. That union is the nicer type, but it is a
+ * response SHAPE change on a method that is on `RELEASED_FLOOR_METHOD_NAMES`,
+ * so it would need a new MAJOR - and a `2 -> 1` downgrade could not represent
+ * a refusal at all, turning a legacy peer's honest error into a confusing
+ * downgrade failure. An optional key keeps the whole thing inside minor
+ * `@1.1`, where a `@1.0` peer's frozen schema simply strips it.
+ *
+ * Stripping is why the HOST gates emission on the negotiated minor instead of
+ * relying on the parse: a stripped refusal would reach a `@1.0` client as
+ * `{ roomInfo: null }`, i.e. a SUCCESSFUL create with no room - the one
+ * reading of this payload that is a lie. Below `@1.1` the host still throws,
+ * so a legacy peer keeps exactly today's error and never sees this key.
+ *
+ * `refusal` present and `roomInfo` non-null is therefore not a state the host
+ * ever emits; the two are mutually exclusive by construction at the emitter,
+ * which is the cost of staying additive.
+ */
+export const createEpicResponseSchema = createEpicResponseSchemaPre11.extend({
+  refusal: epicCreateRefusalSchema.optional(),
 });
 export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
 

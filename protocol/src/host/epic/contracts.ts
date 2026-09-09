@@ -18,6 +18,7 @@ import {
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
   createEpicResponseSchema,
+  createEpicResponseSchemaPre11,
   createTuiAgentRequestSchema,
   createTuiAgentRequestSchemaV10,
   createTuiAgentResponseSchema,
@@ -505,7 +506,44 @@ export const epicCreateV10 = defineRpcContract({
   method: "epic.create",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: createEpicRequestSchema,
+  responseSchema: createEpicResponseSchemaPre11,
+});
+
+/**
+ * `epic.create@1.1` - the create refusal, carried as data.
+ *
+ * The host's local-store create refusal was THROWN and flattened to an
+ * `RPC_ERROR` string. `LOCAL_STORE_UNAVAILABLE` is not an `RPC_ERROR_CODES`
+ * member, so the client could not recover the remedy from prose and could only
+ * surface the sentence - no Repair action, no branch on the cause. This minor
+ * gives the refusal the same treatment the open path already gives it
+ * (`SnapshotFetchError.localStoreRemedy`) and `host.rebindLocalStore` already
+ * gives its own refusal.
+ *
+ * The response grows by an optional key rather than gaining a `status` union
+ * arm; `createEpicResponseSchema`'s own note has the reasoning, and the short
+ * version is that a shape change on a floor method costs a major whose
+ * downgrade could not represent a refusal anyway.
+ */
+export const epicCreateV11 = defineRpcContract({
+  method: "epic.create",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: createEpicRequestSchema,
   responseSchema: createEpicResponseSchema,
+});
+
+export const epicCreateUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicCreateV10,
+  typeof epicCreateV11
+>({
+  from: epicCreateV10.schemaVersion,
+  to: epicCreateV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // No synthesized `refusal`. A `@1.0` host that could not create THREW, and
+  // that error is already travelling its own path; manufacturing a refusal
+  // here would invent a `kind` and a `remedy` this host never said, and the
+  // client would offer a Repair action on a guess.
+  upgradeResponse: (response) => response,
 });
 
 // `epic.batchDelete@1.0` - host-side entry point for the CloudData
