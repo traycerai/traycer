@@ -770,10 +770,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     accent colour (`Switch`, Dither only; off dithers each RGB channel on its
     own so the image keeps its own colours), Greeting and
     Recent tasks (`showGreeting` / `showRecentHistory` switches). The style,
-    intensity and tint live in the settings store (`startPageWallpaper`); the
-    bytes live only in the appearance blob store
-    (`lib/appearance/start-page-wallpaper.ts`), stored as a `File` so the row
-    can name the image without a second settings key shadowing it. The start
+    intensity, tint and the chosen file's `name` all live in the settings store
+    (`startPageWallpaper`); the bytes live only in the appearance blob store.
+    `lib/appearance/start-page-wallpaper.ts` owns one entry point per user
+    action (`chooseStartPageWallpaper` / `removeStartPageWallpaper`), and each
+    writes BOTH stores - that is what keeps a name from outliving the bytes it
+    describes, and is why the name can be an ordinary settings field rather
+    than a `File` subclass smuggled through IndexedDB. The start
     page's own `Paintbrush` button opens this panel - there is no separate
     appearance editor.
   - **Interface**: Zoom (`DesktopZoomSettingsRow` - desktop-only, renders
