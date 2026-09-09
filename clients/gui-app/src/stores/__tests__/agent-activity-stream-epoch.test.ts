@@ -15,6 +15,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
 import type {
   HostReconnectEngine,
   ReopenLane,
@@ -95,7 +96,7 @@ class StubHostStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
     Method extends keyof HostStreamRpcRegistry & string,
   >(
     _method: Method,
-    _paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+    _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
     return this.session;
   }

@@ -3,6 +3,9 @@ import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/ver
 import type { IStreamSession } from "./i-stream-session";
 import type { ParamsOf } from "./ws-stream-client";
 
+import type { StreamParamsProvider } from "@traycer/protocol/host-transport/remote/stream-codec";
+export type { StreamParamsProvider };
+
 /**
  * Subscribe-only seam over a streaming transport (transport-seam spike).
  *
@@ -59,10 +62,13 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
    * client state, but must not create transport or application state as a
    * side effect. `WsStreamClient` and `RemoteStreamClient` both implement it,
    * and both re-invoke it on reconnect.
+   *
+   * The provider is handed the version it is about to be declared at - see
+   * {@link StreamParamsProvider}.
    */
   subscribeWithParamsProvider<Method extends keyof Registry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
+    paramsProvider: StreamParamsProvider<Registry, Method>,
   ): IStreamSession;
 
   /**
