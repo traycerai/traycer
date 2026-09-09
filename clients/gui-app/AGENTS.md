@@ -323,10 +323,10 @@ Materialized from `skills-lock.json` under `.agents/` / `.claude/`.
 ## Terminal theming (xterm)
 
 Invariants only — read `src/lib/theme-applier.ts`, `terminal-theme.ts`,
-`styles/terminal-themes.css` before changing:
+`lib/themes/builtin-palettes.ts` before changing:
 
 - `theme-applier.ts` owns `<html>` class / `data-theme` (module-load, outside
   React). Don't write those attributes elsewhere.
-- ANSI tokens in CSS (`--term-ansi-*`); new full-palette preset = one CSS block.
+- Palette data (including `--term-ansi-*`) lives in `lib/themes/builtin-palettes.ts`; the applier writes the registered CSS tokens. Add presets to that registry, never theme-name CSS selectors.
 - `buildTerminalTheme` is sync (no flash); unset bright slots L-shift at runtime.
 - Lazy-load `TerminalXtermHost`; clear atlas via `scheduleAtlasClear`.

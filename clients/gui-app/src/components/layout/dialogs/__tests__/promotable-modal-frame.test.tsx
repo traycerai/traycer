@@ -42,6 +42,7 @@ describe("PromotableModalFrame", () => {
           closeTestId="close"
           onPromote={() => {}}
           onClose={() => {}}
+          onOpenAutoFocus={undefined}
         >
           <div data-testid="modal-body">body</div>
         </PromotableModalFrame>

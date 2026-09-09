@@ -1,4 +1,5 @@
 import type { SessionImportSelection } from "@traycer/protocol/host/session-import/candidate";
+import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { appLogger } from "@/lib/logger";
 
@@ -24,11 +25,28 @@ export interface SessionImportRunTarget {
   readonly hostId: string;
 }
 
+export type SessionImportActiveRun = NonNullable<
+  SessionImportStatusResponse["active"]
+>;
+
 interface SessionImportStartHandle {
   readonly start: (
     request: SessionImportRunRequest,
     target: SessionImportRunTarget,
   ) => void;
+  readonly attach: (
+    target: SessionImportRunTarget,
+    run: SessionImportActiveRun,
+  ) => void;
+}
+
+/** Watches the run found by the wizard's status query, without submitting selections. */
+export function attachSessionImportRun(
+  binding: StreamRuntimeBinding | null,
+  run: SessionImportActiveRun,
+): void {
+  if (binding === null || binding.hostId === null) return;
+  ref.current?.attach({ binding, hostId: binding.hostId }, run);
 }
 
 const ref: { current: SessionImportStartHandle | null } = { current: null };

@@ -1,3 +1,4 @@
+import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { PersistentBrowserGuestHost } from "@/components/epic-canvas/browser-guest/persistent-browser-guest-host";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
@@ -237,6 +238,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                   <DesktopZoomController />
                   <ReportIssueDialogHost />
                   <Toaster />
+                  <ThemeEditorHost />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}

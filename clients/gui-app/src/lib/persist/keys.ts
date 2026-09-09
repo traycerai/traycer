@@ -284,6 +284,7 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   { camelName: "settings", leaf: "settings", kind: "static" },
+  { camelName: "themeLibrary", leaf: "theme-library", kind: "static" },
   { camelName: "settingsSection", leaf: "settings-section", kind: "static" },
   {
     camelName: "worktreesSettingsView",

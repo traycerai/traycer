@@ -94,8 +94,13 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
       {
         force: false,
         allowDowngrade: false,
+        acceptStoreFormatLoss: false,
         versionRequest: null,
         ackNonce: "nonce-abcdefgh",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -109,8 +114,13 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
       {
         force: false,
         allowDowngrade: false,
+        acceptStoreFormatLoss: false,
         versionRequest: null,
         ackNonce: null,
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -127,8 +137,13 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
       {
         force: true,
         allowDowngrade: false,
+        acceptStoreFormatLoss: false,
         versionRequest: null,
         ackNonce: "nonce-abcdefgh",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -150,8 +165,13 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
       {
         force: false,
         allowDowngrade: true,
+        acceptStoreFormatLoss: false,
         versionRequest: "1.2.0",
         ackNonce: "nonce-downgrade",
+        intent: null,
+        expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });

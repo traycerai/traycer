@@ -295,6 +295,13 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const operationCopy = describeUpdateOperation({
     view: localUpdate.view,
     hostName: localHostName,
+    // This surface has no CLI-floor lane. The floor is the update REGION's
+    // finding — it comes out of the Overview's summary walk over the available
+    // manifest, which this banner never performs — and the substituted sentence
+    // points at a `Show installation help` affordance that exists only there.
+    // Naming a way forward that is nowhere on this screen is the dead end the
+    // Overview card's own header warns about, so the banner keeps the count.
+    cliFloorBlocked: false,
   });
 
   // THE RENDERED BRANCH, AS A VALUE — computed once and read by the markup, the
@@ -346,7 +353,10 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         }}
       />
       <HostBusyForceDeferDialog
+        purpose="update"
+        detail={null}
         open={busy !== null}
+        title="Host is busy"
         message={forceDialogProps.message}
         isForcing={isPending}
         forceLabel={forceDialogProps.forceLabel}
@@ -591,7 +601,13 @@ function isLandingDismissed(
   view: FleetUpdateView,
   dismissedAttemptIds: ReadonlyArray<string>,
 ): boolean {
-  if (view.kind !== "complete" && view.kind !== "failed") return false;
+  if (
+    view.kind !== "complete" &&
+    view.kind !== "failed" &&
+    view.kind !== "finalizing-record"
+  ) {
+    return false;
+  }
   const attemptId = view.attemptId;
   return attemptId !== null && dismissedAttemptIds.includes(attemptId);
 }
@@ -613,7 +629,17 @@ function useLandingCompletionCollapse(view: FleetUpdateView): void {
   const dismissLandingAttempt = useHostUpdateBannerStore(
     (state) => state.dismissLandingAttempt,
   );
-  const completedAttemptId = view.kind === "complete" ? view.attemptId : null;
+  // `finalizing-record` collapses on the same timer, and for the reason above
+  // stated exactly: it is a SUCCESS nobody has to act on, and it outlives a
+  // retained `complete` rather than expiring sooner — the record it names is
+  // reconciled by the next update RUN, which may be days away and may never
+  // come. Leaving it out would have parked "Updated to v1.2.3. Finalizing the
+  // update record." on the landing page permanently, which is the exact defect
+  // this hook was written to fix, reintroduced through its own omission.
+  const completedAttemptId =
+    view.kind === "complete" || view.kind === "finalizing-record"
+      ? view.attemptId
+      : null;
   useEffect(() => {
     if (completedAttemptId === null) return;
     const timer = setTimeout(() => {
@@ -715,7 +741,16 @@ function OperationContent(props: OperationContentProps) {
           copy already ends "see Diagnostics" and until now named a place with
           no way to get to it.
         */}
-        {view.kind === "failed" || view.kind === "unavailable" ? (
+        {/*
+          `verification-refused` joins the two states that point here, and it is
+          the reason it is not on the Retry gate above: a host that refused the
+          authenticated check will refuse it again, so a Retry would be a button
+          whose only outcome is the same refusal. Diagnostics is the one
+          affordance, and the sentence ends by naming it.
+        */}
+        {view.kind === "failed" ||
+        view.kind === "unavailable" ||
+        view.kind === "verification-refused" ? (
           <Button
             type="button"
             size="sm"

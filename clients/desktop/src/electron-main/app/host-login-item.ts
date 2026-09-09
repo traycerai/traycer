@@ -96,8 +96,11 @@ export function withHostLoginItemRegistrationLock<Result>(
  * - `requires-approval` - registered but disabled by the user in System
  *   Settings → Login Items. launchd refuses to spawn until they re-enable.
  * - `not-registered` - SMAppService has no record of this plist.
- * - `not-found` - the in-bundle plist filename isn't where SMAppService
- *   looks. A packaging bug; never expected at runtime.
+ * - `not-found` - SMAppService cannot see the in-bundle plist. A packaging
+ *   bug in a signed build, but also the steady answer for an ad-hoc-signed
+ *   build (no Team ID for BTM to key the item on) and, per the 2026-07-28
+ *   RCA, for a byte-correct plist whose BTM record is keyed to a previous
+ *   build - in both cases for the life of the process. Not a transient.
  * - `not-supported` - running on a platform/build where SMAppService is
  *   unavailable. Caller MUST gate with `hostManagesHostLoginItem()`.
  */
@@ -182,6 +185,146 @@ export async function hostManagesHostLoginItem(): Promise<boolean> {
  */
 export function readHostLoginItemStatus(): HostLoginItemStatus {
   return readLoginItemStatus(HOST_SERVICE_NAME);
+}
+
+/**
+ * Whether a register cycle that PARKED can be finished by the CLI-owned
+ * LaunchAgent (`host service install --takeover`) instead of failing.
+ *
+ * `takeover` names the one parked state that is unrestorable because there is
+ * nothing to restore: SMAppService cannot see the in-bundle agent plist at all
+ * (`not-found` - an ad-hoc-signed build, or a BTM record keyed to a previous
+ * build - or `not-supported`). No register cycle in this process will ever
+ * put a login item there, so re-running the cycle cannot start a host. On
+ * 2026-09-06 that stranded a machine: `host uninstall` had removed the CLI
+ * registration the host had always run under, the reinstalled app parked on
+ * `not-found`, and every boot retry failed "no host is running to restart"
+ * until a person ran `host service install` by hand. That command is what
+ * the takeover runs, so the desktop can run it itself.
+ *
+ * `not-registered` is deliberately NOT in that set, although
+ * `HostController.isCliTakeoverRecoverableStatus` admits it after a cycle
+ * RAN: a cycle that ends `not-registered` has already booted the old agent
+ * out, so leaving it there strands the machine, and `not-registered` is the
+ * one status the register poll treats as potentially transient (cold-BTM
+ * commit lag). A park booted nothing out, and a fresh read cannot say which
+ * of the guard's three inputs refused - so only the two statuses that are
+ * terminal for the life of the process admit the takeover.
+ *
+ * Four refusals, all read HERE after the park, never from the snapshot the
+ * guard refused on, and every unreadable answer refuses:
+ *
+ *   - `primary-manageable`: the primary status is one SMAppService can still
+ *     act on; the park was about something else.
+ *   - `legacy-registered`: the legacy label reads `enabled` or
+ *     `requires-approval` - a BTM record under the very label the raw plist
+ *     would use, which is the collision the park exists to avoid. Honest
+ *     limit: on an ad-hoc build BOTH labels read `not-found` whatever BTM
+ *     holds, so this is a bound, not a proof; the residual (a BTM record from
+ *     an older signed build under the CLI label, unloaded) is the accepted
+ *     edge `installService` documents on its loaded-state probe, and the
+ *     `register-failed` path already takes the takeover with no legacy check
+ *     at all.
+ *   - `manifest-unreadable`: `~/Library/LaunchAgents/<cli-label>.plist` could
+ *     not be probed - the same input the entry guard refuses on.
+ *   - `job-running` / `job-indeterminate`: launchd reports a live process
+ *     (a positive `pid`, or `state = running`) under either label, or could
+ *     not be asked. This is the down-host proof the callers'
+ *     `prePid === null` is NOT: that is a structural read of `pid.json`, and
+ *     a host in its first seconds after a `KeepAlive` respawn (or one whose
+ *     metadata tore) has none - while the takeover's install boots a loaded
+ *     CLI label out with no cooperative claim, and the CLI's own takeover
+ *     treats missing metadata as a reason to boot the job out underneath a
+ *     host it could not ask. A job that is loaded but has no process is
+ *     fine: the CLI unloads it under its lock and re-registers it, which is
+ *     the start this exists to perform. This read is a snapshot, not a
+ *     lock: a job that starts between it and the CLI taking its contender
+ *     lock is caught THERE - `takeoverDesktopRegistration` asks a live
+ *     CLI-label process to stand down before its reload, refuses one that
+ *     has no endpoint to ask yet, and unloads an idle one itself so launchd
+ *     cannot start it under the install.
+ */
+export type ParkedRegistrationTakeover =
+  | {
+      readonly kind: "takeover";
+      readonly status: "not-found" | "not-supported";
+    }
+  | {
+      readonly kind: "no-takeover";
+      readonly reason:
+        | "primary-manageable"
+        | "legacy-registered"
+        | "manifest-unreadable"
+        | "job-running"
+        | "job-indeterminate";
+    };
+
+export async function readParkedRegistrationTakeover(): Promise<ParkedRegistrationTakeover> {
+  const primary = readLoginItemStatusEvidence(HOST_SERVICE_NAME);
+  if (
+    primary.kind !== "read" ||
+    (primary.status !== "not-found" && primary.status !== "not-supported")
+  ) {
+    return { kind: "no-takeover", reason: "primary-manageable" };
+  }
+  const legacy = readLoginItemStatusEvidence(LEGACY_HOST_SERVICE_NAME);
+  if (
+    legacy.kind !== "read" ||
+    legacy.status === "enabled" ||
+    legacy.status === "requires-approval"
+  ) {
+    return { kind: "no-takeover", reason: "legacy-registered" };
+  }
+  const manifest = await probeCliLabelManifest(
+    userLaunchAgentPlistPath(CLI_HOST_LABEL),
+  );
+  if (manifest.kind === "unreadable") {
+    return { kind: "no-takeover", reason: "manifest-unreadable" };
+  }
+  for (const labelId of [HOST_AGENT_LABEL, CLI_HOST_LABEL]) {
+    const job = await probeLaunchdJobProcess(labelId);
+    if (job !== "none") return { kind: "no-takeover", reason: job };
+  }
+  return { kind: "takeover", status: primary.status };
+}
+
+/**
+ * Whether launchd holds a live process under `labelId`. `job-indeterminate`
+ * when launchd could not be asked (no uid, spawn failure, timeout,
+ * permission, unrecognized output); the caller fails closed on it.
+ */
+async function probeLaunchdJobProcess(
+  labelId: string,
+): Promise<"none" | "job-running" | "job-indeterminate"> {
+  if (typeof process.getuid !== "function") return "job-indeterminate";
+  let result: ProbeCommandResult;
+  try {
+    result = await runAgentPrint(`gui/${process.getuid()}/${labelId}`);
+  } catch {
+    return "job-indeterminate";
+  }
+  const probe = classifyLaunchctlPrintResult(result, null, labelId);
+  if (probe.kind === "absent") return "none";
+  if (probe.kind === "indeterminate") return "job-indeterminate";
+  // An exit-0 answer with no recognizable job fields (truncated output, a
+  // changed format) is `observed` with an indeterminate OWNERSHIP, and its
+  // run state is then empty by construction, not because the job is idle.
+  // Reading that as "no process" would let unreadable evidence authorize
+  // the takeover (Codex, traycer#1761); it fails closed like a non-answer.
+  if (probe.ownership.kind === "indeterminate") return "job-indeterminate";
+  const { pid, jobState } = probe.runState;
+  // `pid = 0` is launchd's idle job, not a process: the shared parser keeps
+  // every finite number as observed, and the CLI's ownership classifier and
+  // `wedge.ts` both read only a positive pid as live. Reading 0 as running
+  // would park this boot cycle, and every retry after it, on a job that has
+  // nothing to interrupt.
+  if (
+    (pid.kind === "observed" && pid.value > 0) ||
+    (jobState.kind === "observed" && jobState.value.toLowerCase() === "running")
+  ) {
+    return "job-running";
+  }
+  return "none";
 }
 
 function readLoginItemStatus(serviceName: string): HostLoginItemStatus {

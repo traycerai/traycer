@@ -297,7 +297,11 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     const applyStaged = vi.fn(() =>
       Promise.resolve<MutationOutcome<ApplyStagedOk>>({
         kind: "ok",
-        value: { appliedVersion: "1.4.2", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.2",
+          runningActivated: true,
+          applied: true,
+        },
       }),
     );
     const activateInstalled = vi.fn(() =>
@@ -327,7 +331,11 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     const applyStaged = vi.fn(() =>
       Promise.resolve<MutationOutcome<ApplyStagedOk>>({
         kind: "ok",
-        value: { appliedVersion: "1.4.2", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.2",
+          runningActivated: true,
+          applied: true,
+        },
       }),
     );
     const management = makeManagement({
@@ -359,7 +367,11 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       })
       .mockResolvedValueOnce({
         kind: "ok" as const,
-        value: { appliedVersion: "1.4.2", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.2",
+          runningActivated: true,
+          applied: true,
+        },
       });
     const management = makeManagement({ status: READY_STATUS, applyStaged });
     renderBanner(makeHost(management));
@@ -367,6 +379,9 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     fireEvent.click(button);
 
     const dialog = await screen.findByTestId("host-busy-force-defer-dialog");
+    // Shared with the restart flow's busy verdict; the purpose attribute is
+    // the one thing that distinguishes the two on a page rendering both.
+    expect(dialog.dataset.purpose).toBe("update");
     expect(dialog.textContent).toContain(
       "Another Traycer process is applying an update.",
     );
@@ -437,7 +452,11 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       })
       .mockResolvedValueOnce({
         kind: "ok" as const,
-        value: { appliedVersion: "1.4.2", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.2",
+          runningActivated: true,
+          applied: true,
+        },
       });
     const management = makeManagement({ status: READY_STATUS, applyStaged });
     renderBanner(makeHost(management));

@@ -118,7 +118,11 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "1.5.0", runningActivated: true },
+          value: {
+            appliedVersion: "1.5.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       ),
     activateInstalled:
@@ -412,7 +416,11 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
       })
       .mockResolvedValueOnce({
         kind: "ok" as const,
-        value: { appliedVersion: "1.5.0", runningActivated: true },
+        value: {
+          appliedVersion: "1.5.0",
+          runningActivated: true,
+          applied: true,
+        },
       });
     const management = makeManagement({ status: READY_STATUS, applyStaged });
     renderListener(makeHost(tray.bridge, management));
@@ -430,6 +438,9 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     const busyDialog = await screen.findByTestId(
       "host-busy-force-defer-dialog",
     );
+    // The tray's busy verdict is the UPDATE commands' (apply / activate);
+    // its restart command confirms through `LocalHostRestartFlow`.
+    expect(busyDialog.dataset.purpose).toBe("update");
     expect(busyDialog.textContent).toContain(
       "Another Traycer process is applying an update.",
     );
