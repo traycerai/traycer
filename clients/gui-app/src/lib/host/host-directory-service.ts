@@ -1130,11 +1130,28 @@ export class HostDirectoryService implements IHostDirectoryService {
       // answers over a directory that is empty EITHER WAY, so the snapshot
       // compare would swallow the one emit that redraws the readiness gate -
       // the same reason the commit path emits unconditionally when the flag
-      // flips. Dropping rows always changes the snapshot, so that half can
-      // still take the compared emit.
-      if (foreignObservedListing) {
+      // flips.
+      //
+      // `concludedBefore` is DOCUMENTARY here, not load-bearing, and a mutation
+      // probe proved it: removing it leaves the suite green. `remoteEntries` is
+      // written in exactly two places and the committing one sets
+      // `hasObservedRemoteListing` from the same outcome, so non-empty rows
+      // imply an observed listing - and the outer condition's other disjunct IS
+      // `foreignObservedListing`, which makes the unconditional arm the only
+      // reachable one. This branch therefore always announces the conclusion
+      // crossing it makes, today, by implication.
+      //
+      // It stays because an implication drawn from two distant assignments is
+      // not a rule a future edit can see. The rule this surface's subscribers
+      // depend on is the one the arm below states: a flag nobody is told about
+      // is a flag no subscriber can act on. Same convention as the `hosts`
+      // check further up - stated so an edit has to keep it, with no test
+      // pinning it, because no mutation of it can go red.
+      if (foreignObservedListing || !concludedBefore) {
         this.emit();
       } else {
+        // Dropping rows always changes the snapshot, so this half can still
+        // take the compared emit.
         this.emitIfSnapshotChanged();
       }
       return this.snapshot();

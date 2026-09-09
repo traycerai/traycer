@@ -453,7 +453,7 @@ describe("deriveWindowNarration", () => {
       expect(state).toEqual({ kind: "silent" });
     });
 
-    it("is silent for a fleet that has answered with a connecting remote, by the ∅ arm never being reached", () => {
+    it("narrates cold-start for a fleet that has answered with a connecting remote - the ∅ arm is never reached", () => {
       // The settled half of the same launch: the listing landed, the authority
       // published a lease, and the window is on a host that has not answered
       // yet. `isUsableForSelection` counts `connecting`, so this is a cold
