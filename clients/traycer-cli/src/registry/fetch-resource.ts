@@ -799,8 +799,27 @@ function parseContentRange(
   return { start, total };
 }
 
+/**
+ * The CLI's own copy of the shared helper of the same name, and it has to keep
+ * that helper's non-throwing contract or the name lies.
+ *
+ * Every caller here is already carrying a verdict: `httpStatusFailure` cancels
+ * BEFORE constructing the error it returns, so a rejecting cancel meant
+ * `throw await httpStatusFailure(...)` threw a stream error and the
+ * "GET <url> returned 404 Not Found" diagnosis was never built; the three
+ * resume-path callers would have lost their `{ kind: "restart" }` the same way,
+ * turning a recoverable resume into a hard failure. `cancel()` rejects when the
+ * connection has already errored - exactly when these paths run - so the leak
+ * this prevents is bounded either way: a body that cannot be cancelled belongs
+ * to a connection that is already gone.
+ */
 async function cancelResponseBody(response: Response): Promise<void> {
-  if (response.body !== null) await response.body.cancel();
+  if (response.body === null) return;
+  try {
+    await response.body.cancel();
+  } catch {
+    // Best effort; the caller's verdict is the one that matters.
+  }
 }
 
 async function finishWriter(writer: WriteStream): Promise<void> {

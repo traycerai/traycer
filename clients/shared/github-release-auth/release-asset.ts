@@ -1,4 +1,7 @@
-import { fetchWithGitHubReleaseAuth } from "./authenticated-fetch";
+import {
+  cancelResponseBody,
+  fetchWithGitHubReleaseAuth,
+} from "./authenticated-fetch";
 import { isAuthorizedGitHubReleaseUrl } from "./policy";
 import { AuthenticationRequiredError } from "./redact";
 import type { GitHubReleaseCredentialResolver } from "./resolver";
@@ -174,7 +177,14 @@ async function assertRepositoryVisible(
     if (signal !== null && signal.aborted) throw error;
     return;
   }
-  if (probe.body !== null) await probe.body.cancel();
+  // Through `cancelResponseBody`, not a raw `cancel()`. This is the LAST call
+  // site of the masked-verdict problem the rest of this change fixes, and it
+  // sat one line above the verdict it would erase: a rejecting cancel here
+  // replaced the caller's 404 on a 200/500 probe, and on a 404 probe it took
+  // out `discardLease()` and the `AuthenticationRequiredError` below with it -
+  // so a revoked credential stayed cached and the CLI reported a generic
+  // registry failure instead of asking the user to re-authenticate.
+  await cancelResponseBody(probe);
   if (probe.status !== 404) return;
   resolver.discardLease();
   throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);

@@ -289,3 +289,75 @@ describe("GitHub release asset URL resolution", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a failing probe-body cancellation cannot rewrite the verdict", () => {
+  // The probe reaches its answer from `status` alone and then releases the
+  // socket. That release sat one line ABOVE the verdict, un-guarded, so a
+  // rejecting `cancel()` replaced whatever the probe had just decided. It
+  // rejects precisely when the connection has already errored - the same
+  // condition that makes a probe worth doing - so this is the reachable case,
+  // not a contrived one.
+  function bodyThatFailsToCancel(): ReadableStream<Uint8Array> {
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel() {
+        throw new Error("cancel failed: connection already gone");
+      },
+    });
+  }
+
+  function stubListing404ThenProbe(probeStatus: number): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/releases/tags/")) {
+          return new Response("no such tag", { status: 404 });
+        }
+        return new Response(bodyThatFailsToCancel(), { status: probeStatus });
+      }),
+    );
+  }
+
+  it.each([
+    ["access is proven", 200],
+    ["the probe itself fails", 500],
+  ])(
+    "keeps the caller's 404 when %s and the probe body will not cancel",
+    async (_label, probeStatus) => {
+      process.env[STAGING_RELEASE_TOKEN_ENV] = "asset-token";
+      const resolver = new GitHubReleaseCredentialResolver();
+      const discard = vi.spyOn(resolver, "discardLease");
+      stubListing404ThenProbe(probeStatus);
+
+      const response = await fetchGitHubReleaseAssetWithAuth(
+        resolver,
+        testPolicy,
+        releaseUrl,
+        {},
+      );
+
+      // The 404 the caller asked about, not the cleanup's exception.
+      expect(response.status).toBe(404);
+      expect(discard).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still discards the lease and raises the auth error when the probe 404s", async () => {
+    process.env[STAGING_RELEASE_TOKEN_ENV] = "asset-token";
+    const resolver = new GitHubReleaseCredentialResolver();
+    const discard = vi.spyOn(resolver, "discardLease");
+    stubListing404ThenProbe(404);
+
+    // The severe arm: a rejecting cancel used to skip BOTH the discard and the
+    // throw, so a credential that can no longer see the repository stayed
+    // cached for the process lifetime and the CLI reported a generic registry
+    // failure instead of asking the user to re-authenticate.
+    await expect(
+      fetchGitHubReleaseAssetWithAuth(resolver, testPolicy, releaseUrl, {}),
+    ).rejects.toBeInstanceOf(AuthenticationRequiredError);
+    expect(discard).toHaveBeenCalledTimes(1);
+  });
+});
