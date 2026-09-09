@@ -112,6 +112,7 @@ function buildMessengerFactory(
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           }),
       },
     });

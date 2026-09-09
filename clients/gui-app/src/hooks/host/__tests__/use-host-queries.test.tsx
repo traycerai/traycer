@@ -133,6 +133,7 @@ function createHostQueriesFixture(): {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           };
         },
       },

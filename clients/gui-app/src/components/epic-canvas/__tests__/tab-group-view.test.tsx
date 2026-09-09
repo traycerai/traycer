@@ -1363,7 +1363,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
 
   const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
 
-  it("renders the published copy + dead-tile banner instead of the live chat body", async () => {
+  it("renders the published copy instead of the live chat body, and leaves the offline-host banner to the copy tile", async () => {
     testState.unreachableHostIds.add(CHAT.hostId);
     testState.sessionHostId = "host-B";
     seedCanvas([CHAT], CHAT.instanceId);
@@ -1376,18 +1376,13 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
         ),
       ).not.toBeNull();
     });
-    const banner = container.querySelector(
-      `[data-testid="chat-dead-tile-${CHAT.id}"]`,
-    );
-    expect(banner).not.toBeNull();
-    // Nothing answered for this chat, so the banner is about the HOST - the
-    // one state of the three that is allowed to tell the reader to go wake a
-    // machine (ticket 47/48's copy split).
-    expect(banner?.getAttribute("data-reason")).toBe("host-offline");
-    // The owner the opening row resolved rides into the banner - the ref in
-    // PUBLISHED_COPY_TILE_ID names user-1, and the banner's ownership
-    // verdict must come from that same row rather than a second lookup.
-    expect(banner?.getAttribute("data-source-owner")).toBe("user-1");
+    // Nothing answered for this chat, so the banner is about the HOST - and
+    // the published-chat tile draws that one itself from the owner's
+    // reachability (`published-chat-tile.test.tsx`). A canvas banner here
+    // was the second of two identical "Bound host is offline" bars.
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).toBeNull();
     // The live chat body must NOT render alongside the copy.
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
@@ -1573,6 +1568,10 @@ describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat o
     );
     expect(banner).not.toBeNull();
     expect(banner?.getAttribute("data-reason")).toBe("chat-not-visible");
+    // The owner the opening row resolved rides into the banner - the ref in
+    // PUBLISHED_COPY_TILE_ID names user-1, and the banner's ownership
+    // verdict must come from that same row rather than a second lookup.
+    expect(banner?.getAttribute("data-source-owner")).toBe("user-1");
     // The live chat body must NOT render alongside the copy.
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
@@ -1732,15 +1731,14 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
         ),
       ).not.toBeNull();
     });
-    const banner = container.querySelector(
-      `[data-testid="chat-dead-tile-${CHAT.id}"]`,
-    );
-    expect(banner).not.toBeNull();
     // SAME host, but nothing answered - reachability outranks the (absent)
-    // terminate, so this keeps the host sentence rather than claiming the
-    // history "is no longer on this host", which would assert something no
-    // one has said while the host is down.
-    expect(banner?.getAttribute("data-reason")).toBe("host-offline");
+    // terminate, so the reader gets the host sentence rather than a claim
+    // that the history "is no longer on this host", which would assert
+    // something no one has said while the host is down. The host sentence
+    // is the copy tile's to draw, so the canvas mounts no banner of its own.
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).toBeNull();
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
     ).toBeNull();

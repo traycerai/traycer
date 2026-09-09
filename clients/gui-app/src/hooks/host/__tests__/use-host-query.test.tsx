@@ -329,6 +329,7 @@ describe("useHostQuery auth readiness", () => {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           };
         },
       },
@@ -877,6 +878,7 @@ function createHostQueryFixture(): {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           };
         },
       },
@@ -932,6 +934,7 @@ function createEndpointGatedHostQueryFixture(): {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           };
         },
       },

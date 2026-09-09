@@ -157,11 +157,27 @@ export function publishedHostProcessGone(metadata: HostPidMetadata): boolean {
 export async function readHostPidMetadataEvidence(
   environment: Environment | undefined,
 ): Promise<HostPidMetadataEvidence> {
-  const logEnvironment = environment ?? config.environment;
+  return readHostPidMetadataEvidenceAt(
+    hostPidMetadataPath(environment),
+    environment ?? config.environment,
+  );
+}
+
+/**
+ * The same read against an EXPLICIT record path, for the one reader that has
+ * to account for a host home other than its own: the swap quiescence check
+ * walks every dev run slot's record before a swap (`swap-quiescence.ts`).
+ * `logEnvironment` only names the environment in the log lines; it resolves
+ * no path.
+ */
+export async function readHostPidMetadataEvidenceAt(
+  path: string,
+  logEnvironment: Environment,
+): Promise<HostPidMetadataEvidence> {
   const logger = createCliLogger(logEnvironment);
   let raw: string;
   try {
-    raw = await readFile(hostPidMetadataPath(environment), "utf8");
+    raw = await readFile(path, "utf8");
   } catch (err) {
     const code = readErrorCode(err);
     if (code === "ENOENT") return { kind: "absent" };

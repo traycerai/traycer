@@ -184,6 +184,7 @@ import {
   ChatHostStartingBanner,
   type ChatDeadTileBannerReason,
 } from "./dead-tile-banner";
+import { unreachableHostBannerReason } from "./unreachable-host-banner-reason";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -517,15 +518,7 @@ export function ChatTile(props: ChatTileProps) {
           chatId={node.id}
           sourceHostId={tabHostId}
           hostLabel={reachability.hostLabel}
-          // The hook's reason, not a constant. This used to hard-code
-          // `host-offline` for every unreachable result, which is how a
-          // `plan-restricted` host — running fine, just with no remote route on
-          // this account's plan — was reported to its owner as being off.
-          reason={
-            reachability.unavailability === "plan-restricted"
-              ? "host-plan-restricted"
-              : "host-offline"
-          }
+          reason={unreachableHostBannerReason(reachability.unavailability)}
           // This mount's body is a load state or a cached live session -
           // never a published copy the banner could truthfully point at.
           showsPublishedCopy={false}

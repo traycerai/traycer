@@ -98,6 +98,9 @@ describe("provisionHost real yank lookup construction", () => {
       onProgress: null,
       force: false,
       acceptStoreFormatLoss: false,
+      // The REAL lookup, by design: this suite pins that constructing it
+      // costs no fetch on the equal-version shortcut.
+      yankLookup: null,
       holdExplicitDowngrade: false,
       adoption: undefined,
       beforeMutate: null,
