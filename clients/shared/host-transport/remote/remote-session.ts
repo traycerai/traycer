@@ -95,6 +95,7 @@ import {
   SESSION_CONTROL_STREAM_ID,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+  SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_FINE_CREDITS,
   creditPayloadSchema,
   decodeMuxFrame,
@@ -290,6 +291,23 @@ export interface RemoteSessionOptions<
   /** Reads the user bearer for the in-channel `open{bearer}` frame (A2). */
   readonly bearer: BearerSourceProvider;
   /**
+   * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
+   * asserted to the host on every session `open` and updated in place through
+   * {@link MuxFrameType.CLOUD_VERDICT_UPDATE}.
+   *
+   * A LIVE READ rather than a captured boolean: this session outlives any one
+   * verdict and re-handshakes across relay drops, so each `open` must carry the
+   * verdict as it stands at that moment.
+   *
+   * Distinct from `CreateRemoteTransportOptions.cloudAuthorized`, which gates
+   * the attach-grant MINT - the permission to reach the relay at all. This one
+   * reports the same fact to the HOST at the other end, so its background work
+   * inherits the verdict instead of defaulting to authorized. Omitted by a
+   * caller with no admission/authorization split to report, which leaves the
+   * open-frame field absent and suppresses the control frame entirely.
+   */
+  readonly cloudAuthorized?: () => boolean;
+  /**
    * Auth recovery hook invoked when the host FATALs the session with
    * `UNAUTHORIZED` - the in-channel `open{bearer}` was rejected (the
    * overnight-wake case: the bearer expired while the renderer slept). The
@@ -422,6 +440,12 @@ export interface IRemoteSession<
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,
   ): IStreamSession;
   notifyBearerRotated(): void;
+  /**
+   * Pushes the session's current cloud verdict in place, if the host advertised
+   * the capability. Independent of {@link notifyBearerRotated}: a verdict can
+   * change with no rotation, and every rotation leaves the verdict alone.
+   */
+  notifyCloudVerdictChanged(): void;
   /**
    * Tells the session that something outside it has evidence its connection
    * should be re-established sooner than the backoff schedule intends.
@@ -598,6 +622,7 @@ interface ActiveConnection {
    */
   hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
+  cloudVerdictUpdateSupported: boolean;
   idempotencyKeySupported: boolean;
   /**
    * Whether the HOST advertised that it can inflate compressed frames, i.e.
@@ -1549,6 +1574,41 @@ export class RemoteSession<
     });
   }
 
+  /**
+   * Pushes the session's current cloud verdict in place if the host advertised
+   * the capability - see {@link IRemoteSession.notifyCloudVerdictChanged}.
+   *
+   * THE TAG CHECK IS NOT OPTIONAL HERE. `decodeMuxFrame` rejects an
+   * unrecognized frame type and the host force-closes on a decode failure, so
+   * sending this to a host that did not advertise it would take down every
+   * logical stream multiplexed inside the session - a strictly worse outcome
+   * than the stale verdict it was trying to fix.
+   *
+   * A session that is not `ready` sends nothing and needs nothing: its next
+   * `open` carries the verdict, read afresh at handshake time.
+   */
+  notifyCloudVerdictChanged(): void {
+    const connection = this.connection;
+    if (
+      this.phase !== "ready" ||
+      connection === null ||
+      !connection.cloudVerdictUpdateSupported
+    ) {
+      return;
+    }
+    const read = this.options.cloudAuthorized;
+    if (read === undefined) {
+      return;
+    }
+    this.enqueueMessage(connection, {
+      type: MuxFrameType.CLOUD_VERDICT_UPDATE,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: { cloudAuthorized: read() },
+      binary: null,
+    });
+  }
+
   /** See {@link IRemoteSession.wake}. */
   wake(reason: string, probe: WakeProbeTuning | null): void {
     if (this.phase === "closed" || this.phase === "idle") {
@@ -1953,6 +2013,7 @@ export class RemoteSession<
       hostManifest: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
+      cloudVerdictUpdateSupported: false,
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       hostAttached: true,
@@ -2254,6 +2315,11 @@ export class RemoteSession<
         CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
       ],
       clientIdentity: this.clientIdentity,
+      // Read HERE, per handshake, not captured at construction: this session
+      // re-opens across relay drops and wake redials, and each of those must
+      // assert the verdict it holds now. A capture would let a session that
+      // dropped while unverified come back authorized.
+      cloudAuthorized: this.options.cloudAuthorized?.(),
     };
     this.enqueueMessage(connection, {
       type: MuxFrameType.OPEN,
@@ -2562,6 +2628,9 @@ export class RemoteSession<
     this.notifyMethodSupportListeners();
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+    );
+    connection.cloudVerdictUpdateSupported = parsed.data.capabilities.includes(
+      SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
     );
     connection.idempotencyKeySupported = parsed.data.capabilities.includes(
       UNARY_CAPABILITY_IDEMPOTENCY_KEY,

@@ -168,6 +168,15 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     (event: HostClientChangeEvent) => void
   >();
   private readonly bearerRotationHandlers = new Set<() => void>();
+  /**
+   * Separate from `bearerRotationHandlers` because the two events are separate:
+   * a verdict can change with no rotation (a demotion whose bearer is
+   * untouched, a regain after a successful validation) and every ordinary
+   * refresh rotates without touching the verdict. One handler set would make
+   * each refresh re-assert a verdict and each verdict change look like a
+   * refresh.
+   */
+  private readonly cloudVerdictHandlers = new Set<() => void>();
 
   constructor(options: HostClientOptions<Registry>) {
     this.registry = options.registry;
@@ -614,6 +623,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     }
   }
 
+  onCloudVerdictChanged(handler: () => void): HostClientUnsubscribe {
+    this.cloudVerdictHandlers.add(handler);
+    return () => {
+      this.cloudVerdictHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Fires every `onCloudVerdictChanged` subscriber. Called by `HostRuntime`
+   * when the auth boundary changes what the active context may SPEND, which is
+   * a different event from rotating what it holds - see
+   * `notifyBearerRotated` above, and the two wire frames they drive.
+   */
+  notifyCloudVerdictChanged(): void {
+    for (const handler of [...this.cloudVerdictHandlers]) {
+      handler();
+    }
+  }
+
   /**
    * Delegates to the messenger. The messenger reads the latest endpoint /
    * context state at call time, so any `bind` / `setRequestContext` update
@@ -902,6 +930,11 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           binding.abortSignal,
           context.abortSignal,
         ]),
+        // Read at authority-construction time, alongside the bearer it belongs
+        // to, so the verdict and the credential this request dispatches under
+        // are one snapshot rather than two reads that can land on opposite
+        // sides of a transition.
+        cloudAuthorized: context.cloudAuthorized,
       },
       authorityDomain: {
         bindingToken: binding.token,
