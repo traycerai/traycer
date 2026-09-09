@@ -1,0 +1,290 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createRequire } from "node:module";
+import { afterEach, describe, expect, it } from "vitest";
+
+const scriptSource = join(
+  process.cwd(),
+  "scripts",
+  "release-target-electron-builder.cjs",
+);
+const stampSource = join(
+  process.cwd(),
+  "..",
+  "scripts",
+  "release-target-stamp.cjs",
+);
+const roots: string[] = [];
+const require = createRequire(import.meta.url);
+
+function desktopStamp(
+  target: "production" | "staging",
+): Record<string, unknown> {
+  const staging = target === "staging";
+  return {
+    target,
+    environment: target,
+    cloud: {
+      traycerServerBaseUrl: `https://api.${target}.example`,
+      authnApiUrl: `https://authn.${target}.example`,
+      cloudUiBaseUrl: `https://app.${target}.example`,
+      relayAttachUrl: `wss://relay.${target}.example/attach`,
+    },
+    sentryEnvironment: target,
+    cliFeedTag: staging ? "cli-manifest-staging" : "cli-manifest",
+    hostDiscoveryTag: staging
+      ? "released-host-versions-staging"
+      : "released-host-versions",
+    // The third fabrication in this fixture, and the one that mattered most:
+    // `TRAYCER_RELEASE_TOKEN` is a variable that exists nowhere. Production
+    // reaches a PUBLIC repository anonymously, so the generator emits `null`
+    // with two empty arrays - the shape that, until now, no test presented.
+    credentialEnvironmentVariable: staging
+      ? "TRAYCER_STAGING_RELEASE_TOKEN"
+      : null,
+    credentialSources: staging ? ["environment", "github-cli"] : [],
+    authorizedOrigins: staging
+      ? ["https://github.com", "https://api.github.com"]
+      : [],
+    cliInstallRoot: staging ? "~/.traycer/cli/staging" : "~/.traycer/cli",
+    windowsTaskName: staging ? "\\Traycer\\Host-Staging" : "\\Traycer\\Host",
+    appId: staging ? "ai.traycer.desktop.staging" : "ai.traycer.desktop",
+    productName: staging ? "Traycer Staging" : "Traycer",
+    protocolScheme: staging ? "traycer-staging" : "traycer",
+    // NOT `target`: the production line's channel is `stable`, and only
+    // staging's channel happens to share its target's name. Spelling it
+    // `production` here fabricated a stamp the generator has never emitted,
+    // which is exactly what `readClientTargetStamp`'s channel check refuses.
+    releaseChannel: staging ? "staging" : "stable",
+    mac: {
+      bundleName: staging ? "Traycer Staging" : "Traycer",
+      // Same fabrication the `releaseChannel` note above describes, twice more:
+      // `ai.traycer.<target>.host` interpolates the TARGET NAME into an id the
+      // descriptor derives from the app id, so it matched neither row. The real
+      // values are `ai.traycer.desktop[.staging].host` and, for the agent,
+      // `<serviceLabelId>.agent` - which is what the CLI registers and what
+      // SMAppService resolves the in-bundle plist by.
+      helperBundleId: staging
+        ? "ai.traycer.desktop.staging.host"
+        : "ai.traycer.desktop.host",
+      launchAgentLabel: staging
+        ? "ai.traycer.host.staging.agent"
+        : "ai.traycer.host.agent",
+    },
+    windows: {
+      appUserModelId: staging
+        ? "ai.traycer.desktop.staging"
+        : "ai.traycer.desktop",
+      executableName: staging ? "Traycer-Staging" : "Traycer",
+      installerDisplayName: staging ? "Traycer Staging" : "Traycer",
+    },
+    linux: {
+      deb: { packageName: staging ? "traycer-staging" : "traycer" },
+      rpm: { packageName: staging ? "traycer-staging" : "Traycer" },
+      executableName: staging ? "traycer-staging" : "traycer",
+      // WITH the `.desktop` suffix, as the generator emits and as
+      // package.json's `desktopName` carries - it is the installed filename,
+      // not a stem. The config now stamps it, so a suffix-less fixture would
+      // assert a launcher named `traycer-staging` that nothing installs.
+      desktopEntryName: staging
+        ? "traycer-staging.desktop"
+        : "traycer-desktop.desktop",
+    },
+    updaterPackageName: staging ? "traycer-staging-desktop" : "traycer",
+    updaterCacheDirName: staging
+      ? "traycer-staging-updater"
+      : "traycer-updater",
+    updaterChannel: "latest",
+    updaterChannelFiles: ["latest.yml"],
+  };
+}
+
+function createProject(target: "production" | "staging" | "unstamped"): {
+  projectDir: string;
+  configPath: string;
+  generatedPath: string;
+} {
+  const root = mkdtempSync(join(tmpdir(), "traycer-electron-builder-test-"));
+  roots.push(root);
+  const projectDir = join(root, "clients", "desktop");
+  mkdirSync(join(projectDir, "scripts"), { recursive: true });
+  mkdirSync(join(projectDir, "src"), { recursive: true });
+  mkdirSync(join(projectDir, "resources", "bundle"), { recursive: true });
+  mkdirSync(join(root, "clients", "scripts"), { recursive: true });
+  writeFileSync(
+    join(projectDir, "scripts", "release-target-electron-builder.cjs"),
+    readFileSync(scriptSource),
+  );
+  writeFileSync(
+    join(root, "clients", "scripts", "release-target-stamp.cjs"),
+    readFileSync(stampSource),
+  );
+  const configPath = join(projectDir, "src", "config.ts");
+  writeFileSync(
+    configPath,
+    `export const config = { environment: "${target === "unstamped" ? "dev" : target}" };\n`,
+  );
+  writeFileSync(
+    join(projectDir, "package.json"),
+    JSON.stringify({
+      build: {
+        appId: "old.app",
+        productName: "Old Traycer",
+        mac: { executableName: "OldTraycer" },
+        win: { executableName: "OldTraycer" },
+        linux: { executableName: "old-traycer" },
+        deb: { packageName: "old-deb" },
+        rpm: { packageName: "old-rpm" },
+        nsis: { include: "uninstall-host-autostart.nsh" },
+      },
+    }),
+  );
+  if (target !== "unstamped") {
+    writeFileSync(
+      join(projectDir, ".release-target-stamp.json"),
+      JSON.stringify(desktopStamp(target)),
+    );
+  }
+  return {
+    projectDir,
+    configPath,
+    generatedPath: join(
+      projectDir,
+      "resources",
+      "bundle",
+      ".release-target-uninstall-host-autostart.nsh",
+    ),
+  };
+}
+
+function run(projectDir: string): Record<string, unknown> {
+  const modulePath = join(
+    projectDir,
+    "scripts",
+    "release-target-electron-builder.cjs",
+  );
+  execFileSync(process.execPath, [modulePath], {
+    cwd: projectDir,
+    env: { ...process.env, TRAYCER_RELEASE_REPO: "acme/private-traycer" },
+    encoding: "utf8",
+  });
+  const previousRepo = process.env.TRAYCER_RELEASE_REPO;
+  process.env.TRAYCER_RELEASE_REPO = "acme/private-traycer";
+  try {
+    return require(modulePath) as Record<string, unknown>;
+  } finally {
+    if (previousRepo === undefined) {
+      Reflect.deleteProperty(process.env, "TRAYCER_RELEASE_REPO");
+    } else {
+      process.env.TRAYCER_RELEASE_REPO = previousRepo;
+    }
+  }
+}
+
+afterEach(() => {
+  while (roots.length > 0) {
+    const root = roots.pop();
+    if (root !== undefined) rmSync(root, { recursive: true, force: true });
+  }
+});
+
+describe("release-target-electron-builder", () => {
+  it("projects staging identity, package names, publish target, and generated NSIS include", () => {
+    const fixture = createProject("staging");
+    const config = run(fixture.projectDir);
+    expect(config).toMatchObject({
+      appId: "ai.traycer.desktop.staging",
+      productName: "Traycer Staging",
+      protocols: [{ name: "Traycer Staging", schemes: ["traycer-staging"] }],
+      // `desktopName` alongside `name`: with `linux.syncDesktopName` true,
+      // electron-builder takes the installed .desktop FILENAME from this key
+      // and only falls back to `executableName` when it is absent - and
+      // package.json sets it. Overriding the executable alone therefore left
+      // the staging package installing production's `traycer-desktop.desktop`,
+      // so co-installing the two had them fight over one launcher file.
+      extraMetadata: {
+        name: "traycer-staging-desktop",
+        desktopName: "traycer-staging.desktop",
+      },
+      deb: { packageName: "traycer-staging" },
+      rpm: { packageName: "traycer-staging" },
+      publish: [
+        {
+          provider: "github",
+          owner: "acme",
+          repo: "private-traycer",
+          channel: "latest",
+        },
+      ],
+      nsis: { include: ".release-target-uninstall-host-autostart.nsh" },
+    });
+    expect(config.mac).toMatchObject({ executableName: "Traycer Staging" });
+    expect(config.win).toMatchObject({ executableName: "Traycer-Staging" });
+    expect(config.linux).toMatchObject({ executableName: "traycer-staging" });
+    const nsis = readFileSync(fixture.generatedPath, "utf8");
+    expect(nsis).toContain(
+      '!define TRAYCER_WINDOWS_TASK_NAME "\\Traycer\\Host-Staging"',
+    );
+    expect(nsis).toContain('!define TRAYCER_WINDOWS_TASK_FOLDER "Traycer"');
+    expect(nsis).toContain(
+      '!define TRAYCER_HOST_LAUNCHER "$PROFILE\\.traycer\\cli\\staging\\host-start-hidden.vbs"',
+    );
+    expect(nsis).toContain('!include "uninstall-host-autostart.nsh"');
+  });
+
+  it("keeps production deb/rpm casing and historical task identity", () => {
+    const fixture = createProject("production");
+    const config = run(fixture.projectDir);
+    expect(config).toMatchObject({
+      deb: { packageName: "traycer" },
+      rpm: { packageName: "Traycer" },
+    });
+    expect(readFileSync(fixture.generatedPath, "utf8")).toContain(
+      '!define TRAYCER_WINDOWS_TASK_NAME "\\Traycer\\Host"',
+    );
+  });
+
+  it("refuses an unstamped config", () => {
+    const fixture = createProject("unstamped");
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(
+          fixture.projectDir,
+          "scripts",
+          "release-target-electron-builder.cjs",
+        ),
+      ],
+      { cwd: fixture.projectDir, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("release-stamped config");
+  });
+
+  it("refuses a staging stamp when no release repository is configured", () => {
+    const fixture = createProject("staging");
+    const modulePath = join(
+      fixture.projectDir,
+      "scripts",
+      "release-target-electron-builder.cjs",
+    );
+    const env = { ...process.env };
+    Reflect.deleteProperty(env, "TRAYCER_RELEASE_REPO");
+    Reflect.deleteProperty(env, "RELEASE_REPO");
+    const result = spawnSync(process.execPath, [modulePath], {
+      cwd: fixture.projectDir,
+      encoding: "utf8",
+      env,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("TRAYCER_RELEASE_REPO");
+  });
+});

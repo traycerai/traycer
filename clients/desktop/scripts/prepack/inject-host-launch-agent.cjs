@@ -60,11 +60,56 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { Arch } = require("electron-builder");
+const {
+  readClientTargetStamp,
+} = require("../../../scripts/release-target-stamp.cjs");
 
 const pkg = require("../../package.json");
-const PRODUCT_NAME = pkg.build.productName;
-const APP_ID = pkg.build.appId;
 const CONFIG_PATH = path.resolve(__dirname, "..", "..", "src", "config.ts");
+const TARGET_STAMP_PATH = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  ".release-target-stamp.json",
+);
+
+function packagingIdentity() {
+  const source = fs.readFileSync(CONFIG_PATH, "utf8");
+  const match = /environment:\s*"(dev|staging|production)"/.exec(source);
+  if (match === null || match[1] === "dev") return null;
+  if (fs.existsSync(TARGET_STAMP_PATH)) {
+    const stamp = readClientTargetStamp(TARGET_STAMP_PATH, match[1], "desktop");
+    if (!stamp.mac.launchAgentLabel.endsWith(".agent")) {
+      throw new Error("macOS launchAgentLabel must end in .agent");
+    }
+    return {
+      productName: stamp.productName,
+      appId: stamp.appId,
+      helperBundleId: stamp.mac.helperBundleId,
+      agentLabel: stamp.mac.launchAgentLabel,
+      legacyLabel: stamp.mac.launchAgentLabel.slice(0, -".agent".length),
+    };
+  }
+  if (match[1] === "production") {
+    return {
+      productName: pkg.build.productName,
+      appId: pkg.build.appId,
+      helperBundleId: `${pkg.build.appId}.host`,
+      agentLabel: "ai.traycer.host.agent",
+      legacyLabel: "ai.traycer.host",
+    };
+  }
+  // A staging config with NO stamp is the local dogfood installer
+  // (`make install-desktop-staging` in the internal repo), which string-patches
+  // `environment` and packages without a release stamp. That path never had
+  // the helper injected before the stamp existed - `isProductionStamped()`
+  // returned false for it - and it still does not: `afterPack` stays a no-op.
+  return null;
+}
+
+const PACKAGING_IDENTITY = packagingIdentity();
+const PRODUCT_NAME = PACKAGING_IDENTITY?.productName ?? pkg.build.productName;
+const APP_ID = PACKAGING_IDENTITY?.appId ?? pkg.build.appId;
 const CLI_BINARY_NAME = "traycer";
 // The launcher's BASENAME is what the user reads in System Settings → Login
 // Items, so it is a product name, not a filename.
@@ -103,9 +148,8 @@ const HOST_START_COMPAT_LAUNCHER = `${PRODUCT_NAME} Host`;
 const HOST_NODE_OPTIONS = "--max-semi-space-size=16";
 const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
 // Matches `PRODUCTION_LABEL.id` in `src/electron-main/host/host-paths.ts`.
-// Production-only: `scripts/set-deploy-target.cjs --target=production` (run
-// by release-desktop.yml before packaging) is the only stamp this label is
-// valid for - see `isProductionStamped` below.
+// Release builds derive this label from their target stamp; the fallbacks below
+// retain the production identity for the historical unstamped package path.
 //
 // Since the label split (`host-paths.ts:smAppServiceAgentLabelId`), the
 // desktop registers the AGENT label below - `<cli-label>.agent` - and
@@ -119,17 +163,17 @@ const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
 // with `host-paths.ts:smAppServiceAgentLabelId`, the CLI's
 // `service/label.ts:smAppServiceAgentLabelId`, and the internal repo's
 // `desktop-install-cloud.js:hostAgentLabel` (none can import this file).
-const PRODUCTION_LABEL = "ai.traycer.host";
-const PRODUCTION_AGENT_LABEL = `${PRODUCTION_LABEL}.agent`;
+const SERVICE_LABEL = PACKAGING_IDENTITY?.legacyLabel ?? "ai.traycer.host";
+const SERVICE_AGENT_LABEL =
+  PACKAGING_IDENTITY?.agentLabel ?? `${SERVICE_LABEL}.agent`;
 
-// `set-deploy-target.cjs` rewrites `environment: "dev"` to
-// `environment: "production"` in place before packaging for release; an
+// `set-deploy-target.cjs` rewrites `environment: "dev"` to a release target
+// in place before packaging; an
 // unstamped local `bun run package[:dir]` build stays on `"dev"` and would
 // register under a different, dev-scoped label, so injecting the production
 // plist for it would just be dead weight the app never looks at.
-function isProductionStamped() {
-  const source = fs.readFileSync(CONFIG_PATH, "utf8");
-  return /environment:\s*"production"/.test(source);
+function isReleaseStamped() {
+  return PACKAGING_IDENTITY !== null;
 }
 
 function escapeXml(value) {
@@ -314,7 +358,7 @@ function installHelperApp(appPath, archName) {
   <key>CFBundleIconFile</key>
   <string>icon</string>
   <key>CFBundleIdentifier</key>
-  <string>${APP_ID}.host</string>
+  <string>${PACKAGING_IDENTITY?.helperBundleId ?? `${APP_ID}.host`}</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
@@ -353,7 +397,7 @@ function codesign(identity, targetPath) {
 
 exports.afterPack = async function afterPack(context) {
   if (context.electronPlatformName !== "darwin") return;
-  if (!isProductionStamped()) return;
+  if (!isReleaseStamped()) return;
   const appPath = appPathFor(context);
   const archName = Arch[context.arch];
   const { helperAppPath, helperBinary, compatibilityLauncher } =
@@ -387,7 +431,7 @@ exports.afterPack = async function afterPack(context) {
   // label-split rationale above the label constants). Identical bodies
   // apart from the Label; the old one is never loaded by anything - the
   // desktop only ever `unregister`s its serviceName.
-  for (const label of [PRODUCTION_AGENT_LABEL, PRODUCTION_LABEL]) {
+  for (const label of [SERVICE_AGENT_LABEL, SERVICE_LABEL]) {
     fs.writeFileSync(
       path.join(launchAgentsDir, `${label}.plist`),
       buildLaunchAgentPlist(label, relativeCompatibilityLauncher),
