@@ -1,10 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { useMemo } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { useMemo, useState } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { useEpicChatSortClock } from "@/components/epic-canvas/sidebar/epic-sidebar-filter";
+import type { NodeSortClock } from "@/lib/epic-sort";
 import {
   CHATS_TREE_FILTER,
   collectVisibleSidebarTreeIds,
@@ -211,6 +213,51 @@ function ProviderlessOrderProbe() {
   );
 }
 
+/**
+ * The clock itself, rather than the order derived from it.
+ *
+ * The order probe above cannot see the clock's CONTENT: with no session there
+ * is no tree, so an empty order is what it reports whatever the clock says. A
+ * mutation proved that - a no-session clock carrying a bogus entry passed every
+ * test in this file. What the surface is owed is a NEUTRAL clock, and neutral is
+ * a fact about the map, so it has to be read off the map.
+ */
+function ProviderlessClockProbe() {
+  const clock = useEpicChatSortClock();
+  // The FIRST render's clock, held by a state initializer - which runs exactly
+  // once - rather than a ref, because reading a ref during render is banned
+  // here. A snapshot that is not identity-stable is not merely churn: React
+  // requires `useSyncExternalStore`'s snapshot to be cached, and re-mints loop.
+  const [firstClock] = useState<NodeSortClock | null>(clock);
+  return (
+    <>
+      <output data-testid="clock-size">
+        {clock === null ? "null" : clock.size}
+      </output>
+      <output data-testid="clock-stable">{String(clock === firstClock)}</output>
+    </>
+  );
+}
+
+/**
+ * The in-session path, counting SUBSCRIPTIONS rather than reading a value.
+ *
+ * `useEpicStore` handed `useSyncExternalStore` the store's own `subscribe`,
+ * which is one stable reference for the life of the store, so the sidebar
+ * subscribed once however often it re-rendered. Reaching the store directly
+ * puts that reference behind a closure over the handle, and an unmemoised one
+ * would re-subscribe on every render of a panel that re-renders constantly.
+ * Nothing else in the suite would notice.
+ */
+function CountingSessionClockProbe(props: { readonly label: string }) {
+  const clock = useEpicChatSortClock();
+  return (
+    <output data-testid="session-clock">
+      {props.label}:{clock === null ? "null" : clock.size}
+    </output>
+  );
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -260,6 +307,53 @@ describe("useSidebarChatOrder", () => {
     }).not.toThrow();
     expect(screen.getByTestId("providerless-order").textContent).toBe("");
     expect(screen.getByTestId("providerless-hidden").textContent).toBe("0");
+  });
+
+  it("hands a providerless surface an EMPTY clock, and the same one each render", () => {
+    const view = render(<ProviderlessClockProbe />);
+
+    // Empty is the neutral answer, not a degraded one: the clock carries only
+    // the entries that differ from a node's own stamp, so none means every
+    // node sorts on its own stamp - what this surface did before the clock.
+    expect(screen.getByTestId("clock-size").textContent).toBe("0");
+
+    view.rerender(<ProviderlessClockProbe />);
+
+    expect(screen.getByTestId("clock-stable").textContent).toBe("true");
+  });
+
+  it("subscribes to the session store once, however often it re-renders", () => {
+    const handle = createSession();
+    // Spied on the REAL handle rather than a rebuilt one: the store is a
+    // callable bound store, and a spread copy silently drops its call
+    // signature.
+    const subscribeSpy = vi.spyOn(handle.store, "subscribe");
+    const view = render(
+      <EpicSessionContext.Provider value={handle}>
+        <CountingSessionClockProbe label="a" />
+      </EpicSessionContext.Provider>,
+    );
+    try {
+      const afterFirst = subscribeSpy.mock.calls.length;
+      expect(afterFirst).toBeGreaterThan(0);
+
+      for (const label of ["b", "c", "d"]) {
+        view.rerender(
+          <EpicSessionContext.Provider value={handle}>
+            <CountingSessionClockProbe label={label} />
+          </EpicSessionContext.Provider>,
+        );
+      }
+      // The probe really did re-render, so the count below is a fact about
+      // re-subscription rather than about a component that never ran again.
+      expect(screen.getByTestId("session-clock").textContent).toContain("d:");
+
+      expect(subscribeSpy.mock.calls.length).toBe(afterFirst);
+    } finally {
+      subscribeSpy.mockRestore();
+      view.unmount();
+      handle.dispose();
+    }
   });
 });
 
