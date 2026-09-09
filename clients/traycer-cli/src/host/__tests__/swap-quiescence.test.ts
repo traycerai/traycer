@@ -360,6 +360,12 @@ describe("observeSwapQuiescence", () => {
       // the previous test's calls - this describe reads BOTH kinds of record.
       mocks.readHostHolderEvidenceMock.mockReset();
       mocks.readHostHolderEvidenceMock.mockResolvedValue({ kind: "absent" });
+      // And the service probe, for the same reason twice over: tests here
+      // assert WHICH labels were probed, and some install an implementation
+      // that must not outlive them. Restored to the file-level default, so a
+      // later describe still starts from "will not respawn".
+      mocks.macosServiceMayRespawnMock.mockReset();
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
     });
     afterEach(async () => {
       sandbox.root = null;
@@ -518,10 +524,21 @@ describe("observeSwapQuiescence", () => {
       // The other half of the same finding: the pid walk covered slot B while
       // the settle probe only ever asked about slot A's label, so a sibling
       // job inside its relaunch window cleared the swap.
+      //
+      // Both slots are created HERE rather than leaned on from the first test
+      // in this describe: that one runs unwrapped, so it reaches the macOS
+      // probe only on a macOS developer's machine, and this assertion passed
+      // on darwin off its leaked calls while failing on CI's Linux. The
+      // `beforeEach` reset makes the set below this test's OWN probes, and
+      // creating both slots makes every label it asserts one it actually put
+      // on disk - the own label is `serviceLabelFor`'s, which reads an ambient
+      // `DEV_DESKTOP_SLOT` this suite must not inherit an answer from.
+      await mkdir(join(root, "host", "dev-runs", "slot-a"), {
+        recursive: true,
+      });
       await mkdir(join(root, "host", "dev-runs", "slot-b"), {
         recursive: true,
       });
-      mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
 
       await withPlatform("darwin", async () => {
         await expect(
@@ -537,6 +554,74 @@ describe("observeSwapQuiescence", () => {
       expect(probed).toContain("ai.traycer.host.dev.slot-a");
       expect(probed).toContain("ai.traycer.host.dev.slot-b");
       expect(probed).toContain("ai.traycer.host.dev");
+    });
+
+    it("does NOT clear when a run slot appears while the service manager is being probed - its records are re-read, but its job never was", async () => {
+      // The backstop for the finding above, along the TIME axis. The probes
+      // are subprocess calls; a slot created while they run is named by the
+      // re-resolution that follows them, and clearing on that re-read would
+      // clear on a job nothing ever asked about - exactly the writer this wait
+      // exists to catch.
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+      mocks.macosServiceMayRespawnMock.mockImplementation(async () => {
+        await mkdir(join(root, "host", "dev-runs", "slot-c"), {
+          recursive: true,
+        });
+        return false;
+      });
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: false, reason: "unseen-writers" });
+      });
+
+      const probed = new Set(
+        mocks.macosServiceMayRespawnMock.mock.calls.map(
+          (call) => (call[0] as { id: string }).id,
+        ),
+      );
+      expect(probed).not.toContain("ai.traycer.host.dev.slot-c");
+    });
+
+    it("probes a run slot that appears DURING the settle wait, and clears once its job is proven too", async () => {
+      // The other side of the same coin: the label set is re-resolved after
+      // every sleep, so a slot created mid-wait is probed by the next round
+      // rather than only noticed by the final re-read. Without that the swap
+      // could never clear while a slot appeared - the backstop above would
+      // refuse forever - so this is the half that keeps the wait USEFUL.
+      await mkdir(join(root, "host", "dev-runs", "slot-b"), {
+        recursive: true,
+      });
+      // REAL timers, and so one real 500 ms poll: the loop's re-resolution is
+      // a `readdir` of the temp root, and faking timers around real filesystem
+      // work is how an earlier round of this suite deadlocked. One sleep is
+      // cheaper than that class of flake.
+      let round = 0;
+      mocks.macosServiceMayRespawnMock.mockImplementation(async () => {
+        round += 1;
+        if (round > 1) return false;
+        // Busy on the first round only, and the slot lands while it is busy.
+        await mkdir(join(root, "host", "dev-runs", "slot-c"), {
+          recursive: true,
+        });
+        return true;
+      });
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence("dev", DEV_ROOTS, fakeLogger()),
+        ).resolves.toEqual({ established: true });
+      });
+
+      const probed = new Set(
+        mocks.macosServiceMayRespawnMock.mock.calls.map(
+          (call) => (call[0] as { id: string }).id,
+        ),
+      );
+      expect(probed).toContain("ai.traycer.host.dev.slot-c");
     });
 
     it("is NOT established, with reason unseen-writers, when dev-runs cannot be read - and consults no record", async () => {

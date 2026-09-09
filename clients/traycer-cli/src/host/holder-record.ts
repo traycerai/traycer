@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/host/lifecycle";
 import { isProcessAlive } from "../store/cli-lock";
 import { readProcessStartIdentity } from "../store/process-identity";
+import { isReadablePid } from "./pid-value";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
 
@@ -85,8 +86,11 @@ export async function readHostHolderEvidenceAt(
     return { kind: "unreadable", cause: "not a JSON object" };
   }
   const obj = parsed as Record<string, unknown>;
-  if (typeof obj.pid !== "number") {
-    return { kind: "unreadable", cause: "malformed record (pid missing)" };
+  // Positive integer, not merely a number - `isReadablePid` owns why. Shared
+  // with `pid.json`'s reader so one file's worth of corruption cannot read as
+  // malformed to one record reader and as a live writer to the other.
+  if (!isReadablePid(obj.pid)) {
+    return { kind: "unreadable", cause: "malformed record (pid unusable)" };
   }
   return {
     kind: "read",

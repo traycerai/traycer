@@ -175,7 +175,7 @@ export async function observeSwapQuiescence(
   return await quiescenceOnceServiceSettles(
     environment,
     surveyRoots,
-    writers.extraServiceLabels,
+    writers,
     logger,
   );
 }
@@ -197,19 +197,26 @@ export async function observeSwapQuiescence(
  *   and reading only this process's label was the hole that made the widened
  *   walk unsound.
  */
+interface WriterEvidenceRecords {
+  readonly kind: "records";
+  readonly pidPaths: readonly string[];
+  readonly holderPaths: readonly string[];
+  /**
+   * The labels BESIDES this environment's own, which is probed through
+   * `serviceManagerMayRespawn` - the seam every caller and suite already
+   * knows. Empty on every shipped path, so production probes exactly what
+   * it always did.
+   */
+  readonly extraServiceLabels: readonly ServiceLabel[];
+}
+
+/**
+ * The resolution, which either names every source or admits it cannot. Named
+ * apart from the records themselves because the settle loop carries ONE round's
+ * records forward to compare the next resolution against.
+ */
 type WriterEvidenceSources =
-  | {
-      readonly kind: "records";
-      readonly pidPaths: readonly string[];
-      readonly holderPaths: readonly string[];
-      /**
-       * The labels BESIDES this environment's own, which is probed through
-       * `serviceManagerMayRespawn` - the seam every caller and suite already
-       * knows. Empty on every shipped path, so production probes exactly what
-       * it always did.
-       */
-      readonly extraServiceLabels: readonly ServiceLabel[];
-    }
+  | WriterEvidenceRecords
   | { readonly kind: "unenumerable"; readonly cause: string };
 
 /**
@@ -236,9 +243,12 @@ type WriterEvidenceSources =
  *   live child is precisely the writer the settle wait exists to catch, and
  *   reading only this process's label left every sibling slot unprobed.
  *
- * Resolved on EVERY ask rather than once per swap: a slot can appear while
- * the service manager is being waited on, and the reads after that wait have
- * to see it. A `dev-runs` that does not exist is the ordinary single-desktop
+ * Resolved on EVERY round rather than once per swap - before the first probe,
+ * again after every settle sleep, and once more before clearing: a slot can
+ * appear while the service manager is being waited on, and both the reads AND
+ * the probes after that wait have to see it. A resolution that names a source
+ * the round's probes did not cover cannot clear (`sourcesAppearedSince`).
+ * A `dev-runs` that does not exist is the ordinary single-desktop
  * machine and yields no slots; one that cannot be read, or that holds a
  * symlink, is a walk this process cannot complete and answers `unseen-writers`
  * - the same rule the identity pool's own enumeration follows, for the same
@@ -371,7 +381,7 @@ function unseenWriters(
  */
 async function publishedHostProcessState(
   environment: Environment,
-  sources: Extract<WriterEvidenceSources, { kind: "records" }>,
+  sources: WriterEvidenceRecords,
   logger: ILogger,
 ): Promise<SwapQuiescence | null> {
   for (const path of sources.pidPaths) {
@@ -463,52 +473,57 @@ const SERVICE_PROBE_TIMEOUT_MS = 10_000;
 async function quiescenceOnceServiceSettles(
   environment: Environment,
   surveyRoots: ChatStoreSurveyRoots,
-  extraLabels: readonly ServiceLabel[],
+  initialWriters: WriterEvidenceRecords,
   logger: ILogger,
 ): Promise<SwapQuiescence> {
   const startedAt = performance.now();
   const remainingMs = (): number =>
     SERVICE_SETTLE_TIMEOUT_MS - (performance.now() - startedAt);
-  // EVERY enumerated label, under the one shared deadline. Any job that could
-  // start a writer keeps the whole set unsettled; probing only this process's
-  // label cleared the swap while a sibling slot's job was in its relaunch
-  // window.
-  const probe = async (): Promise<boolean> => {
+  let waited = false;
+  // The sources THIS round probes. Re-resolved after every sleep rather than
+  // captured once for the wait: a run slot can be created while the manager is
+  // being waited on, and its job can start a writer exactly as a sibling
+  // slot's can. Holding the label set fixed for the whole window would reopen
+  // along the TIME axis the hole the widened walk closed along the slot axis.
+  let writers = initialWriters;
+  for (;;) {
     const budget = Math.max(
       1,
       Math.min(SERVICE_PROBE_TIMEOUT_MS, Math.ceil(remainingMs())),
     );
-    // CONCURRENT, and one budget for the set rather than one each: the
-    // deadline is shared, so probing N labels in sequence would let a slow
-    // manager eat the whole window before the next label is asked at all.
-    // Every label is asked on every poll, so a job that appears mid-wait is
-    // seen by the next round.
+    // EVERY label this round knows of, CONCURRENT, and one budget for the set
+    // rather than one each: the deadline is shared, so probing N labels in
+    // sequence would let a slow manager eat the whole window before the next
+    // label is asked at all. Any job that could start a writer keeps the whole
+    // set unsettled.
     const answers = await Promise.all([
       // This environment's own label through the established seam, so every
       // caller and suite that stubs `serviceManagerMayRespawn` keeps working
       // and the shipped single-label path stays byte-identical to before.
       serviceManagerMayRespawn(environment, budget),
-      ...extraLabels.map((label) => serviceLabelMayRespawn(label, budget)),
+      ...writers.extraServiceLabels.map((label) =>
+        serviceLabelMayRespawn(label, budget),
+      ),
     ]);
-    return answers.some((mayRespawn) => mayRespawn);
-  };
-  let mayRespawn = await probe();
-  if (!mayRespawn) {
-    // Re-read the writers before clearing. The probes above are asynchronous
-    // and take real time, so a host that published during them is invisible to
-    // the reads that preceded them - the same race the post-wait re-read below
-    // closes, which this early return used to skip entirely.
-    return await quiescenceOnceWritersRechecked(
-      environment,
-      surveyRoots,
-      logger,
-    );
-  }
-  logger.debug(
-    "Host store-format floor: the service manager still holds a host job after the stop; waiting for it to settle",
-    { environment, timeoutMs: SERVICE_SETTLE_TIMEOUT_MS },
-  );
-  while (mayRespawn) {
+    if (!answers.some((mayRespawn) => mayRespawn)) {
+      // Re-read the writers before clearing. The probes above are asynchronous
+      // and take real time, so a host that published during them is invisible
+      // to the reads that preceded them - the same race the post-wait re-read
+      // closes, which the first probe's early return used to skip entirely.
+      return await quiescenceOnceWritersRechecked(
+        environment,
+        surveyRoots,
+        writers,
+        logger,
+      );
+    }
+    if (!waited) {
+      waited = true;
+      logger.debug(
+        "Host store-format floor: the service manager still holds a host job after the stop; waiting for it to settle",
+        { environment, timeoutMs: SERVICE_SETTLE_TIMEOUT_MS },
+      );
+    }
     const remaining = remainingMs();
     if (remaining <= 0) {
       logger.info(
@@ -523,27 +538,47 @@ async function quiescenceOnceServiceSettles(
     await new Promise<void>((resolve) => {
       setTimeout(resolve, Math.min(SERVICE_SETTLE_POLL_MS, remaining));
     });
-    mayRespawn = await probe();
+    const next = await resolveWriterEvidenceSources(environment, surveyRoots);
+    if (next.kind === "unenumerable") {
+      return unseenWriters(environment, surveyRoots, next.cause, logger);
+    }
+    writers = next;
   }
-  return await quiescenceOnceWritersRechecked(environment, surveyRoots, logger);
 }
 
 /**
  * Re-resolve the writers and clear only if none of them stands in the way.
  *
- * Re-resolved rather than reused, on BOTH exits from the settle probe: the
- * probes are subprocess calls that take real time, so a slot that appeared -
- * or a host that published - while they ran is invisible to the reads that
- * preceded them.
+ * Re-resolved rather than reused: the probes are subprocess calls that take
+ * real time, so a slot that appeared - or a host that published - while they
+ * ran is invisible to the reads that preceded them.
+ *
+ * Which is exactly why a re-resolution that names a source the round did NOT
+ * probe cannot be read as clearance. Its RECORDS are read here, but the job
+ * that could start its writer never was, and a loaded job with no live child
+ * is precisely the writer this whole wait exists to catch. Answering
+ * `unseen-writers` says the true thing - this process could not get one stable
+ * picture of the machine - and costs a retry on a dev box where a run slot
+ * appeared during the swap's own settle window.
  */
 async function quiescenceOnceWritersRechecked(
   environment: Environment,
   surveyRoots: ChatStoreSurveyRoots,
+  probed: WriterEvidenceRecords,
   logger: ILogger,
 ): Promise<SwapQuiescence> {
   const writers = await resolveWriterEvidenceSources(environment, surveyRoots);
   if (writers.kind === "unenumerable") {
     return unseenWriters(environment, surveyRoots, writers.cause, logger);
+  }
+  const appeared = sourcesAppearedSince(probed, writers);
+  if (appeared.length > 0) {
+    return unseenWriters(
+      environment,
+      surveyRoots,
+      `a host record or service job appeared while the service manager was probed (${appeared.length})`,
+      logger,
+    );
   }
   const processGap = await publishedHostProcessState(
     environment,
@@ -551,6 +586,31 @@ async function quiescenceOnceWritersRechecked(
     logger,
   );
   return processGap ?? QUIESCED;
+}
+
+/**
+ * The sources the re-resolution names that the probed round did not cover.
+ *
+ * Growth is the only direction that matters. A source that DISAPPEARED - a run
+ * slot removed mid-check - takes a possible writer off the board and can never
+ * make a cleared swap unsafe, so the comparison is a subset test rather than an
+ * equality one, and a slot torn down during a swap is not turned into a
+ * refusal.
+ */
+function sourcesAppearedSince(
+  probed: WriterEvidenceRecords,
+  resolved: WriterEvidenceRecords,
+): readonly string[] {
+  const covered = new Set<string>([
+    ...probed.pidPaths,
+    ...probed.holderPaths,
+    ...probed.extraServiceLabels.map((label) => label.id),
+  ]);
+  return [
+    ...resolved.pidPaths,
+    ...resolved.holderPaths,
+    ...resolved.extraServiceLabels.map((label) => label.id),
+  ].filter((source) => !covered.has(source));
 }
 
 /** The gap, as a sentence fragment for the refusal. */
