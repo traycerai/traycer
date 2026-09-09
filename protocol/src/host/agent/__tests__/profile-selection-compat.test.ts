@@ -575,27 +575,32 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // All three now sit on the v5.0 line. Major 4 DID ship - the v1.2.0 tags
-    // (2026-08-24) carry it - so the sentence this comment used to end with
-    // ("since 4 has never shipped") stopped being true, and with it the reason
-    // these three could keep absorbing ids in place. `reasonix` opened major 5
-    // on each, with fail-closed v5->v4 bridges.
-    // `supportedMajors` is every major the line INSTALLS, so opening major 5
-    // widens it to [1..5] on all three. It is not a restatement of `major`:
+    // All three now sit on the v6.0 line, and the history is the point: major
+    // 4 shipped in the v1.2.0 tags, which ended the "4 has never shipped"
+    // reasoning that had let these absorb ids in place, and `reasonix` opened
+    // major 5. Major 5 then shipped in the 1.3.0 tags - cut from a branch that
+    // predates `antigravity` - so the SAME sentence retired again one release
+    // later, and `antigravity` opened major 6 with fail-closed v6->v5 bridges.
+    //
+    // Two releases, one mistake: a line is safe to grow in place only while it
+    // is unreleased, and "newest major" is not a synonym for that.
+    //
+    // `supportedMajors` is every major the line INSTALLS, so opening major 6
+    // widens it to [1..6] on all three. It is not a restatement of `major`:
     // `major` is the canonical one a peer picks by default, `supportedMajors`
     // is the set it can still be talked down to.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 5,
+      major: 6,
       minor: 0,
-      supportedMajors: [1, 2, 3, 4, 5],
+      supportedMajors: [1, 2, 3, 4, 5, 6],
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 5, minor: 0, supportedMajors: [1, 2, 3, 4, 5] });
+    ).toEqual({ major: 6, minor: 0, supportedMajors: [1, 2, 3, 4, 5, 6] });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 5,
+      major: 6,
       minor: 0,
-      supportedMajors: [1, 2, 3, 4, 5],
+      supportedMajors: [1, 2, 3, 4, 5, 6],
     });
   });
 

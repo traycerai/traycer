@@ -114,6 +114,7 @@ import {
   chatTranscriptDerivedSchema,
   chatTranscriptWindowSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -2819,6 +2820,45 @@ export type ChatSubscribeWindowedServerFrame = z.infer<
 >;
 
 /**
+ * Frozen windowed server frame as `cli-v1.3.0` / `host-v1.3.0` shipped `@1.8`.
+ *
+ * The only difference is the anchor union reachable through `rowContext` on
+ * the two arms that carry one: 1.3.0 was cut before Antigravity, so a released
+ * `@1.8` peer's `discriminatedUnion` has twenty arms and rejects a frame
+ * carrying the twenty-first outright - the whole frame, not the one row.
+ *
+ * Built by overriding those two arms on the live union rather than re-listing
+ * eight-plus arms, so every OTHER frame stays shared by construction and a new
+ * arm added above cannot forget this copy. `@1.9` below takes the live union.
+ */
+export const chatSubscribeWindowedServerFrameSchemaPreAntigravity =
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchema.extend({
+        tail: chatTranscriptWindowSchema.extend({
+          rowContext: z
+            .record(z.string(), transcriptRowContextSchemaPreAntigravity)
+            .optional(),
+        }),
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema.extend({
+      range: chatRangeResponseSchema.extend({
+        rowContext: z
+          .record(z.string(), transcriptRowContextSchemaPreAntigravity)
+          .default({}),
+      }),
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemas,
+  ]);
+
+/**
  * Ask for a span of bodies.
  *
  * Not an owner action: it carries no `clientActionId` and is never acked,
@@ -2874,6 +2914,37 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
 export const chatSubscribeV18 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 8 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeWindowedServerFrameSchemaPreAntigravity,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The windowed line, with the Antigravity session anchor.
+ *
+ * `@1.8` shipped in 1.3.0 and is frozen at the twenty-arm anchor union; this
+ * is the first minor whose `rowContext` may carry an Antigravity anchor. It is
+ * `@1.8` in every other respect - the windowing design, the client frames and
+ * the open request are all shared by reference.
+ *
+ * Streams have no downgrade bridge, so the host must GATE on the negotiated
+ * minor: an `@1.8` subscriber gets rows whose `sessionAnchor` is withheld
+ * rather than a frame it cannot decode. That projection is
+ * `projectWindowedFrameForVersion` in the internal repo's
+ * `traycer-host/src/domain/chat/chat-session-manager.ts`, applied at
+ * `emitWindowedFrameToSubscriber` - the same per-minor discipline
+ * `chatSubscribeClientFrameSchemaForVersion` already applies in the client
+ * direction.
+ *
+ * A SECOND, independent gate covers the harness id itself:
+ * `HARNESS_MINIMUM_CHAT_SUBSCRIBE_MINOR` refuses to serve an Antigravity CHAT
+ * below `1.9` at all. The two are not redundant - that one keys on the chat's
+ * harness, this one on an anchor that can appear on a row of a chat the peer
+ * can otherwise render.
+ */
+export const chatSubscribeV19 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 9 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
