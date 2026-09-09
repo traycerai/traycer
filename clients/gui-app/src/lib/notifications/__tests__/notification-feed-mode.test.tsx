@@ -27,11 +27,13 @@ const feedVersions = vi.hoisted(() => ({
 interface UnaryVersions {
   list: SchemaVersion | false | null;
   markAllRead: SchemaVersion | false | null;
+  clearAll: SchemaVersion | false | null;
   indicatorState: SchemaVersion | false | null;
 }
 const unaryVersions = vi.hoisted((): UnaryVersions => ({
   list: { major: 2, minor: 2 },
   markAllRead: { major: 1, minor: 1 },
+  clearAll: { major: 1, minor: 1 },
   indicatorState: { major: 1, minor: 1 },
 }));
 
@@ -77,6 +79,7 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", async () => {
       const slots = new Map<string, SchemaVersion | false | null>([
         ["host.notifications.list", unaryVersions.list],
         ["host.notifications.markAllRead", unaryVersions.markAllRead],
+        ["host.notifications.clearAll", unaryVersions.clearAll],
         ["host.notifications.indicatorState", unaryVersions.indicatorState],
       ]);
       const answer = slots.get(method) ?? null;
@@ -96,6 +99,7 @@ describe("useNotificationFeedMode", () => {
     feedVersions.local = { major: 1, minor: 2 };
     unaryVersions.list = { major: 2, minor: 2 };
     unaryVersions.markAllRead = { major: 1, minor: 1 };
+    unaryVersions.clearAll = { major: 1, minor: 1 };
     unaryVersions.indicatorState = { major: 1, minor: 1 };
   });
 
@@ -255,6 +259,19 @@ describe("useNotificationFeedMode", () => {
       renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
         .current,
     ).toBe("local");
+
+    // `clearAll` short, with every other floor met. The least recoverable of
+    // the four selectors and the one that shipped a minor after its siblings:
+    // admitting mixed mode here would send `home: "local"` on a clear that an
+    // `@1.0` peer STRIPS, so the user's local-partition clear silently takes
+    // the whole origin - a 200 that deleted more than it was asked to.
+    unaryVersions.markAllRead = { major: 1, minor: 1 };
+    unaryVersions.clearAll = { major: 1, minor: 0 };
+    expect(
+      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+        .current,
+    ).toBe("local");
+    unaryVersions.clearAll = { major: 1, minor: 1 };
 
     // Both unary floors met, with the stream minors already there → mixed.
     unaryVersions.markAllRead = { major: 1, minor: 1 };

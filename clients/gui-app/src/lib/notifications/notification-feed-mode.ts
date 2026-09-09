@@ -182,18 +182,27 @@ export function useHeldNotificationFeedMode(
  * origin summaries; selecting both there would double-count replicas. In that
  * case local remains the single safe view until the host upgrades.
  *
- * FIVE methods are consulted, across BOTH transports, because RPC versions are
- * negotiated per method and the two stream minors do not imply the three unary
+ * SIX methods are consulted, across BOTH transports, because RPC versions are
+ * negotiated per method and the two stream minors do not imply the four unary
  * ones. Mixed mode is not only a subscription choice: it makes
  * `useMergedNotificationsActions` send `home: "local"` as a partition selector
- * on `host.notifications.list` and `host.notifications.markAllRead`, and
- * `useNotificationIndicators` send it on `host.notifications.indicatorState`.
- * A host below `list@2.2` / `markAllRead@1.1` / `indicatorState@1.1` parses
- * those requests against its frozen schema and STRIPS that selector, so
- * pagination merges whole-origin cloud replicas into the cloud lane, mark-all
- * reaches cloud-home rows the user never saw, and the indicator flags answer
- * for the whole origin. Selecting mixed mode on the stream minors alone is what
+ * on `host.notifications.list`, `host.notifications.markAllRead` and
+ * `host.notifications.clearAll`, and `useNotificationIndicators` send it on
+ * `host.notifications.indicatorState`.
+ * A host below `list@2.2` / `markAllRead@1.1` / `clearAll@1.1` /
+ * `indicatorState@1.1` parses those requests against its frozen schema and
+ * STRIPS that selector, so pagination merges whole-origin cloud replicas into
+ * the cloud lane, mark-all reaches cloud-home rows the user never saw, the
+ * indicator flags answer for the whole origin - and clear-all DELETES the
+ * whole origin. Selecting mixed mode on the stream minors alone is what
  * makes an unsupported selector look accepted.
+ *
+ * `clearAll@1.1` is the least recoverable of the four and shipped a minor
+ * after its siblings, which is precisely how it was missed: a mixed-mode
+ * renderer was already sending `home: "local"` on the other three, so the feed
+ * it was LOOKING AT was the local partition, while its clear silently took
+ * everything. Like `indicatorState`, its selector is an optional field rather
+ * than a refusing downgrade, so an `@1.0` peer drops it and answers 200.
  *
  * `indicatorState` is the quietest of the three and the reason this floor is
  * checked HERE rather than left to the wire. `list@2.2` refuses its own
@@ -237,6 +246,10 @@ export function useNotificationFeedModeFor(
     partitionHostIds,
     "host.notifications.markAllRead",
   );
+  const clearAllVersions = useHostNegotiatedMethodVersions(
+    partitionHostIds,
+    "host.notifications.clearAll",
+  );
   const indicatorStateVersions = useHostNegotiatedMethodVersions(
     partitionHostIds,
     "host.notifications.indicatorState",
@@ -265,6 +278,7 @@ export function useNotificationFeedModeFor(
     1,
     1,
   );
+  const hasPartitionedClearAll = meetsHostFloor(clearAllVersions, hostId, 1, 1);
   const hasPartitionedIndicatorState = meetsHostFloor(
     indicatorStateVersions,
     hostId,
@@ -276,6 +290,7 @@ export function useNotificationFeedModeFor(
     hasLocalProjection &&
     hasPartitionedList &&
     hasPartitionedMarkAllRead &&
+    hasPartitionedClearAll &&
     hasPartitionedIndicatorState
     ? "cloud"
     : "local";

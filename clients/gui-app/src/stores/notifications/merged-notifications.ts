@@ -1012,7 +1012,14 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   >({
     client,
     method: "host.notifications.clearAll",
-    mapVariables: (variables) => variables,
+    // The same partition selector its three siblings already send, on the
+    // same condition. `clearAll@1.1` closes the gap documented at the call
+    // site below: in mixed mode this clear now names the local partition
+    // instead of silently taking the whole origin.
+    mapVariables: (variables) => ({
+      beforeUpdatedAt: variables.beforeUpdatedAt,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+    }),
     options: {
       mutationKey: notificationsMutationKeys.clearAll(),
       onMutate: () => captureHostNotificationMutationContext(client),
@@ -1383,22 +1390,22 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // and deliberately not `client !== null`, which survives a disconnect
         // that has already taken the rows' host away.
         //
-        // KNOWN GAP in mixed mode, and stated here because the wire does not
-        // say it: `host.notifications.clearAll` is still `@1.0`, whose request
-        // is `{ beforeUpdatedAt }` and nothing else. There is no `home`
-        // selector, so this clears the host's WHOLE origin store, not its
-        // `home: "local"` partition. Every sibling in this class was
-        // partitioned - `list@2.2`, `markAllRead@1.1`, `indicatorState@1.1` -
-        // and clear-all was missed.
+        // The gap this comment used to describe is CLOSED. It read: clear-all
+        // is still `@1.0`, whose request is `{ beforeUpdatedAt }` and nothing
+        // else, so in mixed mode it clears the host's WHOLE origin rather than
+        // its `home: "local"` partition - every sibling in the class
+        // (`list@2.2`, `markAllRead@1.1`, `indicatorState@1.1`) was
+        // partitioned and clear-all was missed. The consequence was that a
+        // cloud-home occurrence absent from the observed relay snapshot (one
+        // arriving while the relay lags) was cleared here even though the
+        // version-bounded `cloudClearAll` below deliberately excludes it.
         //
-        // The consequence is narrow but real: a cloud-home occurrence absent
-        // from the observed relay snapshot (one arriving while the relay lags)
-        // is cleared by this call even though the version-bounded
-        // `cloudClearAll` below deliberately excludes it. Closing it needs a
-        // partitioned clear-all minor negotiated end to end, not a change
-        // here; dropping the host leg in mixed mode instead would leave the
-        // local partition uncleared and break the same promise in the other
-        // direction. Tracked on #889.
+        // `clearAll@1.1` adds the selector, `mapVariables` above sends it on
+        // the same `feedMode === "cloud"` condition as its siblings, and
+        // `useNotificationFeedModeFor` will not choose mixed mode against a
+        // host below `@1.1` - which is the half that matters, because the
+        // selector is an OPTIONAL field and an `@1.0` peer STRIPS it and
+        // clears everything while looking like it complied.
         //
         // What IS gated is the verdict: a whole-origin clear from a session
         // that no longer holds one would delete cloud-home replicas the

@@ -42,6 +42,13 @@ export const RPC_ERROR_CODES = [
   // The caller's OWN agent lives on another host; the message names it, so
   // telling the caller where to go discloses nothing across accounts.
   "E_AGENT_NOT_LOCAL",
+  // A HOME-partitioned request (`clearAll@1.1`'s `home: "local"`) arrived
+  // while this host could not read local-home membership. RETRYABLE (503) and
+  // deliberately NOT collapsed into a generic failure: the alternative to
+  // refusing is guessing, and for a destructive clear the guess that matches
+  // the read path's fallback would widen "clear my local partition" into
+  // "clear the whole origin". The client shows a retry, not a failure.
+  "E_LOCAL_HOME_MEMBERSHIP_UNKNOWN",
   // A claim held by ANOTHER of the caller's own agents - a real authorization
   // error with role-specific copy, distinct from the generic epic-access
   // FORBIDDEN whose "check Task access" guidance would mislead here.
