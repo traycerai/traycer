@@ -147,6 +147,7 @@ function createStubRebuildPacer(): StreamRebuildPacer {
   return {
     markBuilt: vi.fn(),
     nextRebuildDelayMs: vi.fn(() => 0),
+    clearStreak: vi.fn(),
   };
 }
 
@@ -210,6 +211,27 @@ function reopenableFatalClose(): StreamCloseReason {
 
 const EPIC_ID = "epic-1";
 const AGENT_ID = "agent-1";
+/**
+ * Both epochs open under the SAME host: this suite is about one host's client
+ * being replaced, which is exactly the case where the outgoing session's
+ * health used to stay readable. The store is keyed by host now, so every read
+ * below goes through that host's slice rather than a flat top-level field.
+ */
+const HOST_ID = "host-1";
+
+function hostSlice(hostId: string): {
+  readonly connectionStatus: string;
+  readonly servedBy: string | null;
+  readonly cloudSyncStatus: string | null;
+  readonly byEpic: ReadonlyMap<
+    string,
+    { readonly working: ReadonlySet<string> }
+  >;
+} {
+  const host = useAgentActivityStore.getState().byHost.get(hostId);
+  if (host === undefined) throw new Error(`no activity slice for ${hostId}`);
+  return host;
+}
 
 function driveToOpenAndConnected(session: StubSession): void {
   session.emitStatus("open", null);
@@ -237,17 +259,17 @@ describe("agent activity stream epoch handoff", () => {
     const reconnectEngine = createStubReconnectEngine();
 
     const disposeFirst = openAgentActivityStream(
+      HOST_ID,
       reconnectEngine,
       firstClient,
       null,
-      "host-a",
     );
 
     driveToOpenAndConnected(firstSession);
 
-    expect(useAgentActivityStore.getState().connectionStatus).toBe("open");
-    expect(useAgentActivityStore.getState().cloudSyncStatus).toBe("connected");
-    expect(useAgentActivityStore.getState().byEpic.size).toBeGreaterThan(0);
+    expect(hostSlice(HOST_ID).connectionStatus).toBe("open");
+    expect(hostSlice(HOST_ID).cloudSyncStatus).toBe("connected");
+    expect(hostSlice(HOST_ID).byEpic.size).toBeGreaterThan(0);
 
     disposeFirst();
 
@@ -259,12 +281,10 @@ describe("agent activity stream epoch handoff", () => {
     // The new epoch is opened, but its session is never driven - no frame,
     // no status change. Without the fix the store would still be reading
     // `open` / `connected` from the torn-down first session.
-    openAgentActivityStream(reconnectEngine, secondClient, null, "host-a");
+    openAgentActivityStream(HOST_ID, reconnectEngine, secondClient, null);
 
-    expect(useAgentActivityStore.getState().connectionStatus).toBe(
-      "connecting",
-    );
-    expect(useAgentActivityStore.getState().cloudSyncStatus).toBeNull();
+    expect(hostSlice(HOST_ID).connectionStatus).toBe("connecting");
+    expect(hostSlice(HOST_ID).cloudSyncStatus).toBeNull();
   });
 
   it("the retired epoch leaves no live claim behind", () => {
@@ -273,23 +293,21 @@ describe("agent activity stream epoch handoff", () => {
     const reconnectEngine = createStubReconnectEngine();
 
     const dispose = openAgentActivityStream(
+      HOST_ID,
       reconnectEngine,
       client,
       null,
-      "host-a",
     );
 
     driveToOpenAndConnected(session);
 
-    expect(useAgentActivityStore.getState().connectionStatus).toBe("open");
-    expect(useAgentActivityStore.getState().cloudSyncStatus).toBe("connected");
+    expect(hostSlice(HOST_ID).connectionStatus).toBe("open");
+    expect(hostSlice(HOST_ID).cloudSyncStatus).toBe("connected");
 
     dispose();
 
-    expect(useAgentActivityStore.getState().connectionStatus).toBe(
-      "connecting",
-    );
-    expect(useAgentActivityStore.getState().cloudSyncStatus).toBeNull();
+    expect(hostSlice(HOST_ID).connectionStatus).toBe("connecting");
+    expect(hostSlice(HOST_ID).cloudSyncStatus).toBeNull();
   });
 
   it("a replacement epoch does not vouch for the union until its own frame arrives, though servedBy survived the swap", () => {
@@ -298,10 +316,10 @@ describe("agent activity stream epoch handoff", () => {
     const reconnectEngine = createStubReconnectEngine();
 
     const disposeFirst = openAgentActivityStream(
+      "host-a",
       reconnectEngine,
       firstClient,
       null,
-      "host-a",
     );
     driveToOpenAndConnected(firstSession);
     expect(agentActivityPlaneAnswers()).toBe(true);
@@ -313,7 +331,7 @@ describe("agent activity stream epoch handoff", () => {
       secondSession,
       "host-stream-2",
     );
-    openAgentActivityStream(reconnectEngine, secondClient, null, "host-a");
+    openAgentActivityStream("host-a", reconnectEngine, secondClient, null);
     // The window this pins: a raw transport open with no frame behind it. The
     // per-user union and its `servedBy` are still the FIRST epoch's, by
     // design, so a plane predicate that read `servedBy !== null` would vouch
@@ -321,8 +339,8 @@ describe("agent activity stream epoch handoff", () => {
     // vouch, would prune against a working set nobody has re-attested,
     // evicting an Epic whose agent started during the gap.
     secondSession.emitStatus("open", null);
-    expect(useAgentActivityStore.getState().connectionStatus).toBe("open");
-    expect(useAgentActivityStore.getState().servedBy).toBe("cloud");
+    expect(hostSlice("host-a").connectionStatus).toBe("open");
+    expect(hostSlice("host-a").servedBy).toBe("cloud");
     expect(agentActivityPlaneAnswers()).toBe(false);
 
     // Its own frame is the proof, and it is the thing that flips the answer.
@@ -341,7 +359,7 @@ describe("agent activity stream epoch handoff", () => {
     const client = new StubHostStreamClient(session, "host-stream-1");
     const reconnectEngine = createStubReconnectEngine();
 
-    openAgentActivityStream(reconnectEngine, client, null, "host-a");
+    openAgentActivityStream("host-a", reconnectEngine, client, null);
     driveToOpenAndConnected(session);
     expect(agentActivityPlaneAnswers()).toBe(true);
 
@@ -352,13 +370,13 @@ describe("agent activity stream epoch handoff", () => {
     // that gap, and the cap would evict its Epic on the old map's silence.
     session.emitStatus("reconnecting", null);
     expect(agentActivityPlaneAnswers()).toBe(false);
-    expect(
-      useAgentActivityStore.getState().byEpic.get(EPIC_ID)?.working,
-    ).toEqual(new Set([AGENT_ID]));
+    expect(hostSlice("host-a").byEpic.get(EPIC_ID)?.working).toEqual(
+      new Set([AGENT_ID]),
+    );
 
     // Back on the wire, still unattested: the socket is not the answer.
     session.emitStatus("open", null);
-    expect(useAgentActivityStore.getState().connectionStatus).toBe("open");
+    expect(hostSlice("host-a").connectionStatus).toBe("open");
     expect(agentActivityPlaneAnswers()).toBe(false);
 
     session.emitFrame({
@@ -392,10 +410,10 @@ describe("agent activity stream epoch handoff", () => {
     const reconnectEngine = createStubReconnectEngine();
 
     const disposeFirst = openAgentActivityStream(
+      "host-a",
       reconnectEngine,
       firstClient,
       null,
-      "host-a",
     );
     // Set at open, ahead of any frame - `agentActivityPlaneCoversHost` is
     // still false here because `agentActivityPlaneAnswers` gates it first,
@@ -415,7 +433,7 @@ describe("agent activity stream epoch handoff", () => {
     // A different host now serves the union - the exact swap a host failover
     // performs, with the registry potentially still holding a session bound
     // to `host-a` from before it.
-    openAgentActivityStream(reconnectEngine, secondClient, null, "host-b");
+    openAgentActivityStream("host-b", reconnectEngine, secondClient, null);
     driveOpenWithNarrowFrame(secondSession);
     expect(agentActivityPlaneCoversHost("host-b")).toBe(true);
     expect(agentActivityPlaneCoversHost("host-a")).toBe(false);
@@ -443,7 +461,7 @@ describe("agent activity stream epoch handoff", () => {
     const session = new StubSession();
     const client = new StubHostStreamClient(session, "host-stream-1");
 
-    openAgentActivityStream(reconnectEngine, client, null, "host-a");
+    openAgentActivityStream("host-a", reconnectEngine, client, null);
     driveOpenWithNarrowFrame(session);
     expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
 
@@ -451,7 +469,8 @@ describe("agent activity stream epoch handoff", () => {
     // `noteAgentActivityConnectionStatus("closed")` - `servingHostId`
     // included, same as every other field.
     session.emitStatus("closed", reopenableFatalClose());
-    expect(useAgentActivityStore.getState().servingHostId).toBeNull();
+    expect(hostSlice("host-a").connectionStatus).toBe("closed");
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(false);
 
     // The reopen lane's timer firing, simulated directly: the callback
     // `openAgentActivityStream` gave `openReopenLane` closes the old client
@@ -474,17 +493,17 @@ describe("agent activity stream epoch handoff", () => {
     const reconnectEngine = createStubReconnectEngine();
 
     const disposeFirst = openAgentActivityStream(
+      HOST_ID,
       reconnectEngine,
       firstClient,
       null,
-      "host-a",
     );
 
     driveToOpenAndConnected(firstSession);
 
-    expect(
-      useAgentActivityStore.getState().byEpic.get(EPIC_ID)?.working,
-    ).toEqual(new Set([AGENT_ID]));
+    expect(hostSlice(HOST_ID).byEpic.get(EPIC_ID)?.working).toEqual(
+      new Set([AGENT_ID]),
+    );
 
     disposeFirst();
 
@@ -493,12 +512,12 @@ describe("agent activity stream epoch handoff", () => {
       secondSession,
       "host-stream-2",
     );
-    openAgentActivityStream(reconnectEngine, secondClient, null, "host-a");
+    openAgentActivityStream(HOST_ID, reconnectEngine, secondClient, null);
 
     // `byEpic` is per-user, not per-stream-epoch: a host switch does not
     // clear it, only the health of the stream that reported it.
-    expect(
-      useAgentActivityStore.getState().byEpic.get(EPIC_ID)?.working,
-    ).toEqual(new Set([AGENT_ID]));
+    expect(hostSlice(HOST_ID).byEpic.get(EPIC_ID)?.working).toEqual(
+      new Set([AGENT_ID]),
+    );
   });
 });

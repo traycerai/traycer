@@ -30,7 +30,11 @@ export interface AuthorityBoundAuthRevalidator {
   ): Promise<RevalidateOutcome | "superseded">;
 }
 
-export type RevalidateOutcome = "rotated" | "rejected" | "network-error";
+export type RevalidateOutcome =
+  | "rotated"
+  | "rejected"
+  | "network-error"
+  | "local-plane-retained";
 
 /**
  * Stream-side auth recovery hook the `/stream` transport invokes after the
@@ -44,6 +48,23 @@ export type RevalidateOutcome = "rotated" | "rejected" | "network-error";
  *                      sign-out, never a terminal close.
  *   - "rejected":      the credential is dead (revoked / expired refresh token)
  *                      and the revalidator has already signed out → terminal.
+ *   - "local-plane-retained":
+ *                      the CLOUD verdict is gone but the SESSION is not: the
+ *                      revalidator demoted a held identity instead of signing
+ *                      it out, and that identity is still admitted to the local
+ *                      plane. Terminal is wrong here - it closes a local host's
+ *                      stream on a state whose entire purpose is to keep that
+ *                      stream usable - but so is unbounded retry: no better
+ *                      bearer can arrive while the session stays demoted, and
+ *                      each revalidation cycle spends a single-use refresh. So
+ *                      the transport re-dials under the SAME no-progress bound
+ *                      "rotated" uses, giving a host that admits the demoted
+ *                      session its chance to accept and stopping if none does.
+ *
+ * A producer that has no such state never returns it (the CLI's
+ * `createStoreBackedRevalidator` signs out instead of demoting), so a consumer
+ * may treat it as unreachable only if it has PROVEN its revalidator is one of
+ * those - never by omission.
  *
  * This is distinct from `AuthRevalidator` (whose `unknown` return the unary
  * `AuthAwareMessenger` deliberately ignores in favour of a before/after bearer

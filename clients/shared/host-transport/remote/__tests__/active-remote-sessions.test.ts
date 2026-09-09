@@ -1,18 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
-import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type {
+  SchemaVersion,
+  VersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   PLAN_RESTRICTED_REPROBE_MS,
   REMOTE_SESSION_LINGER_MS,
 } from "../config";
 import type { IRemoteSession } from "../remote-session";
 import type { WakeProbeTuning } from "../../host-stream-client";
+import type { StreamMethodSupport } from "../../ws-stream-client";
 import { RemoteStreamClient } from "../remote-stream-client";
 import {
   acquireRemoteSession,
   hasReadyRemoteSession,
   remoteSessionRefCountForTest,
+  resetRemoteSessionReadinessListenersForTest,
   retireAllRemoteSessions,
+  subscribeRemoteSessionReadiness,
   wakeHeldRemoteSessions,
   type RemoteSessionAcquirePolicy,
   type RemoteSessionIdentity,
@@ -70,6 +76,9 @@ interface FakeSession extends IRemoteSession<
 function fakeSession(): FakeSession {
   let closeCalls = 0;
   const wakeReasons: string[] = [];
+  const methodSupportListeners = new Set<() => void>();
+  let methodSupport: StreamMethodSupport = "supported";
+  const methodSchemaVersion: SchemaVersion = { major: 1, minor: 0 };
   const wakeProbes: Array<WakeProbeTuning | null> = [];
   const closedListeners = new Set<() => void>();
   const session: FakeSession = {
@@ -118,6 +127,14 @@ function fakeSession(): FakeSession {
     },
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
+    getMethodSupport: () => methodSupport,
+    getMethodSchemaVersion: () => methodSchemaVersion,
+    subscribeMethodSupport: (listener) => {
+      methodSupportListeners.add(listener);
+      return () => {
+        methodSupportListeners.delete(listener);
+      };
+    },
     terminalFatal: () =>
       session.fatalCode === null
         ? null
@@ -155,6 +172,13 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 afterEach(() => {
+  // Some tests in this file subscribe to readiness via
+  // `subscribeRemoteSessionReadiness` (the `retireAllRemoteSessions` auth-
+  // boundary coverage below). The module is a shared singleton across the
+  // whole suite, so a listener left registered here would fire into an
+  // unrelated test's assertions - mirrors the cleanup
+  // `active-remote-sessions-readiness-events.test.ts` already does.
+  resetRemoteSessionReadinessListenersForTest();
   vi.useRealTimers();
 });
 
@@ -1057,11 +1081,29 @@ describe("auth-recovery policy is part of the session identity", () => {
     expect(hasReadyRemoteSession(retired.hostId)).toBe(false);
   });
 
-  it("retireAllRemoteSessions retires free AND held entries at the auth boundary", () => {
-    // Supersession is otherwise detected only at acquire time, and a read-only
-    // surface never acquires - so on sign-out, without this sweep, a retired
-    // user's still-attached session would keep answering
-    // `hasReadyRemoteSession` for the whole linger window.
+  it("retireAllRemoteSessions closes a HELD entry outright at the auth boundary - unlike ordinary supersession, which waits for release", () => {
+    // Contrast with the neighbour above ("supersedes a RETIRED auth epoch
+    // instead of leaving it to report Online"): ordinary supersession
+    // (`closeSupersededIdentities`, driven per-acquire) marks a held entry
+    // and leaves it to close at the consumer's OWN release. That is a
+    // deliberate, UNCHANGED rule, not an inconsistency this test is
+    // "fixing" - release-on-let-go presumes the holder's own lifecycle will
+    // eventually end the session, and that presumption is sound for an
+    // ordinary re-key (a fresh acquire for the new identity already proves
+    // someone is live and driving the transition).
+    //
+    // That presumption does NOT hold at an authorization boundary. An open
+    // tab holds its reference indefinitely - there is no lifecycle event
+    // that will ever call release on its own - and the relay's client-leg
+    // deadline is 60 minutes, so waiting for the holder to let go would keep
+    // serving RPCs/streams to an account no longer authorized for up to that
+    // long. `retireAllRemoteSessions` is also the sweep the cloud-
+    // authorization-loss demotion (`AuthService.demoteVerifiedSessionToUnverified`)
+    // now drives: a session losing its verdict retains the live local-plane
+    // bearer/`RequestContext` (nothing re-keys the cache), so a held remote
+    // session is exactly the open tab this sweep must not leave alive - which
+    // is why it force-closes held entries where ordinary supersession does
+    // not.
     const lingering = freshIdentity();
     const lingeringSession = fakeSession();
     lingeringSession.ready = true;
@@ -1085,15 +1127,122 @@ describe("auth-recovery policy is part of the session identity", () => {
 
     retireAllRemoteSessions();
 
-    // The free entry closes outright; the held one stops answering
-    // IMMEDIATELY and closes the moment its last consumer lets go.
+    // Both close IMMEDIATELY: the free entry outright, and - the behaviour
+    // this test exists to pin, now widened from the earlier free-only sweep -
+    // the held one too, not deferred to its consumer's own release.
     expect(lingeringSession.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(lingering.hostId)).toBe(false);
-    expect(heldSession.closeCalls).toBe(0);
+    expect(heldSession.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(held.hostId)).toBe(false);
 
+    // The holder's later release must still be safe: `release` finds its
+    // captured entry displaced from the map (`entriesByKey.get(key) !==
+    // entry`) and calls `close()` again there - a second call is fine
+    // because the REAL `IRemoteSession.close()` is idempotent ("Idempotent
+    // when the session was already closed"), even though this fake
+    // double-counts every call it receives. What matters is that release
+    // does not throw and does not resurrect the entry.
+    expect(() => heldView.close()).not.toThrow();
+    expect(heldSession.closeCalls).toBe(2);
+  });
+
+  it("retireAllRemoteSessions leaves a clean cache MISS behind - a re-acquire for the same identity rebuilds via the factory instead of adopting the corpse", () => {
+    const identity = freshIdentity();
+    let builds = 0;
+    const originalSession = fakeSession();
+    const firstView = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => {
+      builds += 1;
+      return originalSession;
+    });
+
+    retireAllRemoteSessions();
+    expect(originalSession.closeCalls).toBe(1);
+
+    const rebuiltSession = fakeSession();
+    const secondView = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => {
+      builds += 1;
+      return rebuiltSession;
+    });
+
+    // The factory ran a SECOND time - a cache hit would never call it again,
+    // so this is proof the sweep deleted the entry from the map (rather than
+    // leaving a closed corpse for the next acquire to evict lazily) and the
+    // new acquire is building fresh, exactly as a signed-back-in consumer
+    // needs.
+    expect(builds).toBe(2);
+    expect(remoteSessionRefCountForTest(identity)).toBe(1);
+
+    firstView.close();
+    secondView.close();
+    expireLinger();
+  });
+
+  it("retireAllRemoteSessions: a late release of the ORIGINAL view (held before the sweep, released after) does not throw and does not touch a successor acquired for the same identity in between", () => {
+    const identity = freshIdentity();
+    const originalSession = fakeSession();
+    const originalView = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      () => originalSession,
+    );
+
+    retireAllRemoteSessions();
+    expect(originalSession.closeCalls).toBe(1);
+
+    // A successor is acquired for the SAME identity key in between the sweep
+    // and the late release - e.g. a re-sign-in, or (as in the auth-loss case
+    // this sweep also serves) a fresh transport built for the surviving
+    // local-plane context.
+    const successorSession = fakeSession();
+    const successorView = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      () => successorSession,
+    );
+    expect(remoteSessionRefCountForTest(identity)).toBe(1);
+
+    // The late release: the ORIGINAL view's close(), called after the sweep
+    // already closed its entry AND after a successor now occupies the key.
+    // `release` captures its own entry at acquire time and never re-looks-up
+    // the key, so this must be a no-op against the successor - not throw, not
+    // decrement the successor's refCount, not close the successor's session.
+    expect(() => originalView.close()).not.toThrow();
+
+    expect(remoteSessionRefCountForTest(identity)).toBe(1);
+    expect(successorSession.closeCalls).toBe(0);
+
+    successorView.close();
+    expireLinger();
+  });
+
+  it("retireAllRemoteSessions notifies readiness subscribers - delivery coalesced onto a microtask, so it is observable only after a flush", async () => {
+    const held = freshIdentity();
+    const heldSession = fakeSession();
+    heldSession.ready = true;
+    const heldView = acquireRemoteSession(
+      held,
+      ELIGIBLE_POLICY,
+      () => heldSession,
+    );
+
+    const listener = vi.fn();
+    subscribeRemoteSessionReadiness(listener);
+
+    retireAllRemoteSessions();
+
+    // Not yet delivered: `notifyReadinessChanged` schedules via
+    // `queueMicrotask` rather than calling listeners synchronously (see
+    // `active-remote-sessions-readiness-events.test.ts`'s "delivery mechanics"
+    // suite for why - `close()` fires `onClosed` synchronously from inside
+    // this module's own mutation paths, so an immediate notify would re-enter
+    // the cache mid-sweep).
+    expect(listener).not.toHaveBeenCalled();
+
+    await Promise.resolve();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+
     heldView.close();
-    expect(heldSession.closeCalls).toBe(1);
   });
 
   it("drops a session that closed underneath at release instead of lingering the corpse", () => {

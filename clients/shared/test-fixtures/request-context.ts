@@ -28,6 +28,22 @@ export interface RequestContextFixtureOverrides {
   readonly connectionId: string | undefined;
   readonly operationId: string | undefined;
   readonly externalAbortSignal: AbortSignal | undefined;
+  /**
+   * The fixture's cloud verdict. Defaults to `true`, which is what the
+   * overwhelming majority of suites mean by "a signed-in context" - pass
+   * `false` to build the `unverified` shape.
+   *
+   * There are exactly those two states to ask for; there is no third
+   * "verdict-absent" context to build. `createRequestContext` collapses
+   * `undefined` into `true` at construction and `RequestContext` exposes a
+   * plain `boolean`, so a peer that does not speak verdicts IS an authorized
+   * context - the distinction lives at the construction SITE, not in the
+   * object. `| undefined` here is only this interface's uniform shape: it is
+   * consumed as `Partial<>`, so an omitted key and an explicit `undefined`
+   * are the same request for the default, exactly as for the `bearerToken`
+   * and `origin` fields above.
+   */
+  readonly cloudAuthorized: boolean | undefined;
 }
 
 const DEFAULT_BEARER = "test-bearer-token";
@@ -61,6 +77,7 @@ export function createRequestContextFixture(
     connectionId: overrides.connectionId,
     operationId: overrides.operationId,
     externalAbortSignal: overrides.externalAbortSignal,
+    cloudAuthorized: overrides.cloudAuthorized ?? true,
   });
 }
 

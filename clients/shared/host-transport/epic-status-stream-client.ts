@@ -24,8 +24,9 @@
  * Retry button to a channel that no longer exists.
  */
 import {
-  epicStatusSubscribeServerFrameSchemaV10,
-  type EpicStatusSubscribeServerFrameV10,
+  epicStatusSubscribeServerFrameSchemaV11,
+  EPIC_STATUS_DURABILITY_LEGS_MINOR,
+  type EpicStatusSubscribeServerFrameV11,
 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -38,8 +39,8 @@ import type { IStreamClient } from "./i-stream-client";
 
 export const EPIC_STATUS_SUBSCRIBE_METHOD = "epic.status.subscribe";
 
-type StatusServerFrame<Kind extends EpicStatusSubscribeServerFrameV10["kind"]> =
-  Extract<EpicStatusSubscribeServerFrameV10, { readonly kind: Kind }>;
+type StatusServerFrame<Kind extends EpicStatusSubscribeServerFrameV11["kind"]> =
+  Extract<EpicStatusSubscribeServerFrameV11, { readonly kind: Kind }>;
 
 export type EpicStatusSnapshotFrame = StatusServerFrame<"snapshot">;
 
@@ -54,7 +55,7 @@ export type EpicStatusSnapshotFrame = StatusServerFrame<"snapshot">;
  * two is what makes a cursor-less lane lossy.
  */
 export type EpicStatusTransitionFrame = Exclude<
-  EpicStatusSubscribeServerFrameV10,
+  EpicStatusSubscribeServerFrameV11,
   { readonly kind: "snapshot" } | { readonly kind: "pong" }
 >;
 
@@ -64,8 +65,23 @@ export interface EpicStatusStreamCallbacks {
    * FIRST frame of that cycle - plus one more each time the authority epoch
    * changes under a live subscription.
    */
-  readonly onSnapshot: (frame: EpicStatusSnapshotFrame) => void;
-  readonly onTransition: (frame: EpicStatusTransitionFrame) => void;
+  /**
+   * `peerServesDurabilityLegs` states whether the NEGOTIATED minor carries the
+   * durability legs, and it is passed per frame because it is the one fact an
+   * absent leg cannot supply. `@1.0` shipped in cli-v1.3.0 without them, so a
+   * missing `durability` from such a host means "this peer predates the datum",
+   * while the same absence at `@1.1` is the wire's stated UNKNOWN. Rendering
+   * one as the other is precisely the silence-read-as-reassurance the legs
+   * exist to end, in whichever direction it is confused.
+   */
+  readonly onSnapshot: (
+    frame: EpicStatusSnapshotFrame,
+    peerServesDurabilityLegs: boolean,
+  ) => void;
+  readonly onTransition: (
+    frame: EpicStatusTransitionFrame,
+    peerServesDurabilityLegs: boolean,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -97,6 +113,22 @@ export class EpicStatusStreamClient {
     });
   }
 
+  /**
+   * Whether this session's negotiated minor carries the durability legs.
+   *
+   * Read per frame rather than latched at construction: the negotiated version
+   * is not known until the stream's open handshake completes, which is after
+   * this constructor returns.
+   */
+  private peerServesDurabilityLegs(): boolean {
+    const negotiated = this.session.getNegotiatedSchemaVersion();
+    if (negotiated === null || negotiated === undefined) return false;
+    return (
+      negotiated.major === 1 &&
+      negotiated.minor >= EPIC_STATUS_DURABILITY_LEGS_MINOR
+    );
+  }
+
   /** Tears down the underlying session. Idempotent. */
   close(): void {
     if (this.closed) return;
@@ -111,14 +143,20 @@ export class EpicStatusStreamClient {
     if (this.closed) return;
     // Text-only by contract, exactly as on the records lane.
     if (binaryPayload !== null) return;
-    const parsed = epicStatusSubscribeServerFrameSchemaV10.safeParse(envelope);
+    // The `@1.1` schema, deliberately, even on an `@1.0` session: zod STRIPS
+    // unknown keys, so parsing a negotiated-`@1.1` frame through the `@1.0`
+    // union would silently drop the very legs this lane negotiated for. The
+    // superset parses both, and the negotiated minor - not the frame - is what
+    // says whether an absent leg means unknown or unsupported.
+    const parsed = epicStatusSubscribeServerFrameSchemaV11.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     if (frame.kind === "pong") return;
+    const servesLegs = this.peerServesDurabilityLegs();
     if (frame.kind === "snapshot") {
-      this.callbacks.onSnapshot(frame);
+      this.callbacks.onSnapshot(frame, servesLegs);
       return;
     }
-    this.callbacks.onTransition(frame);
+    this.callbacks.onTransition(frame, servesLegs);
   }
 }

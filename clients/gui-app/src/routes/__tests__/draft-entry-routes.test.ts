@@ -91,6 +91,41 @@ describe("draft entry routes", () => {
     expect(invokeIndexBeforeLoad("signed-out")).toBeNull();
   });
 
+  // T2: `beforeLoad` moved from `status !== "signed-in"` to
+  // `!admitsLocalPlane(status)`. Before the fix, an `unverified` user (a
+  // stored session identity with no held `/api/v3/user` verdict) with no
+  // restored tabs got NO redirect here, and `RootLandingPage` renders `null`
+  // for any status `admitsLocalPlane` admits - so that cohort landed on an
+  // empty app shell with no composer, no draft, nothing to do. Widening the
+  // gate sends them to the same committed-draft route a `signed-in` user with
+  // no restored tabs gets.
+  it("/ redirects unverified users (no restored tabs) to the committed draft creation route", () => {
+    const thrown = invokeIndexBeforeLoad("unverified");
+    expect(thrown).not.toBeNull();
+    expect(isRedirect(thrown)).toBe(true);
+    const response = thrown as Response & {
+      options: { to: string; replace: boolean };
+    };
+    expect(response.options.to).toBe("/draft/new");
+    expect(response.options.replace).toBe(true);
+  });
+
+  it("/ keeps unverified users on root when tabs have already been restored", () => {
+    useTabsStore.setState({
+      stripOrder: [{ kind: "history", id: "history" }],
+      systemTabs: {
+        history: {
+          id: "history",
+          kind: "history",
+          name: "History",
+          lastPath: null,
+        },
+        settings: null,
+      },
+    });
+    expect(invokeIndexBeforeLoad("unverified")).toBeNull();
+  });
+
   it("/draft/new requests a controller-owned draft creation and replace", async () => {
     const { createDraftAndReplaceRoute } =
       await import("@/lib/draft-entry-route");

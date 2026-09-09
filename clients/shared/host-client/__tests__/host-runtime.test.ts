@@ -88,6 +88,12 @@ class FakeDirectoryService implements IHostDirectoryService {
   readonly refreshForEraCalls: AuthEra[] = [];
   readonly invalidateInFlightRefreshCalls = { count: 0 };
   /**
+   * ONE ordered log across the two operations above, so an ordering claim
+   * ("invalidate, THEN refresh") is observable rather than inferred from two
+   * independent counters.
+   */
+  readonly callOrder: Array<"invalidate" | "refreshForEra"> = [];
+  /**
    * Per-identity host sets a "fetch" resolves to, keyed by auth context id
    * (`null` for signed-out). Lets `refreshForEra`/`refresh` model a REAL
    * commit instead of a no-op counter: a call stamped with the wrong identity
@@ -128,11 +134,13 @@ class FakeDirectoryService implements IHostDirectoryService {
   async refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]> {
     this.refreshCalls.count += 1;
     this.refreshForEraCalls.push(era);
+    this.callOrder.push("refreshForEra");
     return this.commitForIdentity(era.identity);
   }
 
   invalidateInFlightRefresh(): void {
     this.invalidateInFlightRefreshCalls.count += 1;
+    this.callOrder.push("invalidate");
   }
 
   private commitForIdentity(
@@ -508,5 +516,88 @@ describe("HostRuntime context-change refresh is stamped with the era the emissio
       null,
     ]);
     expect(directory.entries).toEqual([]);
+  });
+});
+
+describe("HostRuntime session-verified wiring", () => {
+  // `onSessionVerified` is the third subscription `start()` installs (besides
+  // `onChange` and `onBearerRotated`), and it is DRIVEN BY THE AUTH BOUNDARY
+  // rather than by any transition this provider performs on its own -
+  // `announceSessionVerified()` is the test-reachable stand-in for that
+  // boundary call. Reusing the real `DefaultRequestContextProvider` (as the
+  // rest of this file's `start()`/`dispose()` suite already does via
+  // `buildRuntime`) rather than a hand-rolled fake means the era these probes
+  // assert on is the SAME shape production wires through: `{ identity,
+  // credentialGeneration }` read off the provider's own live context, not a
+  // value this test invents.
+
+  it("invalidates the in-flight refresh THEN refreshes for the announced era", () => {
+    const { runtime, provider, directory } = buildRuntime({
+      initialSignedIn: null,
+    });
+
+    runtime.start();
+    // A live context is required: `announceSessionVerified()` is a no-op
+    // while signed out (see its doc comment) - there is no session to have
+    // been verified. Sign in first so there is one to announce for.
+    signInProvider(provider, "user-1", "tok-1");
+    // `signInProvider` above already drives `onChange`, which itself calls
+    // `refreshForEra` and `invalidateInFlightRefresh` is untouched by it -
+    // baseline past that unrelated cadence so this probe isolates the
+    // `onSessionVerified` wiring alone.
+    const invalidateBaseline = directory.invalidateInFlightRefreshCalls.count;
+    const refreshForEraBaseline = directory.refreshForEraCalls.length;
+    const orderBaseline = directory.callOrder.length;
+
+    provider.announceSessionVerified();
+
+    // Both fired...
+    expect(directory.invalidateInFlightRefreshCalls.count).toBe(
+      invalidateBaseline + 1,
+    );
+    expect(directory.refreshForEraCalls.length).toBe(refreshForEraBaseline + 1);
+    // ...`refreshForEra` carrying the SAME era the provider emitted - the
+    // live context's identity and the provider's current credential
+    // generation, not a value re-derived from some other read.
+    const announcedEra = directory.refreshForEraCalls[refreshForEraBaseline];
+    if (announcedEra === undefined) {
+      throw new Error("expected refreshForEra to have been called");
+    }
+    expect(announcedEra.identity).toBe("user-1");
+    expect(announcedEra.credentialGeneration).toBe(
+      provider.getCredentialGeneration(),
+    );
+    // Ordering, pinned on the fake's single ordered log: the invalidation
+    // must land BEFORE the refresh it clears the way for. Swapping the two
+    // lines in `HostRuntime`'s handler reverses this sequence.
+    expect(directory.callOrder.slice(orderBaseline)).toEqual([
+      "invalidate",
+      "refreshForEra",
+    ]);
+  });
+
+  it("dispose() unsubscribes: a later announcement reaches the directory no further", () => {
+    const { runtime, provider, directory } = buildRuntime({
+      initialSignedIn: { userId: "user-1", bearer: "tok-1" },
+    });
+
+    runtime.start();
+    runtime.dispose();
+
+    const invalidateBaseline = directory.invalidateInFlightRefreshCalls.count;
+    const refreshForEraBaseline = directory.refreshForEraCalls.length;
+
+    // The provider itself is NOT disposed here (only the runtime is), so this
+    // exercises the runtime's unsubscribe specifically: `current()` still
+    // holds the live context `start()` applied, `announceSessionVerified()`
+    // would fire normally on ANY still-registered listener, and the only
+    // reason nothing lands on the directory is that `dispose()` already
+    // called the disposer `onSessionVerified(...)` returned.
+    provider.announceSessionVerified();
+
+    expect(directory.invalidateInFlightRefreshCalls.count).toBe(
+      invalidateBaseline,
+    );
+    expect(directory.refreshForEraCalls.length).toBe(refreshForEraBaseline);
   });
 });
