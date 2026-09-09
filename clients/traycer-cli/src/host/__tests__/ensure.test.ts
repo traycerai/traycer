@@ -116,23 +116,6 @@ vi.mock("../busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusyMock,
 }));
 
-// `provisionHost` constructs a REAL registry yank-lookup up front
-// (`provision.ts` - see `../../registry/client`), and only the
-// "regression: installed 1.2.0, pin 1.3.0-rc.4, --keep-installed" case
-// below actually calls it (it is the one path that asks whether the
-// installed version is yanked). Left unmocked, that one test makes a
-// genuine network `fetchText` to the manifest URL: `YANK_LOOKUP_TIMEOUT_MS`
-// is 10s, twice vitest's 5s default, so a sandboxed CI runner with no
-// egress cannot finish the test before vitest kills it - invisible on a
-// developer machine, where the connection is refused fast enough to just
-// look like a 20x-slower outlier. Mirrors `provision.test.ts`'s own mock of
-// this same boundary.
-vi.mock("../../registry/client", () => ({
-  createRegistryYankLookup: () => ({
-    isVersionYanked: mocks.isVersionYankedMock,
-  }),
-}));
-
 // The real `publishHostStartAdoption` waits (up to 30s) for a service-
 // manager child to ack a spawn that never happens under a stubbed
 // controller. This suite pins `ensureHost`'s orchestration, not the
@@ -188,6 +171,12 @@ function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
     noServiceRegister: false,
     force: false,
     acceptStoreFormatLoss: false,
+    // Through the seam, never the real lookup: the "regression: installed
+    // 1.2.0, pin 1.3.0-rc.4, --keep-installed" case below is the one path
+    // that asks whether the installed version is yanked, and the real
+    // lookup's manifest fetch runs under a 10 s watchdog - twice vitest's
+    // default - so a runner with no egress would time the test out.
+    yankLookup: { isVersionYanked: mocks.isVersionYankedMock },
     keepInstalled: false,
     onProgress: null,
     adoption: undefined,

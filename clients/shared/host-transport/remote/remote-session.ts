@@ -160,11 +160,15 @@ function qosForStreamMethod(method: string): QosClassValue {
  *   mint fresh grant → dial relay(?grant) → attach_ack{sid}
  *     → Noise-NK handshake (msg0 → msg1)
  *     → open{bearer, manifest, authz:null, resume:null}  (re-presents bearer, A2)
- *     → openAck{manifest, capabilities}  → compat mirror
- *     → re-subscribe every live stream → ready
+ *     → openAck{manifest, capabilities}  → compat mirror → ready
+ *     → re-subscribe every live stream
+ *
+ * Ready is the host's ack, not the fan-out that follows it: the re-subscribes
+ * go out from a session that is already carrying traffic, and what each stream
+ * then has to say is its own status rather than the connection's.
  *
  * Backoff resets ONLY after a connection SURVIVES: the ready boundary
- * (transport open · E2E handshake · session open · subscriptions restored) must
+ * (transport open · E2E handshake · session open · host attached) must
  * be reached AND held for `RECONNECT_STABLE_RESET_MS`. Never on socket-open,
  * never on the boundary alone, and never on a wake — a connection that opens
  * and dies repeatedly must escalate, not present itself as a first failure
@@ -491,9 +495,9 @@ export interface IRemoteSession<
   terminalFatal(): FatalErrorDetails | null;
   /**
    * Subscribes to positive evidence that the session just reached its ready
-   * boundary (full attach + accepted restore evidence for every live
-   * stream; completed delivery stays each stream's own status) - EVERY boundary,
-   * including the clean first open. The remote analog of the recovery
+   * boundary (full attach through the host's own `openAck`, with the host
+   * still attached at the relay; what each stream then delivers stays that
+   * stream's own status) - EVERY boundary, including the clean first open. The remote analog of the recovery
    * evidence `WsStreamClient` surfaces via `subscribeAvailabilityRecovered`,
    * consumed to un-strand errored host-scoped queries.
    *
@@ -638,21 +642,20 @@ export class RemoteSession<
    */
   private stableResetTimer: TimerHandle | null = null;
   /**
-   * Armed when an attach completes with the ready boundary still unreached,
-   * cleared by the boundary or by connection loss. If it fires, some stream's
-   * restore has produced no evidence at all for the whole window - no
-   * delivered frame and no in-flight chunk - and the session is sitting
-   * not-ready on a live mux. That state is otherwise invisible: the surfaces
-   * above can only say "still can't connect", which misattributes it. One
-   * line naming the unrestored methods is what lets a field report of a stuck
-   * banner be attributed to the stream that caused it.
+   * Armed when an attach completes, cleared by connection loss. If it fires,
+   * some stream has produced no evidence at all for the whole window - no
+   * delivered frame and no in-flight chunk - on a mux that is otherwise
+   * carrying traffic. Two very different things look identical from here (a
+   * subscription whose subject simply has not changed, and one the host failed
+   * to replay), and neither is visible anywhere else, so the line names the
+   * methods and leaves the reading to whoever has the host's side of it.
    */
   private restoreStallTimer: TimerHandle | null = null;
   /**
    * Per-stream progress deadlines for in-flight chunk reassembly on the
    * current connection - the replacement for the stall bound that message
-   * COMPLETION used to provide implicitly, before the ready boundary started
-   * accepting the first chunk as restore evidence. Armed/reset by every
+   * COMPLETION used to provide implicitly, before an accepted chunk counted as
+   * a stream having spoken. Armed/reset by every
    * accepted chunk of a subscription stream's message, retired when that
    * message completes (or the stream/connection ends). Expiry is the verdict
    * "this transfer stopped": the stream is reopened on a fresh id through the
@@ -962,13 +965,13 @@ export class RemoteSession<
    * standing lie R4-B5 exists to kill (Settings would render Online, off this
    * session, for a host that is OFF — for up to the 15-min standing bound).
    *
-   * "Restored" means ACCEPTED restore evidence — a delivered frame, or the
-   * first accepted chunk of one still reassembling — not completed delivery.
-   * This verdict is connection/host liveness for session-level surfaces; a
-   * consumer that needs a specific stream's DATA reads that stream's own
-   * status, which stays `reconnecting` until its completed frame lands. The
-   * gap between the two (an in-flight transfer that stops) is bounded by the
-   * per-stream reassembly watchdog, not by this read.
+   * The boundary this reads is the host's own `openAck` for the current
+   * generation, not a poll of the subscriptions — see
+   * {@link maybeReachReadyBoundary}. This verdict is connection/host liveness
+   * for session-level surfaces; a consumer that needs a specific stream's DATA
+   * reads that stream's own status, which stays `reconnecting` until its
+   * completed frame lands. Those two answers differ on purpose, and a surface
+   * that states "the connection is interrupted" must read this one.
    */
   isReady(): boolean {
     return (
@@ -1743,7 +1746,6 @@ export class RemoteSession<
         },
         nextSeq,
       );
-      this.maybeReachReadyBoundary();
     }
   }
 
@@ -1803,7 +1805,6 @@ export class RemoteSession<
         nextSeq,
       );
     }
-    this.maybeReachReadyBoundary();
   }
 
   // ---- Connect / attach / handshake / open ------------------------------- //
@@ -2070,17 +2071,12 @@ export class RemoteSession<
       if (message === null) {
         // A chunk was accepted for a message still in flight. For a stream
         // subscription that is all the proof "restored" asks for: the host
-        // accepted the subscribe and its data is arriving on the mux, so the
-        // SESSION-level ready boundary must not stay hostage to the transfer
-        // finishing. A large snapshot (tens of MB through the relay) can take
-        // minutes on a slow link, during which every connection-plane surface
-        // - the connectivity banner, availability recovery, the backoff
-        // stable-reset - would otherwise report an outage on a link that is
-        // demonstrably carrying frames, inviting the exact retry/redial that
-        // restarts the transfer from zero. The stream's own consumer still
-        // waits for the completed message; only the session verdict moves
-        // early. Per-stream reopen escalation is deliberately NOT reset here
-        // - a delivered frame remains its only proof (see the dispatch path).
+        // accepted the subscribe and its data is arriving on the mux, so a
+        // transfer that runs for minutes is not a stream that has gone quiet
+        // and the stall diagnostic must not name it as one. The stream's own
+        // consumer still waits for the completed message. Per-stream reopen
+        // escalation is deliberately NOT reset here - a delivered frame
+        // remains its only proof (see the dispatch path).
         if (frame.type === MuxFrameType.STREAM_FRAME) {
           this.markStreamRestored(frame.streamId);
           // Early evidence needs its own progress bound: completion used to
@@ -2209,7 +2205,6 @@ export class RemoteSession<
       this.subscriptions.delete(frame.streamId);
       this.restoredStreamIds.delete(frame.streamId);
       this.stallReopenedStreamIds.delete(frame.streamId);
-      this.maybeReachReadyBoundary();
     }
     return true;
   }
@@ -2405,7 +2400,6 @@ export class RemoteSession<
           this.streamReopenAttempts.set(freshStreamId, reopenAttempts);
         }
         this.scheduleStreamReopen(stream);
-        this.maybeReachReadyBoundary();
         return;
       }
       stream.goFatal(parsed.data.details);
@@ -2414,7 +2408,6 @@ export class RemoteSession<
       this.outboundSeq.delete(message.streamId);
       this.clearStreamReopen(message.streamId);
       this.stallReopenedStreamIds.delete(message.streamId);
-      this.maybeReachReadyBoundary();
       return;
     }
     if (message.type === MuxFrameType.CLOSE) {
@@ -2437,7 +2430,6 @@ export class RemoteSession<
       // stream - leaked its entry in this long-lived session forever.
       this.clearStreamReopen(message.streamId);
       this.stallReopenedStreamIds.delete(message.streamId);
-      this.maybeReachReadyBoundary();
       return;
     }
     if (message.type === MuxFrameType.STREAM_FRAME) {
@@ -2611,23 +2603,21 @@ export class RemoteSession<
   }
 
   /**
-   * Arms the restore-stall diagnostic for this attach: a no-op when the
-   * boundary was already reached above, one line if any stream is still
-   * producing zero restore evidence a full window after the attach completed.
-   * See the field doc for why that state must be named rather than inferred.
+   * Arms the restore-stall diagnostic for this attach: one line if any stream
+   * is still producing zero restore evidence a full window after the attach
+   * completed. See the field doc for why that state must be named rather than
+   * inferred.
+   *
+   * A statement about STREAMS, not about the session. The session is ready as
+   * soon as the host acks the open, so silence here is not an outage - it is
+   * either a stream with nothing to say or a subscription the host did not
+   * replay, and only the log line distinguishes them for whoever is reading.
    */
   private armRestoreStallTimer(generation: number): void {
     this.clearRestoreStallTimer();
-    if (this.readyBoundaryGeneration === this.connectGeneration) {
-      return;
-    }
     this.restoreStallTimer = setTimeout(() => {
       this.restoreStallTimer = null;
-      if (
-        !this.isCurrent(generation) ||
-        this.phase !== "ready" ||
-        this.readyBoundaryGeneration === this.connectGeneration
-      ) {
+      if (!this.isCurrent(generation) || this.phase !== "ready") {
         return;
       }
       const unrestored: string[] = [];
@@ -2643,8 +2633,8 @@ export class RemoteSession<
         return;
       }
       console.warn(
-        `[remote-session] remote session (host ${this.options.hostId}) not ready ${RESTORE_STALL_LOG_AFTER_MS}ms after attach: ` +
-          `unrestored streams with no inbound evidence [${unrestored.join(", ")}], ` +
+        `[remote-session] remote session (host ${this.options.hostId}) ${RESTORE_STALL_LOG_AFTER_MS}ms after attach: ` +
+          `streams with no inbound evidence yet [${unrestored.join(", ")}], ` +
           `reassembling=${this.pendingReassemblyCount}`,
       );
     }, RESTORE_STALL_LOG_AFTER_MS);
@@ -2755,7 +2745,6 @@ export class RemoteSession<
     this.stallReopenedStreamIds.delete(streamId);
     this.stallReopenedStreamIds.add(freshStreamId);
     this.scheduleStreamReopen(stream);
-    this.maybeReachReadyBoundary();
   }
 
   private clearReassemblyWatchdog(streamId: number): void {
@@ -3632,9 +3621,14 @@ export class RemoteSession<
   /**
    * Emits the one line that makes the reattach budget falsifiable: total, and
    * where the time went. Without the split, a regression in any single leg -
-   * a slower grant mint, an extra Noise round trip, a resubscribe fan-out that
-   * grew with the epic - is invisible inside one aggregate number, and the
-   * budget becomes a claim nobody can check against a field log.
+   * a slower grant mint, an extra Noise round trip - is invisible inside one
+   * aggregate number, and the budget becomes a claim nobody can check against
+   * a field log.
+   *
+   * The legs end at the host's `openAck`, which is where the session is ready.
+   * What each stream does afterwards is its own story and is not timed here:
+   * a subscription that stays quiet is not a slow reattach, and folding the
+   * two together is what the stall diagnostic exists to keep apart.
    *
    * `info`, not `warn`: a successful reattach is not a problem, and the
    * scenario harness asserts zero ERROR-level lines per blip.
@@ -3670,7 +3664,6 @@ export class RemoteSession<
         `grant+dial=${leg(marks.startedAt, marks.attachAckAt)} ` +
         `noise=${leg(marks.attachAckAt, marks.handshakeAt)} ` +
         `open=${leg(marks.handshakeAt, marks.openAckAt)} ` +
-        `resubscribe=${leg(marks.openAckAt, now)} ` +
         `streams=${this.subscriptions.size})`,
     );
     this.reattachMarks = emptyReattachMarks();
@@ -4287,41 +4280,65 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Records that a stream has produced inbound evidence on the current attach.
+   *
+   * Read by the stall diagnostic only. It is deliberately NOT an input to the
+   * session's ready boundary: what one stream has to say is a fact about that
+   * stream, and a session cannot be held un-ready by a subscription whose
+   * subject has simply not changed.
+   */
   private markStreamRestored(streamId: number): void {
     if (!this.subscriptions.has(streamId)) {
       return;
     }
     this.restoredStreamIds.add(streamId);
-    this.maybeReachReadyBoundary();
   }
 
+  /**
+   * Crosses the ready boundary for the CURRENT generation, once.
+   *
+   * The boundary is the host's own answer: `open`/`openAck` accepted in-channel
+   * for this generation. That is first-hand host evidence rather than the
+   * relay's - the ack travels through the Noise channel, so a relay that
+   * accepted a socket cannot produce one - and it is the strongest statement
+   * about the CONNECTION that any single frame can carry.
+   *
+   * Deliberately NOT a poll of the subscriptions. Requiring an inbound frame
+   * per stream asks each one to prove something many of them cannot: an
+   * event-only subscription emits when its subject changes and is otherwise
+   * silent by contract, so a session carrying frames for every other stream
+   * stayed un-ready for as long as the quiet one had nothing to say - and with
+   * it the announcement, the availability-recovery signal and the host's
+   * death-streak clearance. A verdict about the connection cannot be a
+   * conjunction over what the application happens to be saying on it.
+   *
+   * Per-stream restore evidence keeps its own jobs: each stream's status stays
+   * `reconnecting` until its data lands, the reassembly watchdog paces
+   * in-flight transfers, and the stall diagnostic reports streams that stay
+   * silent after an attach. Those are statements about STREAMS, and a consumer
+   * that needs one reads it there.
+   */
   private maybeReachReadyBoundary(): void {
     if (
       this.phase !== "ready" ||
-      this.readyBoundaryGeneration === this.connectGeneration
+      this.readyBoundaryGeneration === this.connectGeneration ||
+      // The same conjunction {@link isReady} answers, and for the same reason:
+      // this is where the session is ANNOUNCED, and an announcement pins the
+      // host's lease `ready` and suppresses its death evidence until it is
+      // retracted. A relay `host_detached` can land between the host's ack and
+      // this crossing - the ack's decrypt is awaited while control frames
+      // dispatch synchronously - and crossing anyway would announce a live
+      // session for a host whose leg is gone, re-arm the probation a detach
+      // had just stood down, and publish a recovery that `isReady()` denies in
+      // the same tick. `onHostAttached` runs a full re-attach, which reaches
+      // this crossing honestly.
+      this.connection === null ||
+      !this.connection.hostAttached
     ) {
       return;
     }
-    for (const streamId of this.subscriptions.keys()) {
-      // A stream in its private retryable-FATAL loop (an attempt entry exists
-      // from its first verdict until a frame finally lands) must not hold the
-      // SESSION's boundary hostage: its id can never enter `restoredStreamIds`
-      // while the loop runs, so waiting on it meant one broken resolver kept
-      // `isReady()` false forever - the session was never announced,
-      // availability recovery never fired, and the reconnect backoff never
-      // reset, making the whole remote host look unavailable while every
-      // other stream exchanged frames on a healthy mux. The stream keeps its
-      // own reopen backoff either way; only the session-level verdict stops
-      // depending on it.
-      if (this.streamReopenAttempts.has(streamId)) {
-        continue;
-      }
-      if (!this.restoredStreamIds.has(streamId)) {
-        return;
-      }
-    }
     this.readyBoundaryGeneration = this.connectGeneration;
-    this.clearRestoreStallTimer();
     // A force recorded against this generation is satisfied by reaching
     // ready: a fresh attach is everything it could have bought. Consumed
     // unspent, so it cannot leak onto a later, unrelated loss.

@@ -1064,6 +1064,7 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
       installGeneration: INSTALL_GENERATION,
       stageFingerprint: null,
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       ...overrides,
     };
   }

@@ -516,6 +516,8 @@ describe.skipIf(baselines.length === 0)(
             updateTransaction: null,
             // @1.4
             storeFormats: null,
+            // @1.5
+            install: null,
           };
 
           // SELF-CHECKING FIXTURE. Without this, the next released minor a

@@ -4976,17 +4976,17 @@ const buildChunkFrames = (
   ];
 };
 
-describe("RemoteSession ready boundary under an in-flight snapshot restore", () => {
+describe("RemoteSession ready boundary at the host's open-ack", () => {
   it(
-    "counts a replayed stream as restored on its FIRST accepted chunk - a large snapshot mid-transfer does not hold the session not-ready",
+    "reaches ready on the open-ack alone - a subscribed stream that has said nothing does not hold the session not-ready",
     async () => {
-      // The failure this pins: a reconnect's resubscribe answers with a
-      // multi-chunk snapshot, and the session read "restored" only off the
-      // COMPLETED message - so for the whole transfer (minutes for a
-      // tens-of-MB snapshot through the relay) `isReady()` was false, the
-      // connectivity surfaces reported an outage on a link that was
-      // demonstrably carrying frames, and the retry they invited restarted
-      // the transfer from zero.
+      // The failure this pins: readiness used to require an inbound frame from
+      // EVERY live subscription. An event-only stream emits when its subject
+      // changes and is otherwise silent by contract, so one quiet subscription
+      // held `isReady()` false for as long as it had nothing to say - on a mux
+      // that was carrying frames for everything else - and with it the session
+      // announcement, availability recovery and the host's death-streak
+      // clearance.
       const relay = new FakeRelayHost();
       relay.streamManifest = buildStreamManifest(
         cursorStreamRegistry,
@@ -4998,48 +4998,13 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
         streamRegistry: cursorStreamRegistry,
       });
       const stream = session.subscribe("cursor.subscribe", { cursor: null });
-      const delivered: StreamFrameEnvelope[] = [];
-      stream.onServerFrame((envelope) => {
-        delivered.push(envelope);
-      });
       try {
         await vi.waitFor(
           () => expect(relay.subscribeStreamIds).toHaveLength(1),
           WAIT,
         );
-        // Establish the baseline: the first attach's boundary waits on this
-        // stream's snapshot exactly as a reconnect's does, so deliver it
-        // whole and reach ready once.
-        const [seedFirst, seedLast] = buildChunkFrames(
-          relay.subscribeStreamIds[0],
-        );
-        relay.deliverToClient(await relay.encryptFrame(seedFirst));
-        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        // Not one frame is delivered on that stream, for the whole test.
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        await vi.waitFor(() => expect(delivered).toHaveLength(1), WAIT);
-
-        session.forceReconnect("test-resume");
-        await vi.waitFor(
-          () => expect(relay.subscribeStreamIds).toHaveLength(2),
-          WAIT,
-        );
-        // The discriminating control: the subscribe replay is on the wire but
-        // no restore evidence has arrived, so the boundary is still blocked.
-        expect(session.isReady()).toBe(false);
-
-        const [firstChunk, lastChunk] = buildChunkFrames(
-          relay.subscribeStreamIds[1],
-        );
-        relay.deliverToClient(await relay.encryptFrame(firstChunk));
-        // One accepted chunk IS restore evidence: ready flips while the
-        // message is still in flight...
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        // ...and provably BEFORE the consumer saw anything - the stream's own
-        // delivery still waits for the completed message.
-        expect(delivered).toHaveLength(1);
-
-        relay.deliverToClient(await relay.encryptFrame(lastChunk));
-        await vi.waitFor(() => expect(delivered).toHaveLength(2), WAIT);
         expect(relay.errors).toEqual([]);
       } finally {
         stream.close();
@@ -5050,7 +5015,52 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
   );
 
   it(
-    "arms the restore-stall diagnostic only for a blocked boundary, and its report names the silent stream",
+    "re-reaches ready after a reconnect without the replayed stream speaking, and fires availability recovery once per boundary",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      let recoveredEvents = 0;
+      session.subscribeAvailabilityRecovered(() => {
+        recoveredEvents += 1;
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(1);
+
+        // The reconnect a resumed device performs. The replay goes out and the
+        // host has nothing to send on it - which is the ordinary case for an
+        // event-only subscription, and must not be an outage.
+        session.forceReconnect("test-resume");
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(2);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps the stall diagnostic as a statement about STREAMS: it names the silent one while the session reads ready",
     async () => {
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const warnSpy = vi
@@ -5076,52 +5086,35 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
           () => expect(relay.subscribeStreamIds).toHaveLength(1),
           WAIT,
         );
-        // Reach ready once so the reconnect below exercises the RESTORE path.
-        // The first attach arms its own diagnostic (its boundary waits on
-        // this stream's snapshot too); the boundary then clears it, so only
-        // the CALL record remains - count relatively from here.
-        const [seedFirst, seedLast] = buildChunkFrames(
-          relay.subscribeStreamIds[0],
-        );
-        relay.deliverToClient(await relay.encryptFrame(seedFirst));
-        relay.deliverToClient(await relay.encryptFrame(seedLast));
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        const armsAtBaseline = stallArms().length;
-
-        session.forceReconnect("test-resume");
+        // Armed by the attach, not by a blocked boundary: the session is ready
+        // and the diagnostic is still watching what the streams do.
         await vi.waitFor(
-          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          () => expect(stallArms().length).toBeGreaterThan(0),
           WAIT,
         );
-        // The reattach completed with the boundary blocked: exactly one more
-        // diagnostic armed, on its own distinct delay.
-        await vi.waitFor(
-          () => expect(stallArms()).toHaveLength(armsAtBaseline + 1),
-          WAIT,
-        );
-        const armedStall = stallArms()[armsAtBaseline][0] as () => void;
+        const armedStall = stallArms()[stallArms().length - 1][0] as () => void;
 
-        // Fire the armed callback directly (the suite's idiom for timers too
-        // long to wait out): still blocked, so it reports - naming the method.
-        // Counted from a clean slate: the forced drop above legitimately
-        // warns through other components (the dial-failure log), and this
-        // assertion is about the STALL line only.
         warnSpy.mockClear();
         armedStall();
         expect(warnSpy).toHaveBeenCalledTimes(1);
         const line = String(warnSpy.mock.calls[0][0]);
-        expect(line).toContain("not ready");
         expect(line).toContain(
-          `cursor.subscribe#${relay.subscribeStreamIds[1]}`,
+          `cursor.subscribe#${relay.subscribeStreamIds[0]}`,
         );
+        // The line reports a stream, and must not restate it as a session
+        // verdict - the session is ready, as the same tick proves.
+        expect(line).not.toContain("not ready");
+        expect(session.isReady()).toBe(true);
 
-        // Restore evidence ends the episode: once a chunk flips the boundary,
-        // the same callback is inert - the diagnostic cannot cry wolf about a
-        // session that recovered.
+        // A frame ends that stream's silence, and the same callback goes quiet.
         warnSpy.mockClear();
-        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[1]);
+        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[0]);
         relay.deliverToClient(await relay.encryptFrame(firstChunk));
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(
+          () => expect(session.pendingReassemblyCount).toBe(1),
+          WAIT,
+        );
         armedStall();
         expect(warnSpy).not.toHaveBeenCalled();
       } finally {
@@ -5135,32 +5128,161 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
   );
 
   it(
-    "releases the COLD attach's boundary on first-chunk progress too - a subscribe racing the first dial does not wait out its snapshot",
+    "does not cross the boundary when the host leg detached before the ack landed - no announcement, no probation, no recovery",
     async () => {
+      // The interleave: the host's `openAck` decrypt is awaited while relay
+      // control frames dispatch synchronously, so a `host_detached` can land
+      // between the ack and this crossing. Announcing there would pin the
+      // host's lease `ready` and suppress its death evidence for a host whose
+      // leg is gone - and publish a recovery that `isReady()` denies in the
+      // same tick.
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(
-        cursorStreamRegistry,
-        SERVES_EVERY_INSTALLED_MAJOR,
-      );
       const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = buildSession(relay, lease, null);
+      let recoveredEvents = 0;
+      session.subscribeAvailabilityRecovered(() => {
+        recoveredEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(1);
+
+        relay.sendHostAttachment("host_detached");
+        expect(session.isReady()).toBe(false);
+        // The re-attach out of detached is a FULL one (the host discarded its
+        // Noise state), so readiness returns through a fresh generation's ack
+        // and announces exactly once more - never twice for one recovery.
+        relay.sendHostAttachment("host_attached");
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(2);
+        await vi.waitFor(() => expect(relay.errors).toEqual([]), WAIT);
+        expect(recoveredEvents).toBe(2);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not announce when the host leg detaches between the open frame and its ack",
+    async () => {
+      // The exact interleave the boundary's `hostAttached` term exists for.
+      // The ack's decrypt is awaited while relay control frames dispatch
+      // synchronously, so a `host_detached` can land in that window. Crossing
+      // anyway would announce a live session for a host whose leg is gone -
+      // and an announcement pins that host's lease `ready` and suppresses its
+      // death evidence until it is retracted.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const evidence = new RecordingEvidence();
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
-        streamRegistry: cursorStreamRegistry,
+        evidence,
       });
-      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let recoveredEvents = 0;
+      session.subscribeAvailabilityRecovered(() => {
+        recoveredEvents += 1;
+      });
       try {
-        await vi.waitFor(
-          () => expect(relay.subscribeStreamIds).toHaveLength(1),
-          WAIT,
-        );
-        // The first attach's boundary is blocked by this stream's snapshot.
+        // Freeze the attach with the `open` on the wire and no ack yet.
+        relay.stallOpens = true;
+        session.start();
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
         expect(session.isReady()).toBe(false);
-        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[0]);
-        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+
+        // A parked request is the milestone that proves the ack was PROCESSED,
+        // so the negative assertions below cannot pass merely by running
+        // early - and its verdict is itself the point: the ack unparked it
+        // onto a connection whose host leg is gone, which is retryable, not a
+        // dispatch. Anything that RESOLVED here would mean the session had
+        // dispatched work at a host that cannot receive it.
+        const parked: unknown = session
+          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        // The host's leg goes while the ack is still in flight.
+        relay.sendHostAttachment("host_detached");
+        await relay.releaseStalledOpens();
+        const parkedError = await parked;
+        expect(parkedError).toBeInstanceOf(RetryableTransportError);
+        expect(String(parkedError)).toContain(
+          "Remote host is detached from the relay",
+        );
+
+        // The ack landed and the phase reached ready, but the session is not
+        // announced, no recovery is published, and readiness stays false.
+        expect(session.isReady()).toBe(false);
+        expect(recoveredEvents).toBe(0);
+        expect(evidence.callsNamed("sessionEstablished")).toEqual([]);
+
+        // The host coming back is a FULL re-attach (it discarded its Noise
+        // state), and THAT crossing announces - exactly once.
+        relay.stallOpens = false;
+        relay.sendHostAttachment("host_attached");
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(1);
+        expect(evidence.callsNamed("sessionEstablished")).toHaveLength(1);
         expect(relay.errors).toEqual([]);
       } finally {
-        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps the ladder reset behind the probation dwell: the boundary arms it, and only its expiry forgives the streak",
+    async () => {
+      // The anchor moved; the REWARD did not. Reaching ready proves a session
+      // was established, not that it is healthy - so the recovery line, which
+      // the dial log emits only when the ladder is actually forgiven, must
+      // wait for the dwell rather than for the boundary.
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const infoSpy = vi
+        .spyOn(console, "info")
+        .mockImplementation(() => undefined);
+      const probationArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === RECONNECT_STABLE_RESET_MS,
+        );
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        // Force a real failure streak, then recover: the reattach crosses the
+        // boundary and arms probation, and the streak is still unforgiven.
+        relay.dropCurrentConnection();
+        await vi.waitFor(() => expect(session.isReady()).toBe(false), WAIT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(
+          () => expect(probationArms().length).toBeGreaterThan(0),
+          WAIT,
+        );
+        const armedProbation = probationArms()[
+          probationArms().length - 1
+        ][0] as () => void;
+
+        infoSpy.mockClear();
+        const recoveryLines = (): string[] =>
+          infoSpy.mock.calls
+            .map((call) => String(call[0]))
+            .filter((line) => line.includes("recovered after"));
+        // Ready, but the dwell has not elapsed: nothing is forgiven yet.
+        expect(recoveryLines()).toEqual([]);
+
+        // Firing the armed probation is what forgives it.
+        armedProbation();
+        expect(recoveryLines()).toHaveLength(1);
+      } finally {
+        infoSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
         session.close();
       }
     },

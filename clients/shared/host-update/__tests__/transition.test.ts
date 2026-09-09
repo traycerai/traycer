@@ -177,6 +177,7 @@ describe("decideAttemptClaim - create", () => {
       installGeneration: "gen-a",
       stageFingerprint: "fp-a",
       allowDowngrade: true,
+      acceptStoreFormatLoss: false,
     };
     const withClaim = decideAttemptClaim({
       current: { kind: "absent" },
@@ -1381,9 +1382,13 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
     // `false`, so a passing test here is proof the value was COPIED, not
     // rederived from the refresh or from the target.
     allowDowngrade: true,
+    // The other consent, on the same terms: nothing in the refresh or the
+    // target says anything about store formats, so `true` can only have been
+    // copied.
+    acceptStoreFormatLoss: true,
   };
 
-  it("replaces the three identity fields on a refresh and copies allowDowngrade from the prior record, never recomputing it", () => {
+  it("replaces the three identity fields on a refresh and copies both consents from the prior record, never recomputing them", () => {
     const current = makeRecord({
       phase: "applying",
       continuation: null,
@@ -1409,6 +1414,7 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
       installGeneration: "gen-refreshed",
       stageFingerprint: "fp-refreshed",
       allowDowngrade: true,
+      acceptStoreFormatLoss: true,
     });
   });
 
@@ -1501,6 +1507,7 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
         installGeneration: "gen-before-the-swap",
         stageFingerprint: null,
         allowDowngrade: true,
+        acceptStoreFormatLoss: false,
       },
     };
     const outcome = advanceAttempt(withClaim, attemptIdentityOf(withClaim), {
@@ -1525,6 +1532,7 @@ describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
       installGeneration: "gen-written-by-the-swap",
       stageFingerprint: null,
       allowDowngrade: true,
+      acceptStoreFormatLoss: false,
     });
   });
 });

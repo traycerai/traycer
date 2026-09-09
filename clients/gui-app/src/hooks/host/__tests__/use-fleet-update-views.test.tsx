@@ -107,6 +107,7 @@ function idleStatus(version: string) {
     updateOperation: { kind: "none" },
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
+    install: null,
   };
 }
 

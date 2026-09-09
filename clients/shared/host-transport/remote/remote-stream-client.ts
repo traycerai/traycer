@@ -138,10 +138,10 @@ export class RemoteStreamClient<
 
   /**
    * Whether the session backing THIS client is carrying traffic right now
-   * (see {@link IRemoteSession.isReady}) - full attach, restore evidence
-   * accepted for every live stream (a delivered frame or an in-flight chunk;
-   * completed delivery stays each stream's own status), and the host still
-   * attached at the relay.
+   * (see {@link IRemoteSession.isReady}) - full attach through the host's own
+   * `openAck`, with the host still attached at the relay. What any one stream
+   * has delivered stays that stream's own status: a subscription with nothing
+   * to say is not an unready connection.
    *
    * Exact by construction: one client, one shared session, no lookup by host.
    * A ready one-shot session or a lingering keep-warm one for the same host
@@ -153,10 +153,10 @@ export class RemoteStreamClient<
   }
 
   /**
-   * Bridges the session's ready-boundary transition (full attach + accepted
-   * restore evidence for every live stream; see
-   * `RemoteSession.subscribeAvailabilityRecovered`) to availability-recovered
-   * listeners - the same "endpoint recovered" evidence `WsStreamClient`
+   * Bridges the session's ready-boundary transition (full attach through the
+   * host's `openAck`; see `RemoteSession.subscribeAvailabilityRecovered`) to
+   * availability-recovered listeners - the same "endpoint recovered" evidence
+   * `WsStreamClient`
    * surfaces when a session re-opens after a drop, PLUS the clean first open
    * (a remote session's first dial races the queries that created it; see
    * the session contract for why). This is what un-strands errored
