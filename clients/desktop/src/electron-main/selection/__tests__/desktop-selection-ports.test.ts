@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AuthorityIdentitySource,
   HostFleetSnapshot,
@@ -1049,32 +1049,38 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     const authSession = new DesktopAuthSession();
-    // Signed out throughout: this isolates `refreshLocalIdentity` from
-    // `refresh()`'s own auto-triggered fetch (which would need a bearer
-    // token to reach `listRegisteredHosts` at all), so the only thing that
-    // can publish a snapshot here is the local-identity re-read this test is
-    // pinning.
-    const identity = new FakeIdentitySource(null, 0);
+    // Signed IN at the start so `refreshLocalIdentity` is eligible and
+    // actually starts a libuv enrollment read. Signed-out-throughout skipped
+    // the read (`eligible === false`), which made the contamination
+    // assertions vacuous and left only the anti-vacuity half as a `flushIo`
+    // timing flake under a loaded darwin CI runner.
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
+    const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
     const fleet = buildFleetSource({
       identity,
       authSession,
       host,
-      listRegisteredHosts: async () => {
-        throw new Error("must not be called - signed out throughout");
-      },
+      // Identity-change `refresh()` may run while a bearer is briefly still
+      // present; answer empty rather than throwing.
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [] },
+      }),
     });
 
     const snapshots: HostFleetSnapshot[] = [];
     fleet.onChanged((snapshot) => snapshots.push(snapshot));
 
-    // Fire the `host` change: `refreshLocalIdentity` captures generation 0
-    // and starts its (real, libuv-backed) enrollment read. `fs.readFile`
-    // cannot resolve before this synchronous block finishes, so switching
-    // the identity here lands strictly BEFORE the read completes - the
-    // exact race the fix closes.
+    // `emitChange` runs `refreshLocalIdentity` until its first await (the fs
+    // read). When it returns, generation 0 and eligible=true are already
+    // captured and the enrollment read is in flight - the exact race the
+    // generation fence closes. Sign out BEFORE bumping the generation so
+    // `identity.set`'s `refresh()` takes the signed-out branch (empty fleet)
+    // rather than re-adopting `local-a` under gen 1.
     host.emitChange();
+    authSession.set({ status: "signed-out", token: null, profile: null });
     identity.set("user-b", 1);
 
     // The identity switch publishes the generation-1 shape synchronously
@@ -1089,56 +1095,43 @@ describe("DesktopHostFleetSource", () => {
       });
     }
 
-    // Let the stale enrollment read (account A, generation 0) resolve.
-    await flushIo();
-
-    // No snapshot carrying A's local host id was published under
-    // identityGeneration: 1 - the stale read must not be stamped with
-    // whatever generation happens to be current when it completes.
-    const contaminatedUnderCurrentGeneration = snapshots.some(
-      (snapshot) =>
-        snapshot.identityGeneration === 1 &&
-        (snapshot.localHostId === "local-a" ||
-          snapshot.hosts.some((entry) => entry.hostId === "local-a")),
-    );
-    expect(contaminatedUnderCurrentGeneration).toBe(false);
-
-    // The port's latest snapshot still has the generation-1 shape the
-    // identity change published: no A rows, no A local host id.
-    expect(fleet.snapshot()).toMatchObject({
-      identityGeneration: 1,
-      localHostId: null,
-      hosts: [],
-    });
-
-    // ANTI-VACUITY ANCHOR, in two halves. The negative assertions above are
-    // only meaningful if the enrollment read actually had time to complete
-    // inside `flushIo`; a read still in flight would satisfy them for the
-    // wrong reason. But a signed-out read publishes NOTHING (eligibility, not
-    // just staleness, gates it - a durable local id must not repopulate a
-    // fleet `refresh` has declared empty), so "nothing was published" cannot
-    // by itself prove the pipeline ran.
-    //
-    // Half 1: SIGN IN, then drive a local-host change. The read must land and
-    // publish the id - this is what proves the pipeline completes inside the
-    // flush window, so the silence above was a decision and not a delay.
+    // ANTI-VACUITY ANCHOR, in two halves. A dropped stale read publishes
+    // NOTHING, so silence alone cannot prove the pipeline ran - and a fixed
+    // `flushIo` sleep is not a settlement barrier under CI load (same lesson
+    // as `settledSeedFetchCount` in selection-authority-ipc.test.ts). Sign
+    // in, drive a local-host change, and WAIT ON THE OBSERVABLE. Snapshots
+    // recorded before this sign-in must not already carry `local-a` under
+    // gen 1 - that would be the stale gen-0 read leaking through.
+    const beforeSignIn = snapshots.length;
     setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
     host.emitChange();
-    await flushIo();
-    expect(fleet.snapshot()).toMatchObject({
-      identityGeneration: 1,
-      localHostId: "local-a",
+    await vi.waitFor(() => {
+      expect(fleet.snapshot()).toMatchObject({
+        identityGeneration: 1,
+        localHostId: "local-a",
+      });
     });
+
+    const contaminatedBeforeSignIn = snapshots
+      .slice(0, beforeSignIn)
+      .some(
+        (snapshot) =>
+          snapshot.identityGeneration === 1 &&
+          (snapshot.localHostId === "local-a" ||
+            snapshot.hosts.some((entry) => entry.hostId === "local-a")),
+      );
+    expect(contaminatedBeforeSignIn).toBe(false);
 
     // Half 2: SIGN OUT again and drive another change. The id is RETRACTED,
     // not retained - the same rule `refresh`'s signed-out branch applies.
     authSession.set({ status: "signed-out", token: null, profile: null });
     host.emitChange();
-    await flushIo();
-    expect(fleet.snapshot()).toMatchObject({
-      identityGeneration: 1,
-      localHostId: null,
-      hosts: [],
+    await vi.waitFor(() => {
+      expect(fleet.snapshot()).toMatchObject({
+        identityGeneration: 1,
+        localHostId: null,
+        hosts: [],
+      });
     });
 
     fleet.dispose();
