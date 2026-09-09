@@ -52,6 +52,28 @@ function createTransportHarness(): {
   };
 }
 
+/**
+ * Like {@link createTransportHarness}, but its sessions are never born
+ * connected - an UNDIALABLE device. The auto-opening harness cannot express
+ * one: every retry it serves succeeds on subscribe, so a coordinator can never
+ * be observed failing an attempt, which is the whole state the release sweep's
+ * bound is about.
+ */
+function createDownTransportHarness(): {
+  readonly openTransport: (hostId: string) => DurableStreamTransport;
+  readonly clients: FakeStreamClient[];
+} {
+  const clients: FakeStreamClient[] = [];
+  return {
+    clients,
+    openTransport: () => {
+      const client = new FakeStreamClient(false);
+      clients.push(client);
+      return { wsStreamClient: client, close: () => undefined };
+    },
+  };
+}
+
 function buildRuntime(
   openTransport: (hostId: string) => DurableStreamTransport,
 ): {
@@ -394,6 +416,99 @@ describe("browser sessions coordinator registry", () => {
     expect(browserSessionsCoordinatorState(undialable.key)?.lifecycle).toBe(
       "failed",
     );
+  });
+
+  // The release edge cannot bound itself any more. The always-mounted
+  // tombstone recovery bridge rotates devices through its slots, and a device
+  // YIELDS by failing to answer - which is also what leaves its coordinator
+  // failed - so a release arrives with no UI gesture behind it. A `failed`
+  // lifecycle also changes what consumers render, so a retry that fails again
+  // can unmount the consumer holding an acquisition, and that cleanup is
+  // another release. Either way the sweep fed itself, and unbounded nested
+  // updates surface as React #185, which takes the window to the crash card.
+  it("re-asks a failed coordinator at most once per failure episode", () => {
+    const live = createTransportHarness();
+    const down = createDownTransportHarness();
+    const undialable = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: down.openTransport,
+    });
+    soleSession(soleClient(down.clients)).emitFatal(
+      "This host cannot be dialed.",
+    );
+    expect(browserSessionsCoordinatorState(undialable.key)?.lifecycle).toBe(
+      "failed",
+    );
+    expect(down.clients).toHaveLength(1);
+
+    // One release: the sweep re-asks it, on a fresh transport, and that
+    // attempt fails too.
+    const firstBystander = acquire({
+      scope: epicScope("epic-2"),
+      openTransport: live.openTransport,
+    });
+    firstBystander.release();
+    expect(down.clients).toHaveLength(2);
+    const retried = down.clients.at(1);
+    if (retried === undefined) throw new Error("expected a retry transport");
+    soleSession(retried).emitFatal("This host cannot be dialed.");
+    expect(browserSessionsCoordinatorState(undialable.key)?.lifecycle).toBe(
+      "failed",
+    );
+
+    // A second release finds nothing has moved this coordinator since its
+    // re-ask, so it is left alone. Without the bound every release re-asked
+    // it, and each re-ask could produce the next release.
+    const secondBystander = acquire({
+      scope: epicScope("epic-3"),
+      openTransport: live.openTransport,
+    });
+    secondBystander.release();
+    expect(down.clients).toHaveLength(2);
+    expect(browserSessionsCoordinatorState(undialable.key)?.lifecycle).toBe(
+      "failed",
+    );
+  });
+
+  // The bound is per EPISODE, not for the life of the coordinator: a device
+  // that comes back and later drops again is a new outage and earns a fresh
+  // re-ask. Reaching `live` is what re-arms it - and deliberately not merely
+  // leaving `failed`, since a retry publishes `connecting` on its way out and
+  // arming on that would hand the flag back once per attempt.
+  it("re-arms the release sweep once the stream actually opens", () => {
+    const live = createTransportHarness();
+    const down = createDownTransportHarness();
+    const flaky = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: down.openTransport,
+    });
+    soleSession(soleClient(down.clients)).emitFatal(
+      "This host cannot be dialed.",
+    );
+
+    const firstBystander = acquire({
+      scope: epicScope("epic-2"),
+      openTransport: live.openTransport,
+    });
+    firstBystander.release();
+    expect(down.clients).toHaveLength(2);
+    const retried = down.clients.at(1);
+    if (retried === undefined) throw new Error("expected a retry transport");
+
+    // This attempt OPENS, then drops later - a second, genuine outage.
+    soleSession(retried).emitStatus("open");
+    expect(browserSessionsCoordinatorState(flaky.key)?.lifecycle).toBe("live");
+    soleSession(retried).emitFatal("This host cannot be dialed.");
+    expect(browserSessionsCoordinatorState(flaky.key)?.lifecycle).toBe(
+      "failed",
+    );
+
+    const secondBystander = acquire({
+      scope: epicScope("epic-3"),
+      openTransport: live.openTransport,
+    });
+    secondBystander.release();
+    expect(down.clients).toHaveLength(3);
   });
 
   it("keys two scopes on the same host and identity into two coordinators, independent of scope field order", () => {
