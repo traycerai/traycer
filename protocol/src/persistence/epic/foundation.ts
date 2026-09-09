@@ -117,6 +117,46 @@ export type GuiHarnessIdPreReasonix = z.infer<
   typeof guiHarnessIdSchemaPreReasonix
 >;
 
+/**
+ * Frozen copy of the persisted harness enum as `cli-v1.3.0` / `host-v1.3.0`
+ * shipped it - everything before Antigravity, which first rides
+ * `chat.subscribe@1.9`, `sessionImport.scan@1.2` and `sessionImport.run@1.1`.
+ *
+ * Taken because 1.3.0 was cut from a branch that predates Antigravity while
+ * `main` had already added the id to the LIVE enum above: every stream frame
+ * that embeds this enum was therefore advertising a value the released peers
+ * strict-decode against a twenty-id set. Freezing here is what lets those
+ * released minors keep serializing exactly what they shipped with.
+ *
+ * Do NOT add new harnesses here - extend `guiHarnessIdSchema` above and gate
+ * emission on the negotiated minor (streams have no downgrade bridge).
+ */
+export const guiHarnessIdSchemaPreAntigravity = z.enum([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+export type GuiHarnessIdPreAntigravity = z.infer<
+  typeof guiHarnessIdSchemaPreAntigravity
+>;
+
 // Cursor remains a reserved compatibility value: it shipped in this persisted
 // enum before the unfinished runtime surface was withdrawn from the product.
 export const tuiHarnessIdSchema = z.enum([
