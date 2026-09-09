@@ -114,6 +114,19 @@ class FakeDirectory {
     this.emit();
   }
 
+  /**
+   * A FAILED fetch: the question was put and did not come back. The registry's
+   * contents stay unknown - `hasSettledFleet()` would still be false - but an
+   * attempt has concluded, which is the only thing this hook reads. That rule
+   * is the service's own and is pinned against the real service in
+   * `host-directory-service.test.ts`; modelled here so the chain from a failed
+   * conclusion to a rendered card can be exercised end to end.
+   */
+  concludeByFailedFetch(): void {
+    this.concluded = true;
+    this.emit();
+  }
+
   /** A `signed-out` outcome, or the foreign-identity drop: the answer is withdrawn. */
   withdraw(): void {
     this.concluded = false;
@@ -301,6 +314,39 @@ describe("the narrator across the launch, on a shell with no local host", () => 
       expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
     expect(screen.getByText("No host is available")).toBeTruthy();
+  });
+
+  it("a FAILED fetch carries all the way to the card, with the offline recovery on it", async () => {
+    // THE WIRING, end to end, which no other case covers. The service's rule
+    // (a failed fetch concludes), the hook's re-read on emit, and the arm's
+    // reading of that flag each have their own test - but a green chain can
+    // still be wired wrong between two green links, so this drives one
+    // unreachable-registry launch from the directory through to the rendered
+    // surface.
+    //
+    // It is also the case the whole `concluded`-vs-`settled` distinction exists
+    // for: gated on a DELIVERED listing, an unreachable registry would leave
+    // this card off screen for the entire outage, and the user with no Retry.
+    const directory = directoryUnderTest();
+    applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
+    renderNarrator();
+
+    await waitFor(() => {
+      expect(narratorSurface()).toBeNull();
+    });
+
+    act(() => {
+      directory.concludeByFailedFetch();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+    });
+    expect(screen.getByText("No host is available")).toBeTruthy();
+    // The RECOVERY, not just the words: ∅ is a settled failure by definition,
+    // so this arm owes the user an action. On a shell that cannot manage a
+    // host that action is re-reading the registry.
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("does not wait once the authority has named a host, whatever the directory has said", async () => {

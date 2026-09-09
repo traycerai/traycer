@@ -539,6 +539,69 @@ describe("deriveWindowNarration", () => {
       expect(state).toEqual({ kind: "silent" });
     });
 
+    it("waits over a CONNECTING lease that has not produced an effective host", () => {
+      // A lease that is not dead concludes nothing, so the scan answers
+      // `offline` and the wait applies. Pinned because the arm must not read a
+      // populated lease list as an answer in itself - what ends the wait is a
+      // conclusion, or an actionable verdict, never the mere presence of rows.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [lease({ hostId: "host-a", status: "connecting" })],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("waits over a RESTARTING-EXPECTED lease on a shell with no local host", () => {
+      // The restarting-target grace below is local-only (it requires
+      // `targetHostId === localHostId`), so on this shell that hold never
+      // applies and this arm is the only thing standing between an unconcluded
+      // ∅ and a verdict. `restarting-expected` is not dead, so the scan still
+      // answers `offline` and the wait holds.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          targetHostId: "host-remote",
+          leases: [
+            lease({ hostId: "host-remote", status: "restarting-expected" }),
+          ],
+          localHostExpected: false,
+          localHostId: null,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("narrates that same restarting remote once discovery concludes", () => {
+      // The discriminating control for the row above: identical fleet, the only
+      // difference being that an attempt has now concluded. Without the local
+      // grace there is nothing to soften it, so ∅ is the verdict.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          targetHostId: "host-remote",
+          leases: [
+            lease({ hostId: "host-remote", status: "restarting-expected" }),
+          ],
+          localHostExpected: false,
+          localHostId: null,
+          discoveryConcluded: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
     it("does not silence a shell that can boot a local host", () => {
       // Desktop's `cold-start` arm is untouched: something really is starting
       // there, and "Starting Traycer…" is the truer sentence than silence.
