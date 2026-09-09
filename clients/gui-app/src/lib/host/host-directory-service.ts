@@ -210,6 +210,27 @@ export class HostDirectoryService implements IHostDirectoryService {
    * question was put and did not come back - which is why it sets this.
    */
   private hasConcludedRemoteAttempt = false;
+  /**
+   * The identity {@link hasConcludedRemoteAttempt} was set under, or null when
+   * nothing has concluded.
+   *
+   * Read WITH the flag by {@link hasConcludedDiscovery}, never separately,
+   * because the flag alone cannot survive an account switch honestly. This
+   * service outlives the identity: nothing clears state on the switch itself,
+   * so a `true` set under account A stands until account B's first outcome
+   * commits, and for that window B would be told an attempt had concluded when
+   * nothing had asked on its behalf at all. That window is exactly when the
+   * authority has wiped its fleet, so a surface waiting on this would stop
+   * waiting at the worst possible moment.
+   *
+   * ⚠ Deliberately NOT applied to {@link hasObservedRemoteListing}. That flag
+   * has the same gap, its own consumers, and its own reasons; narrowing it here
+   * would change `getCardinality()` for readers this change never looked at.
+   * The scoping is added where the claim is made - this flag's contract says
+   * "under the current identity", so this is what makes that true rather than
+   * aspirational.
+   */
+  private concludedUnderIdentity: string | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
   /**
    * Refresh-liveness subscribers, kept OFF the main `listeners` fan-out on
@@ -369,6 +390,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.started = true;
     this.hasObservedRemoteListing = false;
     this.hasConcludedRemoteAttempt = false;
+    this.concludedUnderIdentity = null;
     // BEFORE the first refresh: the very first launch after the upgrade that
     // introduced the persisted key has nothing stored, and that launch is
     // exactly the reinstall this guard exists for - the host is down, so no
@@ -684,6 +706,12 @@ export class HostDirectoryService implements IHostDirectoryService {
    * Whether an attempt to read the registry has FINISHED under the current
    * identity, whatever it said - see {@link hasConcludedRemoteAttempt}.
    *
+   * The identity half is enforced here rather than assumed: the flag and the
+   * identity it was set under are read together (see
+   * {@link concludedUnderIdentity}), so an account switch re-arms the answer
+   * immediately instead of letting the previous account's conclusion stand
+   * until the new one's first outcome lands.
+   *
    * The question a surface asks before it stands aside for a start in
    * progress, and deliberately NOT {@link hasSettledFleet}. That one is about
    * the fleet's CONTENTS, so it stays false for the whole of an outage the
@@ -698,7 +726,10 @@ export class HostDirectoryService implements IHostDirectoryService {
    * can read membership out of it.
    */
   hasConcludedDiscovery(): boolean {
-    return this.hasConcludedRemoteAttempt;
+    return (
+      this.hasConcludedRemoteAttempt &&
+      this.concludedUnderIdentity === this.authContextId()
+    );
   }
 
   onChange(listener: HostDirectoryListener): Disposable {
@@ -981,6 +1012,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     // nothing was asked and nothing concluded. Only the `failed` arm below
     // makes the two disagree.
     this.hasConcludedRemoteAttempt = outcome.kind === "hosts";
+    this.concludedUnderIdentity = this.hasConcludedRemoteAttempt
+      ? era.identity
+      : null;
     const observedChanged = observedBefore !== this.hasObservedRemoteListing;
     // A host registered late - from the CLI, or from another machine - reaches
     // this directory through its own poll, while the selection authority's
@@ -1063,8 +1097,13 @@ export class HostDirectoryService implements IHostDirectoryService {
     // branches), but "has anyone finished asking" is now yes - which is what
     // lets a surface stop waiting and narrate the failure instead of holding a
     // start-in-progress over an outage that may never end.
-    const concludedBefore = this.hasConcludedRemoteAttempt;
+    // Compared THROUGH the scoping, not against the raw flag: a `true` left
+    // standing by a previous account is not a conclusion this identity has
+    // seen, so the crossing it would otherwise swallow is a real one that its
+    // subscribers must hear.
+    const concludedBefore = this.hasConcludedDiscovery();
     this.hasConcludedRemoteAttempt = true;
+    this.concludedUnderIdentity = era.identity;
     const foreignIdentity = this.lastCommitIdentity !== era.identity;
     const foreignObservedListing =
       foreignIdentity && this.hasObservedRemoteListing;

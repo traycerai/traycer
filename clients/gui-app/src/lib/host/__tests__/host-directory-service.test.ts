@@ -598,7 +598,7 @@ describe("HostDirectoryService", () => {
     ]);
   });
 
-  it("counts a FAILED fetch as a concluded attempt while the fleet stays unsettled, and emits the crossing", async () => {
+  it("counts a FAILED fetch as a concluded attempt while the fleet stays unsettled, and emits the crossing once", async () => {
     // The two flags part company here, and only here. A registry that cannot
     // be reached never DELIVERS, so `hasSettledFleet()` is false for the whole
     // outage - correctly, since the contents really are unknown. But the
@@ -607,12 +607,20 @@ describe("HostDirectoryService", () => {
     // settled-fleet flag instead would hold a start-in-progress over an
     // offline shell until the outage ended.
     //
-    // The EMIT is half the fix. This path changes no row by construction, so
-    // the compared emit swallows it, exactly as an empty-either-way listing
-    // crossing does on the commit path - and a flag nobody is told about is a
-    // flag no subscriber can act on.
+    // The EMIT is half the fix, and this case is built to actually SEE it. The
+    // crossing is driven from an explicit `refresh()` rather than from
+    // `start()`, because `start()` awaits the initial refresh AND the local
+    // snapshot subscription emits inside it - so a listener registered around
+    // `start()` either misses the transition entirely or cannot tell it apart
+    // from the shell's own emission. Opening with `signed-out` leaves the flag
+    // false (nothing was asked) so the first FAILED refresh below is a genuine
+    // false -> true crossing with the listener already watching.
     const host = makeHost(null);
-    const { fetcher } = queuedFetcher([{ kind: "failed" }, { kind: "failed" }]);
+    const { fetcher } = queuedFetcher([
+      { kind: "signed-out" },
+      { kind: "failed" },
+      { kind: "failed" },
+    ]);
     const directory = makeDirectory({
       authContextId: null,
       credentialGeneration: null,
@@ -620,23 +628,67 @@ describe("HostDirectoryService", () => {
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
     });
-    const emits: number[] = [];
     await directory.start();
 
-    expect(directory.hasSettledFleet()).toBe(false);
-    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(directory.hasConcludedDiscovery()).toBe(false);
 
+    const emits: number[] = [];
     directory.onChange((entries) => {
       emits.push(entries.length);
     });
     await directory.refresh();
 
-    // Still concluded, still unsettled - and SILENT. Gating the emit on the
-    // flip rather than on the outcome is what keeps a failing 60s poll from
-    // fanning out to every consumer of the snapshot on every tick.
+    expect(directory.hasSettledFleet()).toBe(false);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(emits).toEqual([0]);
+
+    await directory.refresh();
+
+    // Still concluded, still unsettled - and SILENT this time. Gating the emit
+    // on the flip rather than on the outcome is what keeps a failing 60s poll
+    // from fanning out to every consumer of the snapshot on every tick.
     expect(directory.hasConcludedDiscovery()).toBe(true);
     expect(directory.hasSettledFleet()).toBe(false);
-    expect(emits).toEqual([]);
+    expect(emits).toEqual([0]);
+  });
+
+  it("re-arms the concluded answer for a new identity rather than inheriting the previous account's", async () => {
+    // This service outlives the identity and nothing clears state on the switch
+    // itself, so a conclusion reached under account A would otherwise stand for
+    // account B until B's own first outcome committed. That window is exactly
+    // when the authority has wiped its fleet, so a surface waiting on this
+    // would stop waiting at the worst moment - and the failed arm's
+    // flip-gated emit would swallow B's crossing on top, because the raw flag
+    // never went false.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([{ kind: "failed" }, { kind: "failed" }]);
+    let identity: string | null = "user-a";
+    const directory = makeDirectory({
+      authContextId: () => identity,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+
+    const emits: number[] = [];
+    directory.onChange((entries) => {
+      emits.push(entries.length);
+    });
+    identity = "user-b";
+
+    // The switch alone re-arms it: nothing has asked on B's behalf yet.
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+
+    await directory.refresh();
+
+    // B's own attempt concludes, and its crossing is announced - which a raw
+    // `hasConcludedRemoteAttempt` comparison would have swallowed.
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(emits).toEqual([0]);
   });
 
   it("keeps a delivered listing a concluded attempt too - the weaker claim never disagrees", async () => {
