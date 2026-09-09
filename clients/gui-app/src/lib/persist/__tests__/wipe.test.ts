@@ -22,11 +22,10 @@ vi.mock("@/lib/composer/prompt-stash-channel", () => ({
   publishPromptStashReset: () => publishPromptStashReset(),
 }));
 
-// The real module opens an IndexedDB store at IMPORT TIME (`idb-keyval`'s
-// `createStore`), which jsdom has no native support for - importing it for
-// real here would throw before a single test runs. Mocked wholesale; the
-// wipe's OWN handling of it (calling it, tolerating its rejection, and
-// deleting its fixed db name unconditionally) is what this file tests.
+// The real module reaches `idb-keyval` on first use, which jsdom has no
+// native support for. Mocked wholesale; the wipe's OWN handling of it
+// (calling it, tolerating its rejection, and deleting its fixed db name
+// unconditionally) is what this file tests.
 // `vi.mock` factories run during import resolution - which, for ES modules,
 // happens BEFORE any of this file's own top-level `const`s execute (imports
 // hoist above regular statements). A factory that closes over a later

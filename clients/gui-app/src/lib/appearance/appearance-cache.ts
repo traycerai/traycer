@@ -1,4 +1,4 @@
-import { createStore, get, clear, del } from "idb-keyval";
+import { createStore, get, clear, del, type UseStore } from "idb-keyval";
 import {
   workspaceAppearanceReadSchema,
   type WorkspaceAppearanceRead,
@@ -17,7 +17,14 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // avoids that cross-cutting change.
 export const APPEARANCE_DB_NAME = `${PERSIST_PREFIX}:appearance`;
 export const APPEARANCE_CACHE_LIMIT = 64 * 1024 * 1024;
-const store = createStore(APPEARANCE_DB_NAME, "appearance");
+// Opened on first use, like `landing-image-store` and `file-edit-recovery-store`:
+// `createStore` opens the database eagerly, and no surface that never reads an
+// appearance should pay for that at module load.
+let cachedStore: UseStore | null = null;
+function appearanceStore(): UseStore {
+  cachedStore ??= createStore(APPEARANCE_DB_NAME, "appearance");
+  return cachedStore;
+}
 let generation = 0;
 let wiping = false;
 useAuthStore.subscribe((state, previous) => {
@@ -101,7 +108,7 @@ async function read(key: string, accountId: string | null): Promise<unknown> {
   const captured = generation;
   if (!allowed(accountId, captured)) return null;
   try {
-    const entry: unknown = await get(key, store);
+    const entry: unknown = await get(key, appearanceStore());
     return allowed(accountId, captured) && isEntry(entry) ? entry.value : null;
   } catch {
     return null;
@@ -208,7 +215,7 @@ async function write(
     throw new Error("Appearance cache session is no longer active.");
   if (size > APPEARANCE_CACHE_LIMIT)
     throw new Error("Appearance image exceeds the cache budget.");
-  await store("readwrite", (objectStore) => {
+  await appearanceStore()("readwrite", (objectStore) => {
     let retainPinned = false;
     return runEvictionTransaction(
       objectStore,
@@ -321,7 +328,7 @@ export async function writeAppearanceBlob(
 export async function clearAppearanceCache(): Promise<void> {
   wiping = true;
   generation += 1;
-  await clear(store);
+  await clear(appearanceStore());
 }
 
 export async function pinGlobalAppearanceBlob(
@@ -330,7 +337,7 @@ export async function pinGlobalAppearanceBlob(
   if (wiping) throw new Error("Appearance cache is being cleared.");
   const pinnedKey =
     identity === null ? null : `blob:${appearanceAssetKey(null, identity)}`;
-  await store("readwrite", (objectStore) => {
+  await appearanceStore()("readwrite", (objectStore) => {
     let found = pinnedKey === null;
     return runEvictionTransaction(objectStore, () => !wiping, {
       onEntry: (cursor, entry) => {
@@ -375,5 +382,5 @@ export async function removeAppearanceBlob(
   identity: string,
 ): Promise<void> {
   if (!allowed(scope?.accountId ?? null, generation)) return;
-  await del(`blob:${appearanceAssetKey(scope, identity)}`, store);
+  await del(`blob:${appearanceAssetKey(scope, identity)}`, appearanceStore());
 }
