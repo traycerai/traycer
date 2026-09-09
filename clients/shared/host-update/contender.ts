@@ -89,12 +89,14 @@ export type UpdateMaintenanceExemption =
    * recovery path.
    *
    * **With a durable nonterminal attempt it therefore ALLOWS**, on the same
-   * reasoning as `uninstall-maintenance`: a live executor segment holds this
-   * lock for its whole span and is refused `busy` before any disposition is
-   * consulted, so a record that reaches here is parked or interrupted and
-   * has no work in flight. Refusing it instead meant one parked update - the
-   * ROUTINE outcome of updating a busy host - made a developer machine
-   * un-reinstallable as well as un-uninstallable.
+   * reasoning as `host-uninstall-maintenance` and stated in full on that arm
+   * in `dispositionFor`: the criterion is IDEMPOTENCE, not the absence of a
+   * live holder. Do not restate this as "a running update answers `busy`
+   * first" - contention cannot exclude a holder that is alive but momentarily
+   * outside the lock. It allows because replacing the whole product leaves a
+   * resumed holder no end state to disagree about. Refusing it instead meant
+   * one parked update - the ROUTINE outcome of updating a busy host - made a
+   * developer machine un-reinstallable as well as un-uninstallable.
    */
   | "desktop-install-maintenance"
   | "runtime-repair-maintenance"

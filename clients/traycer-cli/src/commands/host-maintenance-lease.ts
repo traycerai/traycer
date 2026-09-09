@@ -761,6 +761,17 @@ async function executeAction(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
 ): Promise<void> {
+  // Enforced HERE, at the single boundary every dispatch route funnels
+  // through, rather than at the call sites: there are two of them (the direct
+  // `execute` frame in `serveMaintenanceLease` and the root executor's
+  // `execute` request), and guarding one leaves the other open - which is
+  // exactly the hole a first pass at this left. `requireCliUpdateMutationCapability`
+  // upstream checks lock ownership and the target home, never the admission.
+  if (!leaseAdmissionPermitsAction(contenderOptions.admission, action)) {
+    throw new Error(
+      `maintenance admission ${contenderOptions.admission} does not permit the action ${action}`,
+    );
+  }
   await withCliAttemptMutation(capability, contenderOptions, async () => {
     const environment = contenderOptions.environment;
     if (action === "host-stop") {

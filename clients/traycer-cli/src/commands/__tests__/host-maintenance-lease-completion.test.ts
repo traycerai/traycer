@@ -378,3 +378,50 @@ describe("assertPathHelpersBoundToTarget", () => {
     }
   });
 });
+
+describe("lease admission bounds the action", () => {
+  // The guard lives at the shared `executeAction` boundary precisely because
+  // there are TWO dispatch routes into it - the direct `execute` frame and the
+  // root executor's request - and an earlier revision guarded only one, leaving
+  // the other able to ask for the full teardown under an install-shaped
+  // admission.
+  it("permits host-uninstall-all ONLY under host-uninstall-maintenance", async () => {
+    const { leaseAdmissionPermitsAction } =
+      await import("../host-maintenance-lease");
+    expect(
+      leaseAdmissionPermitsAction(
+        "host-uninstall-maintenance",
+        "host-uninstall-all",
+      ),
+    ).toBe(true);
+    for (const admission of [
+      "desktop-install-maintenance",
+      "desktop-activation-maintenance",
+    ] as const) {
+      expect(leaseAdmissionPermitsAction(admission, "host-uninstall-all")).toBe(
+        false,
+      );
+      // host-stop stays available to every lease admission.
+      expect(leaseAdmissionPermitsAction(admission, "host-stop")).toBe(true);
+    }
+  });
+
+  it("fails closed for an admission that never belonged on a lease", async () => {
+    const { leaseAdmissionPermitsAction } =
+      await import("../host-maintenance-lease");
+    // `uninstall-maintenance` is the Desktop login-item step: not leaseable at
+    // all, so it must answer false rather than index the table to undefined.
+    expect(
+      leaseAdmissionPermitsAction(
+        "uninstall-maintenance",
+        "host-uninstall-all",
+      ),
+    ).toBe(false);
+    expect(
+      leaseAdmissionPermitsAction("uninstall-maintenance", "host-stop"),
+    ).toBe(false);
+    expect(
+      leaseAdmissionPermitsAction("attempt-executor", "host-uninstall-all"),
+    ).toBe(false);
+  });
+});

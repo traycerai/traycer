@@ -174,9 +174,12 @@ export async function uninstallHost(
   // the point of the write, and a handle can outlive its lock without anyone
   // releasing it (a contender that proved this process dead breaks the lock
   // and takes it, notifying nobody), so an uninstall that lost its lock would
-  // unlink the NEW owner's live attempt. The discard re-verifies ownership on
-  // both sides of its read instead. The lock FILE stays - it is the caller's
-  // live handle, not evidence.
+  // unlink the NEW owner's live attempt. The discard takes the mutation lease
+  // and checks ownership immediately before the unlink instead. It NARROWS
+  // that window rather than closing it - see the note on
+  // `discardAttemptRecordForUninstall` - but the raw `rm` this replaces had no
+  // check at all. The lock FILE stays: it is the caller's live handle, not
+  // evidence.
   // A failure here PROPAGATES, unlike the best-effort removals above. Those
   // leave litter; this one leaves the exact defect this seam exists to
   // prevent - a valid nonterminal record standing in a host home whose

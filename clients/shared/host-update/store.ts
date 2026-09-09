@@ -1250,6 +1250,21 @@ export interface DiscardAttemptRecordForUninstallOptions {
  * describes is going away, and the caller cannot know the identity of a park
  * some earlier invocation wrote.
  *
+ * ## What this does NOT close
+ *
+ * The ownership check and the unlink are not one atomic step:
+ * `removeRecordFile` awaits `classifyPath` (and the removal barrier) before
+ * `rm`. A contender that positively proves this process dead inside that
+ * window can break the lock, claim, and write a fresh record which this call
+ * then deletes. `pruneTerminalAttemptRecord` has the identical shape, so the
+ * window is a property of this module rather than of this function - but note
+ * that prune is guarded by an expected-identity, terminal and retention check
+ * where this is not, so the CONSEQUENCE of losing that race is worse here.
+ * Closing it needs an atomic compare-and-unlink primitive this module does not
+ * have, and that work is tracked separately; what this function does buy over
+ * the raw `rm` it replaces is the lease plus a check at the point of the
+ * write, where there was previously no check at all.
+ *
  * An unreadable or already-absent record is `discarded`, not a rejection:
  * removal is the goal, and a record that cannot be parsed is exactly what an
  * uninstall should be free to clear.
