@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
 import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -552,6 +553,16 @@ function successfulRecentRecordResponse(): unknown {
 
 describe("landing workspace summary empty state", () => {
   beforeEach(() => {
+    // The submit this suite drives is an epic create, admitted for a session
+    // holding a cloud verdict (an unverified one needs the host's local-first
+    // line, which this suite does not model).
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+        [],
+      );
     window.localStorage.clear();
     mocks.pickAndPrepareFolders.mockClear();
     mocks.selectHost.mockClear();
@@ -593,6 +604,7 @@ describe("landing workspace summary empty state", () => {
 
   afterEach(() => {
     cleanup();
+    useAuthStore.getState().setSignedOut();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     draftRuntimeRegistry.resetForTesting();

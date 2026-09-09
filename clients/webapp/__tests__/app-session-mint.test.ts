@@ -85,7 +85,12 @@ const serialLocks: WebLockManager = {
   },
 };
 
-const unusedRefresh: WebCredentialRefresh = async () => ({ kind: "rejected" });
+const unusedRefresh: WebCredentialRefresh = async () => ({
+  kind: "rejected",
+  // Never spent in these cases. Classified CREDENTIAL because saying ACCOUNT
+  // would assert something about the user that no response here ever said.
+  rejection: { kind: "credential", revocation: null },
+});
 const unusedProbe: WebIdentityProbe = async () => ({ kind: "network-error" });
 
 function storeOver(storage: WebCredentialStorage): WebTokenStore {

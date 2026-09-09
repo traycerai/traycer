@@ -138,6 +138,10 @@ function makeRequestContext(): RequestContext {
     connectionId: undefined,
     operationId: undefined,
     externalAbortSignal: undefined,
+    // No verdict asserted: these cases are about the socket reattaching, not
+    // about cloud authorization, and `undefined` is the contract's reading
+    // for a peer that does not speak verdicts.
+    cloudAuthorized: undefined,
   });
 }
 

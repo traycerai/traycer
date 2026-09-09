@@ -12,6 +12,10 @@ import {
   wireAvailabilityRecovery,
 } from "@/lib/host/availability-recovery";
 import { appLogger } from "@/lib/logger";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 export interface DurableStreamTransport {
   readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
@@ -104,6 +108,8 @@ export function openDurableStreamTransport(params: {
     target: params.target,
     endpoint: params.endpoint,
     bearer: params.bearer,
+    cloudAuthorized: () =>
+      authorizesCloudCapability(useAuthStore.getState().status),
     authnBaseUrl: params.runnerHost.authnBaseUrl,
     auth: params.auth,
     userId: params.userId,

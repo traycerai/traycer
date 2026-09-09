@@ -1,5 +1,7 @@
 import "./stub-sweep-dialog-host-hooks";
 
+import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
+
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -36,6 +38,7 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
@@ -44,7 +47,10 @@ import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schem
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
-import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+import {
+  anyTooltipHasText,
+  tooltipTextNear,
+} from "@/components/ui/__tests__/tooltip-probe";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
@@ -159,6 +165,8 @@ const testState = vi.hoisted(() => ({
     ownershipScopes: [] as HistoryFacets["ownershipScopes"],
   },
   isFetching: false,
+  cloudPagePending: false,
+  completeness: null as ListTasksCompleteness | null,
   bridge: null as DesktopWindowsBridge | null,
   worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
   worktreeCandidatesFetching: false,
@@ -186,9 +194,11 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       totalCount: testState.items.length,
       facets: testState.facets,
       worktreesByEpicId: testState.worktreesByEpicId,
+      completeness: testState.completeness,
     },
     isPending: false,
     isFetching: testState.isFetching,
+    cloudPagePending: testState.cloudPagePending,
     error: null,
     hostId: "host-test",
     refetch: testState.refetch,
@@ -362,6 +372,8 @@ describe("<EpicsListPanel />", () => {
       ownershipScopes: [],
     };
     testState.isFetching = false;
+    testState.cloudPagePending = false;
+    testState.completeness = null;
     testState.bridge = null;
     testState.worktreeCandidates = [];
     testState.worktreeCandidatesFetching = false;
@@ -381,6 +393,10 @@ describe("<EpicsListPanel />", () => {
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    // Pin is a cloud CAPABILITY, so the control is admitted only for a session
+    // holding a verdict. The store defaults to `signed-out`, under which every
+    // pin assertion below would pass vacuously against a disabled control.
+    useAuthStore.setState({ status: "signed-in" });
   });
 
   it("lets a destination picker replace normal row navigation", async () => {
@@ -431,6 +447,9 @@ describe("<EpicsListPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    // Zustand stores are module scope, so an auth status staged here outlives
+    // this file inside the same worker.
+    useAuthStore.setState({ status: "signed-out" });
     __resetTabNavigationControllerForTesting();
     setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -454,6 +473,69 @@ describe("<EpicsListPanel />", () => {
       );
     });
     expect(screen.queryByTestId("old-epic-route")).toBeNull();
+  });
+
+  it("keeps the production History row link interactive while its cloud page is revalidating", async () => {
+    // The local-first query has already supplied this row, while the cloud
+    // follow-up remains unresolved. Exercise the real panel's task-bound Link
+    // rather than a test-only state button: refreshing must not turn a locally
+    // usable row into a dead skeleton or disabled navigation affordance.
+    testState.isFetching = true;
+    testState.completeness = {
+      cloudPage: "pending",
+      facets: "partial",
+      localRows: "present",
+      sort: "loaded-union",
+    };
+    const router = renderPanel("embedded", "/");
+
+    const rowLink = await screen.findByRole("link", {
+      name: "Open task Open from landing",
+    });
+    expect(rowLink.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(rowLink);
+
+    await waitFor(() => {
+      const tabId = useEpicCanvasStore
+        .getState()
+        .resolveTabIdForEpic("epic-from-history");
+      expect(tabId).not.toBeNull();
+      expect(router.state.location.pathname).toBe(
+        `/epics/epic-from-history/${tabId}`,
+      );
+    });
+  });
+
+  it("does not declare the account empty when the cloud page is unavailable", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "present",
+      sort: "loaded-union",
+    };
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-cloud-page-unavailable"),
+    ).not.toBeNull();
+    // RED before the fix: "No tasks yet" rendered under the notice, a claim
+    // about an account whose tasks may all live on other devices.
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+  });
+
+  it("shows the explicit cloud-pending state instead of an empty list", async () => {
+    testState.items = [];
+    testState.cloudPagePending = true;
+    renderPanel("embedded", "/");
+
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+    expect(
+      await screen.findByTestId("epics-list-cloud-page-pending"),
+    ).not.toBeNull();
+    expect(screen.getByTestId("epics-list-completeness").textContent).toContain(
+      "Cloud tasks are still loading",
+    );
   });
 
   it("labels a task that is already open in the tab strip", async () => {
@@ -497,6 +579,22 @@ describe("<EpicsListPanel />", () => {
       epicId: "epic-from-history",
       pinned: true,
     });
+  });
+
+  it("refuses to pin under an unverified session and says why", async () => {
+    // History stays READABLE while unverified - the first page's cache is
+    // infinite-lived and its user id still resolves - so settled cloud rows go
+    // on rendering after the cloud verdict is withdrawn. Pin is not a read: it
+    // spends a cloud capability on the account with a bearer the cloud has
+    // stopped vouching for.
+    useAuthStore.setState({ status: "unverified" });
+    renderPanel("embedded", "/");
+
+    const pin = await screen.findByRole("button", {
+      name: "Pinning Open from landing needs a verified session; sign-in could not be confirmed",
+    });
+    fireEvent.click(pin);
+    expect(testState.setPinnedMutate).not.toHaveBeenCalled();
   });
 
   it("clicks the pin control without triggering the row navigation layer", async () => {
@@ -580,6 +678,187 @@ describe("<EpicsListPanel />", () => {
 
     expect(await screen.findByText("Phase somehow pinned")).not.toBeNull();
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
+  });
+
+  it("lists a preserved orphan in its own section rather than mixed into the list", async () => {
+    // Reachability is the claim (`s5-orphaned-epic-recovery`). Mixing the row
+    // into the ordinary list under whatever sort is active is how an epic that
+    // is technically listable stays effectively invisible - the one fact the
+    // person needs is that the cloud copy is gone.
+    testState.items = [
+      historyItem({ id: "history-normal", epicId: "normal", title: "Normal" }),
+      historyItem({
+        id: "history-orphan",
+        epicId: "orphan",
+        title: "Preserved orphan",
+        isPreservedOrphan: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const section = await screen.findByTestId("epics-list-preserved-section");
+    expect(section.textContent).toContain("Deleted in cloud");
+    expect(section.textContent).toContain("Preserved orphan");
+    // Arrangement fidelity: the ordinary list still rendered, and the orphan
+    // is not in it - so this is a partition, not "everything moved".
+    const rows = screen.getByTestId("epics-list-rows");
+    expect(rows.textContent).toContain("Normal");
+    expect(rows.textContent).not.toContain("Preserved orphan");
+  });
+
+  it("states what an offline page is missing instead of presenting it as complete", async () => {
+    testState.items = [
+      historyItem({ id: "history-local", epicId: "local", title: "Local" }),
+    ];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "present",
+      sort: "loaded-union",
+    };
+    renderPanel("embedded", "/");
+
+    const notice = await screen.findByTestId("epics-list-completeness");
+    expect(notice.getAttribute("data-cloud-page")).toBe("unavailable");
+    expect(notice.textContent).toContain("Cloud tasks couldn't be reached");
+    // `facets: "partial"` means the counts describe a DIFFERENT set from the
+    // rows, so the notice may not claim they cover the listed tasks - the
+    // fixture sets exactly that, and the older wording asserted the opposite.
+    expect(notice.textContent).toContain("Order covers the tasks listed here");
+    expect(notice.textContent).toContain("filter counts may leave some");
+  });
+
+  it("keeps the complete-counts wording when only the ORDER is a loaded union", async () => {
+    testState.items = [
+      historyItem({ id: "history-local", epicId: "local", title: "Local" }),
+    ];
+    testState.completeness = {
+      cloudPage: "settled",
+      facets: "server",
+      localRows: "present",
+      sort: "loaded-union",
+    };
+    renderPanel("embedded", "/");
+
+    const notice = await screen.findByTestId("epics-list-completeness");
+    expect(notice.textContent).toContain("not everything you have");
+    expect(notice.textContent).not.toContain("filter counts may leave some");
+  });
+
+  it("says a truncated page may be missing tasks, without claiming where", async () => {
+    testState.items = [
+      historyItem({ id: "history-m1", epicId: "m1", title: "Mirror 1" }),
+    ];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "truncated",
+      sort: "loaded-union",
+    };
+    renderPanel("embedded", "/");
+
+    const notice = await screen.findByTestId("epics-list-completeness");
+    expect(notice.getAttribute("data-local-rows")).toBe("truncated");
+    // A `truncated` page that says nothing reads as covered-everything - the
+    // banner going silent is what this guards against, not one particular
+    // wording. The copy deliberately does not name WHERE the gap is:
+    // `truncated` has more than one producer (the page cap, an unprovable
+    // filter, an unread root doc), and the wire member does not distinguish
+    // them, so a client must not either.
+    expect(notice.textContent).toContain(
+      "couldn't be checked against your filters",
+    );
+  });
+
+  it("names a filter this device cannot check rather than showing an empty list", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "suppressed-unprovable-filter",
+      sort: "server",
+    };
+    renderPanel("embedded", "/");
+
+    const notice = await screen.findByTestId("epics-list-completeness");
+    expect(notice.getAttribute("data-local-rows")).toBe(
+      "suppressed-unprovable-filter",
+    );
+    expect(notice.textContent).toContain("can't be checked against tasks");
+  });
+
+  it("says nothing at all for a fully server-owned page", async () => {
+    testState.items = [
+      historyItem({ id: "history-cloud", epicId: "cloud", title: "Cloud" }),
+    ];
+    testState.completeness = {
+      cloudPage: "settled",
+      facets: "server",
+      localRows: "none",
+      sort: "server",
+    };
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("Cloud")).not.toBeNull();
+    // A caveat that appears on a complete page is the same defect wearing the
+    // other sign.
+    expect(screen.queryByTestId("epics-list-completeness")).toBeNull();
+  });
+
+  it("disables pin mutation for a local-home epic and names the cloud-sync boundary", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+        isPinned: false,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const pin = await screen.findByRole("button", {
+      name: "Pinning Local only epic needs cloud sync; it is stored on this device",
+    });
+    // `aria-disabled`, not the native attribute: a natively disabled button is
+    // unfocusable and swallows pointer events, so the tooltip below - the only
+    // place the reason is stated - was reachable by mouse hover and by nothing
+    // else. The mutation is still blocked, which the click asserts.
+    expect(pin.getAttribute("aria-disabled")).toBe("true");
+    expect(pin.hasAttribute("disabled")).toBe(false);
+    expect(pin.getAttribute("data-local-home-pin-unavailable")).toBe("true");
+    fireEvent.click(pin);
+    expect(testState.setPinnedMutate).not.toHaveBeenCalled();
+    // Copy states the condition instead of promising a sync that a free-tier
+    // account never gets and a stale row has already had - see
+    // `HistoryPinControl`.
+    expect(tooltipTextNear(pin)).toBe(
+      "This epic is stored on this device. Pinning needs cloud sync.",
+    );
+  });
+
+  it("disables pinning for a preserved orphan, whose cloud task no longer exists", async () => {
+    // `preservation: "orphaned-local-edits"` is a CLOUD-homed row - so
+    // `isLocalHome` is false and the cloud-only gate let it through. The
+    // server has already deleted the task, so the optimistic flip fired
+    // `epic.setPinned` at nothing.
+    testState.items = [
+      historyItem({
+        title: "Orphaned epic",
+        isLocalHome: false,
+        isPreservedOrphan: true,
+        isPinned: false,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const pin = await screen.findByRole("button", {
+      name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only this device's edits remain",
+    });
+    expect(pin.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(pin);
+    expect(testState.setPinnedMutate).not.toHaveBeenCalled();
+    expect(tooltipTextNear(pin)).toBe(
+      "This epic's cloud copy was deleted. Only this device's edits remain, so it can't be pinned.",
+    );
   });
 
   // The Sweep control keeps its slot in every task row rather than appearing
@@ -1114,6 +1393,48 @@ describe("<EpicsListPanel />", () => {
     expect(typeof options.onSuccess).toBe("function");
   });
 
+  // T13: the delete confirmation is an unbounded pause with a human in it, so
+  // `handleConfirmDelete` re-reads the verdict from the store rather than
+  // trusting the render that opened the dialog. A mixed pending set must
+  // re-filter, not refuse wholesale: the cloud row drops out, the local-home
+  // row - which spends nothing - survives.
+  it("re-filters the pending delete set when the session goes unverified while the dialog is open", async () => {
+    testState.items = [
+      historyItem({}),
+      historyItem({
+        id: "history-epic-local",
+        epicId: "epic-local",
+        title: "Local-home item",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epics-list-delete-selected"));
+
+    // The verdict is withdrawn while the confirmation sits open, before
+    // confirming.
+    useAuthStore.setState({ status: "unverified" });
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+
+    expect(testState.mutate).toHaveBeenCalledTimes(1);
+    const deleteCall = testState.mutate.mock.calls.at(0);
+    if (deleteCall === undefined) {
+      throw new Error("expected the local-home-only delete mutation call");
+    }
+    const [variables] = deleteCall;
+    // The cloud row ("epic-from-history") was NOT dispatched; the local-home
+    // row STILL was.
+    expect(variables).toEqual({
+      ids: ["epic-local"],
+      worktreeCleanup: null,
+    });
+  });
+
   it("checks only PROVEN-removable rows by default (unproven and dirty stay unchecked)", async () => {
     testState.worktreeCandidates = [
       {
@@ -1541,6 +1862,72 @@ describe("<EpicsListPanel />", () => {
     // Up off the first row is the way back to refining the query.
     fireEvent.keyDown(first, { key: "ArrowUp" });
     expect(document.activeElement).toBe(input);
+  });
+
+  it("walks preserved-orphan rows in the same arrow sequence as ordinary ones", async () => {
+    // The preserved section is a second `<ul>` ABOVE the results, so a
+    // traversal scoped to the ordinary list skipped every preserved row on the
+    // way down and answered nothing to an arrow pressed ON one - the rows were
+    // visible, reachable by mouse, and dead to the keyboard.
+    testState.items = [
+      historyItem({
+        id: "history-orphan",
+        epicId: "orphan",
+        title: "Preserved orphan",
+        isPreservedOrphan: true,
+      }),
+      historyItem({ id: "history-normal", epicId: "normal", title: "Normal" }),
+    ];
+
+    renderPanel("page", "/");
+    const input = await screen.findByRole("searchbox", {
+      name: "Search tasks",
+    });
+    const orphan = screen.getByRole("link", {
+      name: "Open task Preserved orphan",
+    });
+    const normal = screen.getByRole("link", { name: "Open task Normal" });
+    input.focus();
+
+    // DOM order, which is also visual order: the preserved section renders
+    // first, so it is the first thing ArrowDown reaches.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(orphan);
+
+    fireEvent.keyDown(orphan, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(normal);
+
+    fireEvent.keyDown(normal, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(orphan);
+
+    fireEvent.keyDown(orphan, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("enters a page whose ONLY rows are preserved orphans", async () => {
+    // The worst arm of the same defect: with no ordinary rows the traversal
+    // found zero targets, declined the key, and left the results unreachable
+    // from the search box entirely.
+    testState.items = [
+      historyItem({
+        id: "history-orphan",
+        epicId: "orphan",
+        title: "Preserved orphan",
+        isPreservedOrphan: true,
+      }),
+    ];
+
+    renderPanel("page", "/");
+    const input = await screen.findByRole("searchbox", {
+      name: "Search tasks",
+    });
+    const orphan = screen.getByRole("link", {
+      name: "Open task Preserved orphan",
+    });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(orphan);
   });
 
   it("leaves ArrowDown to the caret when the query matches nothing", async () => {

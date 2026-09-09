@@ -173,16 +173,16 @@ export class WebTokenStore implements ITokenStore {
       // user in - each of which this read now sees.
       const stored = this.readStored();
       if (stored === null) {
-        return { outcome: "deleted", pair: null };
+        return { outcome: "deleted", pair: null, rejection: null };
       }
       if (stored.user.id !== expected.userId) {
-        return { outcome: "user-mismatch", pair: stored };
+        return { outcome: "user-mismatch", pair: stored, rejection: null };
       }
       if (stored.token !== expected.token) {
         // The stale writer loses here, BEFORE the spend. `pair` is the
         // winner's committed pair, which the caller adopts instead of
         // burning a refresh token that authn has already consumed.
-        return { outcome: "superseded", pair: stored };
+        return { outcome: "superseded", pair: stored, rejection: null };
       }
       const refreshed = await this.options.refresh({
         authnBaseUrl: this.options.authnBaseUrl,
@@ -192,10 +192,21 @@ export class WebTokenStore implements ITokenStore {
         signal: null,
       });
       if (refreshed.kind === "network-error") {
-        return { outcome: "refresh-network", pair: null };
+        return { outcome: "refresh-network", pair: null, rejection: null };
       }
       if (refreshed.kind === "rejected") {
-        return { outcome: "refresh-rejected", pair: null };
+        // The split the renderer branches on: an ACCOUNT reject (403/404) is a
+        // statement about the user, a CREDENTIAL reject is only about this
+        // pair. Carried through rather than collapsed into the outcome string,
+        // so a "sign out everywhere" reads differently from an expiry.
+        return {
+          outcome:
+            refreshed.rejection.kind === "account"
+              ? "refresh-rejected-account"
+              : "refresh-rejected-credential",
+          pair: null,
+          rejection: refreshed.rejection,
+        };
       }
       const next: StoredCredentials = {
         ...stored,
@@ -205,7 +216,7 @@ export class WebTokenStore implements ITokenStore {
       };
       this.writeStored(next);
       this.notifyAfterMutation();
-      return { outcome: "applied", pair: next };
+      return { outcome: "applied", pair: next, rejection: null };
     });
   }
 

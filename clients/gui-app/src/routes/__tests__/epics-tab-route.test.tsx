@@ -8,11 +8,18 @@ import {
 } from "@tanstack/react-router";
 import { QueryClient } from "@tanstack/react-query";
 import { routeTree } from "@/routeTree.gen";
+import type { AuthStatus } from "@/stores/auth/auth-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { getCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
+import { Route as EpicTabRoute } from "@/routes/epics.$epicId.$tabId";
 
 const recordViewed = vi.hoisted(() => vi.fn());
 
@@ -229,5 +236,140 @@ describe("/epics/$epicId/$tabId route", () => {
     expect(screen.queryByTestId("app-shell")).toBeNull();
     expect(router.state.location.pathname).toBe("/onboarding");
     expect(useOnboardingStore.getState().completedAt).toBe(1_700_000_000_000);
+  });
+});
+
+/**
+ * T3: the `/epics/$epicId/$tabId` loader's History first-page prefetch moved
+ * from `auth.status !== "signed-in"` to `!admitsLocalPlane(auth.status)`, on
+ * the same reading as the `/epics` loader (`epics-route.test.tsx`) - this
+ * warms the History overlay so it opens populated from inside an epic tab,
+ * and `beforeLoad`'s `requireSignedIn` already admits `unverified` here.
+ *
+ * Invoked directly against `Route.options.loader`, same idiom as
+ * `epics-route.test.tsx`'s loader block and `draft-entry-routes.test.ts`'s
+ * `beforeLoad` invocation.
+ */
+describe("/epics/$epicId/$tabId loader prefetch admission", () => {
+  afterEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  interface FakeHostClient {
+    getActiveHostId(): string | null;
+    getRequestContextUserId(): string | null;
+  }
+
+  interface FakeLoaderContext {
+    getHostClient: () => FakeHostClient | null;
+    getAuthSnapshot: () => {
+      readonly status: AuthStatus;
+      readonly contextMetadata: { readonly userId: string } | null;
+    };
+    queryClient: { prefetchQuery: (options: unknown) => Promise<void> };
+  }
+
+  function invokeEpicTabLoader(args: {
+    readonly authStatus: AuthStatus;
+    readonly contextMetadataUserId: string | null;
+    readonly hostId: string;
+    readonly requestContextUserId: string | null;
+  }): { readonly prefetchCalls: number } {
+    const prefetchQuery = vi.fn(() => Promise.resolve());
+    const loader = EpicTabRoute.options.loader as (loaderArgs: {
+      context: FakeLoaderContext;
+    }) => unknown;
+    loader({
+      context: {
+        getHostClient: () => ({
+          getActiveHostId: () => args.hostId,
+          getRequestContextUserId: () => args.requestContextUserId,
+        }),
+        getAuthSnapshot: () => ({
+          status: args.authStatus,
+          contextMetadata:
+            args.contextMetadataUserId === null
+              ? null
+              : { userId: args.contextMetadataUserId },
+        }),
+        queryClient: { prefetchQuery },
+      },
+    });
+    return { prefetchCalls: prefetchQuery.mock.calls.length };
+  }
+
+  it("prefetches the History first page for an unverified session with a matching request-context user", () => {
+    const hostId = "host-epic-tab-unverified";
+    recordNegotiatedHostManifest(hostId, {
+      "epic.listTasks": { major: 1, minor: 6 },
+    });
+    const result = invokeEpicTabLoader({
+      authStatus: "unverified",
+      contextMetadataUserId: "user-1",
+      hostId,
+      requestContextUserId: "user-1",
+    });
+    expect(result.prefetchCalls).toBe(1);
+    expect(getCloudEpicTasksClient(hostId)).not.toBeNull();
+  });
+
+  it("does not prefetch for an unverified session on a host below epic.listTasks@1.6", () => {
+    // Same gate as `/epics`: a pre-1.6 host would run the cloud-backed list
+    // on the retained credential.
+    const hostId = "host-epic-tab-unverified-legacy";
+    recordNegotiatedHostManifest(hostId, {
+      "epic.listTasks": { major: 1, minor: 5 },
+    });
+    const result = invokeEpicTabLoader({
+      authStatus: "unverified",
+      contextMetadataUserId: "user-1",
+      hostId,
+      requestContextUserId: "user-1",
+    });
+    expect(result.prefetchCalls).toBe(0);
+  });
+
+  it("still prefetches for a signed-in session on a host below epic.listTasks@1.6", () => {
+    const hostId = "host-epic-tab-signed-in-legacy";
+    recordNegotiatedHostManifest(hostId, {
+      "epic.listTasks": { major: 1, minor: 5 },
+    });
+    const result = invokeEpicTabLoader({
+      authStatus: "signed-in",
+      contextMetadataUserId: "user-1",
+      hostId,
+      requestContextUserId: "user-1",
+    });
+    expect(result.prefetchCalls).toBe(1);
+  });
+
+  it("does not prefetch for a signed-out session", () => {
+    const result = invokeEpicTabLoader({
+      authStatus: "signed-out",
+      contextMetadataUserId: "user-1",
+      hostId: "host-epic-tab-signed-out",
+      requestContextUserId: "user-1",
+    });
+    expect(result.prefetchCalls).toBe(0);
+  });
+
+  it("does not prefetch when the auth snapshot has no context user id", () => {
+    const result = invokeEpicTabLoader({
+      authStatus: "unverified",
+      contextMetadataUserId: null,
+      hostId: "host-epic-tab-null-user",
+      requestContextUserId: "user-1",
+    });
+    expect(result.prefetchCalls).toBe(0);
+  });
+
+  it("does not prefetch when the client's request-context user does not match", () => {
+    const result = invokeEpicTabLoader({
+      authStatus: "unverified",
+      contextMetadataUserId: "user-1",
+      hostId: "host-epic-tab-mismatch",
+      requestContextUserId: "user-2",
+    });
+    expect(result.prefetchCalls).toBe(0);
   });
 });

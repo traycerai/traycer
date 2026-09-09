@@ -616,6 +616,7 @@ export function registerBrowserViewIpc(
             identity: { userId: principal.userId },
           };
         },
+        cloudAuthorized: () => jarPlanePrincipal() !== null,
         appVersion: app.getVersion(),
       }),
     jar: {

@@ -109,7 +109,12 @@ class FakeAuthn {
   ): Promise<AuthTokenRefreshResult> => {
     this.presented.push(request.refreshToken);
     if (!this.live.has(request.refreshToken)) {
-      return { kind: "rejected" };
+      // A refresh token this fake never minted, or one a sibling already
+      // spent: dead PAIR, and nothing said about the account.
+      return {
+        kind: "rejected",
+        rejection: { kind: "credential", revocation: null },
+      };
     }
     this.live.delete(request.refreshToken);
     this.counter += 1;
@@ -211,11 +216,18 @@ describe("WebTokenStore cross-tab authority", () => {
 
     // The damage the lock prevents, stated as an expectation so the two tests
     // above cannot pass vacuously: the same refresh token is presented twice,
-    // authn honours it once, and the losing tab is signed out holding a
-    // credential that is still perfectly good in storage.
+    // authn honours it once, and the losing tab is left holding a dead pair
+    // while storage still has a perfectly good one.
     expect(race.authn.presented).toEqual(["refresh-0", "refresh-0"]);
     expect(firstResult.outcome).toBe("applied");
-    expect(secondResult.outcome).toBe("refresh-rejected");
+    // CREDENTIAL, not ACCOUNT: a spent refresh token says this pair is
+    // finished and nothing at all about the user, so the loser holds its
+    // local plane rather than clearing it.
+    expect(secondResult.outcome).toBe("refresh-rejected-credential");
+    expect(secondResult.rejection).toEqual({
+      kind: "credential",
+      revocation: null,
+    });
   });
 
   it("refuses a rotation whose base another tab already replaced", async () => {

@@ -99,7 +99,14 @@ function createHarness(
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
+  // `status` as well as the identity. `useCloudChatList` needs BOTH: the
+  // viewer id says who is asking, `authorizesCloudCapability(status)` says
+  // whether this session may spend the account's cloud capability at all.
+  // The store defaults to `signed-out`, so staging only the identity leaves
+  // the query DISABLED - and a disabled query never reaches `isSuccess` or
+  // `isError`, so `mountList`'s waitFor below simply times out.
   useAuthStore.setState({
+    status: "signed-in",
     contextMetadata: { userId: VIEWER, username: VIEWER },
   });
   return { queryClient, client: spine.createRequester(mockLocalHostEntry) };

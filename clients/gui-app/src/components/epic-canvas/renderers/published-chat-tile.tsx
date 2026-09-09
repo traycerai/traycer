@@ -555,6 +555,15 @@ function useAppliedPublishedCopy(input: {
  * copy" notice. Once a copy is on screen, a later key's loading is the
  * footer's business, not this gate's. The replica arm folds in for its own
  * reason (see the call site).
+ *
+ * The final clause is an ALLOWLIST rather than a "not ready" test, and that
+ * is load-bearing for `unauthorized`. It is the one non-ready state waiting
+ * on nothing: the reads were withheld before dispatch, so no answer is in
+ * flight and no deadline can expire into useful news. Counting it would make
+ * an unverified session's published tile accuse the serving host of failing
+ * to answer a question nobody asked it; falling through here sends it to
+ * `PublishedChatNotice` instead. Any state added later is non-pending by
+ * default, which is the safe direction.
  */
 function firstCopyPending(input: {
   readonly handle: PublishedChatSessionHandle | null;
@@ -575,6 +584,13 @@ function firstCopyPending(input: {
  * that said "fetching" for that frame would be describing work that is done.
  * `unsupported` cannot follow a shown copy on the same serving host and is
  * folded into `failed` rather than given words nobody will read.
+ *
+ * `unauthorized` is `idle` for the same reason it is not pending above: the
+ * read was withheld before dispatch, so no re-read is in flight and none
+ * failed. `loading` would describe work nobody started and `failed` would
+ * blame the host for a question it was never asked. That the copy on screen
+ * will not refresh until the session verifies is the unverified-session
+ * surface's news to deliver, not this footer's.
  */
 function publishedCopyRefresh(
   state: CloudChatTranscriptState,
@@ -584,6 +600,8 @@ function publishedCopyRefresh(
       return { kind: "idle" };
     case "loading":
       return { kind: "loading" };
+    case "unauthorized":
+      return { kind: "idle" };
     case "failed":
     case "unsupported":
       return { kind: "failed" };

@@ -16,6 +16,29 @@ import {
   resetCloudEpicTasksPagesForScope,
   setCloudEpicTasksPagePinned,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { historyPinUnavailableTooltip } from "@/components/epics/history-pin-availability";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import { toast } from "sonner";
+
+/**
+ * Thrown from `onMutate` when the session holds no cloud verdict at dispatch.
+ *
+ * `epic.setPinned` is cloud-only - `historyPinUnavailableReason` already
+ * refuses a local-home row, so there is no local exemption to carry here -
+ * and every surface that dispatches it (the desktop History row, the mobile
+ * action tray, the tab strip and its Undo toast) admits the control from a
+ * RENDER-time verdict. A control rendered while verified and activated after
+ * a demotion, or an Undo toast outliving the click, would otherwise spend a
+ * cloud capability on a bearer the cloud stopped vouching for; the host
+ * connection carries no renderer verdict of its own. Gated in the one
+ * mutation every consumer shares, so no consumer can omit it. Same shape as
+ * the comment writes' `COMMENT_WRITE_UNAUTHORIZED_MESSAGE`.
+ */
+export const EPIC_PIN_UNAUTHORIZED_MESSAGE =
+  "pin refused: the session holds no cloud verdict";
 
 interface SetEpicPinnedMutationContext {
   readonly hostId: string | null;
@@ -57,6 +80,11 @@ export function useEpicSetPinned() {
       onMutate: (
         variables: SetEpicPinnedVariables,
       ): SetEpicPinnedMutationContext => {
+        // Before the optimistic patch: a refused dispatch reaches `onError`
+        // with no context, and the inverse patch must have nothing to undo.
+        if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+          throw new Error(EPIC_PIN_UNAUTHORIZED_MESSAGE);
+        }
         const hostId = client.getActiveHostId();
         const userId = client.getRequestContextUserId();
         if (hostId !== null && userId !== null) {
@@ -100,6 +128,10 @@ export function useEpicSetPinned() {
             variables.epicId,
             !variables.pinned,
           );
+        }
+        if (error.message === EPIC_PIN_UNAUTHORIZED_MESSAGE) {
+          toast.error(historyPinUnavailableTooltip("unverified-session"));
+          return;
         }
         toastFromHostError(error, "Couldn't update pinned task.");
       },
