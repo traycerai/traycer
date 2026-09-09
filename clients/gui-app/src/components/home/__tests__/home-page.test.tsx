@@ -39,7 +39,7 @@ import {
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 import { isMobileApp, setMobileApp } from "@/lib/mobile-app";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import {
@@ -435,7 +435,7 @@ describe("<HomePage />", () => {
     });
     homeMocks.composerCommits.length = 0;
     homeMocks.nextInstanceId = 0;
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     useTabsStore.setState(INITIAL_TAB_LAYOUT);
     useAuthStore.setState({
       status: "signed-in",
@@ -472,7 +472,7 @@ describe("<HomePage />", () => {
     });
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     useTabsStore.setState(INITIAL_TAB_LAYOUT);
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useEpicCanvasStore.setState({
@@ -830,8 +830,9 @@ describe("<HomePage />", () => {
         ],
         activeItemId: "item-draft-a",
       });
-      const terminalStore = useLandingTerminalStore.getState();
+      const terminalStore = useLandingPanelStore.getState();
       terminalStore.addTab({
+        kind: "terminal",
         instanceId: "landing-terminal-focus-test",
         sessionId: "terminal-session-test",
         hostId: TEST_HOST_ID,

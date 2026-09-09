@@ -200,6 +200,25 @@ const pendingCertificateErrorsById = new Map<
  * `session.defaultSession` is never touched here - the app shell owns it.
  */
 const sessionsByPartition = new Map<string, Session>();
+/**
+ * Isolated partitions whose jar is being cleared right now, keyed by partition
+ * name.
+ *
+ * `releaseBrowserViewSession` drops the memo synchronously and only STARTS the
+ * clear, and every caller of it is fire-and-forget (the IPC's
+ * `releaseSessionStorage` is typed `void`). Electron hands `fromPartition` the
+ * same in-memory partition for the same NAME, and a partition name is derived
+ * from the session id - so a tab of the same isolated session opened while a
+ * clear is in flight is born into the very jar that clear is about to empty,
+ * and loses its cookies and localStorage seconds after it starts.
+ *
+ * The promise is the barrier that stops that: whoever is about to materialize
+ * an isolated guest waits on it first. It is stored here rather than in the
+ * manager because the hazard is a property of the PARTITION - it is the same
+ * whichever path re-acquires it - and because the callers who start a release
+ * drop its promise on the floor by design.
+ */
+const pendingReleasesByPartition = new Map<string, Promise<void>>();
 const browserCookieDeltaListeners = new Set<
   (delta: BrowserPrimaryProfileDelta) => void
 >();
@@ -249,6 +268,17 @@ export function ensureBrowserViewSessionForPartition(
 ): Session {
   const existing = sessionsByPartition.get(partition);
   if (existing !== undefined) return existing;
+  // A TRIPWIRE, not a guard: this function is synchronous and cannot wait, so
+  // it can only report that someone reached the jar around the barrier. Every
+  // isolated partition is acquired through one guest birth, which awaits
+  // `pendingBrowserViewPartitionRelease` before it mints; a line here means a
+  // new path bypassed it and that guest is about to have its storage cleared
+  // out from under it.
+  if (pendingReleasesByPartition.has(partition)) {
+    log.warn("[browser-view] partition acquired while its clear is running", {
+      partition,
+    });
+  }
   const browserSession = session.fromPartition(partition, { cache: true });
   installBrowserViewSessionPolicy(browserSession);
   sessionsByPartition.set(partition, browserSession);
@@ -398,14 +428,46 @@ export async function releaseBrowserViewSession(
   const browserSession = sessionsByPartition.get(partition);
   sessionsByPartition.delete(partition);
   if (browserSession === undefined) return;
+  // Swallowed inside the barrier rather than around it: a clear that REJECTS
+  // still ends the window in which the jar is being emptied, so the awaiters
+  // must be let through either way. A barrier that could reject would also
+  // make every waiter's `await` a second failure path for a fault this
+  // function has always handled by logging.
+  const clearing = (async (): Promise<void> => {
+    try {
+      await browserSession.clearStorageData();
+    } catch (error) {
+      log.warn("[browser-view] isolated partition clear failed", {
+        partition,
+        error: describeLogError(error),
+      });
+    }
+  })();
+  pendingReleasesByPartition.set(partition, clearing);
   try {
-    await browserSession.clearStorageData();
-  } catch (error) {
-    log.warn("[browser-view] isolated partition clear failed", {
-      partition,
-      error: describeLogError(error),
-    });
+    await clearing;
+  } finally {
+    // Identity-checked: a second release of the same partition registers its
+    // own barrier, and this one must not delete that. Unconditional otherwise,
+    // so a partition nobody ever re-acquires leaves no entry behind.
+    if (pendingReleasesByPartition.get(partition) === clearing) {
+      pendingReleasesByPartition.delete(partition);
+    }
   }
+}
+
+/**
+ * The in-flight clear of this partition's jar, or `null` when nothing is being
+ * cleared.
+ *
+ * Await it before materializing a guest into an isolated partition. It never
+ * rejects - see the release above - so a waiter needs no failure branch, and a
+ * partition with no pending clear costs a map lookup and no microtask.
+ */
+export function pendingBrowserViewPartitionRelease(
+  partition: string,
+): Promise<void> | null {
+  return pendingReleasesByPartition.get(partition) ?? null;
 }
 
 function installBrowserViewSessionPolicy(

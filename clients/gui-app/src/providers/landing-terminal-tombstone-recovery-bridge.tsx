@@ -14,21 +14,36 @@ import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import {
   absentListingProvesDeath,
-  useLandingTerminalStore,
+  useLandingPanelStore,
   type LandingTerminalPendingKill,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import {
   useLandingTerminalKill,
   type LandingTerminalKillVariables,
 } from "@/components/home/terminal-panel/use-landing-terminal-kill-mutation";
 import {
   LandingTerminalAuthorityFleet,
+  type LandingBrowserSessionEntries,
   type LandingTerminalAuthorityEntries,
   type LandingTerminalAuthorityEntry,
 } from "@/components/home/terminal-panel/landing-terminal-authority-fleet";
-import { terminalSessionKey } from "@/stores/home/landing-terminal-store";
+import { LANDING_BROWSER_RECOVERY_HOST_CAP } from "@/components/home/terminal-panel/landing-browser-presentation";
+import {
+  selectLandingBrowserRecoveryHostIds,
+  yieldLandingBrowserRecoveryHosts,
+  LANDING_BROWSER_RECOVERY_ATTEMPT_MS,
+  type LandingBrowserRecoveryQueue,
+} from "@/providers/landing-browser-recovery-slots";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { useLandingBrowserTombstoneDrain } from "@/providers/landing-browser-tombstone-drain";
+import {
+  landingBrowserPendingKills,
+  landingTabRefKey,
+  landingTerminalPendingKills,
+} from "@/stores/home/landing-panel-store";
 import { getPlainTerminal } from "@/lib/terminals/plain-terminal-authority";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
+import { terminalTombstoneOutstanding } from "@/providers/landing-terminal-tombstone-outstanding";
 
 const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
 /**
@@ -107,6 +122,14 @@ const PENDING_CREATE_KILL_ANSWER_BUDGET = 10;
 type TombstoneCloseArm = "plain" | "kill";
 
 interface CapableCloseRetry {
+  /**
+   * The host this tombstone's retries belong to, carried rather than parsed
+   * back out of the map key. The key is `landingTabRefKey`'s opaque encoding
+   * and its segment layout is not this file's to know: reading the host by
+   * position silently broke the moment that key grew a leading `kind` segment,
+   * cancelling every armed retry on the following pass.
+   */
+  readonly hostId: string;
   attempt: number;
   /**
    * Settlements where the HOST ANSWERED - a close that resolved and still left
@@ -166,14 +189,84 @@ interface TombstoneDrainability {
   readonly plain: boolean;
 }
 
+/**
+ * Is there a route to this host right now?
+ *
+ * The canonical rule both arms read, named once rather than spelled twice: the
+ * terminal arm gates its DISPATCH on it (below), and the browser arm gates its
+ * MOUNT on it - a device with no route answers nothing, so its stream would
+ * hold a place under the desktop's per-window cap while doing nothing but
+ * retry.
+ *
+ * A fuse-window `offline` host is excluded for the reason the recorded bit
+ * excludes it: the endpoint is non-null because a recovery dial is PERMITTED,
+ * not because the host is there. A READY remote session overrides that - it is
+ * proof the dial succeeded.
+ */
+function landingTombstoneRouteReady(
+  directoryEntry: HostDirectoryEntry,
+  hasReadySession: boolean,
+): boolean {
+  return (
+    dialableHostEndpointFor(directoryEntry, hasReadySession) !== null &&
+    (hasReadySession || !isRelayFuseRecoveryCandidate(directoryEntry))
+  );
+}
+
+/**
+ * Is this mounted device making progress - has its stream published an
+ * inventory?
+ *
+ * The one thing that renews a lease, and deliberately the only one. A stream
+ * that reaches its device answers with a snapshot as its first frame, so
+ * everything short of that is a device that has not been reached yet: a
+ * `connecting` that may never connect, a `failed` refusal, an `unsupported`
+ * host that can never answer at all. None of them is worth a slot the queue
+ * behind them could use.
+ *
+ * It renews the lease ONCE, and does not end it. A snapshot says the device
+ * can be reached, which is what earns a full budget to drain in; it says
+ * nothing about whether the closes that follow are accepted, so a device that
+ * answers and cannot discharge its tombstones still gives up the slot when
+ * that budget runs out. See the lease effect for the starvation that
+ * distinction fixes - and note that giving up the slot is a fairness outcome,
+ * not the retry: the drain's own ladder owns that.
+ */
+function landingBrowserRecoveryAnswering(
+  sessions: BrowserSessionsState | null,
+): boolean {
+  if (sessions === null) return false;
+  return sessions.inventoryReady;
+}
+
+/**
+ * What joins host ids into a recovery key. NUL cannot occur in a host id, so
+ * the key IS the content - the same encoding the authority fleet uses for its
+ * own host key.
+ *
+ * Named rather than written at each join: three keys are built from it and one
+ * split reads them back, and a separator that disagreed between two of them
+ * would compare as a cohort change on every render.
+ */
+const RECOVERY_HOST_KEY_SEPARATOR = "\u0000";
+
+/**
+ * The host ids a recovery key names. `[].join()` is `""`, which splits to one
+ * empty id rather than to nothing - the case an empty mount list is.
+ */
+function splitRecoveryHostKey(key: string): readonly string[] {
+  return key.length === 0 ? [] : key.split(RECOVERY_HOST_KEY_SEPARATOR);
+}
+
 function landingTerminalTombstoneDrainability(
   directoryEntry: HostDirectoryEntry,
   hasReadySession: boolean,
   authorityEntry: LandingTerminalAuthorityEntry | undefined,
 ): TombstoneDrainability {
-  const routeReady =
-    dialableHostEndpointFor(directoryEntry, hasReadySession) !== null &&
-    (hasReadySession || !isRelayFuseRecoveryCandidate(directoryEntry));
+  const routeReady = landingTombstoneRouteReady(
+    directoryEntry,
+    hasReadySession,
+  );
   const authority = authorityEntry?.authority;
   const capability = authority?.capability.status;
   const kill =
@@ -200,14 +293,13 @@ function cancelUndrainableCapableCloseRetries(args: {
   readonly pendingKeys: ReadonlySet<string>;
   readonly drainableByHostId: ReadonlyMap<string, TombstoneDrainability>;
 }): void {
-  for (const key of args.retries.keys()) {
-    const hostId = key.slice(0, key.indexOf("\u0000"));
+  for (const [key, retry] of args.retries) {
     // Keyed on the `kill` arm, the weaker of the two: a host whose listing has
     // merely gone stale can still serve a kill, so tearing its retry down here
     // would strand the arm that had no reason to stop.
     if (
       args.pendingKeys.has(key) &&
-      args.drainableByHostId.get(hostId)?.kill === true
+      args.drainableByHostId.get(retry.hostId)?.kill === true
     ) {
       continue;
     }
@@ -234,14 +326,7 @@ function closeRetryStillWarranted(args: {
   readonly refs: TombstoneRetryRefs;
   readonly arm: TombstoneCloseArm;
 }): boolean {
-  const stillPending = useLandingTerminalStore
-    .getState()
-    .pendingKills.some(
-      (candidate) =>
-        candidate.hostId === args.pending.hostId &&
-        candidate.sessionId === args.pending.sessionId,
-    );
-  if (!stillPending) return false;
+  if (!terminalTombstoneOutstanding(args.pending)) return false;
   // Per-arm, so a stale listing stops only the arm that reads one.
   const drainable = args.refs.dialable.current.get(args.pending.hostId);
   if (drainable === undefined) return false;
@@ -294,6 +379,7 @@ function scheduleCloseRetry(args: {
     CAPABLE_CLOSE_RETRY_MAX_MS,
   );
   const nextRetry: CapableCloseRetry = {
+    hostId: args.pending.hostId,
     attempt,
     // Carried across attempts on the same arm, and reset with the record when
     // the arm changes - a `plain` rejection says nothing about what `kill` was
@@ -504,9 +590,7 @@ function dispatchCapableClose(args: {
           scheduleCloseRetry({ ...args, answered: false, arm: "plain" });
           return;
         }
-        useLandingTerminalStore
-          .getState()
-          .clearPendingKill(args.pending.hostId, args.pending.sessionId);
+        useLandingPanelStore.getState().clearPendingKill(args.pending);
         clearCapableCloseRetry(args.refs.retries.current, args.key);
       },
       () => scheduleCloseRetry({ ...args, answered: false, arm: "plain" }),
@@ -580,15 +664,7 @@ function dispatchLegacyClose(args: {
       // resolved close is a kill that is still owed, so it is retried on the
       // same backoff a rejection would have earned.
       () => {
-        if (
-          useLandingTerminalStore
-            .getState()
-            .pendingKills.some(
-              (candidate) =>
-                candidate.hostId === args.pending.hostId &&
-                candidate.sessionId === args.pending.sessionId,
-            )
-        ) {
+        if (terminalTombstoneOutstanding(args.pending)) {
           scheduleCloseRetry({ ...args, answered: true, arm: "kill" });
           return;
         }
@@ -632,9 +708,7 @@ function dispatchTombstoneClose(args: {
     //   (`PENDING_CREATE_KILL_ANSWER_BUDGET`). The host has answered "no such
     //   session" for the whole attempt ladder, and the create that could have
     //   contradicted it can no longer be observed from here.
-    useLandingTerminalStore
-      .getState()
-      .clearPendingKill(args.pending.hostId, args.pending.sessionId);
+    useLandingPanelStore.getState().clearPendingKill(args.pending);
     clearCapableCloseRetry(args.refs.retries.current, args.key);
     return;
   }
@@ -667,7 +741,16 @@ function dispatchTombstoneClose(args: {
 export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   const directory = useHostDirectoryList();
   const binding = useHostBinding();
-  const pendingKills = useLandingTerminalStore((state) => state.pendingKills);
+  // Subscribed to the WHOLE tombstone set, then narrowed at each use. The
+  // subscription has to stay the store's own array: this bridge re-examines the
+  // set on every write to it, including a write that removed nothing, and a
+  // derived array would only re-run the drain when the terminal slice happened
+  // to change.
+  //
+  // Everything below routes a tombstone to `terminal.plain.close` or
+  // `terminal.kill`, neither of which can serve a browser tab; the browser arm
+  // drains through its own device coordinator.
+  const allPendingKills = useLandingPanelStore((state) => state.pendingKills);
   const kill = useLandingTerminalKill();
   const killRef = useRef(kill);
   const inFlightRef = useRef<ReadonlySet<string>>(new Set());
@@ -696,6 +779,32 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
         if (entry !== null) {
           if (current[hostId] === entry) return current;
           return { ...current, [hostId]: entry };
+        }
+        if (current[hostId] === undefined) return current;
+        const next = { ...current };
+        delete next[hostId];
+        return next;
+      });
+    },
+    [],
+  );
+  /**
+   * The recovery arm's queue - who has given a slot up, and in what order.
+   *
+   * Held as state rather than in a ref because a yield has to reach the render
+   * that mounts the streams: the device that gave its slot up would otherwise
+   * keep it until something else happened to move.
+   */
+  const [recoveryQueue, setRecoveryQueue] =
+    useState<LandingBrowserRecoveryQueue>(() => new Map());
+  const [browserSessions, setBrowserSessions] =
+    useState<LandingBrowserSessionEntries>({});
+  const handleBrowserSessions = useCallback(
+    (hostId: string, state: BrowserSessionsState | null): void => {
+      setBrowserSessions((current) => {
+        if (state !== null) {
+          if (current[hostId] === state) return current;
+          return { ...current, [hostId]: state };
         }
         if (current[hostId] === undefined) return current;
         const next = { ...current };
@@ -772,13 +881,228 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   // makes an auth-identity transition harmless.
   const authorityHostIds = useMemo(() => {
     const tombstoned = [
-      ...new Set(pendingKills.map((pending) => pending.hostId)),
+      ...new Set(
+        landingTerminalPendingKills(allPendingKills).map(
+          (pending) => pending.hostId,
+        ),
+      ),
     ];
     if (!fleetSettled) return tombstoned;
     const fleet = new Set(directoryHostIds);
     return tombstoned.filter((hostId) => fleet.has(hostId));
-  }, [directoryHostIds, fleetSettled, pendingKills]);
+  }, [allPendingKills, directoryHostIds, fleetSettled]);
+  const browserPendingKills = useMemo(
+    () => landingBrowserPendingKills(allPendingKills),
+    [allPendingKills],
+  );
   const hasReadySessionFor = useRemoteSessionsPollReadiness(directoryHostIds);
+  /**
+   * The devices whose tombstones this bridge COULD serve right now: one entry
+   * per device with a route, oldest tombstone first.
+   *
+   * Scoped harder than `authorityHostIds`, because what this arm mounts is a
+   * STREAM rather than a probe and the desktop bounds those per window
+   * (`MAX_STREAMS_PER_WINDOW`). A device with no route answers nothing, so its
+   * stream would hold a place under that cap for as long as the tombstone went
+   * undrained - which is exactly as long as the device stays away. It is the
+   * same argument the fleet already makes for not mounting the other arm's
+   * devices here, and the same evidence the terminal arm dispatches on.
+   *
+   * A departed host is covered by that gate rather than by the fleet check its
+   * sibling makes: it has no directory entry, so it has no route. The tombstone
+   * itself is never dropped - the device can come back under the id it already
+   * names, and the mount returns with it.
+   */
+  const browserCandidateHostIds = useMemo(() => {
+    const routable = new Map(
+      (directory.data ?? []).map((entry) => [
+        entry.hostId,
+        landingTombstoneRouteReady(entry, hasReadySessionFor(entry.hostId)),
+      ]),
+    );
+    const candidates: string[] = [];
+    for (const pending of browserPendingKills) {
+      if (routable.get(pending.hostId) !== true) continue;
+      if (candidates.includes(pending.hostId)) continue;
+      candidates.push(pending.hostId);
+    }
+    return candidates;
+  }, [browserPendingKills, directory.data, hasReadySessionFor]);
+  /**
+   * Which of those actually hold a stream, capped and rotated.
+   *
+   * The count gate is the second half of the cap argument: route-ready devices
+   * would still, in numbers, refuse a visible surface its own stream, so
+   * background recovery takes at most its budget. The rotation is what keeps
+   * that bound from becoming a TRAP. A route is permission to dial and not
+   * evidence anyone is home - `dialableHostEndpointFor` admits an
+   * `indeterminate` entry deliberately - so the two devices at the head of the
+   * list can be silent ones, and a fixed oldest-first selection would park
+   * every device behind them forever. `landing-browser-recovery-slots` leases
+   * the slots instead: hold one for an attempt budget, which answering buys
+   * once more of, and go to the back of the queue with your tombstones intact
+   * when it runs out with them still outstanding.
+   *
+   * Every yield is also a coordinator RELEASE, which is one of the two edges
+   * `browser-sessions-coordinator` re-asks a refused visible coordinator on.
+   */
+  const browserHostIds = useMemo(
+    () =>
+      selectLandingBrowserRecoveryHostIds({
+        candidateHostIds: browserCandidateHostIds,
+        queue: recoveryQueue,
+        cap: LANDING_BROWSER_RECOVERY_HOST_CAP,
+      }),
+    [browserCandidateHostIds, recoveryQueue],
+  );
+  /**
+   * Which devices holding a slot have answered - published an inventory.
+   *
+   * A KEY and not the entries themselves, because this is a dependency of the
+   * lease timer below: `browserSessions` changes identity on every frame an
+   * answering device publishes, so depending on it would restart that timer
+   * forever and the queue behind a chatty device would never move. This moves
+   * only when an answer does - which is exactly when the lease is worth
+   * re-deciding.
+   *
+   * Per DEVICE and no longer a single "all of them" boolean, because what the
+   * lease does with the answer changed: an answer buys a device a fresh
+   * budget, so the lease has to know which devices have spent theirs.
+   */
+  const browserAnsweringKey = browserHostIds
+    .filter((hostId) =>
+      landingBrowserRecoveryAnswering(browserSessions[hostId] ?? null),
+    )
+    .join(RECOVERY_HOST_KEY_SEPARATOR);
+  /**
+   * The two lists as SEMANTIC keys, which is what the lease below depends on.
+   *
+   * Both memos above hand back a fresh array whenever one of their inputs
+   * changes identity, and their inputs change identity for reasons that have
+   * nothing to do with which devices are listed:
+   * `useRemoteSessionsPollReadiness` returns a new lookup when ANY host in the
+   * directory changes readiness, and `browserPendingKills` is rebuilt whenever
+   * a TERMINAL tombstone moves. As effect dependencies those arrays restart the
+   * lease on unrelated fleet activity, and a fleet that stirs more often than
+   * once per budget never rotates at all - the starvation the lease exists to
+   * prevent, reintroduced by the dependency array.
+   *
+   * Joined on {@link RECOVERY_HOST_KEY_SEPARATOR}, so the key IS the content.
+   */
+  const browserCandidateKey = browserCandidateHostIds.join(
+    RECOVERY_HOST_KEY_SEPARATOR,
+  );
+  const browserMountedKey = browserHostIds.join(RECOVERY_HOST_KEY_SEPARATOR);
+  /**
+   * The mounted cohort's deadline, kept across re-renders.
+   *
+   * Stable keys stop the churn above, but a genuine change - a fourth device's
+   * tombstone arriving mid-budget - still re-runs the effect, and re-arming a
+   * full budget there would let a slow drip of real changes park the queue just
+   * as effectively. So the deadline belongs to the COHORT: while the same
+   * devices hold the slots, a re-run resumes the remaining time rather than
+   * starting over. A different cohort earns a fresh budget, which is exactly
+   * what a new cohort is owed - and so does a device in this one ANSWERING for
+   * the first time, which is the one other thing worth spending budget on.
+   *
+   * `answered` is what bounds that second renewal. It is the set of devices in
+   * this cohort that have published an inventory at any point during it, so it
+   * only ever grows and a device that flaps ready renews once rather than on
+   * every reconnect. A cohort therefore holds its slots for at most one budget
+   * per device in it, whatever the fleet does underneath.
+   */
+  const browserLeaseRef = useRef<{
+    readonly cohortKey: string;
+    readonly answered: ReadonlySet<string>;
+    readonly dueAtMs: number;
+  } | null>(null);
+  /**
+   * The cohort's lease: one deadline per mounted set, and whoever is still
+   * holding a tombstone when it expires goes to the back of the queue.
+   *
+   * Armed only when there is somewhere for a slot to GO. With no more
+   * candidates than slots every device already holds one, so yielding would
+   * re-select the same list and buy nothing - the stream's own reconnect is
+   * what keeps trying there.
+   *
+   * An inventory EXTENDS the lease and does not cancel it, and that difference
+   * is the whole point of this deadline. Cancelling on "everyone answered" read
+   * a snapshot as the end of the story, but the slot is for DRAINING and a
+   * device can answer and still never discharge its tombstones - a `closeTab`
+   * the host refuses leaves the tombstone standing. Two answering devices in
+   * that state held both slots for the life of the window, and every device
+   * behind them waited on a rotation that was no longer armed.
+   *
+   * What this lease owes them is a TURN, and nothing more than that. It is not
+   * what re-sends a refused close: `landing-browser-tombstone-drain` runs its
+   * own ladder for that, because a refusal has to be retried whether or not
+   * anyone else wants the slot - and when nobody does, this effect correctly
+   * returns above without arming anything at all.
+   *
+   * So the deadline is spent against progress that ARRIVED, not progress that
+   * is possible: answering buys a full budget to drain in, and a device still
+   * holding a tombstone after it has had its turn at a scarce slot.
+   *
+   * The lists are read back out of the keys rather than closed over, so this
+   * effect sees the CURRENT candidates and mounts on every run it makes -
+   * including the run a new tombstone triggers - while depending on nothing
+   * that changes without them.
+   *
+   * Everything mounted yields, with no second look at who answered: a device
+   * that drained what it was mounted for stops being a candidate, which
+   * changes the cohort and clears this timer before it can fire. So a mounted
+   * device still here at the deadline is by construction one that has not
+   * finished, whether it never spoke, was refused, or is still waiting on a
+   * close the host has not answered. It keeps its tombstones and its ladder
+   * either way - a yield costs it the slot, never an attempt. `yieldLandingBrowserRecoveryHosts` drops
+   * whatever left the candidate list in the meantime, which covers the frame
+   * between a drain landing and this bridge re-rendering.
+   */
+  useEffect(() => {
+    const candidateHostIds = splitRecoveryHostKey(browserCandidateKey);
+    const mountedHostIds = splitRecoveryHostKey(browserMountedKey);
+    if (candidateHostIds.length <= mountedHostIds.length) {
+      browserLeaseRef.current = null;
+      return;
+    }
+    const nowMs = Date.now();
+    const held = browserLeaseRef.current;
+    const carried = held?.cohortKey === browserMountedKey ? held : null;
+    const answered = new Set([
+      ...(carried?.answered ?? []),
+      ...splitRecoveryHostKey(browserAnsweringKey),
+    ]);
+    const renewed =
+      carried === null || answered.size > carried.answered.size
+        ? nowMs + LANDING_BROWSER_RECOVERY_ATTEMPT_MS
+        : carried.dueAtMs;
+    const lease = {
+      cohortKey: browserMountedKey,
+      answered,
+      dueAtMs: renewed,
+    };
+    browserLeaseRef.current = lease;
+    const timer = setTimeout(
+      () => {
+        browserLeaseRef.current = null;
+        setRecoveryQueue((queue) =>
+          yieldLandingBrowserRecoveryHosts({
+            queue,
+            candidateHostIds,
+            yieldingHostIds: mountedHostIds,
+          }),
+        );
+      },
+      Math.max(0, lease.dueAtMs - nowMs),
+    );
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [browserCandidateKey, browserMountedKey, browserAnsweringKey]);
+  useLandingBrowserTombstoneDrain({
+    pendingKills: browserPendingKills,
+    browserSessions,
+  });
   const authorityEntriesRef = useRef(authorityEntries);
 
   useEffect(() => {
@@ -843,10 +1167,9 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       retries: retriesRef,
     };
 
+    const pendingKills = landingTerminalPendingKills(allPendingKills);
     const pendingKeys = new Set(
-      pendingKills.map((pending) =>
-        terminalSessionKey(pending.hostId, pending.sessionId),
-      ),
+      pendingKills.map((pending) => landingTabRefKey(pending)),
     );
     cancelUndrainableCapableCloseRetries({
       retries: retriesRef.current,
@@ -868,7 +1191,7 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       // freshness parked the tombstones that never needed it.
       const drainable = currentDrainable.get(pending.hostId);
       if (drainable?.kill !== true) continue;
-      const key = terminalSessionKey(pending.hostId, pending.sessionId);
+      const key = landingTabRefKey(pending);
       const retry = retriesRef.current.get(key);
       const entry = authorityEntries[pending.hostId];
       const decision = tombstoneDispatchDecision({
@@ -904,7 +1227,7 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   }, [
     authorityEntries,
     directory.data,
-    pendingKills,
+    allPendingKills,
     hasReadySessionFor,
     retryGeneration,
   ]);
@@ -912,7 +1235,13 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   return (
     <LandingTerminalAuthorityFleet
       hostIds={authorityHostIds}
+      browserHostIds={browserHostIds}
+      // Report only. The panel owns the reconciliation of the browser slice;
+      // this bridge is mounted above the router and would otherwise adopt and
+      // drop against snapshots the panel had already acted on.
+      browserArm="report-only"
       onEntry={handleAuthorityEntry}
+      onBrowserSessions={handleBrowserSessions}
     />
   );
 }
