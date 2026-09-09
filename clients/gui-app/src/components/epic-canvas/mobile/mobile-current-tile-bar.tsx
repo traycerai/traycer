@@ -7,8 +7,8 @@ import {
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
 import { StreamSyncingBar } from "@/components/sync/stream-syncing-bar";
-import { isStreamSyncing } from "@/lib/sync/stream-syncing-state";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
+import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import {
   tileRenameKind,
   useSwitcherRename,
@@ -22,7 +22,6 @@ import {
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   BrowserSessionTileRef,
   EpicCanvasTileRef,
@@ -32,14 +31,12 @@ interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
   /**
-   * The Epic stream's own legs, passed down rather than re-read here, so the
-   * outer strip and this bar's suppression decision are answering off ONE
-   * value. Two independent reads of the same store could disagree for a frame
-   * and paint both strips at once, which is the single thing the suppression
-   * exists to prevent.
+   * Whether the Epic's own strip is currently showing - the DECIDED answer,
+   * passed down rather than re-derived here. Re-deriving it from the legs
+   * behind it would be a second decider that can disagree with the first for a
+   * frame, and that frame is the one in which both strips paint.
    */
-  readonly epicTransportStatus: StreamConnectionStatus;
-  readonly epicSnapshotLoaded: boolean;
+  readonly epicStripShowing: boolean;
 }
 
 /**
@@ -138,23 +135,33 @@ function MobileCurrentTileBarBody(
     tile.id,
     isChat && "hostId" in tile ? tile.hostId : null,
   );
+  // Run the clock on THIS chat's outage whether or not the strip is drawn. The
+  // suppression below hides the strip while the Epic's is speaking, and the
+  // Epic's stream typically returns first: a clock that lived inside the hidden
+  // strip would start over at that hand-off, so one continuous chat outage
+  // would read as a fresh "Syncing…" a minute in, and would set its animation
+  // running again past the bound the escalation exists to impose. Keyed on the
+  // tile's id, so swiping to a different chat starts a new spell instead of
+  // inheriting this one's verdict.
+  const chatSpell = useStreamSyncingSpell({
+    status: chatSync.status,
+    hasContent: chatSync.hasContent,
+    identity: tile.id,
+  });
   // ONE strip on screen at a time. On an app switch every stream is pushed to
   // `reconnecting` in the same tick, so without this the Epic's strip and the
   // chat's would appear together saying the same thing twice. The outer surface
-  // wins while it is speaking; when the Epic's stream returns first - which it
-  // does, the streams restore staggered - this takes over and keeps saying it
-  // until the transcript itself is current. The user therefore sees exactly one
-  // strip, from the first drop until everything on screen is fresh.
+  // wins while it is speaking; when the Epic's stream returns first, this takes
+  // over - carrying however far its own spell had already run - and keeps
+  // saying it until the transcript itself is current. The user therefore sees
+  // exactly one strip, from the first drop until everything on screen is fresh.
   //
   // The kind is re-checked here rather than left to the `null` host above. A
   // resolver returning nothing for a non-chat tile is the mechanism, not the
   // rule, and the rule belongs where the strip is decided: a future resolver
   // that answered a spec id from some other table would otherwise put a chat's
   // reconnect banner on an artifact with nothing to say.
-  const showChatStrip =
-    isChat &&
-    !isStreamSyncing(props.epicTransportStatus, props.epicSnapshotLoaded) &&
-    isStreamSyncing(chatSync.status, chatSync.hasContent);
+  const showChatStrip = isChat && !props.epicStripShowing && chatSpell.syncing;
 
   return (
     <div
@@ -185,8 +192,7 @@ function MobileCurrentTileBarBody(
           header's lower edge rather than as a banner floating over the tile. */}
       {showChatStrip ? (
         <StreamSyncingBar
-          status={chatSync.status}
-          hasContent={chatSync.hasContent}
+          spell={chatSpell}
           surfaceLabel="Chat"
           testId="chat-stream-syncing-bar"
         />

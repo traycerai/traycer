@@ -12,6 +12,7 @@ import {
   useEpicHostTransportStatus,
   useEpicSnapshotLoaded,
 } from "@/lib/epic-selectors";
+import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -62,6 +63,14 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // absence makes what they are showing stale.
   const epicTransportStatus = useEpicHostTransportStatus();
   const epicSnapshotLoaded = useEpicSnapshotLoaded();
+  // Before the empty-pane early return, like the insets above: hooks are
+  // unconditional, and this one owns a clock that must not be re-timed by a
+  // render path changing under it.
+  const epicSpell = useStreamSyncingSpell({
+    status: epicTransportStatus,
+    hasContent: epicSnapshotLoaded,
+    identity: epicId,
+  });
 
   // Non-null root with no resolvable tile = an empty pane (e.g. the user closed
   // the last tab). Desktop renders the inline `PaneOpener` for this; do the
@@ -114,16 +123,19 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           which would drop the strip in a mobile browser, where the relay drops
           the socket exactly the same way. */}
       <StreamSyncingBar
-        status={epicTransportStatus}
-        hasContent={epicSnapshotLoaded}
+        spell={epicSpell}
         surfaceLabel="Task"
         testId="epic-stream-syncing-bar"
       />
       <MobileCurrentTileBar
         epicId={epicId}
         tile={selection.ref}
-        epicTransportStatus={epicTransportStatus}
-        epicSnapshotLoaded={epicSnapshotLoaded}
+        // The DECIDED answer, not the legs behind it. The tile bar suppresses
+        // its own strip while this one is speaking, and re-deriving "is it
+        // speaking" from the same two legs down there would be a second
+        // decider that can disagree for a frame - the frame in which both
+        // strips paint.
+        epicStripShowing={epicSpell.syncing}
       />
       <div className="relative min-h-0 flex-1">
         <TabBodySelectedContext.Provider value>

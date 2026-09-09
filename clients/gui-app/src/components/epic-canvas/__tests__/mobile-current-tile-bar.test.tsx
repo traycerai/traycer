@@ -16,7 +16,6 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { ChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 
@@ -251,8 +250,7 @@ describe("<MobileCurrentTileBar />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={SPEC_TILE}
-        epicTransportStatus="open"
-        epicSnapshotLoaded
+        epicStripShowing={false}
       />,
     );
     const bar = screen.getByTestId("mobile-current-tile-bar");
@@ -265,8 +263,7 @@ describe("<MobileCurrentTileBar />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={CHAT_TILE}
-        epicTransportStatus="open"
-        epicSnapshotLoaded
+        epicStripShowing={false}
       />,
     );
     expect(screen.getByTestId("mobile-current-tile-title").tagName).toBe(
@@ -279,8 +276,7 @@ describe("<MobileCurrentTileBar />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={CHAT_TILE}
-        epicTransportStatus="open"
-        epicSnapshotLoaded
+        epicStripShowing={false}
       />,
     );
     const input = openEdit();
@@ -306,8 +302,7 @@ describe("<MobileCurrentTileBar />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={CHAT_TILE}
-        epicTransportStatus="open"
-        epicSnapshotLoaded
+        epicStripShowing={false}
       />,
     );
     const input = openEdit();
@@ -324,8 +319,7 @@ describe("<MobileCurrentTileBar />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={CHAT_TILE}
-        epicTransportStatus="open"
-        epicSnapshotLoaded
+        epicStripShowing={false}
       />,
     );
     const input = openEdit();
@@ -342,8 +336,7 @@ describe("<MobileCurrentTileBar />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={FILE_TILE}
-        epicTransportStatus="open"
-        epicSnapshotLoaded
+        epicStripShowing={false}
       />,
     );
     const title = screen.getByTestId("mobile-current-tile-title");
@@ -357,8 +350,7 @@ describe("<MobileCurrentTileBar />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={CHAT_TILE}
-        epicTransportStatus="open"
-        epicSnapshotLoaded
+        epicStripShowing={false}
       />,
     );
     const title = screen.getByTestId("mobile-current-tile-title");
@@ -373,8 +365,7 @@ describe("<MobileCurrentTileBar />", () => {
     });
 
     function renderChatBar(input: {
-      readonly epicTransportStatus: StreamConnectionStatus;
-      readonly epicSnapshotLoaded: boolean;
+      readonly epicStripShowing: boolean;
       readonly chat: ChatStreamSyncState;
       readonly tile: EpicCanvasTileRef;
     }): void {
@@ -383,8 +374,7 @@ describe("<MobileCurrentTileBar />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={input.tile}
-          epicTransportStatus={input.epicTransportStatus}
-          epicSnapshotLoaded={input.epicSnapshotLoaded}
+          epicStripShowing={input.epicStripShowing}
         />,
       );
     }
@@ -395,8 +385,7 @@ describe("<MobileCurrentTileBar />", () => {
 
     it("shows the chat strip when only the chat's own stream is away", () => {
       renderChatBar({
-        epicTransportStatus: "open",
-        epicSnapshotLoaded: true,
+        epicStripShowing: false,
         tile: CHAT_TILE,
         chat: { status: "reconnecting", hasContent: true },
       });
@@ -405,8 +394,7 @@ describe("<MobileCurrentTileBar />", () => {
 
     it("stays silent while the chat's stream is healthy", () => {
       renderChatBar({
-        epicTransportStatus: "open",
-        epicSnapshotLoaded: true,
+        epicStripShowing: false,
         tile: CHAT_TILE,
         chat: { status: "open", hasContent: true },
       });
@@ -415,45 +403,60 @@ describe("<MobileCurrentTileBar />", () => {
 
     it("stays silent on a cold chat with nothing on screen yet", () => {
       renderChatBar({
-        epicTransportStatus: "open",
-        epicSnapshotLoaded: true,
+        epicStripShowing: false,
         tile: CHAT_TILE,
         chat: { status: "connecting", hasContent: false },
       });
       expect(chatStrip()).toBeNull();
     });
 
-    it("yields to the Epic's strip when both streams are away at once", () => {
+    it("yields while the Epic's strip is showing, even with its own stream away", () => {
       // An app switch drops every stream in the same tick, so this is the
       // ordinary case and not an edge one. Two strips saying the same thing
       // one above the other is the failure being prevented.
       renderChatBar({
-        epicTransportStatus: "reconnecting",
-        epicSnapshotLoaded: true,
+        epicStripShowing: true,
         tile: CHAT_TILE,
         chat: { status: "reconnecting", hasContent: true },
       });
       expect(chatStrip()).toBeNull();
     });
 
-    it("does NOT yield when the Epic's status is away but its strip is not shown", () => {
-      // Suppression keys on whether the outer strip is actually SPEAKING, not
-      // on the raw status. An Epic still cold (no snapshot) shows no strip, so
-      // deferring to it here would silence both and leave a stale transcript
-      // with nothing said about it at all.
-      renderChatBar({
-        epicTransportStatus: "reconnecting",
-        epicSnapshotLoaded: false,
-        tile: CHAT_TILE,
-        chat: { status: "reconnecting", hasContent: true },
-      });
+    it("takes over the moment the Epic's strip stops showing", () => {
+      // The hand-off: the Epic's stream returns first (restores are staggered)
+      // while the transcript is still behind, and the chat's strip is what
+      // keeps saying so. Deferring to anything other than the Epic's DECIDED
+      // answer would silence both here.
+      const view = render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={CHAT_TILE}
+          epicStripShowing
+        />,
+      );
+      chatSyncMock.current.value = { status: "reconnecting", hasContent: true };
+      view.rerender(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={CHAT_TILE}
+          epicStripShowing
+        />,
+      );
+      expect(chatStrip()).toBeNull();
+
+      view.rerender(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={CHAT_TILE}
+          epicStripShowing={false}
+        />,
+      );
       expect(chatStrip()?.textContent).toContain("Syncing…");
     });
 
     it("never asks for a chat stream on a tile that is not a chat", () => {
       renderChatBar({
-        epicTransportStatus: "open",
-        epicSnapshotLoaded: true,
+        epicStripShowing: false,
         tile: SPEC_TILE,
         chat: { status: "reconnecting", hasContent: true },
       });
@@ -466,8 +469,7 @@ describe("<MobileCurrentTileBar />", () => {
 
     it("reads the chat stream on the tile's OWN host, not the app's", () => {
       renderChatBar({
-        epicTransportStatus: "open",
-        epicSnapshotLoaded: true,
+        epicStripShowing: false,
         tile: CHAT_TILE,
         chat: { status: "open", hasContent: true },
       });

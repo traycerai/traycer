@@ -39,3 +39,24 @@ export function isStreamSyncing(
 export function streamSyncingLabel(escalated: boolean): string {
   return escalated ? "Still syncing…" : "Syncing…";
 }
+
+/**
+ * One surface's resync, as a spell with a duration - not as a rendering.
+ *
+ * The two are deliberately separate. A strip can be hidden while the stream
+ * behind it is still away (the tile bar defers to the Epic's strip), and if the
+ * clock lived in the hidden component it would restart every time the strip
+ * came back, so one continuous outage could be shown as a series of fresh ones
+ * and keep renewing its animation. `syncing` and `escalated` describe the
+ * STREAM; whether anything is drawn is the caller's decision, taken after.
+ */
+export interface StreamSyncingSpell {
+  readonly syncing: boolean;
+  readonly escalated: boolean;
+}
+
+/** A stream with nothing to report - no spell running, nothing to draw. */
+export const NO_STREAM_SYNCING_SPELL: StreamSyncingSpell = Object.freeze({
+  syncing: false,
+  escalated: false,
+});

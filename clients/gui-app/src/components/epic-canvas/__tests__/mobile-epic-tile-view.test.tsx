@@ -61,12 +61,10 @@ vi.mock("@/components/epic-canvas/canvas/pane-opener", () => ({
 vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
   MobileCurrentTileBar: ({
     tile,
-    epicTransportStatus,
-    epicSnapshotLoaded,
+    epicStripShowing,
   }: {
     readonly tile: EpicCanvasTileRef;
-    readonly epicTransportStatus: StreamConnectionStatus;
-    readonly epicSnapshotLoaded: boolean;
+    readonly epicStripShowing: boolean;
   }) => (
     <div
       data-testid="current-tile-bar"
@@ -75,8 +73,7 @@ vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
       // outer strip decided on. The tile bar suppresses its own strip off these;
       // if the view ever stopped passing them, the two strips would stack and
       // only this attribute would say so.
-      data-epic-transport-status={epicTransportStatus}
-      data-epic-snapshot-loaded={String(epicSnapshotLoaded)}
+      data-epic-strip-showing={String(epicStripShowing)}
     />
   ),
 }));
@@ -297,18 +294,38 @@ describe("<MobileEpicTileView />", () => {
       expect(epicStrip()).toBeNull();
     });
 
-    it("hands the tile bar the same legs it decided on, so the two never stack", () => {
+    it("hands the tile bar its DECIDED answer, so the two never stack", () => {
       epicSession.value = {
         transportStatus: "reconnecting",
         snapshotLoaded: true,
       };
       seed(twoPaneCanvas("pane-A"));
       renderView();
-      const bar = screen.getByTestId("current-tile-bar");
-      expect(bar.getAttribute("data-epic-transport-status")).toBe(
-        "reconnecting",
-      );
-      expect(bar.getAttribute("data-epic-snapshot-loaded")).toBe("true");
+      expect(epicStrip()).not.toBeNull();
+      expect(
+        screen
+          .getByTestId("current-tile-bar")
+          .getAttribute("data-epic-strip-showing"),
+      ).toBe("true");
+    });
+
+    it("tells the tile bar it is silent when its own status is away but cold", () => {
+      // The suppression signal is whether this strip is SPEAKING, not the raw
+      // status behind it. An Epic still cold shows no strip, so reporting
+      // "showing" here would silence the chat's strip too and leave a stale
+      // transcript with nothing said about it at all.
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: false,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(epicStrip()).toBeNull();
+      expect(
+        screen
+          .getByTestId("current-tile-bar")
+          .getAttribute("data-epic-strip-showing"),
+      ).toBe("false");
     });
 
     it("shows no strip on an empty pane, which has no content to be stale", () => {
