@@ -39,12 +39,54 @@ import type {
 } from "../../../ipc-contracts/host-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
+import type { LocalHostIdentityFiles } from "../../host/local-host-identity";
 import {
   createDesktopLocalHostEnsurePort,
   DesktopAuthorityIdentitySource,
   DesktopHostFleetSource,
   DesktopLocalHostOutageSignal,
 } from "../desktop-selection-ports";
+
+/**
+ * Controllable stand-in for the fleet port's enrollment read. Default is the
+ * real implementation; A1 overrides it with a deferred gate so the gen-0 read
+ * can be held across the identity switch and released under a known generation.
+ */
+const localHostIdentityTestDoubles = vi.hoisted(() => {
+  type ReadFn = (files: LocalHostIdentityFiles) => Promise<string | null>;
+  let actual: ReadFn = async () => null;
+  const readLastKnownLocalHostId = vi.fn<ReadFn>(async (files) =>
+    actual(files),
+  );
+  return {
+    readLastKnownLocalHostId,
+    /** The real reader, for gated call-throughs that must not re-enter the mock. */
+    get actual(): ReadFn {
+      return actual;
+    },
+    setActual(fn: ReadFn): void {
+      actual = fn;
+      readLastKnownLocalHostId.mockImplementation(fn);
+    },
+    restore(): void {
+      readLastKnownLocalHostId.mockReset();
+      readLastKnownLocalHostId.mockImplementation(async (files) =>
+        actual(files),
+      );
+    },
+  };
+});
+
+vi.mock("../../host/local-host-identity", async (importOriginal) => {
+  const mod =
+    await importOriginal<typeof import("../../host/local-host-identity")>();
+  localHostIdentityTestDoubles.setActual(mod.readLastKnownLocalHostId);
+  return {
+    ...mod,
+    readLastKnownLocalHostId:
+      localHostIdentityTestDoubles.readLastKnownLocalHostId,
+  };
+});
 
 const silentLog: AuthorityLog = {
   debug: () => undefined,
@@ -79,6 +121,7 @@ async function writeEnrollment(dir: string, hostId: string): Promise<string> {
 
 afterEach(async () => {
   tempDirs.length = 0;
+  localHostIdentityTestDoubles.restore();
 });
 
 /**
@@ -1050,14 +1093,39 @@ describe("DesktopHostFleetSource", () => {
     );
     const authSession = new DesktopAuthSession();
     // Signed IN at the start so `refreshLocalIdentity` is eligible and
-    // actually starts a libuv enrollment read. Signed-out-throughout skipped
-    // the read (`eligible === false`), which made the contamination
-    // assertions vacuous and left only the anti-vacuity half as a `flushIo`
-    // timing flake under a loaded darwin CI runner.
+    // actually starts an enrollment read. Signed-out-throughout skipped the
+    // read (`eligible === false`), which made the contamination assertions
+    // vacuous.
     setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
     const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
+
+    // Deterministic gate on the enrollment read (same shape as
+    // `recordingRegistryFetch`): hold the gen-0 read across the identity
+    // switch, release it while still signed out, and only then drive the
+    // valid gen-1 read. A `beforeSignIn` snapshot cutoff alone cannot prove
+    // the stale read settled - both completions can publish `local-a`.
+    const enrollmentGate = deferred<void>();
+    const enrollmentStarted = deferred<void>();
+    const enrollmentSettled = deferred<void>();
+    let gateOpen = false;
+    const actualRead = localHostIdentityTestDoubles.actual;
+    localHostIdentityTestDoubles.readLastKnownLocalHostId.mockImplementation(
+      async (files) => {
+        if (!gateOpen) {
+          enrollmentStarted.resolve();
+          await enrollmentGate.promise;
+          try {
+            return await actualRead(files);
+          } finally {
+            enrollmentSettled.resolve();
+          }
+        }
+        return actualRead(files);
+      },
+    );
+
     const fleet = buildFleetSource({
       identity,
       authSession,
@@ -1073,19 +1141,18 @@ describe("DesktopHostFleetSource", () => {
     const snapshots: HostFleetSnapshot[] = [];
     fleet.onChanged((snapshot) => snapshots.push(snapshot));
 
-    // `emitChange` runs `refreshLocalIdentity` until its first await (the fs
-    // read). When it returns, generation 0 and eligible=true are already
-    // captured and the enrollment read is in flight - the exact race the
-    // generation fence closes. Sign out BEFORE bumping the generation so
-    // `identity.set`'s `refresh()` takes the signed-out branch (empty fleet)
-    // rather than re-adopting `local-a` under gen 1.
+    // Start the gen-0 eligible read and wait until it is parked on the gate
+    // before switching identity - so the race is exact under any load.
     host.emitChange();
+    await enrollmentStarted.promise;
+    // Sign out BEFORE bumping the generation so `identity.set`'s `refresh()`
+    // takes the signed-out branch (empty fleet) rather than re-adopting
+    // `local-a` under gen 1.
     authSession.set({ status: "signed-out", token: null, profile: null });
     identity.set("user-b", 1);
 
     // The identity switch publishes the generation-1 shape synchronously
-    // (the empty-fleet publish plus the signed-out `refresh()` it triggers,
-    // both before the stale read has any chance to land).
+    // (the empty-fleet publish plus the signed-out `refresh()` it triggers).
     expect(snapshots.length).toBeGreaterThanOrEqual(1);
     for (const snapshot of snapshots) {
       expect(snapshot).toMatchObject({
@@ -1095,14 +1162,27 @@ describe("DesktopHostFleetSource", () => {
       });
     }
 
-    // ANTI-VACUITY ANCHOR, in two halves. A dropped stale read publishes
-    // NOTHING, so silence alone cannot prove the pipeline ran - and a fixed
-    // `flushIo` sleep is not a settlement barrier under CI load (same lesson
-    // as `settledSeedFetchCount` in selection-authority-ipc.test.ts). Sign
-    // in, drive a local-host change, and WAIT ON THE OBSERVABLE. Snapshots
-    // recorded before this sign-in must not already carry `local-a` under
-    // gen 1 - that would be the stale gen-0 read leaking through.
-    const beforeSignIn = snapshots.length;
+    // Release the stale gen-0 read WHILE STILL SIGNED OUT. Open the gate for
+    // later reads first so only this parked call was held. The generation
+    // fence must drop it - no `local-a` under gen 1.
+    gateOpen = true;
+    enrollmentGate.resolve();
+    await enrollmentSettled.promise;
+    expect(fleet.snapshot()).toMatchObject({
+      identityGeneration: 1,
+      localHostId: null,
+      hosts: [],
+    });
+    const contaminatedAfterStaleSettled = snapshots.some(
+      (snapshot) =>
+        snapshot.identityGeneration === 1 &&
+        (snapshot.localHostId === "local-a" ||
+          snapshot.hosts.some((entry) => entry.hostId === "local-a")),
+    );
+    expect(contaminatedAfterStaleSettled).toBe(false);
+
+    // ANTI-VACUITY: sign in and drive a fresh local-host change. Wait on the
+    // observable (not flushIo) so the pipeline is proven under CI load.
     setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
     host.emitChange();
     await vi.waitFor(() => {
@@ -1111,16 +1191,6 @@ describe("DesktopHostFleetSource", () => {
         localHostId: "local-a",
       });
     });
-
-    const contaminatedBeforeSignIn = snapshots
-      .slice(0, beforeSignIn)
-      .some(
-        (snapshot) =>
-          snapshot.identityGeneration === 1 &&
-          (snapshot.localHostId === "local-a" ||
-            snapshot.hosts.some((entry) => entry.hostId === "local-a")),
-      );
-    expect(contaminatedBeforeSignIn).toBe(false);
 
     // Half 2: SIGN OUT again and drive another change. The id is RETRACTED,
     // not retained - the same rule `refresh`'s signed-out branch applies.
