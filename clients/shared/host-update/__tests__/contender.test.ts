@@ -915,7 +915,10 @@ describe("withUpdateContender - active attempt admissions", () => {
     ["legacy-update-shadow", "yield"],
     ["service-maintenance", "refuse"],
     ["desktop-activation-maintenance", "refuse"],
-    ["uninstall-maintenance", "allow"],
+    // The Desktop login-item STEP of an uninstall - removes nothing, so it
+    // keeps refusing. The whole-product removal is the row below.
+    ["uninstall-maintenance", "refuse"],
+    ["host-uninstall-maintenance", "allow"],
     ["desktop-install-maintenance", "allow"],
     ["recovery-maintenance", "allow"],
   ] as const)(
@@ -1602,7 +1605,7 @@ describe("withUpdateContender - the whole-product admissions admit every unheld 
   // case below asserts both directions against the SAME record, so a future
   // widening of the Desktop admission cannot pass unnoticed.
   const WHOLE_PRODUCT_ADMISSIONS = [
-    "uninstall-maintenance",
+    "host-uninstall-maintenance",
     "desktop-install-maintenance",
   ] as const;
   // Both consent flags `false`: the routine park these admissions exist for is
@@ -1736,34 +1739,78 @@ describe("withUpdateContender - the whole-product admissions admit every unheld 
   });
 
   it.each(WHOLE_PRODUCT_ADMISSIONS)(
-    "%s still answers busy to a LIVE holder - the lock, not the disposition, is what excludes a running update",
+    "%s answers busy to a live holder in ANOTHER PROCESS - the lock, not the disposition, is what excludes a running update",
     async (admission) => {
+      // Deliberately cross-process. Nesting two `withUpdateContender` calls in
+      // THIS process proves nothing about `busy`:
+      // `acquireUpdateAttemptLock` short-circuits on its in-process map and
+      // returns `held-in-process` before `acquireLock` is ever reached, so
+      // such a test passes unchanged even if the cross-process path is
+      // broken outright. The real barrier tests above spawn `lock-worker.ts`
+      // for exactly this reason, and so does this one.
       const hostHomeDir = await freshHome();
       await writeRecord(hostHomeDir, record({ phase: "applying" }));
-      let nestedCalls = 0;
+      const barrierDir = join(hostHomeDir, "live-holder-barrier");
+      await mkdir(barrierDir, { recursive: true });
 
-      const executorOutcome = await withUpdateContender(
-        options(hostHomeDir, "attempt-executor"),
+      const holder = spawnAttemptCompetitor(hostHomeDir, barrierDir);
+      await waitForFile(join(barrierDir, "held"), 10_000);
+
+      let callbackCalls = 0;
+      const outcome = await withUpdateContender(
+        options(hostHomeDir, admission),
         async () => {
-          // The executor's segment is live and holding the lock; a
-          // whole-product operation contending now must not be admitted
-          // past it.
-          const nested = await withUpdateContender(
-            options(hostHomeDir, admission),
-            async () => {
-              nestedCalls += 1;
-              return "must-not-run";
-            },
-          );
-          return nested.kind;
+          callbackCalls += 1;
+          return "must-not-run";
         },
       );
 
-      expect(executorOutcome).toEqual({
-        kind: "ran",
-        result: "held-in-process",
+      expect(outcome.kind).toBe("busy");
+      expect(callbackCalls).toBe(0);
+
+      await writeFile(join(barrierDir, "release"), "");
+      await waitForFile(join(barrierDir, "released"), 10_000);
+      await new Promise<void>((resolve) => {
+        if (holder.exitCode !== null) resolve();
+        else holder.once("close", resolve);
       });
-      expect(nestedCalls).toBe(0);
+      forgetChild(holder);
+    },
+    60_000,
+  );
+
+  // The regression guard for the blast-radius miss this change was built
+  // around. `uninstall-maintenance` is NOT a whole-product admission: two
+  // shipped Desktop sites take it (`host-controller.ts#uninstallHost` and
+  // `#removeTraycer`) to run `unregisterHostLoginItemWithAttempt`, a
+  // login-item bootout that removes nothing and rewrites no record. Admitting
+  // it over a park would unregister the login item and then, if the teardown
+  // that follows failed, leave a host that will not relaunch beside a park
+  // nothing can reach. It must keep refusing every record the whole-product
+  // admissions are allowed to step over.
+  it.each([
+    ["waiting-for-work park", "waiting-for-work", "parked", "resume-apply"],
+    ["waiting-to-activate park", "waiting-to-activate", "parked", "activate"],
+  ] as const)(
+    "uninstall-maintenance (the Desktop login-item step) still REFUSES a %s",
+    async (_label, phase, execution, continuation) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({ phase, execution, continuation, claim: claimBaseline }),
+      );
+      let calls = 0;
+      const refused = await withUpdateContender(
+        options(hostHomeDir, "uninstall-maintenance"),
+        async () => {
+          calls += 1;
+          return "must-not-run";
+        },
+      );
+      expect(refused.kind).toBe("nonterminal-attempt");
+      if (refused.kind !== "nonterminal-attempt") return;
+      expect(refused.disposition).toBe("refuse");
+      expect(calls).toBe(0);
     },
   );
 });
@@ -1825,6 +1872,7 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
     "legacy-update-shadow",
     "stage-maintenance",
     "uninstall-maintenance",
+    "host-uninstall-maintenance",
     "service-maintenance",
     "desktop-activation-maintenance",
     "desktop-install-maintenance",
@@ -1967,6 +2015,7 @@ describe("commitExecutorRecoveryMutation - the internal recovery-only writer, no
     "legacy-update-shadow",
     "stage-maintenance",
     "uninstall-maintenance",
+    "host-uninstall-maintenance",
     "service-maintenance",
     "desktop-activation-maintenance",
     "desktop-install-maintenance",

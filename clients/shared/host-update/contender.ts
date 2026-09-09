@@ -3,9 +3,11 @@ import { resolve } from "node:path";
 import {
   commitAttemptMutation,
   commitExecutorOnlyAttemptMutation,
+  discardAttemptRecordForUninstall,
   pruneTerminalAttemptRecord,
   readUpdateAttemptRecord,
   type AttemptCommitOutcome,
+  type AttemptDiscardOutcome,
   type AttemptMutationIntent,
   type PublicAttemptMutationIntent,
 } from "./store";
@@ -35,7 +37,30 @@ import { updateAttemptLockPath } from "./paths";
  */
 export type UpdateMaintenanceExemption =
   | "stage-maintenance"
+  /**
+   * ONE STEP of an uninstall that is not itself a removal: the packaged-macOS
+   * login-item bootout (`unregisterHostLoginItemWithAttempt`) that Desktop's
+   * Settings uninstall and Danger-Zone remove run before streaming the CLI.
+   *
+   * It removes nothing and rewrites no record, so it has NO whole-product
+   * argument and refuses over a durable nonterminal attempt. Admitting it
+   * would unregister the login item and then, if the teardown that follows
+   * failed, leave a host that will not relaunch beside a park nothing can
+   * reach. The removal that DOES have the argument contends separately,
+   * inside the CLI process, as `host-uninstall-maintenance`.
+   */
   | "uninstall-maintenance"
+  /**
+   * `host uninstall` REMOVING the whole install: the CLI command, and the
+   * teardown the internal scripts drive through the maintenance lease.
+   *
+   * It takes the install tree the record describes away and discards the
+   * record with it, so a resumed holder has no end state left to disagree
+   * about - the whole-product criterion documented on the `allow` arm in
+   * `dispositionFor`. Deliberately distinct from `uninstall-maintenance`
+   * above, which is only a login-item step and keeps refusing.
+   */
+  | "host-uninstall-maintenance"
   | "service-maintenance"
   | "desktop-activation-maintenance"
   /**
@@ -452,6 +477,41 @@ export async function commitAttemptMutationWithCapability(
   // from the intent, so this facade contributes the live-capability check and
   // nothing else - it cannot widen what the intent is allowed to express.
   return commitAttemptMutation({ handle: state.handle, intent });
+}
+
+/**
+ * Discard the canonical record as part of REMOVING the install it describes.
+ *
+ * The uninstall's one write, and it is a write, which is why it is here and
+ * handle-bound rather than an `rm` at the call site: `store.ts`'s banner
+ * forbids a raw delete precisely because an unlink performs no check at the
+ * point of the write, and a handle can outlive its lock without anyone
+ * releasing it. This facade contributes the live-capability check; the core
+ * re-verifies ownership on both sides of its read before unlinking.
+ *
+ * Restricted to `host-uninstall-maintenance` - the admission whose whole
+ * justification is that it removes the product. In particular
+ * `uninstall-maintenance`, the Desktop login-item STEP, cannot reach it: that
+ * operation removes nothing and has no business dropping the record.
+ */
+export async function discardAttemptRecordWithCapability(
+  capability: UpdateMutationCapability,
+  hostHomeDir: string,
+): Promise<AttemptDiscardOutcome> {
+  if (!issuedCapabilities.has(capability)) {
+    throw new Error("update uninstall capability was not issued");
+  }
+  const state = heldCapabilityState(capability);
+  if (state === null || state.admission !== "host-uninstall-maintenance") {
+    throw new Error("update uninstall capability was not admitted");
+  }
+  const verdict = await verifyUpdateMutationCapability(capability, hostHomeDir);
+  if (verdict.kind !== "live") {
+    throw new Error(
+      `update uninstall capability is not live (${verdict.kind})`,
+    );
+  }
+  return discardAttemptRecordForUninstall({ handle: state.handle });
 }
 
 /**
@@ -1153,6 +1213,12 @@ function dispositionFor(
       return "yield";
     case "service-maintenance":
     case "desktop-activation-maintenance":
+    // Two shipped Desktop sites take this to unregister the login item as
+    // one STEP of an uninstall (`host-controller.ts#uninstallHost`,
+    // `#removeTraycer`). That step removes nothing, so it has no
+    // whole-product claim and keeps refusing; the removal itself contends
+    // separately, inside the CLI, under `host-uninstall-maintenance`.
+    case "uninstall-maintenance":
     case "runtime-repair-maintenance":
     // The BASE answer, and the one every non-parked record keeps. The parked
     // exceptions are an upgrade applied by `supervisorRelaunchDisposition`
@@ -1162,24 +1228,51 @@ function dispositionFor(
     // which is exactly what must keep refusing.
     case "supervisor-relaunch-maintenance":
       return "refuse";
-    // An uninstall REMOVES the install tree the record describes, and
-    // `installer/uninstall.ts` deletes the attempt record along with it, so
-    // there is nothing a standing record could protect from the removal the
-    // user asked for. Refusing here used to leave a machine that could not be
-    // uninstalled - or reinstalled, since the surviving park refused the next
-    // `desktop-activation-maintenance` too - for as long as ONE update was
-    // parked, and a park is the ROUTINE outcome of updating a busy host
-    // (`parkForWork` in `traycer-cli`'s `host/update-run.ts`).
+    // ## The two WHOLE-PRODUCT admissions
     //
-    // Concurrency is not what this arm was guarding: a live executor segment
-    // holds this same attempt lock for its whole span, so a running update
-    // answers `busy` from `withUpdateContenderInternal` before any disposition
-    // is consulted. A record that reaches this function under the lock is
-    // parked (no holder by definition) or interrupted (its holder is gone),
-    // and neither has work in flight that a removal could corrupt.
-    case "uninstall-maintenance":
-    // The install counterpart, for the same two reasons and no others - see
-    // the type above for why it is NOT `desktop-activation-maintenance`.
+    // The criterion here is the same one `supervisorRelaunchOverActive`
+    // reaches for below, and for the same reason: **not** "is there a live
+    // holder", but "if the holder IS alive and resumes, does admitting this
+    // change the DELIVERED END STATE?".
+    //
+    // Do not reach for the no-live-holder argument. Contention looks like it
+    // proves that - a live executor segment holds this same attempt lock for
+    // its whole span, so a running update answers `busy` from
+    // `withUpdateContenderInternal` before any disposition is consulted - but
+    // it does not, and the paragraph on `supervisorRelaunchOverActive` says
+    // why: what contention CANNOT exclude is a holder that is alive but
+    // momentarily outside the lock. The packaged-macOS executor releases
+    // between its swap span and its CLI verification span by design
+    // (`clients/desktop/.../update-executor.ts`), so a `restarting` record
+    // with a live owner mid-flight reaches this function legitimately.
+    //
+    // These two admissions are sound anyway, because they do not race that
+    // holder - they REMOVE or REPLACE the whole product it would resume
+    // into. An update exists to deliver a version of an install; when the
+    // install itself is being taken away or overwritten wholesale, there is
+    // no end state left for a resumed attempt to disagree about. Whatever the
+    // holder would have done next, the delivered result is the same.
+    //
+    // That is why this is deliberately NOT `uninstall-maintenance`, which two
+    // shipped Desktop sites also take (`host-controller.ts` - Settings
+    // uninstall and Danger-Zone remove). There the in-lock operation is
+    // `unregisterHostLoginItemWithAttempt`: a login-item bootout that removes
+    // NOTHING and rewrites no record. It has no whole-product argument, so it
+    // keeps refusing - admitting it would unregister the login item and then
+    // leave a park nothing can reach if the teardown that follows fails.
+    //
+    // Refusing the whole-product cases used to leave a machine that could not
+    // be uninstalled - or reinstalled, since the surviving park refused the
+    // install too - for as long as ONE update was parked, and a park is the
+    // ROUTINE outcome of updating a busy host (`parkForWork` in
+    // `traycer-cli`'s `host/update-run.ts`).
+    //
+    // `host uninstall`, which removes the install tree the record describes
+    // and discards the record with it.
+    case "host-uninstall-maintenance":
+    // The install counterpart: the cloud-install script replacing the whole
+    // .app bundle - see the type above for why it is NOT
+    // `desktop-activation-maintenance`.
     case "desktop-install-maintenance":
     case "recovery-maintenance":
     case "attempt-executor":

@@ -332,7 +332,7 @@ describe("assertPathHelpersBoundToTarget", () => {
         await import("../host-maintenance-lease");
       return await runHostMaintenanceLease(
         "production",
-        "uninstall-maintenance",
+        "host-uninstall-maintenance",
         {
           hostHomeDir: "/nonexistent-probe-home/.traycer/host",
           serviceUid: 0,

@@ -68,8 +68,9 @@ import {
 //
 // `writeRecordAtomic` and `removeRecordFile` below are module-private and
 // stay that way. The only public ways to change the canonical record are
-// `commitAttemptMutation` / `pruneTerminalAttemptRecord`; the direct-module
-// executor-only channel is separately restricted by the architecture gate.
+// `commitAttemptMutation` / `pruneTerminalAttemptRecord` /
+// `discardAttemptRecordForUninstall`; the direct-module executor-only channel
+// is separately restricted by the architecture gate.
 // Every path takes a lock handle this module's sibling issued and, before
 // touching anything:
 //
@@ -1155,6 +1156,13 @@ export type AttemptPruneRejection =
   | "expectation-mismatch"
   | "remove-failed";
 
+export type AttemptDiscardOutcome =
+  | { readonly kind: "discarded" }
+  | {
+      readonly kind: "rejected";
+      readonly reason: AttemptMutationRejection | "remove-failed";
+    };
+
 export type AttemptPruneOutcome =
   | { readonly kind: "pruned" }
   | {
@@ -1212,6 +1220,70 @@ export async function pruneTerminalAttemptRecord(
     return (await removeRecordFile(lease.recordPath))
       ? { kind: "pruned" }
       : { kind: "rejected", reason: "remove-failed", canonical };
+  } finally {
+    lease.release();
+  }
+}
+
+export interface DiscardAttemptRecordForUninstallOptions {
+  readonly handle: UpdateAttemptLockHandle;
+}
+
+/**
+ * Drop the canonical record because the install it describes is being REMOVED.
+ *
+ * This is the uninstall's counterpart to `pruneTerminalAttemptRecord`, and it
+ * exists so `host uninstall` does not need a raw `rm` on the record path. The
+ * banner at the top of this module is the whole reason: a caller that unlinks
+ * the record itself performs no check AT THE POINT OF THE WRITE, and the gap
+ * is real rather than theoretical - a handle can outlive its lock without
+ * anyone releasing it, because a contender that positively proved this process
+ * dead breaks the lock and takes it, and nothing notifies the original holder
+ * (see `lock.ts`). An uninstall that lost its lock that way and then unlinked
+ * would delete the NEW owner's live attempt.
+ *
+ * So it takes the mutation lease and re-verifies ownership on both sides of
+ * the read, exactly like every other mutation here. What it deliberately does
+ * NOT require is what `pruneTerminalAttemptRecord` requires - terminal
+ * execution, elapsed retention, a matching expected identity - because an
+ * uninstall is not retention policy: whatever the record says, the tree it
+ * describes is going away, and the caller cannot know the identity of a park
+ * some earlier invocation wrote.
+ *
+ * An unreadable or already-absent record is `discarded`, not a rejection:
+ * removal is the goal, and a record that cannot be parsed is exactly what an
+ * uninstall should be free to clear.
+ */
+export async function discardAttemptRecordForUninstall(
+  options: DiscardAttemptRecordForUninstallOptions,
+): Promise<AttemptDiscardOutcome> {
+  const leaseOutcome = acquireAttemptMutationLease(options.handle);
+  if (leaseOutcome.kind !== "leased") {
+    return {
+      kind: "rejected",
+      reason:
+        leaseOutcome.kind === "not-issued"
+          ? "handle-not-issued"
+          : "handle-released",
+    };
+  }
+
+  const { lease } = leaseOutcome;
+  try {
+    const preOwnership = await ownershipRejection(options.handle);
+    if (preOwnership !== null)
+      return { kind: "rejected", reason: preOwnership };
+
+    // Re-checked after the read for the same reason `pruneTerminalAttemptRecord`
+    // does it: the window that matters is the one immediately before the
+    // unlink, not the one when the caller decided to unlink.
+    const postOwnership = await ownershipRejection(options.handle);
+    if (postOwnership !== null) {
+      return { kind: "rejected", reason: postOwnership };
+    }
+    return (await removeRecordFile(lease.recordPath))
+      ? { kind: "discarded" }
+      : { kind: "rejected", reason: "remove-failed" };
   } finally {
     lease.release();
   }

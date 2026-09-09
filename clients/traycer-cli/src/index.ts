@@ -1149,7 +1149,7 @@ function registerHostCommands(program: Command): void {
       const admission =
         opts.admission === "desktop-activation-maintenance" ||
         opts.admission === "desktop-install-maintenance" ||
-        opts.admission === "uninstall-maintenance"
+        opts.admission === "host-uninstall-maintenance"
           ? (opts.admission as HostMaintenanceLeaseAdmission)
           : null;
       if (admission === null) {

@@ -1,5 +1,4 @@
 import { rm } from "node:fs/promises";
-import { updateAttemptRecordPath } from "@traycer-clients/shared/host-update";
 import {
   deleteHostInstallRecord,
   readHostInstallRecord,
@@ -9,7 +8,6 @@ import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { rotateHostLogForPurgeWithVerifier } from "../host/host-log-rotation";
 import {
-  hostHomeDir,
   hostInstallDir,
   hostPidMetadataPath,
   hostStagedDir,
@@ -38,6 +36,16 @@ export interface UninstallHostOptions {
    * use the named `legacyMutationVerifier`, never a nullable omission.
    */
   readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Drops `update-attempt.json` through the caller's live lock handle.
+   *
+   * Required and nullable rather than optional, like every other authority
+   * seam here: the record is canonical state, so the ONLY callers that may
+   * clear it are the ones holding a `host-uninstall-maintenance` capability
+   * to hand one in. `null` is the legacy/no-contender path, which leaves the
+   * record exactly as it found it rather than unlinking it without authority.
+   */
+  readonly discardAttemptRecord: (() => Promise<void>) | null;
 }
 
 export interface UninstallHostResult {
@@ -159,21 +167,27 @@ export async function uninstallHost(
   // a parked or interrupted attempt outlives everything it could resume
   // against and keeps refusing the maintenance admissions that follow: the
   // next `host install` / desktop activation met a park for a host that no
-  // longer existed and failed closed on it. The uninstall runs under the
-  // attempt lock (its capability is verified at every edge), so no writer
-  // can be racing this removal. The lock file itself is untouched - it is
-  // the caller's live handle, not evidence.
-  await verify();
-  try {
-    await rm(updateAttemptRecordPath(hostHomeDir(opts.environment)), {
-      force: true,
-    });
-  } catch (err) {
-    logger.warn("Host uninstall failed to remove the update attempt record", {
-      environment: opts.environment,
-      errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
-    });
+  // longer existed and failed closed on it.
+  //
+  // Dropped through the caller's handle-bound discard, NOT an `rm` here.
+  // `store.ts` forbids a raw delete on purpose: an unlink checks nothing at
+  // the point of the write, and a handle can outlive its lock without anyone
+  // releasing it (a contender that proved this process dead breaks the lock
+  // and takes it, notifying nobody), so an uninstall that lost its lock would
+  // unlink the NEW owner's live attempt. The discard re-verifies ownership on
+  // both sides of its read instead. The lock FILE stays - it is the caller's
+  // live handle, not evidence.
+  if (opts.discardAttemptRecord !== null) {
+    await verify();
+    try {
+      await opts.discardAttemptRecord();
+    } catch (err) {
+      logger.warn("Host uninstall failed to remove the update attempt record", {
+        environment: opts.environment,
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
+      });
+    }
   }
 
   // The version hold names a deliberate downgrade of the install we just

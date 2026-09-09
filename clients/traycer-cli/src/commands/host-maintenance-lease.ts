@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import {
   rebindUpdateMutationCapabilityLiveness,
+  type UpdateContenderAdmission,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
 import { createCliLogger } from "../logger";
@@ -48,9 +49,47 @@ export const HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION = 1;
 export type HostMaintenanceLeaseAdmission =
   | "desktop-activation-maintenance"
   | "desktop-install-maintenance"
-  | "uninstall-maintenance";
+  | "host-uninstall-maintenance";
 
 type HostMaintenanceLeaseAction = "host-stop" | "host-uninstall-all";
+
+/**
+ * Which actions each admission may ask for.
+ *
+ * The admissions do not cost the same. `host-uninstall-maintenance` is
+ * admitted over a durable nonterminal attempt BECAUSE it removes the whole
+ * install; `desktop-install-maintenance` is admitted over one because it
+ * removes nothing at all - it swaps an .app bundle and stops an idle host.
+ * Leaving the wire free to pair either admission with either action would let
+ * an install-shaped lease, admitted on the strength of removing nothing, ask
+ * for the full teardown. The table makes the justification true by
+ * construction instead of by convention in a script in another repository.
+ */
+const LEASE_ACTIONS_BY_ADMISSION: Readonly<
+  Record<HostMaintenanceLeaseAdmission, readonly HostMaintenanceLeaseAction[]>
+> = {
+  "desktop-activation-maintenance": ["host-stop"],
+  "desktop-install-maintenance": ["host-stop"],
+  "host-uninstall-maintenance": ["host-stop", "host-uninstall-all"],
+};
+
+/**
+ * Fail-closed on purpose: this takes the WIDE contender union, not the lease
+ * union, so an admission that never belonged on a lease at all answers `false`
+ * here rather than being cast into the table and indexing to `undefined`.
+ */
+export function leaseAdmissionPermitsAction(
+  admission: UpdateContenderAdmission,
+  action: HostMaintenanceLeaseAction,
+): boolean {
+  const permitted = Object.prototype.hasOwnProperty.call(
+    LEASE_ACTIONS_BY_ADMISSION,
+    admission,
+  )
+    ? LEASE_ACTIONS_BY_ADMISSION[admission as HostMaintenanceLeaseAdmission]
+    : null;
+  return permitted !== null && permitted.includes(action);
+}
 
 type RootMaintenanceOperation =
   | "cloud-macos-install"
@@ -611,6 +650,18 @@ async function handleRootExecutorRequest(
     value.kind === "execute" &&
     (value.action === "host-stop" || value.action === "host-uninstall-all")
   ) {
+    // The admission bounds the action, not just the lease. See
+    // `LEASE_ACTIONS_BY_ADMISSION`: an install-shaped admission is admitted
+    // over a park precisely because it removes nothing, so it must not be
+    // able to ask for the teardown.
+    if (
+      !leaseAdmissionPermitsAction(contenderOptions.admission, value.action)
+    ) {
+      refuse(
+        `maintenance admission does not permit the requested action: ${value.action}`,
+      );
+      return;
+    }
     await executeAction(value.action, capability, contenderOptions);
     stdin.write(`${JSON.stringify({ kind: "executed" })}\n`);
     return;
