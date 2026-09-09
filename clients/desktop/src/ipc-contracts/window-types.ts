@@ -430,10 +430,7 @@ export interface SupportSubmitReportRequest {
   // default - the untouched pre-filled value must never reach the wire, so
   // there is no separate "changed" flag to get out of sync with this.
   readonly location: string | null;
-  // G1: identity (email/name) is attached to the private report only when
-  // this is true. The checkbox itself only renders when a signed-in email
-  // exists, but the flag is always sent explicitly rather than inferred from
-  // email presence on the main-process side.
+  // Retained for older clients. Signed-in email always accompanies private reports.
   readonly allowContact: boolean;
   // Consent panel's two log toggles (default on): whether each frozen tail
   // is attached to the private submission / included in the diagnostic

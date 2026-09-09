@@ -404,11 +404,7 @@ export class DesktopSupportService {
         .join("\n\n"),
     );
 
-    // G1: identity is attached to the private report only when the user
-    // opted in via the contact checkbox - the checkbox itself only renders
-    // when a signed-in email exists, but the gate lives here too so a stale
-    // client can never smuggle identity past an unchecked box.
-    const userEmail = form.allowContact ? snapshot.user.email : null;
+    const userEmail = snapshot.user.email;
     const privateDiagnostics = form.privateDiagnostics;
     // Images ride to Sentry as opaque binary attachments, built directly from
     // `form.images` below - deliberately never folded into `contexts` (the
