@@ -401,7 +401,8 @@ function projectLocalHomedEpicIds(
  * OWNED local-home rows (`getTaskContextsResponseSchema@1.3`), so a host that
  * does not own the epic does not resolve the row at all, the id never reaches
  * the pinned-state map, and the Pin item sits disabled behind a spinner
- * forever instead of explaining that the epic is stored on this device.
+ * forever instead of explaining that the epic is stored on the connected
+ * device.
  *
  * The epic's own session already holds that fact, so this asks it directly
  * rather than routing the RPC by a per-tab host binding. Same shape as
@@ -426,6 +427,77 @@ export function useLocalHomedOpenEpicIds(
     epicIds,
     projectLocalHomedEpicIds,
     () => EMPTY_LOCAL_HOMED_EPIC_IDS,
+  );
+}
+
+/**
+ * What a live session can say RIGHT NOW about where one epic is durable.
+ *
+ * {@link useLocalHomedOpenEpicIds} answers a boolean because its consumers -
+ * a menu item, a row control - only ever render, and a control that renders
+ * unavailable while the answer is in flight is correct. A consumer that must
+ * DECIDE ONCE cannot use that shape: `false` there conflates "the host said
+ * this epic is cloud-homed" with "nobody has said anything yet", and deciding
+ * on the second is deciding on silence.
+ *
+ * - `local` - the host stated a local home (`local` or `promoting`, matching
+ *   {@link useLocalHomedOpenEpicIds} exactly; two answers to "is this epic
+ *   local-homed" that can disagree is the defect shape, not the fix).
+ * - `no-local-claim` - no local-home claim is coming. Either the host stated
+ *   something that is not one (`cloud`, `paused`, `offline`), or it stated
+ *   `unknown`, which is the `@1.6` member for "I cannot say" and is an ANSWER
+ *   rather than silence, or the stream has failed terminally and will state
+ *   nothing at all. Deliberately not called `not-local`: three of those five
+ *   arms are not claims about the home, and a member that asserted one would
+ *   be the same silence-read-as-fact this whole minor exists to break.
+ * - `unstated` - there is no session, or there is one and it has said nothing
+ *   yet. An answer may still arrive, so a caller that can wait should.
+ *
+ * A caller that waits on `unstated` MUST bound the wait: a peer that never
+ * negotiated the durability legs sits here forever and is indistinguishable,
+ * from this side, from one whose first frames are merely slow.
+ */
+export type EpicLocalHomeReading = "local" | "no-local-claim" | "unstated";
+
+function readEpicLocalHomeReading(epicId: string): EpicLocalHomeReading {
+  const state = registry.peek(epicId)?.store.getState();
+  if (state === undefined) return "unstated";
+  const status =
+    state.durabilityStatus ?? state.retainedDurabilityStatus ?? null;
+  if (status === "local" || status === "promoting") return "local";
+  if (status !== null) return "no-local-claim";
+  // Checked only AFTER the status, so a session that stated a local home and
+  // then lost its stream keeps that statement. `retainedDurabilityStatus`
+  // already survives a reconnect for exactly that reason, and where an epic is
+  // durable is a property of the epic, not of the connection.
+  if (
+    state.snapshotFetchError !== null ||
+    state.accessLost ||
+    state.epicDeleted !== null
+  ) {
+    return "no-local-claim";
+  }
+  return "unstated";
+}
+
+function projectEpicLocalHomeReading(
+  canonicalEpicIds: ReadonlyArray<string>,
+): LiveSessionSnapshotCache<EpicLocalHomeReading> {
+  const [epicId] = canonicalEpicIds;
+  const reading: EpicLocalHomeReading =
+    epicId === undefined ? "unstated" : readEpicLocalHomeReading(epicId);
+  return { signature: reading, snapshot: reading };
+}
+
+const UNSTATED_LOCAL_HOME_READING: EpicLocalHomeReading = "unstated";
+
+/** Single-epic {@link EpicLocalHomeReading}, live. */
+export function useEpicLocalHomeReading(epicId: string): EpicLocalHomeReading {
+  const epicIds = useMemo(() => [epicId], [epicId]);
+  return useEpicReadLiveSessionSnapshot<EpicLocalHomeReading>(
+    epicIds,
+    projectEpicLocalHomeReading,
+    () => UNSTATED_LOCAL_HOME_READING,
   );
 }
 

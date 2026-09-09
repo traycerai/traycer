@@ -11,6 +11,20 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
  *
  * The split is also the honest boundary: the rule below is what every
  * responsive surface must agree on, and it has no rendering in it.
+ *
+ * ## "the connected device", never "this device"
+ *
+ * A local-homed epic lives on the HOST that serves it, and after the mobile /
+ * relay work that host is routinely not the machine rendering these strings -
+ * a phone reads its Mac's local epics. "Stored on this device" was written
+ * when the two were always the same and became false without anyone editing
+ * it: a string is a claim about a state space, and a new member invalidates
+ * strings nobody touched.
+ *
+ * "Device" stays the UI word for a host (host identity rule 1: no parallel
+ * `deviceId`), so the fix is the ARTICLE, not the vocabulary. The same
+ * correction applies to the preserved-orphan pair below, whose "this device's
+ * edits" makes the identical claim about the identical machine.
  */
 
 /** The reason a history row cannot dispatch the cloud-only pin mutation. */
@@ -25,15 +39,37 @@ export type HistoryPinUnavailableReason =
  * of the desktop/mobile row implementations so each responsive surface, plus
  * other task affordances, makes the same decision.
  *
- * `cloudAuthorized` is `authorizesCloudCapability(status)` - a required
- * argument rather than a store read, so this stays a pure function every
- * surface can call and test, and so the SESSION half of the rule cannot be
- * silently omitted by a new caller.
+ * `cloudAuthorized` is `authorizesCloudCapability(status)` and
+ * `localHomePinSupported` is `useEpicPinLocalHomeSupported()` - both required
+ * arguments rather than store/registry reads, so this stays a pure function
+ * every surface can call and test, and so neither the SESSION half nor the
+ * NEGOTIATION half of the rule can be silently omitted by a new caller.
  *
- * The row-intrinsic reasons are checked first on purpose: they are permanent
- * facts about the row, while a withdrawn verdict is a condition the user can
- * recover from, and reporting the recoverable one for a row that could never
- * be pinned anyway would send them to fix the wrong thing.
+ * `localHomePinSupported` is what makes `local-home` a statement about the
+ * HOST rather than about the row. The released `epic.setPinned@1.0` line has
+ * only a cloud arm, so pinning an epic that exists only on disk 404s; `@1.1`
+ * carries the local arm and the refusal becomes false. It is deliberately not
+ * derived from anything else on the wire - see `lib/epic-pin-admission.ts`,
+ * which owns the version predicate and the fail-closed rule for a host that
+ * has not handshaken.
+ *
+ * `local-home` is therefore no longer PERMANENT: a row that reads unavailable
+ * against an old host becomes pinnable when that host updates, with no change
+ * to the row.
+ *
+ * It also does not require a cloud verdict. A local-homed pin on a `@1.1`
+ * host is served entirely from that host's disk (`epic-set-pinned-resolver`
+ * admits on the local `epicHomeVerdict` and returns before any cloud header is
+ * built), so the row returns from its own branch and never reaches the session
+ * check. `useEpicSetPinned` carries the same carve-out at DISPATCH, and the
+ * two must move together: a control this function enables and that mutation
+ * refuses is a button that does nothing.
+ *
+ * The row-intrinsic reasons are checked first on purpose: `phase` and
+ * `preserved-orphan` are permanent facts about the row, while a withdrawn
+ * verdict is a condition the user can recover from, and reporting the
+ * recoverable one for a row that could never be pinned anyway would send them
+ * to fix the wrong thing.
  *
  * Why the session belongs in this rule at all: History stays readable under
  * `unverified` by design - `resolveCloudTasksUserId` admits it and the first
@@ -44,10 +80,21 @@ export type HistoryPinUnavailableReason =
 export function historyPinUnavailableReason(
   item: HistoryItem,
   cloudAuthorized: boolean,
+  localHomePinSupported: boolean,
 ): HistoryPinUnavailableReason | null {
   if (item.taskType === "phase") return "phase";
   if (item.isPreservedOrphan === true) return "preserved-orphan";
-  if (item.isLocalHome === true) return "local-home";
+  // A local-homed row RETURNS from here either way and never reaches the
+  // session check below. That is the carve-out, not an ordering accident: on
+  // `@1.1` the host's pin resolver admits this epic on its local
+  // `epicHomeVerdict` and returns before building any cloud header, so the
+  // write spends no cloud capability and a withdrawn verdict is not a reason
+  // to refuse it. Requiring one would deny an offline or free-tier user a
+  // write their own machine can serve - which is the whole population this
+  // lane exists for.
+  if (item.isLocalHome === true) {
+    return localHomePinSupported ? null : "local-home";
+  }
   if (!cloudAuthorized) return "unverified-session";
   return null;
 }
@@ -58,10 +105,10 @@ export function historyPinControlLabel(input: {
   readonly isPinned: boolean;
 }): string {
   if (input.unavailableReason === "preserved-orphan") {
-    return `Pinning ${input.displayTitle} is unavailable; its cloud copy was deleted and only this device's edits remain`;
+    return `Pinning ${input.displayTitle} is unavailable; its cloud copy was deleted and only the connected device's edits remain`;
   }
   if (input.unavailableReason === "local-home") {
-    return `Pinning ${input.displayTitle} needs cloud sync; it is stored on this device`;
+    return `Pinning ${input.displayTitle} needs cloud sync; it is stored on the connected device`;
   }
   if (input.unavailableReason === "phase") {
     return `Pinning ${input.displayTitle} is unavailable for phases`;
@@ -78,10 +125,10 @@ export function historyPinUnavailableTooltip(
   reason: HistoryPinUnavailableReason,
 ): string {
   if (reason === "preserved-orphan") {
-    return "This epic's cloud copy was deleted. Only this device's edits remain, so it can't be pinned.";
+    return "This epic's cloud copy was deleted. Only the connected device's edits remain, so it can't be pinned.";
   }
   if (reason === "local-home") {
-    return "This epic is stored on this device. Pinning needs cloud sync.";
+    return "This epic is stored on the connected device. Pinning needs cloud sync.";
   }
   if (reason === "unverified-session") {
     return "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once your sign-in is confirmed.";

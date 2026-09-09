@@ -55,6 +55,10 @@ export function HistoryRowStatusIcon(props: {
     <NotificationIndicatorIcon
       state={indicatorState}
       running={activityStatus === "idle" ? false : activityStatus}
+      // An EPIC-level rollup, exactly as in the tab strip: a task's agents can
+      // live on several machines, so no one host's coverage answers for the
+      // row. Unserved-plane reporting belongs to the per-agent icons.
+      activityCoverage="indeterminate"
       subjectId={props.item.epicId}
       testIdPrefix={props.testIdPrefix}
       className={props.className}
@@ -177,9 +181,9 @@ export function EpicsListChatHostFilterUnsupported(): ReactNode {
  *
  *  - a spinner claims something is in flight; nothing is, and nothing will be;
  *  - "No tasks yet" claims the account is empty, which is unknown;
- *  - "Showing what this device holds" claims the device is empty, and on this
- *    exact host it is not - the epics are there, the host simply has no way to
- *    list them without the cloud.
+ *  - "Showing what the connected device holds" claims the device is empty, and
+ *    on this exact host it is not - the epics are there, the host simply has no
+ *    way to list them without the cloud.
  *
  * It also does not say the cloud is unreachable. The cloud may be perfectly
  * fine; this client is declining to spend it on an unverified session.
@@ -194,9 +198,9 @@ export function EpicsListHostRequiresCloudToList(): ReactNode {
         This host needs cloud access to list Epics
       </p>
       <p className="max-w-full">
-        It&apos;s running a version that can&apos;t list Epics from this device
-        alone, and your sign-in couldn&apos;t be confirmed. Update the host, or
-        sign in again, to see them.
+        It&apos;s running a version that can&apos;t list Epics from the connected
+        device alone, and your sign-in couldn&apos;t be confirmed. Update the
+        host, or sign in again, to see them.
       </p>
     </div>
   );
@@ -274,7 +278,10 @@ export function HistoryCompletenessNotice(props: {
         data-local-rows={completeness?.localRows}
         className="mb-3 flex flex-col gap-1 rounded-md border border-dashed border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground"
       >
-        <p>Cloud tasks are still loading. Showing what this device holds.</p>
+        <p>
+          Cloud tasks are still loading. Showing what the connected device
+          holds.
+        </p>
       </div>
     );
   }
@@ -282,7 +289,7 @@ export function HistoryCompletenessNotice(props: {
   const lines: string[] = [];
   if (completeness.cloudPage === "unavailable") {
     lines.push(
-      "Cloud tasks couldn't be reached. Showing what this device holds.",
+      "Cloud tasks couldn't be reached. Showing what the connected device holds.",
     );
   }
   if (completeness.localRows === "truncated") {
@@ -299,19 +306,23 @@ export function HistoryCompletenessNotice(props: {
     // it is the wrong SHAPE of claim rather than merely imprecise: a reader
     // told they have a prefix concludes the rest is further down the list.
     //
+    // "the connected device", not "this device", for the same reason as
+    // `history-pin-availability.ts`: these rows are the SERVING HOST's local
+    // rows, and on a phone or a relay-only shell that is another machine.
+    //
     // Do NOT branch this line on which producer fired. The wire member
     // deliberately does not distinguish them, so a client that split the copy
     // would be reading a distinction it was never sent.
     lines.push(
-      "Some tasks on this device couldn't be checked against your filters, so this list may be missing a few.",
+      "Some tasks on the connected device couldn't be checked against your filters, so this list may be missing a few.",
     );
   }
   if (completeness.localRows === "suppressed-unprovable-filter") {
     // The difference between "you have no local epics matching" and "this
-    // filter cannot be answered from this device". Collapsing them is how a
-    // filtered offline History came to look empty and authoritative.
+    // filter cannot be answered from the connected device". Collapsing them is
+    // how a filtered offline History came to look empty and authoritative.
     lines.push(
-      "This filter can't be checked against tasks stored on this device, so they aren't listed.",
+      "This filter can't be checked against tasks stored on the connected device, so they aren't listed.",
     );
   }
   // `facets: "partial"` is the protocol saying the counts describe a DIFFERENT

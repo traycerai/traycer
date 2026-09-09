@@ -34,10 +34,7 @@ import {
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
-import {
-  authorizesCloudCapability,
-  useAuthStore,
-} from "@/stores/auth/auth-store";
+import { useHostClient } from "@/lib/host";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabRef } from "@/stores/tabs/types";
@@ -63,6 +60,7 @@ import {
 import { activatePreparedPairTabIntent } from "@/lib/tab-navigation";
 import type { StripItem } from "@/stores/tabs/layout";
 import {
+  epicPinDispatchAdmitted,
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
@@ -165,37 +163,47 @@ function TabStripBody() {
   const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const { mutate: setEpicPinned } = useEpicSetPinned();
+  const hostClient = useHostClient();
   const handleSetTaskPinned = useCallback(
     (epicId: string, pinned: boolean, displayName: string) => {
+      // The same reading the menu rendered its label and availability from -
+      // NOT a second derivation, which is how a control and its dispatch come
+      // to disagree. A local-homed epic on a `@1.1` host is served off that
+      // host's disk and spends no cloud capability, so it is admissible with
+      // no verdict; everything else still needs one.
+      const isLocalHome = taskPinnedStates.get(epicId)?.home === "local";
+      const variables = { epicId, pinned, isLocalHome };
       // Fail closed on the CAPABILITY, not just in the menu. This is the one
       // dispatch site for the whole tab tree, and the Undo action below is a
       // second entry into it that no menu gate can reach: the toast outlives
-      // the click, so a verdict withdrawn in between would let Undo spend a
-      // cloud capability the session no longer holds. Re-read at the edge
-      // rather than closing over a render-time value for the same reason.
-      if (!authorizesCloudCapability(useAuthStore.getState().status)) return;
-      setEpicPinned(
-        { epicId, pinned },
-        {
-          onSuccess: () => {
-            toast.success(pinConfirmationMessage(displayName, pinned), {
-              action: {
-                label: "Undo",
-                onClick: () => {
-                  if (
-                    !authorizesCloudCapability(useAuthStore.getState().status)
-                  ) {
-                    return;
-                  }
-                  setEpicPinned({ epicId, pinned: !pinned });
-                },
+      // the click, so a verdict withdrawn - or a host rolled back to `@1.0` -
+      // in between would let Undo spend a cloud capability the session no
+      // longer holds. `epicPinDispatchAdmitted` is the mutation's own gate, so
+      // this edge and `onMutate` cannot answer differently; it re-reads both
+      // the verdict and the negotiation rather than closing over either.
+      if (!epicPinDispatchAdmitted(variables, hostClient.getActiveHostId())) {
+        return;
+      }
+      setEpicPinned(variables, {
+        onSuccess: () => {
+          toast.success(pinConfirmationMessage(displayName, pinned), {
+            action: {
+              label: "Undo",
+              onClick: () => {
+                const undo = { epicId, pinned: !pinned, isLocalHome };
+                if (
+                  !epicPinDispatchAdmitted(undo, hostClient.getActiveHostId())
+                ) {
+                  return;
+                }
+                setEpicPinned(undo);
               },
-            });
-          },
+            },
+          });
         },
-      );
+      });
     },
-    [setEpicPinned],
+    [hostClient, setEpicPinned, taskPinnedStates],
   );
 
   // Trailing slot: the strip's empty space after the last tab accepts drops

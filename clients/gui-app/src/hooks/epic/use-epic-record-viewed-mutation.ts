@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudEpicTasksLastViewedQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { resetLastViewedCloudEpicTasksPagesForScope } from "@/stores/epics/cloud-epic-tasks-pages-store";
@@ -10,7 +10,8 @@ import {
 } from "@/stores/auth/auth-store";
 
 /**
- * Thrown from `onMutate` when the session holds no cloud verdict at dispatch.
+ * Thrown from `onMutate` when the session holds no cloud verdict at dispatch
+ * AND the epic is not the local-homed one carved out below.
  *
  * `epic.recordViewed` writes personal cloud recency through a local-host
  * connection that carries no renderer verdict of its own, and its one caller
@@ -20,6 +21,15 @@ import {
  * between commit and effect dispatch on a bearer the cloud stopped vouching
  * for. Re-read here, at dispatch, in the one mutation every caller shares -
  * the same shape as `EPIC_PIN_UNAUTHORIZED_MESSAGE`.
+ *
+ * It is NOT unconditionally a cloud write. The host's `epic.recordViewed`
+ * resolver admits a local-homed epic on the local `epicHomeVerdict` alone and
+ * returns before it builds any cloud header, so recording recency for such an
+ * epic spends no cloud capability - and refusing it would leave an offline or
+ * free-tier user's own machine unable to remember what they just looked at.
+ * Unlike `epic.setPinned`, that local arm needs no version gate: it exists on
+ * every host this client negotiates with, so the caller's local-home fact is
+ * the whole predicate.
  */
 export const EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE =
   "record-viewed refused: the session holds no cloud verdict";
@@ -29,18 +39,49 @@ interface RecordEpicViewedMutationContext {
   readonly userId: string | null;
 }
 
+interface RecordEpicViewedVariables {
+  readonly epicId: string;
+  /**
+   * Whether the epic is durable on the serving host's disk - the caller's own
+   * reading, from the live session that owns that fact.
+   *
+   * Taken from the caller rather than re-derived here, exactly as
+   * `SetEpicPinnedVariables.isLocalHome` is: the route decided admission from
+   * this reading, and a second derivation at dispatch is how the two come to
+   * disagree. Stripped by `mapVariables` and never sent - the host reads
+   * durability from its own `epicHomeVerdict`, and a client-asserted home is
+   * not something it has any business trusting.
+   */
+  readonly isLocalHome: boolean;
+}
+
 /** Records task recency through the default host used by Task History. */
 export function useEpicRecordViewed() {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  return useHostMutation({
+  // Generics spelled out for the same reason as `useEpicSetPinned`:
+  // `RecordEpicViewedVariables` is wider than the request schema, and
+  // `TVariables` defaults to the request shape when nothing names it.
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.recordViewed",
+    RecordEpicViewedMutationContext,
+    RecordEpicViewedVariables
+  >({
     client,
     method: "epic.recordViewed",
-    mapVariables: (variables) => variables,
+    // `isLocalHome` is a DISPATCH-side fact, not a request field: the wire
+    // shape stays `{ epicId }` exactly as the schema declares it.
+    mapVariables: ({ epicId }) => ({ epicId }),
     options: {
       mutationKey: epicMutationKeys.recordViewed(),
-      onMutate: (): RecordEpicViewedMutationContext => {
-        if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+      onMutate: (
+        variables: RecordEpicViewedVariables,
+      ): RecordEpicViewedMutationContext => {
+        if (
+          !variables.isLocalHome &&
+          !authorizesCloudCapability(useAuthStore.getState().status)
+        ) {
           throw new Error(EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE);
         }
         return {

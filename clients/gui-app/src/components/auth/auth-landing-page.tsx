@@ -1,6 +1,7 @@
 import { BrandMark, PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
+import type { ShellAdmissionRefusal } from "@/hooks/auth/use-shell-local-plane-admission";
 import { cn } from "@/lib/utils";
 
 const SIGN_IN_COLOR_VARS =
@@ -8,7 +9,35 @@ const SIGN_IN_COLOR_VARS =
 const SIGN_IN_LANE_CLASS =
   "w-[min(100%,31rem)] pt-[clamp(0.35rem,1.2vh,0.8rem)]";
 
-export function AuthLandingPage() {
+/**
+ * The sentence for a session the STATUS would have admitted and the SHELL
+ * could not.
+ *
+ * Three things it has to do, and the order is the reading order: name what is
+ * wrong with the session (the sign-in is unconfirmed, not rejected), say why
+ * that is fatal HERE and not on a laptop (nothing on this device to fall back
+ * to), and leave the user with the one action that helps. It deliberately does
+ * NOT claim the account is signed out - it is not - nor that the network is
+ * down, which may be perfectly false.
+ */
+function refusalMessage(refusal: ShellAdmissionRefusal): string {
+  // A switch rather than a return, with one arm: it is exhaustive over the
+  // union, so adding a refusal reason fails to compile here until someone
+  // writes its sentence - which is the whole reason the reason is a union.
+  switch (refusal) {
+    case "unverified-relay-only":
+      return "Your sign-in couldn't be confirmed, and this device has no Traycer host of its own — everything here is served from another device over the network. Sign in again to reconnect.";
+  }
+}
+
+export function AuthLandingPage(props: {
+  /**
+   * Why an otherwise-admitted session is on this surface, or `null` for the
+   * ordinary signed-out arrival. Required so a caller has to answer the
+   * question rather than inherit a silent default.
+   */
+  readonly refusal: ShellAdmissionRefusal | null;
+}) {
   return (
     // min-h-full, not min-h-svh: the standalone shell owns the viewport
     // height and reserves the Windows title-bar band above this page.
@@ -29,6 +58,19 @@ export function AuthLandingPage() {
           <h1 className="mb-2 text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-[clamp(2.25rem,5.5vw,3rem)] tracking-tight">
             Welcome to Traycer
           </h1>
+          {/* Above the button, not below it: this is the reason the button is
+              being shown at all, and a reader who has already pressed it has
+              no use for the explanation. Sized as body copy on the artwork's
+              own scale rather than as an alert - the session is intact and
+              nothing here is an error state. */}
+          {props.refusal === null ? null : (
+            <p
+              data-testid="auth-landing-refusal"
+              className="max-w-[min(88vw,28rem)] text-balance text-ui-sm leading-relaxed font-sans text-white/70"
+            >
+              {refusalMessage(props.refusal)}
+            </p>
+          )}
           <div className={cn(SIGN_IN_COLOR_VARS, SIGN_IN_LANE_CLASS)}>
             <SignInButton layout="hero" />
           </div>
