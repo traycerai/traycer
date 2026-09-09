@@ -59,6 +59,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
+  useEpicHostTransportStatus: () => "open",
   useMaybeEpicTuiAgentHarnessId: () => null,
 }));
 

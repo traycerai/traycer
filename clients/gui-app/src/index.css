@@ -29,16 +29,25 @@
    `lib/animation/status-animation-clock.ts` instead. Do not add
    `animation:` back to these rules. */
 
-/* Indeterminate host-progress bar: a segment sweeping across the track, for a
-   stage that is RUNNING but reports no percentage (verify, extract, swap,
-   service-start). Plain CSS - no motion runtime, so it animates regardless of
-   the LazyMotion provider - and a short-lived surface (one install), unlike the
-   run indicator above.
+/* Indeterminate progress: a segment sweeping across the track, for work that is
+   RUNNING but reports no percentage. Plain CSS - no motion runtime, so it
+   animates regardless of the LazyMotion provider.
 
-   It must MOVE. A static full-width fill was the previous behaviour here and it
-   was a lie: the progress carry-forward used to leak a completed download's 100%
-   into the next stage, so the card sat at a full bar for minutes of real work. A
-   motionless indeterminate bar would be that same claim in a new costume.
+   ONE keyframe, two directions BY DECLARATION. The host-install bars
+   (`local-host-loading`, `update-progress-bar`) run it one-way; the
+   stream-syncing strip below runs the same travel with
+   `animation-direction: alternate`, so the segment returns instead of wrapping.
+   The declaration is where the two differ - do not add a second keyframe for a
+   direction a call site can ask for.
+
+   It must MOVE. A static full-width fill was the previous behaviour on the
+   install bars and it was a lie: the progress carry-forward used to leak a
+   completed download's 100% into the next stage, so the card sat at a full bar
+   for minutes of real work. A motionless indeterminate bar would be that same
+   claim in a new costume. (Under reduced motion a full-width line IS what the
+   syncing strip falls back to - see `.stream-syncing-sweep` - but there it is
+   not a progress claim: it carries no percentage semantics and the word
+   "Syncing…" beside it is what the reader is actually reading.)
 
    `transform` only, so it composites without laying out - this runs for the whole
    multi-minute extract. */
@@ -48,6 +57,29 @@
   }
   to {
     transform: translateX(340%);
+  }
+}
+
+/* The stream-syncing strip's travelling segment. A CLASS, not the inline
+   `animation` style the two install bars use, for one reason: an inline style
+   cannot be reached by a `motion-reduce:` variant, so those two do not honour
+   reduced motion at all. This one does, below. */
+.stream-syncing-sweep {
+  animation: host-progress-indeterminate 1.4s ease-in-out infinite alternate;
+}
+
+/* The base layer's blanket reduced-motion rule collapses every animation to
+   0.01ms with one iteration, which would park this segment on its END frame -
+   translated clean off the track, so the bar would simply be missing. Travel is
+   therefore replaced by PRESENCE: a full-width line at low alpha. It reads as
+   "this strip is here", not as "finished", because the strip carries no
+   percentage and the "Syncing…" beside it is the actual claim. */
+@media (prefers-reduced-motion: reduce) {
+  .stream-syncing-sweep {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.45;
   }
 }
 

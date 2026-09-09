@@ -16,7 +16,9 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { ChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (title, rename gating).
@@ -103,6 +105,31 @@ vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
     mutate: mutateSpies.renameTerminal,
     isPending: false,
   }),
+}));
+
+// The chat SESSION is the external boundary here - this suite opens no chat
+// stream - so the hook that reads one is the seam. Everything downstream of it
+// (the gate, the suppression, the strip itself) stays real. The recorded args
+// are asserted too: reading a chat's stream off the wrong tile kind, or off a
+// tile with no host, is the failure that would make the strip describe a
+// different machine's chat.
+const chatSyncMock = vi.hoisted(() => {
+  const current: { value: ChatStreamSyncState } = {
+    value: { status: "closed", hasContent: false },
+  };
+  const calls: Array<readonly [string, string, string | null]> = [];
+  return { current, calls };
+});
+
+vi.mock("@/hooks/chats/use-chat-stream-sync-state", () => ({
+  useChatStreamSyncState: (
+    epicId: string,
+    chatId: string,
+    hostId: string | null,
+  ) => {
+    chatSyncMock.calls.push([epicId, chatId, hostId]);
+    return chatSyncMock.current.value;
+  },
 }));
 
 const SPEC_TILE: EpicCanvasTileRef = {
@@ -220,21 +247,42 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("shows the current tile title and icon", () => {
-    render(<MobileCurrentTileBar epicId="epic-1" tile={SPEC_TILE} />);
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={SPEC_TILE}
+        epicTransportStatus="open"
+        epicSnapshotLoaded
+      />,
+    );
     const bar = screen.getByTestId("mobile-current-tile-bar");
     expect(bar.textContent).toContain("Life Philosophy");
     expect(screen.getByTestId("tab-icon")).not.toBeNull();
   });
 
   it("renders the title as an editable control for a renameable kind and an editor role", () => {
-    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        epicTransportStatus="open"
+        epicSnapshotLoaded
+      />,
+    );
     expect(screen.getByTestId("mobile-current-tile-title").tagName).toBe(
       "BUTTON",
     );
   });
 
   it("commits an edited title through the rename mutation, keyed to the tile kind", async () => {
-    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        epicTransportStatus="open"
+        epicSnapshotLoaded
+      />,
+    );
     const input = openEdit();
     fireEvent.change(input, { target: { value: "New title" } });
     fireEvent.blur(input);
@@ -254,7 +302,14 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("Escape restores the previous title and does not commit", () => {
-    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        epicTransportStatus="open"
+        epicSnapshotLoaded
+      />,
+    );
     const input = openEdit();
     fireEvent.change(input, { target: { value: "Discarded" } });
     fireEvent.keyDown(input, { key: "Escape" });
@@ -265,7 +320,14 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("empty/whitespace commit does not call the mutation and keeps the previous title", () => {
-    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        epicTransportStatus="open"
+        epicSnapshotLoaded
+      />,
+    );
     const input = openEdit();
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.blur(input);
@@ -276,7 +338,14 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("renders plain text with no editable control for a non-renameable tile kind", () => {
-    render(<MobileCurrentTileBar epicId="epic-1" tile={FILE_TILE} />);
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={FILE_TILE}
+        epicTransportStatus="open"
+        epicSnapshotLoaded
+      />,
+    );
     const title = screen.getByTestId("mobile-current-tile-title");
     expect(title.tagName).toBe("SPAN");
     expect(screen.queryByTestId("mobile-current-tile-title-input")).toBeNull();
@@ -284,9 +353,129 @@ describe("<MobileCurrentTileBar />", () => {
 
   it("renders plain text for a viewer role even on a renameable kind", () => {
     holder.role = "viewer";
-    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        epicTransportStatus="open"
+        epicSnapshotLoaded
+      />,
+    );
     const title = screen.getByTestId("mobile-current-tile-title");
     expect(title.tagName).toBe("SPAN");
     expect(screen.queryByTestId("mobile-current-tile-title-input")).toBeNull();
+  });
+
+  describe("stream-syncing strip", () => {
+    beforeEach(() => {
+      chatSyncMock.current.value = { status: "closed", hasContent: false };
+      chatSyncMock.calls.length = 0;
+    });
+
+    function renderChatBar(input: {
+      readonly epicTransportStatus: StreamConnectionStatus;
+      readonly epicSnapshotLoaded: boolean;
+      readonly chat: ChatStreamSyncState;
+      readonly tile: EpicCanvasTileRef;
+    }): void {
+      chatSyncMock.current.value = input.chat;
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={input.tile}
+          epicTransportStatus={input.epicTransportStatus}
+          epicSnapshotLoaded={input.epicSnapshotLoaded}
+        />,
+      );
+    }
+
+    function chatStrip(): HTMLElement | null {
+      return screen.queryByTestId("chat-stream-syncing-bar");
+    }
+
+    it("shows the chat strip when only the chat's own stream is away", () => {
+      renderChatBar({
+        epicTransportStatus: "open",
+        epicSnapshotLoaded: true,
+        tile: CHAT_TILE,
+        chat: { status: "reconnecting", hasContent: true },
+      });
+      expect(chatStrip()?.textContent).toContain("Syncing…");
+    });
+
+    it("stays silent while the chat's stream is healthy", () => {
+      renderChatBar({
+        epicTransportStatus: "open",
+        epicSnapshotLoaded: true,
+        tile: CHAT_TILE,
+        chat: { status: "open", hasContent: true },
+      });
+      expect(chatStrip()).toBeNull();
+    });
+
+    it("stays silent on a cold chat with nothing on screen yet", () => {
+      renderChatBar({
+        epicTransportStatus: "open",
+        epicSnapshotLoaded: true,
+        tile: CHAT_TILE,
+        chat: { status: "connecting", hasContent: false },
+      });
+      expect(chatStrip()).toBeNull();
+    });
+
+    it("yields to the Epic's strip when both streams are away at once", () => {
+      // An app switch drops every stream in the same tick, so this is the
+      // ordinary case and not an edge one. Two strips saying the same thing
+      // one above the other is the failure being prevented.
+      renderChatBar({
+        epicTransportStatus: "reconnecting",
+        epicSnapshotLoaded: true,
+        tile: CHAT_TILE,
+        chat: { status: "reconnecting", hasContent: true },
+      });
+      expect(chatStrip()).toBeNull();
+    });
+
+    it("does NOT yield when the Epic's status is away but its strip is not shown", () => {
+      // Suppression keys on whether the outer strip is actually SPEAKING, not
+      // on the raw status. An Epic still cold (no snapshot) shows no strip, so
+      // deferring to it here would silence both and leave a stale transcript
+      // with nothing said about it at all.
+      renderChatBar({
+        epicTransportStatus: "reconnecting",
+        epicSnapshotLoaded: false,
+        tile: CHAT_TILE,
+        chat: { status: "reconnecting", hasContent: true },
+      });
+      expect(chatStrip()?.textContent).toContain("Syncing…");
+    });
+
+    it("never asks for a chat stream on a tile that is not a chat", () => {
+      renderChatBar({
+        epicTransportStatus: "open",
+        epicSnapshotLoaded: true,
+        tile: SPEC_TILE,
+        chat: { status: "reconnecting", hasContent: true },
+      });
+      expect(chatStrip()).toBeNull();
+      // A `null` host is what makes the hook resolve no session. Passing the
+      // spec's own id with a real host would read a DIFFERENT chat's stream if
+      // the ids ever collided.
+      expect(chatSyncMock.calls.every((call) => call[2] === null)).toBe(true);
+    });
+
+    it("reads the chat stream on the tile's OWN host, not the app's", () => {
+      renderChatBar({
+        epicTransportStatus: "open",
+        epicSnapshotLoaded: true,
+        tile: CHAT_TILE,
+        chat: { status: "open", hasContent: true },
+      });
+      expect(chatSyncMock.calls).toContainEqual([
+        "epic-1",
+        CHAT_TILE.id,
+        "host-A",
+      ]);
+    });
   });
 });

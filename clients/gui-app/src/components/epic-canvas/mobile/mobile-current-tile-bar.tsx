@@ -6,6 +6,9 @@ import {
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
+import { StreamSyncingBar } from "@/components/sync/stream-syncing-bar";
+import { isStreamSyncing } from "@/lib/sync/stream-syncing-state";
+import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import {
   tileRenameKind,
   useSwitcherRename,
@@ -19,6 +22,7 @@ import {
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   BrowserSessionTileRef,
   EpicCanvasTileRef,
@@ -27,6 +31,15 @@ import type {
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
+  /**
+   * The Epic stream's own legs, passed down rather than re-read here, so the
+   * outer strip and this bar's suppression decision are answering off ONE
+   * value. Two independent reads of the same store could disagree for a frame
+   * and paint both strips at once, which is the single thing the suppression
+   * exists to prevent.
+   */
+  readonly epicTransportStatus: StreamConnectionStatus;
+  readonly epicSnapshotLoaded: boolean;
 }
 
 /**
@@ -114,6 +127,34 @@ function MobileCurrentTileBarBody(
     },
     [rename, renameKind, tile.id],
   );
+  // A chat is the one tile kind whose own stream can be away while its content
+  // stays on screen with nothing said about it. Terminals already overlay
+  // theirs, a shell window already banners its own, and every artifact kind is
+  // served by the Epic stream the outer strip covers. `null` for the rest, so
+  // the hook is unconditional and simply resolves no session.
+  const isChat = tile.type === "chat";
+  const chatSync = useChatStreamSyncState(
+    epicId,
+    tile.id,
+    isChat && "hostId" in tile ? tile.hostId : null,
+  );
+  // ONE strip on screen at a time. On an app switch every stream is pushed to
+  // `reconnecting` in the same tick, so without this the Epic's strip and the
+  // chat's would appear together saying the same thing twice. The outer surface
+  // wins while it is speaking; when the Epic's stream returns first - which it
+  // does, the streams restore staggered - this takes over and keeps saying it
+  // until the transcript itself is current. The user therefore sees exactly one
+  // strip, from the first drop until everything on screen is fresh.
+  //
+  // The kind is re-checked here rather than left to the `null` host above. A
+  // resolver returning nothing for a non-chat tile is the mechanism, not the
+  // rule, and the rule belongs where the strip is decided: a future resolver
+  // that answered a spec id from some other table would otherwise put a chat's
+  // reconnect banner on an artifact with nothing to say.
+  const showChatStrip =
+    isChat &&
+    !isStreamSyncing(props.epicTransportStatus, props.epicSnapshotLoaded) &&
+    isStreamSyncing(chatSync.status, chatSync.hasContent);
 
   return (
     <div
@@ -140,6 +181,16 @@ function MobileCurrentTileBarBody(
         />
         <ContentMinimapButton tileInstanceId={tile.instanceId} />
       </div>
+      {/* Under the row, inside the bar's own border, so the strip reads as the
+          header's lower edge rather than as a banner floating over the tile. */}
+      {showChatStrip ? (
+        <StreamSyncingBar
+          status={chatSync.status}
+          hasContent={chatSync.hasContent}
+          surfaceLabel="Chat"
+          testId="chat-stream-syncing-bar"
+        />
+      ) : null}
     </div>
   );
 }

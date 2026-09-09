@@ -5,6 +5,7 @@ import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -14,6 +15,16 @@ import type {
 } from "@/stores/epics/canvas/types";
 
 const VIEW_TAB_ID = "view-tab-1";
+
+// The Epic session's two legs, per test. The stream-syncing strip is a pure
+// function of them, so they are the only thing its cases vary.
+const epicSession = vi.hoisted(() => {
+  const value: {
+    transportStatus: StreamConnectionStatus;
+    snapshotLoaded: boolean;
+  } = { transportStatus: "open", snapshotLoaded: true };
+  return { value };
+});
 
 // ActiveTabBody reads permission/snapshot/artifact state through epic-selectors;
 // stub them so the shared tile body mounts without a HostRuntimeProvider /
@@ -25,7 +36,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
-  useEpicSnapshotLoaded: () => true,
+  useEpicSnapshotLoaded: () => epicSession.value.snapshotLoaded,
+  useEpicHostTransportStatus: () => epicSession.value.transportStatus,
   useMaybeEpicTuiAgentHarnessId: () => null,
 }));
 
@@ -47,8 +59,25 @@ vi.mock("@/components/epic-canvas/canvas/pane-opener", () => ({
 // carrying the tile it was handed, so the view test can assert WHICH tile the
 // bar reflects without pulling the bar's host/title hooks.
 vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
-  MobileCurrentTileBar: ({ tile }: { readonly tile: EpicCanvasTileRef }) => (
-    <div data-testid="current-tile-bar" data-tile-id={tile.id} />
+  MobileCurrentTileBar: ({
+    tile,
+    epicTransportStatus,
+    epicSnapshotLoaded,
+  }: {
+    readonly tile: EpicCanvasTileRef;
+    readonly epicTransportStatus: StreamConnectionStatus;
+    readonly epicSnapshotLoaded: boolean;
+  }) => (
+    <div
+      data-testid="current-tile-bar"
+      data-tile-id={tile.id}
+      // Recorded so the view test can prove the bar is handed the SAME legs the
+      // outer strip decided on. The tile bar suppresses its own strip off these;
+      // if the view ever stopped passing them, the two strips would stack and
+      // only this attribute would say so.
+      data-epic-transport-status={epicTransportStatus}
+      data-epic-snapshot-loaded={String(epicSnapshotLoaded)}
+    />
   ),
 }));
 
@@ -224,6 +253,79 @@ describe("<MobileEpicTileView />", () => {
   afterEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    epicSession.value = { transportStatus: "open", snapshotLoaded: true };
+  });
+
+  describe("stream-syncing strip", () => {
+    function epicStrip(): HTMLElement | null {
+      return screen.queryByTestId("epic-stream-syncing-bar");
+    }
+
+    it("stays silent while the Epic's own stream is open", () => {
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(epicStrip()).toBeNull();
+    });
+
+    it("says Syncing… while the Epic's stream comes back under a painted canvas", () => {
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(epicStrip()?.textContent).toContain("Syncing…");
+      // The tile it describes is still on screen underneath, not replaced by a
+      // skeleton - that is the whole state the strip exists to narrate.
+      expect(screen.queryByTestId("tile-spec-1")).not.toBeNull();
+    });
+
+    it("stays silent on a cold open, where the skeleton already says loading", () => {
+      epicSession.value = {
+        transportStatus: "connecting",
+        snapshotLoaded: false,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(epicStrip()).toBeNull();
+    });
+
+    it("stays silent on a closed stream rather than animating forever", () => {
+      epicSession.value = { transportStatus: "closed", snapshotLoaded: true };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(epicStrip()).toBeNull();
+    });
+
+    it("hands the tile bar the same legs it decided on, so the two never stack", () => {
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      const bar = screen.getByTestId("current-tile-bar");
+      expect(bar.getAttribute("data-epic-transport-status")).toBe(
+        "reconnecting",
+      );
+      expect(bar.getAttribute("data-epic-snapshot-loaded")).toBe("true");
+    });
+
+    it("shows no strip on an empty pane, which has no content to be stale", () => {
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed({
+        root: makePane("pane-A", [], null),
+        activePaneId: "pane-A",
+        tilesByInstanceId: {},
+        sizesByGroupId: {},
+      });
+      renderView();
+      expect(screen.queryByTestId("pane-opener")).not.toBeNull();
+      expect(epicStrip()).toBeNull();
+    });
   });
 
   it("renders exactly one tile - the active pane's active tile", () => {

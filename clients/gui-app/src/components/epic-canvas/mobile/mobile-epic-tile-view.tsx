@@ -6,7 +6,12 @@ import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-cur
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
+import { StreamSyncingBar } from "@/components/sync/stream-syncing-bar";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  useEpicHostTransportStatus,
+  useEpicSnapshotLoaded,
+} from "@/lib/epic-selectors";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -50,6 +55,13 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // measured inset above is 0 even while the keyboard is up - the plugin-fed
   // native state is the only live "keyboard open" signal there.
   const nativeKeyboardOpen = useNativeKeyboardOpen();
+  // The Epic's own leg, RAW. `useEpicConnectionStatus` is a lossy blend of this
+  // and the host's cloud link (see `epic-sync-pill-state.ts`), and a cloud-only
+  // drop is not this strip's subject: the canvas, the tab list and the sidebar
+  // panels are all served by the GUI↔host stream, so that is the one whose
+  // absence makes what they are showing stale.
+  const epicTransportStatus = useEpicHostTransportStatus();
+  const epicSnapshotLoaded = useEpicSnapshotLoaded();
 
   // Non-null root with no resolvable tile = an empty pane (e.g. the user closed
   // the last tab). Desktop renders the inline `PaneOpener` for this; do the
@@ -87,7 +99,23 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           : undefined
       }
     >
-      <MobileCurrentTileBar epicId={epicId} tile={selection.ref} />
+      {/* Above the tile bar, because the Epic's stream is the OUTER surface:
+          the canvas, the tab list and every sidebar panel go stale together
+          when it drops, while the tile bar below names one tile. The tile's own
+          strip suppresses itself while this one is up (see
+          `MobileCurrentTileBar`), so the two never stack. */}
+      <StreamSyncingBar
+        status={epicTransportStatus}
+        hasContent={epicSnapshotLoaded}
+        surfaceLabel="Task"
+        testId="epic-stream-syncing-bar"
+      />
+      <MobileCurrentTileBar
+        epicId={epicId}
+        tile={selection.ref}
+        epicTransportStatus={epicTransportStatus}
+        epicSnapshotLoaded={epicSnapshotLoaded}
+      />
       <div className="relative min-h-0 flex-1">
         <TabBodySelectedContext.Provider value>
           <ActiveTabBody
