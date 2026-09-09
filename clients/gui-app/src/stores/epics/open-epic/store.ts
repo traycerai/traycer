@@ -43,9 +43,15 @@ import type {
   EpicPromotionState,
 } from "@traycer/protocol/host/epic/subscribe";
 import type {
+  ChatRecordHeadStamp,
   ChatRecordRemovalReason,
-  ChatRecordSummaryV11,
+  ChatRecordSummaryV12,
 } from "@traycer/protocol/host/epic/chat-records";
+import {
+  EMPTY_CHAT_RECORD_HEADS,
+  applyChatRecordHeadRows,
+  dropChatRecordHeadsForChat,
+} from "./chat-record-head";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
@@ -337,6 +343,33 @@ export interface OpenEpicState {
    * before the first response lands.
    */
   readonly chatRecords: ChatsSlice;
+  /**
+   * The cloud publication HEAD for each chat this session has heard about,
+   * keyed by `chatRecordKey(ownerUserId, chatId)` (see `./chat-record-head`).
+   * Chats with no publication - and every row from a host that predates
+   * `epic.listChatRecords@1.2` / `host.chatRecords.subscribe@1.3` - are
+   * absent.
+   *
+   * ## Its own plane, beside the record table rather than inside it
+   *
+   * MAIN-THREAD state, and the one record-shaped key that is NOT part of the
+   * worker's projection. The record table's ordering fact is `revision`, and
+   * its guard accepts or rejects a whole row on a strictly-exceeds test; a
+   * head advances on its own server-monotonic `publishedAt` and routinely
+   * moves at an UNCHANGED revision (a turn published, nothing renamed), which
+   * that guard correctly drops. Rather than teach the shared table - which
+   * the terminal-agent plane also uses - a second ordering fact for a field
+   * only chats have, the head is folded in here, at the two seams where both
+   * of its inputs already arrive on this thread: the `epic.listChatRecords`
+   * answer and the `host.chatRecords.subscribe` delta.
+   *
+   * Held BESIDE {@link OpenEpicState.chatRecords} rather than on
+   * `ChatProjection` for a second reason: the projection is keyed on `chatId`
+   * alone and filtered to the signed-in owner, while the head is read for a
+   * collaborator's chat too (the published-copy tile keys its cloud read on
+   * it). Read through `useEpicChatRecordHead`.
+   */
+  readonly chatRecordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
   /**
    * Whether `epic.listChatRecords` has produced an answer this session.
    * Missing rows are not deletion evidence until this is true. Transient
@@ -634,7 +667,7 @@ export interface OpenEpicState {
    * `chats` identical to the doc projection.
    */
   applyChatRecords: (
-    records: readonly ChatRecordSummaryV11[],
+    records: readonly ChatRecordSummaryV12[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -656,8 +689,10 @@ export interface OpenEpicState {
    * 20s list read.
    *
    * `upsert` is REVISION-GUARDED: `revision` is per-chat monotonic and the only
-   * ordering fact on a row, so a delta whose revision does not strictly exceed
-   * the one already held is dropped. That is what makes replayed, reordered and
+   * ordering fact on the ROW, so a delta whose revision does not strictly
+   * exceed the one already held is dropped. The row's `head` is ordered
+   * separately and lands regardless - see
+   * {@link OpenEpicState.chatRecordHeads}. That is what makes replayed, reordered and
    * duplicated frames harmless without any merge logic. `remove` carries no
    * revision and needs none - it applies unconditionally and idempotently, and
    * is remembered in {@link OpenEpicState.chatRetractions}.
@@ -1860,6 +1895,10 @@ export function createOpenEpicStore(
           // Same: its own key, so its own seed. `null` is "no arm selected
           // yet", which is what every reader already treats it as.
           installedArm: null,
+          // Not part of the worker's records projection at all - see the
+          // field's own note on why the head is a main-thread plane. Empty
+          // until a list answer or a delta carries one.
+          chatRecordHeads: EMPTY_CHAT_RECORD_HEADS,
           ingestFenceIdentity: mintedIngestFenceIdentity,
           lastFocusedArtifactId: null,
           lastFocusedThreadId: null,
@@ -1997,6 +2036,16 @@ export function createOpenEpicStore(
           },
 
           applyChatRecords: (records, issuedAtSeq) => {
+            // The head plane, folded in HERE rather than in the worker - see
+            // `OpenEpicState.chatRecordHeads`. Identity-preserving when the
+            // answer re-serves heads this session already holds, which is the
+            // 20s poll's steady state, so a quiet epic publishes nothing.
+            const heads = applyChatRecordHeadRows(
+              get().chatRecordHeads,
+              records,
+            );
+            if (heads !== get().chatRecordHeads)
+              set({ chatRecordHeads: heads });
             runtime.command({
               kind: "apply-chat-records",
               payload: { records, issuedAtSeq },
@@ -2016,6 +2065,22 @@ export function createOpenEpicStore(
             });
           },
           applyChatRecordDelta: (delta) => {
+            // The head plane's push half. An `upsert` folds its stamp in on
+            // `publishedAt`, INDEPENDENTLY of the record table's revision
+            // guard below - which is the whole point: a turn published with
+            // nothing renamed arrives at an unchanged revision, and that
+            // guard drops the row (correctly, its metadata is not newer)
+            // while the head still has to land.
+            //
+            // A `remove` drops the entry: removal is terminal and absorbing
+            // for the head exactly as it is for the row, and it is the only
+            // thing that ever retracts a stamp.
+            const held = get().chatRecordHeads;
+            const heads =
+              delta.kind === "upsert"
+                ? applyChatRecordHeadRows(held, [delta.record])
+                : dropChatRecordHeadsForChat(held, delta.chatId);
+            if (heads !== held) set({ chatRecordHeads: heads });
             runtime.command({
               kind: "apply-chat-record-delta",
               payload: { delta },

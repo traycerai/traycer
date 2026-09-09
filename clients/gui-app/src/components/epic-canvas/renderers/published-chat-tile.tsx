@@ -1,7 +1,7 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import { createStore, useStore } from "zustand";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
-import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -13,14 +13,20 @@ import {
   resolvedHostLabel,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
-import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
+import {
+  useCloudChatTranscript,
+  type CloudChatTranscriptState,
+} from "@/hooks/chats/use-cloud-chat-transcript";
 import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
+import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
 import { isCloudChatsUnsupported } from "@/lib/chats/cloud-chat-read-port";
 import {
   convertPublishedChat,
   convertReplicaChat,
   createPublishedChatSessionHandle,
+  type PublishedChatConversion,
+  type PublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
 import { ChatDeadTileBannerContainer, ChatTileSessionView } from "./chat-tile";
 import { PublishedChatNotice } from "./published-chat-notice";
@@ -28,6 +34,7 @@ import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-p
 import {
   publishedChatLockReason,
   replicaChatLockReason,
+  type PublishedCopyRefresh,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
@@ -45,6 +52,28 @@ import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
  * intentional difference is the composer, which is locked with a reason naming
  * the host, its state, and what the reader is looking at.
  *
+ * ## The copy FOLLOWS the owner's publications, in place
+ *
+ * The epic's record row for this chat carries the cloud head stamp, pushed by
+ * the host's record stream as the owner publishes (completed-turn
+ * granularity). The tile keys its cloud read on that digest
+ * (`useEpicChatRecordHead` -> `useCloudChatTranscript`), so a new publication
+ * is a new read - and the new transcript is applied INTO the store this tile
+ * already created (`applyConversion`) rather than by remounting the surface.
+ * One store per tile, for the tile's life: the surface keeps its
+ * subscriptions, its scroll and its memoized rows, and an appended turn
+ * presents as a live arrival exactly as on a live tile.
+ *
+ * While a re-read for a newer head is loading, or has failed or been refused,
+ * the previously applied transcript stays on screen and the composer's lock
+ * sentence says what is happening (`PublishedCopyRefresh`). The load gate
+ * and the refusal notice apply only BEFORE the first successful read - once
+ * a copy has been shown, nothing replaces it with a skeleton.
+ *
+ * A record row without a head (an older owner host, or a feed upsert that has
+ * not arrived) keys the read on `""` and this tile behaves exactly as it did
+ * before: one read per open.
+ *
  * ## The host binding is untouched
  *
  * The tile reads through the TAB's host client. The cloud read is a byte pipe -
@@ -58,14 +87,15 @@ import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
  *
  * A chat this host neither owns nor has ever published still syncs into the
  * epic Y.Doc through ordinary collaboration, so when the cloud read settles
- * `unpublished` - and only then, no other refusal is masked - the tile asks
- * the SAME serving host to read its own doc replica. "Unpublished" is wider
- * than its name: per `cloud-chat-reader.ts`, it also covers the server
- * declining to serve THIS viewer the row (a missing row and a not-readable
- * one answer identically by design, so the client cannot and does not try to
- * tell them apart) - the replica fallback fires in that case too, which is
- * the right behavior (a synced copy this device can read is not made wrong by
- * the cloud saying nothing), just not literally "never published".
+ * `unpublished` - and only then, no other refusal is masked, and only before
+ * any published copy has been shown - the tile asks the SAME serving host to
+ * read its own doc replica. "Unpublished" is wider than its name: per
+ * `cloud-chat-reader.ts`, it also covers the server declining to serve THIS
+ * viewer the row (a missing row and a not-readable one answer identically by
+ * design, so the client cannot and does not try to tell them apart) - the
+ * replica fallback fires in that case too, which is the right behavior (a
+ * synced copy this device can read is not made wrong by the cloud saying
+ * nothing), just not literally "never published".
  *
  * Doc messages DO carry the same content-addressed hashes a published
  * transcript's do - what a doc row lacks is a PUBLICATION to redirect a
@@ -82,6 +112,50 @@ export interface PublishedChatTileProps {
   readonly tileId: string;
   readonly isActive: boolean;
   readonly epicId: string;
+}
+
+/**
+ * The copy currently APPLIED: the one store this tile renders through, and
+ * what the footer says about what is in it - captured when a read is applied,
+ * so a later read's loading/error state cannot change the date or the
+ * fidelity line of what is still on screen.
+ */
+interface AppliedPublishedCopy {
+  readonly handle: PublishedChatSessionHandle;
+  readonly publishedAt: number | null;
+  readonly fidelityNotice: string | null;
+  readonly unreadableCount: number;
+}
+
+/**
+ * The owning host's own name when the directory knows it, the raw id when it
+ * does not. A host that has never been seen from this device is exactly the
+ * case this surface exists for, so the fallback is a real answer rather than a
+ * defensive one.
+ */
+function publishedCopyOwnerLabel(
+  ownerHostId: string,
+  hostLabel: string,
+): string {
+  return ownerHostId.length > 0 ? hostLabel : "another device";
+}
+
+/**
+ * Whether the machine that owns this chat is the one serving this copy.
+ *
+ * Read off the ref rather than probed: `hostId` is the serving host the tile is
+ * bound to for life and `ownerHostId` is the row's owner, so their equality IS
+ * the question, settled at open and stable for the tab's life (a later
+ * active-host swap cannot reach either field). Reached by the canvas
+ * substituting a copy for a chat its own connected host answered
+ * `CHAT_NOT_VISIBLE` for - see `ChatDeadTileBanner`'s `chat-not-on-this-host`,
+ * whose banner this tile's footer sits under.
+ */
+function ownerHostIsServingHost(
+  ownerHostId: string,
+  servingHostId: string,
+): boolean {
+  return ownerHostId.length > 0 && ownerHostId === servingHostId;
 }
 
 export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
@@ -112,29 +186,30 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     }),
     [node.taskId, node.chatId, node.ownerUserId],
   );
-  const state = useCloudChatTranscript({ client, identity, enabled: true });
+  // The record row's publication head - the signal a new turn was published.
+  // Keyed on the identity triple's owner AND chat, off the epic session this
+  // tile is rendered under; `null` when the row carries none, which keys the
+  // read on `""` and leaves it one read per open.
+  const recordHead = useEpicChatRecordHead(
+    props.epicId,
+    node.ownerUserId,
+    node.chatId,
+  );
+  const state = useCloudChatTranscript({
+    client,
+    identity,
+    enabled: true,
+    recordHeadSha256: recordHead?.headSha256 ?? null,
+  });
   const publishedSource = useMemo(
     () => ({ identity, client }),
     [identity, client],
   );
-  // The owning host's own name when the directory knows it, the raw id when it
-  // does not. A host that has never been seen from this device is exactly the
-  // case this surface exists for, so the id is a real fallback rather than a
-  // defensive one.
-  const ownerLabel =
-    node.ownerHostId.length > 0
-      ? ownerReachability.hostLabel
-      : "another device";
-  // Whether the machine that owns this chat is the one serving this copy.
-  // Read off the ref rather than probed: `hostId` is the serving host this
-  // tile is bound to for life and `ownerHostId` is the row's owner, so their
-  // equality IS the question, settled at open and stable for the tab's life
-  // (a later active-host swap cannot reach either field). Reached by the
-  // canvas substituting a copy for a chat its own connected host answered
-  // `CHAT_NOT_VISIBLE` for - see `ChatDeadTileBanner`'s
-  // `chat-not-on-this-host`, whose banner this footer sits under.
-  const ownerIsThisHost =
-    node.ownerHostId.length > 0 && node.ownerHostId === node.hostId;
+  const ownerLabel = publishedCopyOwnerLabel(
+    node.ownerHostId,
+    ownerReachability.hostLabel,
+  );
+  const ownerIsThisHost = ownerHostIsServingHost(node.ownerHostId, node.hostId);
   // Whether this copy is the viewer's own chat, read off the ref like the
   // owner-host equality above. A collaborator's chat swaps the lock sentence
   // (and, in the child banner, the clone copy) for the foreign-owner arm -
@@ -181,37 +256,26 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       state.kind === "ready" ? convertPublishedChat(state.presented) : null,
     [state],
   );
-  const handle = useMemo(() => {
-    if (state.kind !== "ready" || conversion === null) return null;
-    const row = state.read.chat;
-    // `ready` implies an `ok` read, and `ok` always carries the row - `chat`
-    // is null only on the `missing` outcome, which lands in the refused
-    // state. A violation falls through to the notice rather than rendering
-    // a transcript with fabricated metadata.
-    if (row === null) return null;
-    return createPublishedChatSessionHandle({
-      epicId: props.epicId,
-      chatId: node.chatId,
-      ownerUserId: node.ownerUserId,
-      title: row.title ?? node.name,
-      createdAt: row.createdAt,
-      updatedAt: row.publishedAt ?? row.metadataUpdatedAt,
-      conversion,
-    });
-  }, [
+
+  const applied = useAppliedPublishedCopy({
     state,
     conversion,
-    props.epicId,
-    node.chatId,
-    node.ownerUserId,
-    node.name,
-  ]);
+    epicId: props.epicId,
+    node,
+  });
+  const handle = applied?.handle ?? null;
 
   // The doc-replica fallback: enabled ONLY once the cloud read has settled
   // `unpublished` - every other refusal (needs-newer-app, ambiguous-identity,
-  // corrupt) keeps its own notice, unmasked.
+  // corrupt) keeps its own notice, unmasked - and only while NO published
+  // copy has been shown. A refusal that follows a shown copy (a head moved
+  // and the re-read was declined) keeps that copy and says so in the footer;
+  // it does not swap a transcript that was published moments ago for a doc
+  // replica.
   const cloudUnpublished =
-    state.kind === "refused" && state.read.outcome.kind === "unpublished";
+    handle === null &&
+    state.kind === "refused" &&
+    state.read.outcome.kind === "unpublished";
   const replicaQuery = useChatReplicaRead({
     client,
     epicId: props.epicId,
@@ -267,6 +331,12 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // and no words. Bounded and named now, against the SERVING host (the one
   // whose client is null), which is not the owner host the banner talks about.
   //
+  // Only BEFORE the first applied copy. A `ready` state whose effect has not
+  // yet applied it counts as pending too, so the frame between the read
+  // settling and the store existing shows the same gate it showed a moment
+  // earlier rather than a flash of the "no copy" notice. Once a copy is on
+  // screen, a later key's loading is the footer's business, not this gate's.
+  //
   // The replica arm folds in here rather than keeping its own spinner. Its
   // original reason survives and still holds: while the replica read is in
   // flight the "not published yet" notice below would flash for content that
@@ -275,14 +345,12 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const boundedLoad = useBoundedHostLoad({
     hostId: servingHostId,
     hostLabel: resolvedHostLabel(servingReachability),
-    // `unauthorized` is deliberately NOT pending. It is the one non-ready
-    // state that is not waiting on anything: the reads were withheld before
-    // dispatch, so no answer is in flight and no deadline can expire into
-    // useful news. Counting it here is what made an unverified session's
-    // published tile accuse the serving host of failing to answer a question
-    // nobody asked it. It falls through to `PublishedChatNotice` below.
-    pending:
-      state.kind === "loading" || (cloudUnpublished && replicaQuery.isPending),
+    pending: firstCopyPending({
+      handle,
+      state,
+      cloudUnpublished,
+      replicaPending: replicaQuery.isPending,
+    }),
   });
 
   if (boundedLoad.kind !== "ready") {
@@ -332,7 +400,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     replicaQuery,
   );
 
-  if (state.kind !== "ready" || handle === null || conversion === null) {
+  if (applied === null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
         <PublishedChatNotice
@@ -364,7 +432,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       <PublishedChatSourceProvider source={publishedSource}>
         <ChatTileSessionView
           isLiveSession={false}
-          handle={handle}
+          handle={applied.handle}
           node={{
             // The CHAT id, not the tile ref's id: inside the surface this is what
             // per-chat UI state is keyed by, and it should name the same chat the
@@ -384,9 +452,13 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             ownerIsThisHost,
             ownedByViewer,
             ownerLabel,
-            unreadableCount: conversion.unreadableCount,
-            fidelityNotice: state.fidelityNotice,
-            publishedAt: publishedCopyStamp(state.read),
+            unreadableCount: applied.unreadableCount,
+            fidelityNotice: applied.fidelityNotice,
+            // Off the copy that was APPLIED, not the current read: the
+            // reader's question is about the bytes in front of them, and a
+            // re-read in flight has not changed those yet.
+            publishedAt: applied.publishedAt,
+            refresh: publishedCopyRefresh(state),
           })}
         />
       </PublishedChatSourceProvider>
@@ -395,13 +467,142 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
 }
 
 /**
- * When the copy on screen was published, off the row the transcript read
- * returned rather than any later cloud state - the reader's question is about
- * the bytes in front of them. `null` on a row published by a build that
- * predates the stamp.
+ * ONE store per tile, created on the first `ready` read and updated in place
+ * by every later one - never rebuilt per read. The applied copy (the handle
+ * plus what the footer says about it) is held in a tile-local external store
+ * rather than React state: applying a read is a write to an external system
+ * (the session store) that has to happen in an effect, and the fact that it
+ * happened is read back through a subscription the same way the transcript
+ * itself is. A render never creates or mutates a store.
+ *
+ * Only the CURRENT key's `ready` state reaches here: `useCloudChatRead` has
+ * no placeholder data, so when the record head moves the state drops to
+ * `loading` for the new key and a result that settles for the superseded key
+ * is never observed, let alone applied. Two heads arriving while a read is in
+ * flight therefore apply exactly once, for the latest.
  */
-function publishedCopyStamp(read: CloudChatRead): number | null {
-  return read.chat?.publishedAt ?? null;
+function useAppliedPublishedCopy(input: {
+  readonly state: CloudChatTranscriptState;
+  readonly conversion: PublishedChatConversion | null;
+  readonly epicId: string;
+  readonly node: PublishedChatTileRef;
+}): AppliedPublishedCopy | null {
+  const { state, conversion, epicId, node } = input;
+  const [appliedStore] = useState(() =>
+    createStore<AppliedPublishedCopy | null>(() => null),
+  );
+  const applied = useStore(appliedStore);
+  useEffect(() => {
+    if (state.kind !== "ready" || conversion === null) return;
+    const row = state.read.chat;
+    // `ready` implies an `ok` read, and `ok` always carries the row - `chat`
+    // is null only on the `missing` outcome, which lands in the refused
+    // state. A violation falls through to the notice rather than rendering
+    // a transcript with fabricated metadata.
+    if (row === null) return;
+    const title = row.title ?? node.name;
+    const updatedAt = row.publishedAt ?? row.metadataUpdatedAt;
+    const previous = appliedStore.getState();
+    const handle =
+      previous === null
+        ? createPublishedChatSessionHandle({
+            epicId,
+            chatId: node.chatId,
+            ownerUserId: node.ownerUserId,
+            title,
+            createdAt: row.createdAt,
+            updatedAt,
+            conversion,
+          })
+        : previous.handle;
+    if (previous !== null) {
+      handle.applyConversion({ title, updatedAt, conversion });
+    }
+    appliedStore.setState({
+      handle,
+      publishedAt: row.publishedAt ?? null,
+      fidelityNotice: state.fidelityNotice,
+      unreadableCount: conversion.unreadableCount,
+    });
+  }, [
+    appliedStore,
+    state,
+    conversion,
+    epicId,
+    node.chatId,
+    node.ownerUserId,
+    node.name,
+  ]);
+  return applied;
+}
+
+/**
+ * Whether the bounded load gate is still owed - only BEFORE the first applied
+ * copy. A `ready` state whose effect has not yet applied it counts as pending
+ * too, so the frame between the read settling and the store existing shows
+ * the same gate it showed a moment earlier rather than a flash of the "no
+ * copy" notice. Once a copy is on screen, a later key's loading is the
+ * footer's business, not this gate's. The replica arm folds in for its own
+ * reason (see the call site).
+ *
+ * The final clause is an ALLOWLIST rather than a "not ready" test, and that
+ * is load-bearing for `unauthorized`. It is the one non-ready state waiting
+ * on nothing: the reads were withheld before dispatch, so no answer is in
+ * flight and no deadline can expire into useful news. Counting it would make
+ * an unverified session's published tile accuse the serving host of failing
+ * to answer a question nobody asked it; falling through here sends it to
+ * `PublishedChatNotice` instead. Any state added later is non-pending by
+ * default, which is the safe direction.
+ */
+function firstCopyPending(input: {
+  readonly handle: PublishedChatSessionHandle | null;
+  readonly state: CloudChatTranscriptState;
+  readonly cloudUnpublished: boolean;
+  readonly replicaPending: boolean;
+}): boolean {
+  if (input.cloudUnpublished && input.replicaPending) return true;
+  if (input.handle !== null) return false;
+  return input.state.kind === "loading" || input.state.kind === "ready";
+}
+
+/**
+ * The re-read's state for the footer, once a copy is on screen.
+ *
+ * `ready` is idle by definition: whatever the current key settled on is
+ * either already applied or about to be by the effect above, and a footer
+ * that said "fetching" for that frame would be describing work that is done.
+ * `unsupported` cannot follow a shown copy on the same serving host and is
+ * folded into `failed` rather than given words nobody will read.
+ *
+ * `unauthorized` is `idle` for the same reason it is not pending above: the
+ * read was withheld before dispatch, so no re-read is in flight and none
+ * failed. `loading` would describe work nobody started and `failed` would
+ * blame the host for a question it was never asked. That the copy on screen
+ * will not refresh until the session verifies is the unverified-session
+ * surface's news to deliver, not this footer's.
+ */
+function publishedCopyRefresh(
+  state: CloudChatTranscriptState,
+): PublishedCopyRefresh {
+  switch (state.kind) {
+    case "ready":
+      return { kind: "idle" };
+    case "loading":
+      return { kind: "loading" };
+    case "unauthorized":
+      return { kind: "idle" };
+    case "failed":
+    case "unsupported":
+      return { kind: "failed" };
+    case "refused": {
+      // A refused state always carries a non-`ok` outcome, so this resolves;
+      // the `null` arm exists for the type and reads as a plain failure.
+      const refusal = describeCloudChatRefusal(state.read.outcome);
+      return refusal === null
+        ? { kind: "failed" }
+        : { kind: "refused", title: refusal.title };
+    }
+  }
 }
 
 /**

@@ -108,6 +108,10 @@ describe("useCloudChatTranscript under a withheld cloud verdict", () => {
           client: fixture.client,
           identity: IDENTITY,
           enabled: true,
+          // No record head in this fixture: these cases are about whether the
+          // reads are dispatched at all, not about the head-edge refetch the
+          // digest drives.
+          recordHeadSha256: null,
         }),
       { wrapper: fixture.Wrapper },
     );
@@ -138,6 +142,10 @@ describe("useCloudChatTranscript under a withheld cloud verdict", () => {
           client: fixture.client,
           identity: IDENTITY,
           enabled: true,
+          // No record head in this fixture: these cases are about whether the
+          // reads are dispatched at all, not about the head-edge refetch the
+          // digest drives.
+          recordHeadSha256: null,
         }),
       { wrapper: fixture.Wrapper },
     );

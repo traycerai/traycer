@@ -101,13 +101,13 @@ export const roomMetadataRecordV100 = defineRecordContract({
 // schema embeds, so a copied `{ major: 1, minor: 0 }` here would let a future
 // bump register 1.1 while the payload schema and the writers stayed on 1.0.
 
-export const chatHeadRecordV130 = defineRecordContract({
+export const chatHeadRecordV140 = defineRecordContract({
   name: "chat-head",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatHeadRecordSchema,
 });
 
-export const chatShardRecordV130 = defineRecordContract({
+export const chatShardRecordV140 = defineRecordContract({
   name: "chat-shard",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatShardRecordSchema,
@@ -147,18 +147,18 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
   },
   "chat-head": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
-        3: { contract: chatHeadRecordV130, upgradeFromPreviousVersion: null },
+        4: { contract: chatHeadRecordV140, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
   },
   "chat-shard": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
-        3: { contract: chatShardRecordV130, upgradeFromPreviousVersion: null },
+        4: { contract: chatShardRecordV140, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },

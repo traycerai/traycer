@@ -1090,9 +1090,15 @@ export const HOST_METHOD_POLL_TABLE = {
   // property gained, since none of these writes anything.
   //
   // No polling. A published head changes only when its owning host publishes
-  // again, and this reader has no signal for that; an interval would spend
-  // requests on an answer that is almost always identical. A newer head is
-  // picked up by reopening.
+  // again, and the reader HAS a signal for that: the chat record row carries
+  // the cloud head stamp (`epic.listChatRecords@1.2` /
+  // `host.chatRecords.subscribe@1.3`), pushed by the record stream and
+  // repaired by that list's own 20s poll. The published-copy read keys on the
+  // record head's digest (`cloudChatQueryKeys.read`), so a new publication is
+  // a new key and re-resolves on its own; an interval here would spend
+  // requests re-learning an answer the record plane already delivered. A
+  // reader whose record row carries no head (an older owner host) is back to
+  // one read per open, picked up by reopening.
   "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
@@ -1466,6 +1472,20 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Clearing an API key removes persisted credentials.
   "providers.clearApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The per-profile pair. `fifo` for the same reason as the provider-wide pair
+  // above, and one reason more: these two write and delete the SAME cell, so a
+  // "latest wins" policy could drop a set that a later clear was meant to
+  // follow - leaving the credential the user asked to remove still stored.
+  "providers.setProfileApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.clearProfileApiKey": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

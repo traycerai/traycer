@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   queryOptions,
   useQuery,
+  useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -23,7 +24,9 @@ import {
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   cloudChatReadRefusedWithoutVerdict,
   createHostCloudChatReadPort,
@@ -260,6 +263,12 @@ export interface UseCloudChatReadArgs {
    */
   readonly identity: CloudChatIdentity | null;
   readonly enabled: boolean;
+  /**
+   * The head digest the epic's RECORD row carries for this chat
+   * (`useEpicChatRecordHead`), or `null` when it carries none. Joins the
+   * query key - see "one read per HEAD" below.
+   */
+  readonly recordHeadSha256: string | null;
 }
 
 /**
@@ -283,33 +292,39 @@ export interface UseCloudChatReadArgs {
  * what keeps a chat that is one reconnect away from readable out of the cache as
  * a permanent refusal.
  *
- * ## One read per OPEN, and none within one
+ * ## One read per HEAD, and one per open
  *
- * These two options are a pair and neither works alone.
- *
- * `staleTime: Infinity` is what makes an open dialog a point-in-time copy:
- * swapping the transcript under a reader mid-scroll would be worse than showing
- * them the copy they opened, so nothing refetches while an observer is mounted.
+ * The RECORD row's head digest is part of the key (`""` when the row has
+ * none). The epic's record table learns of a new publication from the host's
+ * record stream, at completed-turn granularity, so a new digest is a new key
+ * and the read re-resolves - with no polling anywhere: `staleTime: Infinity`
+ * still holds for each key, so a mounted observer never refetches the head it
+ * is on. The tile applies the new read into its existing store in place; a
+ * key change here is what drives that, and a superseded key's settled result
+ * never reaches the tile because the observer has already moved on.
  *
  * `gcTime: 0` is what makes "picked up by reopening" true rather than merely
- * intended. The dialog's body unmounts when it closes, so this query loses its
- * last observer and is dropped immediately; the next open finds no entry and
- * resolves the head again. WITHOUT it, `staleTime: Infinity` answers every
- * reopen out of memory - the reader opens H1, the owning device publishes H2,
- * and the reopen renders H1 having made zero requests. The incremental-read
- * property then holds in the pipeline and is unreachable from the surface built
- * for it, which is exactly the shape the mounted reopen test pins.
+ * intended for the case the digest cannot cover - a record row that carries
+ * no head (an older owner host, or a feed upsert that has not arrived). The
+ * surface unmounts when it closes, so this query loses its last observer and
+ * is dropped immediately; the next open finds no entry and resolves the head
+ * again. WITHOUT it, `staleTime: Infinity` answers every reopen out of
+ * memory - the reader opens H1, the owning device publishes H2, and the
+ * reopen renders H1 having made zero requests. It also drops a superseded
+ * key's entry the moment its observer leaves, so a burst of heads does not
+ * accumulate assembled transcripts.
  *
- * Chosen over invalidating on the dialog's open transition because it needs no
- * caller to remember: any surface that mounts this hook gets one read per mount
- * lifecycle by construction. It also avoids the double fetch an on-mount
+ * Chosen over invalidating on the surface's open transition because it needs
+ * no caller to remember: any surface that mounts this hook gets one read per
+ * mount lifecycle by construction. It also avoids the double fetch an on-mount
  * invalidation causes on a COLD open, and the stale-then-fresh flash a
  * post-render invalidation causes on a warm one.
  *
  * Dropping the assembled chat costs nothing to re-derive but the head: the
  * PARTS are content-addressed and live in a store this query does not own, so a
- * reopen after one turn fetches a head and one shard. That is measured as a
- * request count in `cloud-chat-dialog-reopen.test.tsx`, not inferred.
+ * new head after one turn fetches the head and one tail shard. That is
+ * measured as a request count in `cloud-chat-head-keyed-read.test.tsx`, not
+ * inferred.
  */
 export function useCloudChatRead(
   args: UseCloudChatReadArgs,
@@ -363,6 +378,7 @@ export function useCloudChatRead(
         hostId,
         viewerUserId,
         identity ?? { taskId: "", chatId: "", ownerUserId: "" },
+        args.recordHeadSha256 ?? "",
       ),
       queryFn: run,
       enabled:
@@ -400,7 +416,7 @@ export function useCloudChatRead(
  * already fully downloaded. Failing fast degrades to the markers this surface
  * rendered before the channel existed.
  *
- * ## The short list heals on REOPEN, and on nothing else
+ * ## The short list heals on REOPEN and on a HEAD EDGE, and on nothing else
  *
  * What `staleTime: 0` buys is exactly one thing: the next mount of this key
  * refetches rather than being served the short answer. It is not a heal for a
@@ -410,6 +426,14 @@ export function useCloudChatRead(
  * payload that lands seconds after the head keeps its "stored on the
  * originating device" marker until the surface is reopened or the key is
  * explicitly invalidated.
+ *
+ * The one explicit invalidation is the record row's head digest CHANGING
+ * under a mounted reader (`recordHeadSha256`, the same edge the head read
+ * keys on): a new publication commits its head first and its payloads after,
+ * so the list is re-asked once per edge and the markers for payloads
+ * published with the new head heal along with the transcript. It does NOT
+ * heal a payload that lands after a head with no further head - that is the
+ * payload-debt item below, unchanged.
  *
  * A bounded self-poll was evaluated to close that and REJECTED. All four
  * reasons are structural rather than matters of taste, so they are written
@@ -470,21 +494,24 @@ export function useCloudChatRead(
  * no-identity gate below are untouched by any of it (a condition policy owns
  * `retry`, which is already `false` here).
  *
- * The three facts that reading rests on - one request per mount with no
- * interval behind it, a remount that refetches, and a focus event that does
- * not - are pinned in `__tests__/cloud-chat-payload-list-healing.test.tsx`.
+ * The four facts that reading rests on - one request per mount with no
+ * interval behind it, a remount that refetches, a focus event that does not,
+ * and one refetch per head edge - are pinned in
+ * `__tests__/cloud-chat-payload-list-healing.test.tsx`.
  */
 export function useCloudChatPayloadList(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly identity: CloudChatIdentity | null;
   readonly enabled: boolean;
+  /** Same value `useCloudChatRead` keys on; a change is the heal edge. */
+  readonly recordHeadSha256: string | null;
 }): UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "epic.listCloudChatPayloads">,
   HostRpcError
 > {
   const viewerUserId = useCloudChatViewerId();
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
-  const { identity } = args;
+  const { identity, recordHeadSha256 } = args;
   // `identity` is frequently a fresh object per render at the call site, so the
   // params are memoized on its three fields rather than its reference -
   // otherwise every render would mint a new query key.
@@ -496,6 +523,40 @@ export function useCloudChatPayloadList(args: {
     }),
     [identity?.taskId, identity?.chatId, identity?.ownerUserId],
   );
+  // The head-edge heal. The digest is deliberately NOT in this query's key:
+  // the list is `staleTime: 0` already, so a key change would refetch just
+  // the same while also dropping the served answer and holding the
+  // transcript on a skeleton (presentation waits on this list settling)
+  // for the length of the round trip. Invalidating the one key instead
+  // keeps the previous answer in hand while the refetch runs, which is the
+  // same "previous copy stays rendered" contract the tile keeps for the head
+  // read. The host id comes from the SAME readiness source `useHostQuery`
+  // keys on, so the invalidation and the key cannot name different hosts.
+  //
+  // The invalidation is preceded by an explicit CANCEL because of how a query
+  // with no data yet dedupes: `invalidateQueries` only cancels-and-restarts an
+  // in-flight fetch when the query already holds data, and otherwise joins
+  // the request in flight. So a head edge arriving while the INITIAL list
+  // request is still pending would be swallowed - the old response lands,
+  // clears the invalidation, and the new head renders against an obsolete
+  // list until another edge or a reopen. Cancelling first (reverting to the
+  // pre-fetch state, so served data stays served) makes the refetch a fresh
+  // request in both cases; an idle query makes the cancel a no-op.
+  const queryClient = useQueryClient();
+  const readiness = useReactiveHostReadiness(args.client);
+  const invalidationHostId = readiness.hostId;
+  const lastHeadRef = useRef(recordHeadSha256);
+  useEffect(() => {
+    if (lastHeadRef.current === recordHeadSha256) return;
+    lastHeadRef.current = recordHeadSha256;
+    const queryKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "epic.listCloudChatPayloads"
+    >(invalidationHostId, "epic.listCloudChatPayloads", params);
+    void queryClient
+      .cancelQueries({ queryKey })
+      .then(() => queryClient.invalidateQueries({ queryKey }));
+  }, [invalidationHostId, params, queryClient, recordHeadSha256]);
   return useHostQuery<HostRpcRegistry, "epic.listCloudChatPayloads">({
     cacheKeyIdentity: [viewerUserId],
     client: args.client,
