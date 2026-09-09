@@ -1,4 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
+import { useTabRecovery } from "@/lib/tab-recovery/use-tab-recovery";
 import {
   ArrowLeftRight,
   CopyPlus,
@@ -183,6 +184,7 @@ function EpicTabMenuItems(props: {
 export function TabContextMenuContent(
   props: TabContextMenuContentProps,
 ): React.ReactNode {
+  const recovery = useTabRecovery();
   const {
     tab,
     canCloseOtherTabs,
@@ -257,6 +259,13 @@ export function TabContextMenuContent(
       >
         <X />
         Close Other Tabs
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        disabled={!recovery.available}
+        onSelect={recovery.reopen}
+      >
+        Reopen Closed Tab
       </ContextMenuItem>
     </ContextMenuContent>
   );

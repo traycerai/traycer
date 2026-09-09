@@ -1,3 +1,4 @@
+import { recoveryTiles } from "@/lib/tab-recovery/history";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-schemas";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -111,6 +112,16 @@ export function acknowledgedPlainTerminalPresentationIdsForScope(
       );
     }
   }
+  for (const { tile } of recoveryTiles().filter(
+    (entry) => entry.epicId === scope.epicId,
+  )) {
+    addAcknowledgedTerminalId(
+      terminalIds,
+      tile,
+      hostId,
+      pendingCreateTerminalIdentities,
+    );
+  }
   return terminalIds;
 }
 
@@ -141,6 +152,16 @@ function hasPlainTerminalPresentationRefs(
     }),
   );
   if (closed) return true;
+  if (
+    recoveryTiles().some(
+      ({ tile }) =>
+        tile.type === "terminal" &&
+        !isUnsupportedEpicTerminalRef(tile) &&
+        tile.hostId === hostId &&
+        tile.id === terminalId,
+    )
+  )
+    return true;
   return useLandingTerminalStore
     .getState()
     .tabs.some((tab) => tab.hostId === hostId && tab.sessionId === terminalId);

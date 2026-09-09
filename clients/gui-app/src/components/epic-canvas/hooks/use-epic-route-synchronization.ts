@@ -1,3 +1,4 @@
+import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useNavigate,
@@ -573,7 +574,9 @@ export function useEpicRouteSynchronization(
         ) {
           continue;
         }
-        closeCanvasTab(tabId, pane.id, tab.instanceId);
+        withoutTabRecovery(() =>
+          closeCanvasTab(tabId, pane.id, tab.instanceId),
+        );
       }
     }
   }, [

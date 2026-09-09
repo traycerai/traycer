@@ -1,4 +1,8 @@
 import {
+  useTabRecoveryHistory,
+  recoveryEpicIds,
+} from "@/lib/tab-recovery/history";
+import {
   useEffect,
   useMemo,
   useRef,
@@ -114,7 +118,15 @@ function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
     (state) => state.contextMetadata?.userId ?? null,
   );
   const canvasHydrationVersion = useEpicCanvasHydrationVersion();
-  const openEpicIds = useVisibleEpicIds();
+  const visibleEpicIds = useVisibleEpicIds();
+  const recoveryReady = useTabRecoveryHistory((state) => state.ready);
+  const closedEpicIds = useTabRecoveryHistory(
+    useShallow(() => recoveryEpicIds()),
+  );
+  const openEpicIds = useMemo(
+    () => [...new Set([...visibleEpicIds, ...closedEpicIds])],
+    [visibleEpicIds, closedEpicIds],
+  );
   // Three-valued on purpose (`null` = no handshake yet, `false` = known
   // absent): only `true` may license a run. `compatibility.status` cannot
   // stand in for this - it is a `host.status` probe over the released FLOOR
@@ -143,7 +155,7 @@ function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
     if (authUserId === null) return null;
     if (readiness.requestContextUserId !== authUserId) return null;
     if (methodSupport !== true) return null;
-    return `${readiness.hostId}:${authUserId}:${canvasHydrationVersion}`;
+    return `${readiness.hostId}:${authUserId}:${canvasHydrationVersion}:recovery=${recoveryReady}`;
   }, [
     authStatus,
     authUserId,
@@ -153,6 +165,7 @@ function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
     readiness.hostId,
     readiness.requestContextUserId,
     windowsHydrated,
+    recoveryReady,
   ]);
 
   return useMemo(() => {

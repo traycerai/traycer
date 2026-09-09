@@ -1,3 +1,4 @@
+import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
 import {
   memo,
   useCallback,
@@ -287,6 +288,7 @@ export const TabGroupView = memo(function TabGroupView(
       navigateNested(epicId, tabId, () =>
         prepareOpenBlankTabInPaneFocusTarget(tabId, groupId),
       );
+      requestPaneOpenerFocus(groupId);
     },
     [epicId, navigateNested, prepareOpenBlankTabInPaneFocusTarget, tabId],
   );

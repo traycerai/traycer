@@ -44,6 +44,7 @@ export const RESERVED_BROWSER_CHORDS: readonly BrowserViewReservedChord[] = [
   { token: "mod+l", command: "focusAddressBar" },
   // App-forwarded: app-level navigation that stays meaningful over a page.
   { token: "mod+k", command: null }, // app.palette.open
+  { token: "mod+shift+t", command: null }, // tab.reopen
   { token: "mod+shift+w", command: null }, // epic.close
   { token: "mod+]", command: null }, // tab.next
   { token: "mod+[", command: null }, // tab.prev

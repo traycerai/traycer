@@ -85,6 +85,7 @@ type Modules = {
   readonly store: typeof import("@/lib/composer/landing-image-store");
   readonly draft: typeof import("@/stores/home/landing-draft-store");
   readonly runtime: typeof import("@/stores/home/draft-runtime-registry");
+  readonly recovery: typeof import("@/lib/tab-recovery/history");
   readonly idb: typeof import("idb-keyval");
 };
 
@@ -119,11 +120,13 @@ async function loadModules(opts: {
   );
   const store = await import("@/lib/composer/landing-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
+  const recovery = await import("@/lib/tab-recovery/history");
   const draft = await import("@/stores/home/landing-draft-store");
   const runtime = await import("@/stores/home/draft-runtime-registry");
+  recovery.useTabRecoveryHistory.setState({ entries: [], ready: true });
   draft.useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   runtime.draftRuntimeRegistry.resetForTesting();
-  return { gc, store, draft, runtime, idb };
+  return { gc, store, draft, runtime, recovery, idb };
 }
 
 function makeDraft(
@@ -259,6 +262,44 @@ describe("landing-image-gc", () => {
     const keys = await m.store.imageHashKeys();
     expect(keys).toContain("restored-keep");
     expect(keys).not.toContain("restored-orphan");
+  });
+
+  it("keeps a recovered draft image until its recovery entry is removed", async () => {
+    const m = await loadModules({ desktop: true });
+    m.gc.markLandingEditorMounted();
+    const hash = "recovered-draft-image";
+    await m.idb.set(hash, bytesOf([13, 14, 15]), m.store.imageStore());
+
+    m.recovery.useTabRecoveryHistory.setState({
+      entries: [
+        {
+          id: "recovery-entry",
+          kind: "header",
+          bulk: false,
+          items: [
+            {
+              kind: "draft",
+              index: 0,
+              draft: makeDraft(m, {
+                id: "recovered-draft",
+                content: docWithImages(imageNode(hash, 3)),
+                lastTouchedAt: 1,
+              }),
+            },
+          ],
+        },
+      ],
+      ready: true,
+    });
+
+    await m.gc.reconcile();
+    await flush();
+    expect(await m.store.imageHashKeys()).toContain(hash);
+
+    m.recovery.removeRecoveryEntry("recovery-entry");
+    await m.gc.reconcile();
+    await flush();
+    expect(await m.store.imageHashKeys()).not.toContain(hash);
   });
 
   it("[C2] a just-pasted hash in the live editor survives a reconcile from an unrelated close", async () => {

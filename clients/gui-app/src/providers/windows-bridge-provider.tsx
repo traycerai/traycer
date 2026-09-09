@@ -1,4 +1,10 @@
 import {
+  browserCanvasHydration,
+  isBrowserCanvasHydrated,
+  subscribeBrowserCanvasHydration,
+} from "@/lib/tab-sync/browser-canvas-hydration";
+import { flushTabRecoveryHistory } from "@/lib/tab-recovery/history";
+import {
   useLayoutEffect,
   useMemo,
   useSyncExternalStore,
@@ -150,8 +156,15 @@ export function WindowsBridgeProvider(
     getCompletedHydrationRequest,
     getCompletedHydrationRequest,
   );
+  const browserHydrated = useSyncExternalStore(
+    subscribeBrowserCanvasHydration,
+    isBrowserCanvasHydrated,
+    isBrowserCanvasHydrated,
+  );
   const hasHydrated =
-    hydrationRequest === null || completedRequest === hydrationRequest;
+    hydrationRequest === null
+      ? browserHydrated
+      : completedRequest === hydrationRequest;
 
   useLayoutEffect(() => {
     if (bridge === null) return installMissingDesktopWindowsBridge();
@@ -180,12 +193,15 @@ function installMissingDesktopWindowsBridge(): () => void {
   // the draft (only in renderer memory, never reaching the IndexedDB journal).
   const flushFileEditRecovery = (): void => {
     void fileEditRuntimeRegistry.flushRecovery().catch(() => undefined);
+    void flushTabRecoveryHistory();
   };
   if (typeof window !== "undefined") {
     window.addEventListener("pagehide", flushFileEditRecovery);
     window.addEventListener("beforeunload", flushFileEditRecovery);
   }
-  queueMicrotask(() => {
+  // A browser still has an asynchronous auth-to-account-canvas handoff.
+  // Opening reconciliation before that handoff prunes/reorders persisted tabs.
+  void browserCanvasHydration.then(() => {
     trackAppOpenedOnce(false);
     markHydrated();
   });
@@ -224,6 +240,7 @@ function installDesktopWindowsBridge(
     void projectionBridge.flush().catch(() => undefined);
     void drainDesktopTabsPersistence().catch(() => undefined);
     void fileEditRuntimeRegistry.flushRecovery().catch(() => undefined);
+    void flushTabRecoveryHistory();
   };
   setDesktopEpicOwnershipBridge(bridge);
   setActiveDesktopPerWindowProjectionBridge(projectionBridge);

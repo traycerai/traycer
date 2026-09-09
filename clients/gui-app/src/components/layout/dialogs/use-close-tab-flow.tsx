@@ -1,3 +1,4 @@
+import { batchHeaderTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -73,19 +74,21 @@ export function useCloseTabFlow(): CloseTabFlow {
       const preserved = new Set(
         flattenStripItemRefs(targetItem).map((ref) => `${ref.kind}:${ref.id}`),
       );
-      for (const other of getHeaderTabs()) {
-        if (preserved.has(`${other.kind}:${other.id}`)) continue;
-        if (tabRequiresCloseConfirm(other)) {
-          skipped.push(other.name);
-          continue;
+      batchHeaderTabRecovery(() => {
+        for (const other of getHeaderTabs()) {
+          if (preserved.has(`${other.kind}:${other.id}`)) continue;
+          if (tabRequiresCloseConfirm(other)) {
+            skipped.push(other.name);
+            continue;
+          }
+          closeTab(other);
+          if (other.kind === "epic") {
+            Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+              target: "task",
+            });
+          }
         }
-        closeTab(other);
-        if (other.kind === "epic") {
-          Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
-            target: "task",
-          });
-        }
-      }
+      });
       if (skipped.length > 0) {
         const detail =
           skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;

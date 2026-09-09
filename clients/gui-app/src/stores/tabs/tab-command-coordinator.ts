@@ -1,3 +1,11 @@
+import {
+  recordClosedHeaderTab,
+  pruneRecoveryEpics,
+  withoutTabRecovery,
+  type ClosedHeaderTab,
+} from "@/lib/tab-recovery/history";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { releaseOpenEpicSessionIfUnused } from "@/lib/registries/epic-session-registry";
@@ -1294,6 +1302,89 @@ export class TabCommandCoordinator {
     );
   }
 
+  restoreClosedHeaderTabs(
+    items: readonly ClosedHeaderTab[],
+    replaceEmptyDraftId: string | null,
+  ): void {
+    if (items.length === 0) return;
+    const previousLayout = currentLayout();
+    let replacement: TabRef | null = null;
+    if (replaceEmptyDraftId !== null) {
+      const ref: TabRef = { kind: "draft", id: replaceEmptyDraftId };
+      const item = findStripItemForRef(previousLayout, ref);
+      draftRuntimeRegistry.flush(replaceEmptyDraftId);
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((candidate) => candidate.id === replaceEmptyDraftId);
+      // A standalone blank landing page is the fallback after the last tab
+      // closes. Keep deliberate split slots and drafts containing user work.
+      if (
+        item?.kind === "tab" &&
+        previousLayout.activeItemId === item.id &&
+        !isTabCloseLocked(ref) &&
+        draft !== undefined &&
+        isEmptyLandingDraftContent(draft.content)
+      )
+        replacement = ref;
+    }
+    const replacedItem =
+      replacement === null
+        ? null
+        : findStripItemForRef(previousLayout, replacement);
+    const survivingActiveItemId =
+      previousLayout.activeItemId === replacedItem?.id
+        ? null
+        : previousLayout.activeItemId;
+    const refs: TabRef[] = items.map((item) =>
+      item.kind === "epic"
+        ? { kind: "epic", id: item.tab.tabId }
+        : { kind: "draft", id: item.draft.id },
+    );
+    this.execute({
+      layout: () => {
+        let layout =
+          replacement === null
+            ? currentLayout()
+            : layoutWithRemovedRef(currentLayout(), replacement);
+        for (const item of items.toSorted((a, b) => a.index - b.index)) {
+          const ref: TabRef =
+            item.kind === "epic"
+              ? { kind: "epic", id: item.tab.tabId }
+              : { kind: "draft", id: item.draft.id };
+          layout = createLayoutItem(layout, ref);
+          const placed = findStripItemForRef(layout, ref);
+          if (placed !== null)
+            layout = reorderStripItem(layout, {
+              itemId: placed.id,
+              targetIndex: item.index,
+            });
+        }
+        return {
+          ...layout,
+          activeItemId: survivingActiveItemId ?? layout.activeItemId,
+          activationHistory: previousLayout.activationHistory,
+        };
+      },
+      reservedAdditions: refs,
+      pendingRemovals: replacement === null ? [] : [replacement],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        for (const item of items) {
+          if (item.kind === "epic")
+            useEpicCanvasStore
+              .getState()
+              .restoreTabForRecovery(item.tab, item.canvas);
+          else
+            useLandingDraftStore.getState().restoreDraftForRecovery(item.draft);
+        }
+      },
+      applyRemovals: () => {
+        if (replacement !== null)
+          withoutTabRecovery(() => this.removeSourceRef(replacement));
+      },
+    });
+  }
+
   closeRef(ref: TabRef): boolean {
     return this.closeRefAfterConfirmed(ref);
   }
@@ -1303,6 +1394,25 @@ export class TabCommandCoordinator {
     const layout = currentLayout();
     if (findStripItemForRef(layout, ref) === null) return false;
     const next = layoutWithRemovedRef(layout, ref);
+    const item = findStripItemForRef(layout, ref);
+    const index = Math.max(
+      0,
+      layout.items.findIndex((candidate) => candidate.id === item?.id),
+    );
+    let recovery: ClosedHeaderTab | null = null;
+    if (ref.kind === "draft") {
+      draftRuntimeRegistry.flush(ref.id);
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((candidate) => candidate.id === ref.id);
+      if (draft !== undefined) recovery = { kind: "draft", draft, index };
+    } else if (ref.kind === "epic") {
+      const state = useEpicCanvasStore.getState();
+      const tab = state.tabsById[ref.id];
+      const canvas = state.canvasByTabId[ref.id];
+      if (tab !== undefined && canvas !== undefined)
+        recovery = { kind: "epic", tab, canvas, index };
+    }
     this.execute({
       layout: next,
       reservedAdditions: [],
@@ -1310,12 +1420,14 @@ export class TabCommandCoordinator {
         ref.kind === "history" || ref.kind === "settings" ? [] : [ref],
       projectSourceCompatibility: true,
       applySources: () => undefined,
-      applyRemovals: () => this.removeSourceRef(ref),
+      applyRemovals: () => withoutTabRecovery(() => this.removeSourceRef(ref)),
     });
+    if (recovery !== null) recordClosedHeaderTab(recovery);
     return true;
   }
 
   handleEpicAccessLoss(epicIds: ReadonlyArray<string>): void {
+    pruneRecoveryEpics(epicIds);
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
     // Ticket 15 (decision #29): drop every durable chat-key entry under

@@ -1,3 +1,4 @@
+import { useTabRecovery } from "@/lib/tab-recovery/use-tab-recovery";
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -61,6 +62,7 @@ export interface TabStripContextMenuProps {
  * artifact and scrolls the tree to highlight it.
  */
 export function TabStripContextMenu(props: TabStripContextMenuProps) {
+  const recovery = useTabRecovery();
   const {
     groupId,
     tabId,
@@ -151,6 +153,13 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
           </ContextMenuItem>
         </>
       )}
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        disabled={!recovery.available}
+        onSelect={recovery.reopen}
+      >
+        Reopen Closed Tab
+      </ContextMenuItem>
     </ContextMenuContent>
   );
 }

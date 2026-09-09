@@ -424,3 +424,6 @@ if (catalogLeaves.size !== PERSIST_STORES.length) {
     "persist registry: two PERSIST_STORES entries share a leaf — leaves must be unique",
   );
 }
+
+export const tabRecoveryKey = (identity: string, windowId: string): string =>
+  scopedPersistKey("tab-recovery", scopeBucket(identity), windowId);

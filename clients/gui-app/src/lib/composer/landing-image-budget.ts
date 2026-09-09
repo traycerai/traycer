@@ -64,6 +64,8 @@ export function registerLandingDraftRootSource(
  */
 export interface ExtraImageRootSource {
   hashes(): ReadonlyArray<string>;
+  contents?: () => ReadonlyArray<JsonContent>;
+  releaseOldest?: () => boolean;
 }
 
 const extraRootSources: ExtraImageRootSource[] = [];
@@ -139,16 +141,15 @@ function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
   // per-image 5 MB paste cap bounds the untracked slack, so the soft budget stays
   // meaningful.
   const sizeByHash = new Map<string, number>();
-  for (const draft of drafts) {
-    for (const atom of collectImageAtoms(draft.content)) {
-      if (atom.hash === null) continue;
-      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
-    }
-  }
-  for (const content of draftRuntimeRegistry.liveContents()) {
+  const contents = [
+    ...drafts.map((draft) => draft.content),
+    ...draftRuntimeRegistry.liveContents(),
+    ...extraRootSources.flatMap((source) => source.contents?.() ?? []),
+  ];
+  for (const content of contents) {
     for (const atom of collectImageAtoms(content)) {
-      if (atom.hash === null) continue;
-      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
+      if (atom.hash !== null && !sizeByHash.has(atom.hash))
+        sizeByHash.set(atom.hash, atom.size ?? 0);
     }
   }
   let total = 0;
@@ -206,6 +207,28 @@ function showBudgetExceededToast(draftId: string | null): void {
   );
 }
 
+function projectedImageBytes(
+  candidates: ReadonlyArray<LandingImageBudgetCandidate>,
+): number {
+  const roots = landingLiveImageRootHashes();
+  const seen = new Set<string>();
+  let additional = 0;
+  for (const candidate of candidates) {
+    if (candidate.hash === null) {
+      additional += candidate.bytes;
+      continue;
+    }
+    if (
+      !roots.has(candidate.hash) &&
+      !seen.has(candidate.hash) &&
+      !inFlight.has(candidate.hash)
+    )
+      additional += candidate.bytes;
+    seen.add(candidate.hash);
+  }
+  return currentReferencedBytes() + inFlightBytes() + additional;
+}
+
 /**
  * Reserves capacity for every candidate, charged against current live usage
  * PLUS every other outstanding reservation. A candidate whose hash is already
@@ -226,6 +249,11 @@ export function reserveLandingImageBudget(
   draftId: string | null,
   candidates: ReadonlyArray<LandingImageBudgetCandidate>,
 ): LandingImageBudgetReservation | null {
+  // Retained closed drafts yield capacity before any live draft is affected.
+  while (projectedImageBytes(candidates) > LANDING_IMAGE_BUDGET_BYTES) {
+    if (!extraRootSources.some((source) => source.releaseOldest?.() === true))
+      break;
+  }
   const liveRoots = landingLiveImageRootHashes();
   const owned: Array<{ readonly key: string; readonly bytes: number }> = [];
   const seenThisCall = new Set<string>();

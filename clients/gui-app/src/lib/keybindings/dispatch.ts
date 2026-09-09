@@ -1,3 +1,5 @@
+import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
+import { reopenClosedTab } from "@/lib/tab-recovery/reopen";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -377,6 +379,10 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "epic.next": (r) => moveHeaderTabFocus(r, 1),
   "epic.prev": (r) => moveHeaderTabFocus(r, -1),
   "epic.close": (r) => closeActiveEpic(r),
+  "tab.reopen": (r) => {
+    void reopenClosedTab(r);
+    return true;
+  },
   "tab.new": (r) => openBlankTabInActiveGroup(r),
   "tab.close": (r) => closeActiveTab(r),
   "tab.close-others": (r) => closeOtherTabsInActive(r),
@@ -723,6 +729,7 @@ function openBlankTabInActiveGroup(router: KeybindingRouter): boolean {
       .getState()
       .prepareOpenBlankTabInPaneFocusTarget(tab.tabId, groupId),
   );
+  requestPaneOpenerFocus(groupId);
   return true;
 }
 

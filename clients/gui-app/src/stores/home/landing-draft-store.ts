@@ -105,6 +105,7 @@ interface LandingDraftStoreState {
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
   /** Remove a draft by id. If it was the active draft, clears `activeDraftId`;
    *  strip-neighbor navigation in the close-flow handles where the user lands. */
+  restoreDraftForRecovery: (draft: LandingDraftTab) => void;
   closeDraft: (id: string) => void;
   /** Set the active draft without creating a new one. No-op if id not found. */
   setActiveDraft: (id: string) => void;
@@ -475,6 +476,13 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         return next.id;
       },
 
+      restoreDraftForRecovery: (draft) => {
+        set((state) =>
+          state.drafts.some((item) => item.id === draft.id)
+            ? state
+            : { drafts: [...state.drafts, draft] },
+        );
+      },
       closeDraft: (id) => {
         const { drafts, activeDraftId } = get();
         const next = drafts.filter((d) => d.id !== id);

@@ -1,3 +1,6 @@
+import { markBrowserCanvasHydrated } from "@/lib/tab-sync/browser-canvas-hydration";
+import { configureTabRecoveryHistory } from "@/lib/tab-recovery/history";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { useCallback, type ReactNode } from "react";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -32,6 +35,9 @@ export function EpicCanvasPersistLifecycleBridge(
 
   const onTransition = useCallback(
     (transition: AuthIdentityTransition) => {
+      void configureTabRecoveryHistory(
+        transition.kind === "signedOut" ? null : transition.userId,
+      ).then(scheduleLandingImageReconcile);
       if (windowsBridge !== null) return;
       if (
         transition.kind === "signedIn" ||
@@ -43,6 +49,7 @@ export function EpicCanvasPersistLifecycleBridge(
           // Never the anonymous bucket: a null email must not adopt shared state into an account.
           legacyName: legacyEmail === null ? null : epicCanvasKey(legacyEmail),
         });
+        markBrowserCanvasHydrated();
         return;
       }
       // signedOut: wipe the current user's bucket and reset to anonymous.

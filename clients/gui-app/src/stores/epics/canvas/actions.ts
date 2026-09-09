@@ -80,6 +80,12 @@ function createEmptyPane(): TilePane {
   };
 }
 
+export function ensureEmptyCanvasPane(state: EpicCanvasState): EpicCanvasState {
+  if (state.root !== null) return state;
+  const root = createEmptyPane();
+  return { ...state, root, activePaneId: root.id };
+}
+
 function createPaneWithTab(
   node: EpicCanvasTileRef,
   preview: boolean,
@@ -797,12 +803,7 @@ export function openTileInPane(
   };
 }
 
-/**
- * Open a blank "New tab" in `paneId`, made active, with the pane made
- * globally active. Reuse-if-active-is-blank: when the pane's active tab is
- * already blank, just focus it (no stacking) so repeated invocations don't
- * pile up empty tabs.
- */
+/** Open the picker without adding a redundant tab to an empty pane. */
 export function openBlankTabInPane(
   state: EpicCanvasState,
   paneId: string,
@@ -810,19 +811,16 @@ export function openBlankTabInPane(
   if (state.root === null) return state;
   const target = findPaneById(state.root, paneId);
   if (target === null) return state;
-  const active = resolveActiveTabInstance(target);
-  const activeRef =
-    active === null
-      ? null
-      : (state.tilesByInstanceId[active.instanceId] ?? null);
-  if (active !== null && activeRef !== null && isBlankTileRef(activeRef)) {
+  if (target.tabInstanceIds.length === 0)
+    return state.activePaneId === paneId
+      ? state
+      : { ...state, activePaneId: paneId };
+  const blankId = target.tabInstanceIds.find(
+    (id) => state.tilesByInstanceId[id]?.type === "blank",
+  );
+  if (blankId !== undefined) {
     const root = replacePane(state.root, paneId, (pane) =>
-      pane.activeTabId === active.instanceId
-        ? recordPaneActivation(pane, active.instanceId)
-        : recordPaneActivation(
-            { ...pane, activeTabId: active.instanceId },
-            active.instanceId,
-          ),
+      recordPaneActivation(pane, blankId),
     );
     if (root === state.root && state.activePaneId === paneId) return state;
     return { ...state, root, activePaneId: paneId };
@@ -949,7 +947,11 @@ export function closeTab(
     pane.activeTabId === tabId
       ? removeTabAtIndexWithSyntheticFallback(pane, index)
       : removeTabAtIndexPruneOnly(pane, index);
-  if (removed.pane.tabInstanceIds.length > 0) {
+  // A picker tab is temporary UI; dismissing it must not close its split.
+  if (
+    removed.pane.tabInstanceIds.length > 0 ||
+    state.tilesByInstanceId[tabId]?.type === "blank"
+  ) {
     const root = replacePane(state.root, paneId, () => removed.pane);
     return {
       ...state,
@@ -1050,6 +1052,15 @@ export function closeAllTabs(
   const pane = findPaneById(state.root, paneId);
   if (pane === null) return state;
   if (pane.tabInstanceIds.length === 0) return state;
+  if (
+    pane.tabInstanceIds.every(
+      (id) => state.tilesByInstanceId[id]?.type === "blank",
+    )
+  )
+    return pane.tabInstanceIds.reduce(
+      (current, id) => closeTab(current, paneId, id),
+      state,
+    );
   return closePane(state, paneId);
 }
 

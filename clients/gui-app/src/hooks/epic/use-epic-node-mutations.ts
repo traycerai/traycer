@@ -1,3 +1,4 @@
+import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -136,6 +137,10 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
         kind: "delete-artifact",
         artifactId: variables.artifactId,
       });
+      pruneRecoveryTiles(
+        (tile, epicId) =>
+          epicId === variables.epicId && tile.id === variables.artifactId,
+      );
       Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
       return { deleted: true };
     } catch (error: unknown) {

@@ -1,3 +1,4 @@
+import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 /**
  * Garbage collection for the landing / new-epic composer's content-addressed
  * image bytes (`landing-image-store`). Reclaims IndexedDB bytes + session
@@ -137,13 +138,14 @@ export function landingDraftsReady(): boolean {
  * empty and every unreferenced byte is collected in one pass).
  */
 export async function reconcile(): Promise<void> {
-  if (!draftsReady) return;
+  if (!draftsReady || !useTabRecoveryHistory.getState().ready) return;
   // Read the persisted keys FIRST, then snapshot the roots. Both root reads are
   // synchronous, so capturing them AFTER the `await` means a paste that completed
   // DURING the IndexedDB read — writing its bytes and (per `putImage`) seeding the
   // session before that write — is reflected in `liveRoots`/`sessionKeys` and is
   // not mistaken for an orphan and deleted. [C2: the paste↔reconcile-await race]
   const stored = await imageHashKeys();
+  if (!useTabRecoveryHistory.getState().ready) return;
   const liveRoots = landingLiveImageRootHashes();
   const sessionKeys = sessionHashKeys();
   const protectedFromDelete = new Set(sessionKeys);

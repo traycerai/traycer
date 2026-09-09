@@ -1,3 +1,4 @@
+import { resetTabRecoveryHistory } from "@/lib/tab-recovery/history";
 // Destructive "wipe all gui-app persisted state" utility.
 //
 // Bridge-agnostic by design: it takes the host `clear` RPC as a parameter so it
@@ -141,6 +142,7 @@ async function deleteRendererDatabases(): Promise<boolean> {
   const enumerated = await enumeratedRendererDatabaseNames(factory);
   const names = new Set(enumerated);
   names.add(PROMPT_STASH_DB_NAME);
+  names.add(`${PERSIST_PREFIX}:tab-recovery`);
   // Best-effort per partition: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
   // real recovery and tears down every connection anyway. The bytes are
@@ -201,6 +203,8 @@ export async function clearAllPersistedStores(args: {
   } else {
     appLogger.info("[persist] host-side state clear unavailable", {});
   }
+
+  await resetTabRecoveryHistory();
 
   // Stop edit timers before deleting their journal (step 3 below). Deferred
   // until after the failure-prone host clear above: if `hostClear` rejects,
