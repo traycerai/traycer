@@ -87,6 +87,9 @@ function buildParams(closeWs: () => void) {
           order.push("bearer");
         };
       },
+      // No case in this suite exercises a verdict change; a no-op satisfies
+      // the port without a second listener to drive.
+      subscribeCloudVerdictChange: (_onChange: () => void) => () => undefined,
       // No endpoint ever moves in these assembly tests; return a no-op disposer.
       subscribeEndpointChange: () => () => undefined,
       notifyRecoveredForNamedHost,
@@ -226,6 +229,7 @@ describe("openDurableStreamTransport", () => {
       auth: AUTH,
       runnerHost: RUNNER_HOST,
       subscribeBearerRotation: () => () => undefined,
+      subscribeCloudVerdictChange: () => () => undefined,
       subscribeEndpointChange: (onChange: () => void) => {
         fireDirectoryChange = onChange;
         return () => undefined;
