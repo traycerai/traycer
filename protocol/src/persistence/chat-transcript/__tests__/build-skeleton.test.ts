@@ -18,6 +18,8 @@ import {
 import {
   recordByteLength,
   RecordFingerprintMemo,
+  type FingerprintedRecord,
+  type RecordFingerprint,
 } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   ROW_SKELETON_PREVIEW_MAX_CHARS,
@@ -1401,6 +1403,108 @@ describe("the body digest is order-sensitive", () => {
     expect(forwardEntry?.rowId).toBe(backwardEntry?.rowId);
     expect(forwardEntry?.byteLength).toBe(backwardEntry?.byteLength);
 
+    expect(forwardEntry?.bodyDigest).not.toBe(backwardEntry?.bodyDigest);
+  });
+
+  /**
+   * The pair that makes the SEPARATOR load-bearing, rather than the ordering.
+   *
+   * The test above passes with or without `CONTRIBUTION_SEPARATOR`, because two
+   * real digests taken over "hello" and "world" concatenate to different
+   * strings in either order and the lanes see different bytes either way. It
+   * pins that the combine depends on order; it cannot see WHY the delimiter is
+   * there.
+   *
+   * These two do. `finishContentFingerprint` pads only its low lane, so a
+   * digest is 8 to 14 characters, and an 8-character digest followed by a
+   * 9-character one is the same seventeen characters as the 9 followed by the
+   * 8. The FNV lanes are fed characters and a running length - nothing else -
+   * so an undelimited combine over this pair produces one digest for two
+   * different rows, and a reordered turn keeps the `bodyDigest` it had. That is
+   * the silent failure `bodyDigest` exists to prevent, manufactured by the
+   * encoding rather than by the hash.
+   *
+   * Stubbed through the memo rather than hunted for in real content: the point
+   * is the shape of the pair, and a fixture whose real digests happened to
+   * collide today would stop testing this the moment either lane's constants
+   * moved.
+   */
+  const COLLIDING_DIGESTS: ReadonlyMap<string, string> = new Map([
+    ["b-a", "11111111"],
+    ["b-b", "111111111"],
+  ]);
+
+  /** Answers the two blocks above with that pair, everything else honestly. */
+  class CollidingDigestMemo extends RecordFingerprintMemo {
+    override lookup(record: FingerprintedRecord): RecordFingerprint {
+      const honest = super.lookup(record);
+      const stubbed =
+        "blockId" in record && record.blockId !== null
+          ? COLLIDING_DIGESTS.get(record.blockId)
+          : undefined;
+      // The honest `byteLength` is kept: only the digest is under test, and a
+      // row whose size hint moved would be a different failure.
+      return stubbed === undefined
+        ? honest
+        : { digest: stubbed, byteLength: honest.byteLength };
+    }
+  }
+
+  it("separates contributions, so two digests that concatenate alike still order differently", () => {
+    const blockA: ContentBlock = {
+      blockId: "b-a",
+      status: "completed",
+      timestamp: 1,
+      type: "text",
+      text: "hello",
+      providerNotice: null,
+    };
+    const blockB: ContentBlock = {
+      blockId: "b-b",
+      status: "completed",
+      timestamp: 1,
+      type: "text",
+      text: "world",
+      providerNotice: null,
+    };
+
+    // Sanity: the pair really is the ambiguous shape - the two orders are
+    // indistinguishable once concatenated, so anything that still tells them
+    // apart is the delimiter doing it.
+    const digestA = COLLIDING_DIGESTS.get("b-a") ?? "";
+    const digestB = COLLIDING_DIGESTS.get("b-b") ?? "";
+    expect(digestA + digestB).toBe(digestB + digestA);
+
+    const forward = singleRecordTurn({
+      messageId: "m-1",
+      turnId: "t-1",
+      timestamp: 1,
+      blocks: [blockA, blockB],
+    });
+    const backward = singleRecordTurn({
+      messageId: "m-1",
+      turnId: "t-1",
+      timestamp: 1,
+      blocks: [blockB, blockA],
+    });
+
+    const [forwardEntry] = buildRowSkeleton(
+      { messages: [forward], events: [], activeTurnId: null, chatId: "chat-1" },
+      previewText,
+      new CollidingDigestMemo(),
+    );
+    const [backwardEntry] = buildRowSkeleton(
+      {
+        messages: [backward],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+      new CollidingDigestMemo(),
+    );
+
+    expect(forwardEntry?.rowId).toBe(backwardEntry?.rowId);
     expect(forwardEntry?.bodyDigest).not.toBe(backwardEntry?.bodyDigest);
   });
 });
