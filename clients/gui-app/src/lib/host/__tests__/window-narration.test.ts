@@ -59,7 +59,7 @@ function baseInput(
     // therefore a verdict rather than a vacuum, which is what the pre-serve
     // grace and the ∅ arm are both written against. The pre-discovery arm has
     // its own block.
-    discoverySettled: true,
+    discoveryConcluded: true,
     // This machine is `host-local` throughout, so a case whose target is
     // `host-local` is a LOCAL target and one that names anything else is
     // remote - the distinction the restarting-target arm turns on, and one no
@@ -402,7 +402,7 @@ describe("deriveWindowNarration", () => {
      * and Report issue, for the beat between the kernel attaching and
      * discovery answering - on every launch of the phone app.
      *
-     * These cases are what a build that IGNORED `discoverySettled` fails: the
+     * These cases are what a build that IGNORED `discoveryConcluded` fails: the
      * first two differ in nothing else.
      */
     it("is silent on ∅ while discovery has not answered", () => {
@@ -412,7 +412,7 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: null,
           leases: [],
           localHostExpected: false,
-          discoverySettled: false,
+          discoveryConcluded: false,
         }),
       );
       expect(state).toEqual({ kind: "silent" });
@@ -425,7 +425,7 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: null,
           leases: [],
           localHostExpected: false,
-          discoverySettled: true,
+          discoveryConcluded: true,
         }),
       );
       expect(state).toEqual({
@@ -447,7 +447,7 @@ describe("deriveWindowNarration", () => {
           leases: [],
           hasBeenServed: true,
           localHostExpected: false,
-          discoverySettled: false,
+          discoveryConcluded: false,
         }),
       );
       expect(state).toEqual({ kind: "silent" });
@@ -466,7 +466,7 @@ describe("deriveWindowNarration", () => {
             lease({ hostId: "host-a", status: "connecting", dead: null }),
           ],
           localHostExpected: false,
-          discoverySettled: true,
+          discoveryConcluded: true,
         }),
       );
       expect(state).toEqual({
@@ -485,7 +485,7 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: null,
           leases: [],
           localHostExpected: true,
-          discoverySettled: false,
+          discoveryConcluded: false,
         }),
       );
       expect(state).toEqual({
@@ -504,7 +504,7 @@ describe("deriveWindowNarration", () => {
           effectiveHostId: "host-a",
           leases: [lease({ hostId: "host-a", status: "ready", dead: null })],
           localHostExpected: false,
-          discoverySettled: false,
+          discoveryConcluded: false,
         }),
       );
       expect(state).toEqual({ kind: "silent" });
@@ -513,7 +513,7 @@ describe("deriveWindowNarration", () => {
           attached: true,
           effectiveHostId: "host-a",
           localHostExpected: false,
-          discoverySettled: false,
+          discoveryConcluded: false,
         }),
       ).toBe(false);
     });
@@ -530,7 +530,7 @@ describe("deriveWindowNarration", () => {
           attached: false,
           effectiveHostId: null,
           localHostExpected: false,
-          discoverySettled: false,
+          discoveryConcluded: false,
         }),
       ).toBe(false);
     });
@@ -541,7 +541,7 @@ describe("deriveWindowNarration", () => {
           attached: true,
           effectiveHostId: null,
           localHostExpected: false,
-          discoverySettled: false,
+          discoveryConcluded: false,
         }),
       ).toBe(true);
       expect(
@@ -549,7 +549,7 @@ describe("deriveWindowNarration", () => {
           attached: true,
           effectiveHostId: null,
           localHostExpected: true,
-          discoverySettled: false,
+          discoveryConcluded: false,
         }),
       ).toBe(false);
       expect(
@@ -557,7 +557,7 @@ describe("deriveWindowNarration", () => {
           attached: true,
           effectiveHostId: null,
           localHostExpected: false,
-          discoverySettled: true,
+          discoveryConcluded: true,
         }),
       ).toBe(false);
     });

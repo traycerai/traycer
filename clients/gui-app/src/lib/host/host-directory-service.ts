@@ -198,11 +198,10 @@ export class HostDirectoryService implements IHostDirectoryService {
    *
    * The two answer different questions, and a caller that wants "has anyone
    * finished asking" must not use the listing flag for it. A registry that
-   * cannot be reached at all - an offline phone - never delivers, so
-   * `hasSettledFleet()` stays false for as long as the outage lasts; a
-   * surface that WAITS on it would then wait forever, hiding the very failure
-   * it exists to report. Waiting on this instead ends the wait at the first
-   * conclusion and lets the failure be narrated.
+   * cannot be reached at all never delivers, so `hasSettledFleet()` stays false
+   * for as long as the outage lasts, and a surface that WAITS on it waits just
+   * as long. This ends the wait at the first conclusion, which is what lets the
+   * failure be narrated at all.
    *
    * `signed-out` clears it with the listing flag, for that flag's own reason:
    * the fetcher is reporting it had no bearer to ask WITH, so nothing was
@@ -216,19 +215,14 @@ export class HostDirectoryService implements IHostDirectoryService {
    *
    * Read WITH the flag by {@link hasConcludedDiscovery}, never separately,
    * because the flag alone cannot survive an account switch honestly. This
-   * service outlives the identity: nothing clears state on the switch itself,
-   * so a `true` set under account A stands until account B's first outcome
-   * commits, and for that window B would be told an attempt had concluded when
-   * nothing had asked on its behalf at all. That window is exactly when the
-   * authority has wiped its fleet, so a surface waiting on this would stop
-   * waiting at the worst possible moment.
+   * service outlives the identity and nothing clears state on the switch
+   * itself, so a `true` set under account A would otherwise stand until account
+   * B's first outcome commits - telling B an attempt had concluded when nothing
+   * had asked on its behalf, in exactly the window where the authority has
+   * wiped its fleet.
    *
-   * ⚠ Deliberately NOT applied to {@link hasObservedRemoteListing}. That flag
-   * has the same gap, its own consumers, and its own reasons; narrowing it here
-   * would change `getCardinality()` for readers this change never looked at.
-   * The scoping is added where the claim is made - this flag's contract says
-   * "under the current identity", so this is what makes that true rather than
-   * aspirational.
+   * Scoped to this flag only. {@link hasObservedRemoteListing} keeps its own
+   * identity lifecycle because `getCardinality()` reads it.
    */
   private concludedUnderIdentity: string | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
@@ -715,9 +709,8 @@ export class HostDirectoryService implements IHostDirectoryService {
    * The question a surface asks before it stands aside for a start in
    * progress, and deliberately NOT {@link hasSettledFleet}. That one is about
    * the fleet's CONTENTS, so it stays false for the whole of an outage the
-   * registry is never reached in - and a surface that waited on it would hold
-   * its silence for that entire outage, hiding the failure it exists to
-   * report. This ends the wait at the first conclusion; what happens after is
+   * registry is never reached in, and a wait gated on it lasts as long as the
+   * outage. This ends the wait at the first conclusion; what happens after is
    * the caller's own verdict to narrate.
    *
    * Like its sibling, this is for decisions a stale answer merely DELAYS. It
@@ -1099,8 +1092,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     // start-in-progress over an outage that may never end.
     // Compared THROUGH the scoping, not against the raw flag: a `true` left
     // standing by a previous account is not a conclusion this identity has
-    // seen, so the crossing it would otherwise swallow is a real one that its
-    // subscribers must hear.
+    // seen, so the crossing it would otherwise swallow is a real one.
     const concludedBefore = this.hasConcludedDiscovery();
     this.hasConcludedRemoteAttempt = true;
     this.concludedUnderIdentity = era.identity;

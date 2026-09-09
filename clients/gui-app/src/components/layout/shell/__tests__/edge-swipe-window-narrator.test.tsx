@@ -55,8 +55,8 @@ vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
 // every assertion below would pass against a document that simply never had a
 // barrier to raise. The ∅ these cases describe is the post-latch one: the fleet
 // is known and unreachable.
-vi.mock("@/hooks/host/use-host-discovery-settled", () => ({
-  useHostDiscoverySettled: () => true,
+vi.mock("@/hooks/host/use-host-discovery-concluded", () => ({
+  useHostDiscoveryConcluded: () => true,
 }));
 
 const REMOTE_HOST_ID = "remote-host";

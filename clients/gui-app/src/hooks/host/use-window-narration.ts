@@ -6,7 +6,7 @@ import {
   type WindowNarrationState,
 } from "@/lib/host/window-narration";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useHostDiscoverySettled } from "@/hooks/host/use-host-discovery-settled";
+import { useHostDiscoveryConcluded } from "@/hooks/host/use-host-discovery-concluded";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -55,7 +55,7 @@ export function useWindowNarration(): WindowNarrationState {
   // cannot say: its leases are a map over the fleet it has been given, so an
   // unanswered fleet and an empty account produce the identical empty list.
   // Subscribed rather than derived from the directory rows - see the hook.
-  const discoverySettled = useHostDiscoverySettled();
+  const discoveryConcluded = useHostDiscoveryConcluded();
 
   const servingNow =
     attached && isServingLease(findLease(leases, effectiveHostId));
@@ -85,12 +85,12 @@ export function useWindowNarration(): WindowNarrationState {
         leases,
         hasBeenServed,
         localHostExpected,
-        discoverySettled,
+        discoveryConcluded,
         localHostId,
       }),
     [
       attached,
-      discoverySettled,
+      discoveryConcluded,
       effectiveHostId,
       hasBeenServed,
       leases,

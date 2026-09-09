@@ -25,7 +25,7 @@ import {
   type HostReadinessController,
   type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
-import { useHostDiscoverySettled } from "@/hooks/host/use-host-discovery-settled";
+import { useHostDiscoveryConcluded } from "@/hooks/host/use-host-discovery-concluded";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { setMobileApp } from "@/lib/mobile-app";
@@ -241,16 +241,16 @@ function directoryUnderTest(): FakeDirectory {
   return directory;
 }
 
-describe("useHostDiscoverySettled", () => {
+describe("useHostDiscoveryConcluded", () => {
   it("is false with no binding - an absent directory is not an answer", () => {
     mocks.directory = null;
-    const { result } = renderHook(() => useHostDiscoverySettled());
+    const { result } = renderHook(() => useHostDiscoveryConcluded());
     expect(result.current).toBe(false);
   });
 
   it("re-reads the flag on every directory emit, not once at subscribe time", async () => {
     const directory = directoryUnderTest();
-    const { result } = renderHook(() => useHostDiscoverySettled());
+    const { result } = renderHook(() => useHostDiscoveryConcluded());
     expect(result.current).toBe(false);
 
     // An emit that changes nothing about settlement - the poll tick. Reading
