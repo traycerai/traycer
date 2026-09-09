@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { PlugZap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
@@ -28,45 +27,58 @@ import {
  * bound session's own ready edge; surface churn can neither flicker nor
  * postpone it (see the store's announce/escalate deadlines).
  *
- * Retry wakes exactly the session the verdict speaks for
- * (`useHostSessionWake` collapses the transport's pending backoff). The wake
- * reports no progress of its own, so the ambient spinner - the transport
- * genuinely is still redialing in both announced states - is the pending
- * signal, and the button stays enabled: a redial that fails re-arms at the
- * escalated backoff, and re-entering this same line is a normal outcome.
+ * The copy names the CONNECTION and never the machine, for two reasons that
+ * both bite: the verdict cannot distinguish this device's leg from the relay's
+ * host uplink, and a host is not necessarily a Mac - the same string would
+ * face a user whose host is a Windows or Linux box.
+ *
+ * The tone is deliberately quiet. Most interruptions this reports are a
+ * reconnect that completes in a second or two - a phone coming back from the
+ * background, a network moving under a live socket - and dressing those as a
+ * warning taught people to distrust the row rather than read it. The spinner
+ * carries "something is happening"; the words carry what it is.
+ *
+ * Retry appears only in the PROLONGED state, and it wakes exactly the session
+ * the verdict speaks for (`useHostSessionWake` collapses the transport's
+ * pending backoff). Offering it during the ordinary state would invite a tap
+ * that changes nothing: the transport is already redialing, and its first
+ * attempt has not yet failed. The wake reports no progress of its own, so the
+ * ambient spinner is the pending signal and the button stays enabled - a
+ * redial that fails re-arms at the escalated backoff, and re-entering this
+ * same line is a normal outcome.
  */
 export function SessionConnectivityStrip(): ReactNode {
   const connectivity = useHostSessionConnectivity();
   const wakeSession = useHostSessionWake();
+  const prolonged = connectivity === "interrupted-prolonged";
   if (!isAnnouncedInterruption(connectivity)) return null;
   return (
     <output
-      aria-label="Connection to Traycer Host interrupted"
+      aria-label="Connection interrupted - reconnecting"
       data-testid="session-connectivity-strip"
       data-state={connectivity}
-      className="flex w-full items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-ui-xs text-amber-950 dark:text-amber-100"
+      className="flex w-full items-center gap-2 border-b border-border bg-background px-3 py-1.5 text-ui-xs text-muted-foreground"
     >
-      <PlugZap className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1">
-        {connectivity === "interrupted-prolonged"
-          ? "Still can't connect - retrying."
-          : "Connection interrupted - reconnecting…"}
+        {prolonged ? "Still reconnecting. Retrying…" : "Reconnecting…"}
       </span>
       <AgentSpinningDots
         className="size-3"
         testId="session-connectivity-strip-spinner"
         variant={undefined}
       />
-      <Button
-        type="button"
-        size="xs"
-        variant="ghost"
-        className="text-current"
-        data-testid="session-connectivity-strip-retry"
-        onClick={wakeSession}
-      >
-        Retry now
-      </Button>
+      {prolonged ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          className="text-current"
+          data-testid="session-connectivity-strip-retry"
+          onClick={wakeSession}
+        >
+          Retry now
+        </Button>
+      ) : null}
     </output>
   );
 }
