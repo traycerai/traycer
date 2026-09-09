@@ -302,6 +302,44 @@ export const guiHarnessIdSchemaV70 = harnessIdSchema.extract([
 ]);
 export type GuiHarnessIdV70 = z.infer<typeof guiHarnessIdSchemaV70>;
 
+/**
+ * Frozen harness id set as `cli-v1.3.0` / `host-v1.3.0` shipped v8.0 - i.e.
+ * everything through Reasonix, before Antigravity.
+ *
+ * v7.0's docblock above hands v8.0 the job of tracking live growth, and that
+ * was correct while v8.0 was UNRELEASED. 1.3.0 was then cut from a branch that
+ * predates Antigravity, so the tag pinned v8.0 at these twenty ids while
+ * `main` had already widened the live enum underneath it - the shipped line
+ * and the live line disagreed with nothing in between to catch it until the
+ * released-baseline gate resolved the new tag.
+ *
+ * v9.0 owns live growth now. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema`; a v9.0 bridge drops post-v8.0 ids for older callers.
+ */
+export const guiHarnessIdSchemaV80 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+export type GuiHarnessIdV80 = z.infer<typeof guiHarnessIdSchemaV80>;
+
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
   "codex",
@@ -966,6 +1004,23 @@ export const listAgentsResponseSchemaV70 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV70),
 });
 export type ListAgentsResponseV70 = z.infer<typeof listAgentsResponseSchemaV70>;
+
+// ── Frozen protocol-v8.0 agent.list response (with Reasonix, pre-Antigravity)
+// This line IS released (`cli-v1.3.0` / `host-v1.3.0`), and was cut from a
+// branch that predates Antigravity - so it shipped the twenty-id set and is
+// frozen here as actually shipped. v9.0 carries Antigravity rows and v9→v8 …
+// v9→v1 bridges drop them for older callers. Do not add new harnesses here.
+//
+// Hand-frozen off `releasedAgentSummarySchema` for the same reason v7.0 is: a
+// field added to the live `agentSummarySchema` must not widen a released line.
+export const agentSummarySchemaV80 = releasedAgentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV80.nullable(),
+  runConfig: agentRunConfigSchema.nullable().default(null),
+});
+export const listAgentsResponseSchemaV80 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV80),
+});
+export type ListAgentsResponseV80 = z.infer<typeof listAgentsResponseSchemaV80>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

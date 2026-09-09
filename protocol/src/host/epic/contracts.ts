@@ -146,6 +146,7 @@ import {
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
+  getChatRunSettingsResponseSchemaV20,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   readChatAttachmentRequestSchema,
@@ -964,7 +965,77 @@ export const epicGetChatRunSettingsV20 = defineRpcContract({
   method: "epic.getChatRunSettings",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: getChatRunSettingsRequestSchema,
+  // Frozen at the harness id set the `1.3.0` tags shipped. v2.0 was opened to
+  // carry what v1.0 froze off and then bound the live persisted enum - the
+  // same trap one line up, one release later. v3.0 is the head line.
+  responseSchema: getChatRunSettingsResponseSchemaV20,
+});
+
+export const epicGetChatRunSettingsV30 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
   responseSchema: getChatRunSettingsResponseSchema,
+});
+
+export const epicGetChatRunSettingsUpgradeV20ToV30 = defineUpgradePath<
+  typeof epicGetChatRunSettingsV20,
+  typeof epicGetChatRunSettingsV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  // Request shape is identical; a v2.0 settings tuple is a valid v3.0 one
+  // (only the `harnessId` enum grows), so both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicGetChatRunSettingsDowngradeV30ToV20 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV30,
+  typeof epicGetChatRunSettingsV20
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Refuse rather than answering `{ settings: null }` - see the v2->v1
+    // bridge below for why that arm would be a false claim, not a degrade.
+    const parsed = getChatRunSettingsResponseSchemaV20.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const epicGetChatRunSettingsDowngradeV30ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV30,
+  typeof epicGetChatRunSettingsV10
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = getChatRunSettingsResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 export const epicGetChatRunSettingsUpgradeV10ToV20 = defineUpgradePath<
