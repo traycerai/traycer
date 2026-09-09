@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isCanonicalReleaseCandidate,
+  isCanonicalStagingVersion,
+  isHiddenFromDefaultCatalog,
   isMatchingStableRelease,
   isPreReleaseVersion,
   isSameReleaseLine,
@@ -58,6 +60,12 @@ describe("isCanonicalReleaseCandidate", () => {
 
   it("rejects a stable release - stable never follows a line implicitly", () => {
     expect(isCanonicalReleaseCandidate("2.0.0")).toBe(false);
+  });
+
+  it("does not classify a canonical staging version as an RC", () => {
+    const staging = "1.2.3-staging.4.gabcdef1";
+    expect(isCanonicalStagingVersion(staging)).toBe(true);
+    expect(isCanonicalReleaseCandidate(staging)).toBe(false);
   });
 
   it("scopes an RC to the line its core names", () => {
@@ -156,6 +164,43 @@ describe("isPreReleaseVersion", () => {
     // release and must stay in the default catalog.
     for (const version of ["2.0.0", "0.0.0", "10.20.30", "1.8.0+build.4"]) {
       expect(isPreReleaseVersion(version)).toBe(false);
+    }
+  });
+
+  it("reports a canonical staging version as a pre-release BY SHAPE", () => {
+    // The exemption moved to `isHiddenFromDefaultCatalog` and this predicate
+    // no longer carries it. A staging version IS a pre-release by shape, and
+    // an explicit `--no-include-pre-releases` is entitled to that answer;
+    // while the exemption lived here it applied to that user too, who kept
+    // receiving every `-staging.*` row alongside output reporting that
+    // pre-releases had been excluded.
+    expect(isCanonicalStagingVersion("1.2.3-staging.4.gabcdef1")).toBe(true);
+    expect(isPreReleaseVersion("1.2.3-staging.4.gabcdef1")).toBe(true);
+  });
+
+  it("keeps canonical staging versions in the DEFAULT catalog", () => {
+    // The exemption itself, now scoped to the question it belongs to: a
+    // staging client reads only the staging feeds, where every row has this
+    // shape, so hiding them would leave its unstated-default listing empty
+    // and make Desktop purge every staged staging host as yanked.
+    expect(isHiddenFromDefaultCatalog("1.2.3-staging.4.gabcdef1")).toBe(false);
+    // Every other pre-release shape is still hidden by default.
+    for (const version of ["2.0.0-rc.1", "2.0.0-beta.1", "2.0.0-nightly.3"]) {
+      expect(isHiddenFromDefaultCatalog(version)).toBe(true);
+    }
+    // ...and a stable release is never hidden by either question.
+    expect(isHiddenFromDefaultCatalog("2.0.0")).toBe(false);
+  });
+
+  it("rejects non-canonical staging versions", () => {
+    for (const version of [
+      "1.2.3-staging.04.gabcdef1",
+      "1.2.3-staging.4.gabcdef",
+      "1.2.3-staging.4.gABCDEF1",
+      "1.2.3-staging.4.gabcdef1+build.1",
+      "v1.2.3-staging.4.gabcdef1",
+    ]) {
+      expect(isCanonicalStagingVersion(version)).toBe(false);
     }
   });
 
