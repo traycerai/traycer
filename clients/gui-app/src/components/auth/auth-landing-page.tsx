@@ -1,3 +1,4 @@
+import "@/styles/auth-arrival.css";
 import { BrandMark, PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
@@ -13,7 +14,9 @@ export function AuthLandingPage() {
     // min-h-full, not min-h-svh: the standalone shell owns the viewport
     // height and reserves the Windows title-bar band above this page.
     <main className="relative isolate flex min-h-full flex-1 overflow-hidden bg-zinc-950 text-white">
-      <PhotoBloom />
+      <div className="auth-arrival-backdrop pointer-events-none absolute inset-0">
+        <PhotoBloom />
+      </div>
 
       {/* The content layer of a full-bleed surface: the backdrop above is
           meant to run under the status bar and the sensor housing, and this is
@@ -25,11 +28,23 @@ export function AuthLandingPage() {
           housing. */}
       <section className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading">
         <div className="flex w-full max-w-[min(88vw,31rem)] flex-col items-center gap-[clamp(1.2rem,2.8vh,2rem)]">
-          <BrandMark className="h-auto w-[clamp(3.75rem,8vw,5.4rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]" />
-          <h1 className="mb-2 text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-[clamp(2.25rem,5.5vw,3rem)] tracking-tight">
-            Welcome to Traycer
-          </h1>
-          <div className={cn(SIGN_IN_COLOR_VARS, SIGN_IN_LANE_CLASS)}>
+          <BrandMark className="auth-arrival-mark h-auto w-[clamp(4.5rem,18vw,6.5rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]" />
+          <div className="auth-arrival-copy flex flex-col items-center gap-5">
+            <h1 className="flex flex-col items-center gap-2 font-medium">
+              <span className="text-ui text-white/65">Welcome to</span>
+              <span className="text-[clamp(3.5rem,14vw,5rem)] leading-none tracking-[-0.055em]">
+                traycer
+              </span>
+            </h1>
+            <p className="text-ui text-white/65">Pick up where you left off.</p>
+          </div>
+          <div
+            className={cn(
+              "auth-arrival-actions",
+              SIGN_IN_COLOR_VARS,
+              SIGN_IN_LANE_CLASS,
+            )}
+          >
             <SignInButton layout="hero" />
           </div>
         </div>
