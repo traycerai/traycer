@@ -299,6 +299,37 @@ describe("hostStoreFormatRestriction over a local-file install (the CLI's local-
     ).toMatchObject({ kind: "blocked" });
   });
 
+  it("leaves a move the floor does not evaluate unrestricted, even with NEWER stores on disk", () => {
+    // The CLI exits on `target-not-older` before it reads anything, so it
+    // never sees the disk for this move. The GUI used to fall through to the
+    // survey branches anyway and demand loss consent for an upgrade that
+    // loses nothing - a live source build can still be serving after older
+    // bytes were installed, which is exactly how `onDiskMax` outruns both
+    // versions.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0-rc.4",
+          publishedFormats: { chatDb: 9 },
+          runningVersion: "1.3.0-rc.1",
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: 10,
+              epicCount: 1,
+              survey: "complete",
+            },
+          },
+          install: {
+            source: "registry",
+            version: "1.3.0-rc.1",
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("judges a registry install exactly as before: an upgrade is not evaluated at all", () => {
     expect(
       hostStoreFormatRestriction(
