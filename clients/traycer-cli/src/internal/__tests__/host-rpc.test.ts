@@ -27,6 +27,7 @@ import type { ZodType } from "zod";
 import {
   agentGetProviderProfileRateLimitsResponseSchema,
   agentGetProviderProfileRateLimitsResponseSchemaV5,
+  agentGetProviderProfileRateLimitsResponseSchemaV6,
 } from "@traycer/protocol/host/agent/profiles";
 import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -451,9 +452,18 @@ describe("canonicalResponseSchemaFor", () => {
     expect(canonicalResponseSchemaFor("terminal.list")).toBe(
       listTerminalsResponseSchemaV23,
     );
+    // v6.0, not v5.0: `cli-v1.3.0` shipped the v5.0 line, so
+    // traycerai/traycer#1808 froze it against `providerRateLimitsSchemaV80`
+    // and opened v6.0 over the live union. This pin moving is the intended
+    // consequence of a freeze - what must NOT happen is the call site staying
+    // on v5.0 while this pin moves, which is why the two are asserted apart.
     expect(
       canonicalResponseSchemaFor("agent.getProviderProfileRateLimits"),
-    ).toBe(agentGetProviderProfileRateLimitsResponseSchemaV5);
+    ).toBe(agentGetProviderProfileRateLimitsResponseSchemaV6);
+    // And the line the release froze is now demonstrably NOT canonical.
+    expect(
+      canonicalResponseSchemaFor("agent.getProviderProfileRateLimits"),
+    ).not.toBe(agentGetProviderProfileRateLimitsResponseSchemaV5);
   });
 });
 
@@ -465,20 +475,30 @@ describe("parseCanonicalHostResponse", () => {
     };
     const parsed = parseCanonicalHostResponse(
       "agent.getProviderProfileRateLimits",
-      agentGetProviderProfileRateLimitsResponseSchemaV5,
+      agentGetProviderProfileRateLimitsResponseSchemaV6,
       value,
     );
     expect(parsed).toEqual(value);
   });
 
-  // This is the one case the type system cannot catch: `...Schema` (no
-  // version suffix) is the LIVE-line alias, redefined onto each new major as
-  // the previous one freezes. It is STRUCTURALLY IDENTICAL to `...SchemaV5`
-  // today, so it satisfies `ZodType<ResponseOfMethod<...>>` and compiles at
-  // the call site - but it is a DIFFERENT object, free to stop tracking
-  // canonical the moment a v6 line ships. Only the runtime identity check in
-  // `assertCanonicalResponseSchema` catches that drift; a type-level
-  // assertion would pass this call unchanged.
+  // This is the one case the type system cannot catch: `...Schema` (no version
+  // suffix) ranges over the same live `providerRateLimitsSchema` as the head
+  // `...SchemaV6`, so it is STRUCTURALLY IDENTICAL to canonical, satisfies
+  // `ZodType<ResponseOfMethod<...>>`, and compiles at any call site - while
+  // being a DIFFERENT object that is canonical for nothing.
+  //
+  // That is precisely the drift a freeze creates, and it is not hypothetical:
+  // `cli-v1.3.0` froze the v5.0 line and the call site in
+  // `agent-profile-rate-limits.ts` was still pinned to `...SchemaV5`, which
+  // would have strict-decoded a v6.0 response and silently dropped
+  // `antigravity`. Only the runtime identity check in
+  // `assertCanonicalResponseSchema` catches it; a type-level assertion passes
+  // both the stale pin and this call unchanged.
+  //
+  // Keeping the base alias distinct from the head is therefore deliberate -
+  // it is this test's only falsifying fixture. If a future change collapses
+  // them, this test has nothing left to prove and must be given a fresh
+  // structurally-identical object rather than deleted.
   it("throws when handed a schema that is structurally identical to canonical but not the same object (the runtime backstop)", () => {
     const value = {
       rateLimits: { provider: "codex", available: false, reason: "timeout" },

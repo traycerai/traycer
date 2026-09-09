@@ -203,6 +203,43 @@ export const providerIdSchemaV70 = z.enum([
 ]);
 export type ProviderIdV70 = z.infer<typeof providerIdSchemaV70>;
 
+/**
+ * Frozen provider id set as `cli-v1.3.0` / `host-v1.3.0` shipped v8.0 - i.e.
+ * everything before Antigravity.
+ *
+ * v8.0's docblock above says v8.0 "owns live catalog growth". That was true
+ * only while v8.0 was UNRELEASED: 1.3.0 was cut from a branch that predates
+ * Antigravity, so the tag froze v8.0 at these twenty ids while `main` had
+ * already widened the live enum underneath it. v9.0 now owns live growth, and
+ * a v9->v8 bridge drops post-v8.0 ids for the peers that shipped with them.
+ *
+ * Do NOT add new providers here - extend the latest `providerIdSchema` and use
+ * the existing version bridges instead.
+ */
+export const providerIdSchemaV80 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+export type ProviderIdV80 = z.infer<typeof providerIdSchemaV80>;
+
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   "claude-code": "Claude Code",
@@ -2037,6 +2074,111 @@ export type ProvidersListResponseV70 = z.infer<
   typeof providersListResponseSchemaV70
 >;
 
+// ── Frozen protocol-v8.0 provider state + list response ────────────────────
+//
+// v8.0 shipped in `cli-v1.3.0` / `host-v1.3.0` and bound the LIVE schema on
+// the (then true) reading that it was the unreleased head line. Two things
+// reached it afterwards and both are host→client:
+//
+//   - `antigravity`, on `providerId` and on `managedVersions`'
+//     `sharedWithProviders` array;
+//   - `profiles[].apiKey`, added by the per-profile API-key work, which the
+//     release branch predates.
+//
+// The key set is hand-listed off `providerCliStateBaseShapeV70` (identical to
+// the live shape's keys at this cut) rather than spread from the live shape,
+// for the reason `providerCliStateBaseShapeV20`'s comment gives: a released
+// line must not absorb a field the live shape grows later.
+const providerManagedVersionsSchemaV80 = z.object({
+  autoDownload: z.boolean(),
+  pinnedVersion: z.string().nullable(),
+  updateAvailable: z.object({ version: z.string() }).nullable(),
+  // The one leaf that differs from live - same reasoning as
+  // `providerManagedVersionsSchemaV70`: this is a host→client `providerId`
+  // enum, and leaving it live let Antigravity reach a released wire.
+  sharedWithProviders: z.array(providerIdSchemaV80).catch([]),
+  totalSizeBytes: z.number().int().nonnegative().nullable(),
+  available: z.array(providerPackVersionSchema),
+});
+
+/**
+ * Frozen `providers.list@8.0` profile row: the live profile as 1.3.0 shipped
+ * it, i.e. WITHOUT `apiKey`.
+ *
+ * `apiKey` is `.catch(null).optional()`, so a v8.0 client tolerates its
+ * presence at parse time - but tolerance is not a versioning mechanism, and
+ * the gate scores an added host→client property on a released line breaking
+ * for the reason the finding states: a released peer never sends the key, so a
+ * consumer that assumes it is populated reads `undefined`. `launchCommand`
+ * stays, because it DID ship in 1.3.0.
+ */
+export const providerProfileSchemaV80 = z.object({
+  ...providerProfileShapeV70,
+  enabled: z.boolean().default(true).catch(true),
+  launchCommand: z
+    .object({
+      command: z.string(),
+      shell: z.enum(["posix", "powershell"]),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
+});
+export type ProviderProfileV80 = z.infer<typeof providerProfileSchemaV80>;
+
+const providerCliStateBaseShapeV80 = {
+  enabled: z.boolean(),
+  disabledBy: providerDisabledBySchema.nullable(),
+  selected: providerSelectionSchema,
+  candidates: z.array(providerCliCandidateSchema),
+  authPending: z.boolean(),
+  checkedAt: z.number().nullable(),
+  apiKey: providerApiKeyStateSchema,
+  terminalAgentArgs: z.string().catch(""),
+  envOverrides: z.array(providerEnvOverrideSchema).catch([]),
+  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  availabilityPending: z.boolean().catch(false),
+  profiles: z.array(providerProfileSchemaV80).catch([]),
+  managedInstallState: providerManagedInstallStateSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  versionVisibility: providerVersionVisibilitySchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  advisory: providerAdvisorySchema.nullable().catch(null).optional(),
+  cliBinaryResolved: z.boolean().catch(true).optional(),
+  packId: z.string().nullable().catch(null).optional(),
+  managedVersions: providerManagedVersionsSchemaV80
+    .nullable()
+    .catch(null)
+    .optional(),
+  managedVersionsUnavailable: providerManagedVersionsUnavailableSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  nextRunBinary: providerNextRunBinarySchema.nullable().catch(null).optional(),
+};
+
+export const providerCliStateSchemaV80 = z.object({
+  providerId: providerIdSchemaV80,
+  ...providerCliStateBaseShapeV80,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+  nativeCapabilities: providerNativeCapabilitiesSchema.catch(
+    DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  ),
+});
+export type ProviderCliStateV80 = z.infer<typeof providerCliStateSchemaV80>;
+
+export const providersListResponseSchemaV80 = z.object({
+  providers: z.array(providerCliStateSchemaV80),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV80 = z.infer<
+  typeof providersListResponseSchemaV80
+>;
+
 // THERE IS NO `providers.list@7.1`. One was opened for the auth-aware
 // enablement pair (`enablementMode` / `enablementSource`) and removed with
 // them, before either reached a tag: those two optional fields were the
@@ -3721,6 +3863,26 @@ export function downgradeProviderCliStateListToV70(
     const current = parseProviderStateWithEnabledProfiles(state);
     if (current === null) return [];
     const parsed = providerCliStateSchemaV70.safeParse(current);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
+ * Drop post-v8.0 providers (currently `antigravity`) for an already-shipped
+ * v8.0 client, and strip `profiles[].apiKey`, which the frozen v8.0 profile
+ * does not model.
+ *
+ * Both fall out of the same reparse: `providerCliStateSchemaV80` is a plain
+ * (non-strict) object, so the added key is stripped, while an id outside the
+ * frozen enum fails the parse and the row is dropped. No `enabledProfilesOnly`
+ * pre-pass, unlike the v7.0 helper - v8.0 is the line that introduced
+ * `profiles[].enabled`, so it can carry a disabled row itself.
+ */
+export function downgradeProviderCliStateListToV80(
+  states: readonly unknown[],
+): ProviderCliStateV80[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV80.safeParse(state);
     return parsed.success ? [parsed.data] : [];
   });
 }

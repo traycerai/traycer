@@ -1,7 +1,7 @@
 import { formatAgentProviderProfileRateLimitsResponse } from "@traycer/protocol/agent/agent-profile-format";
 import {
   agentGetProviderProfileRateLimitsRequestSchema,
-  agentGetProviderProfileRateLimitsResponseSchemaV5,
+  agentGetProviderProfileRateLimitsResponseSchemaV6,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   callHostRpc,
@@ -44,14 +44,21 @@ export function buildAgentProfileRateLimitsCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.getProviderProfileRateLimits", request),
     );
-    // The explicit v5.0 schema, not the base `...ResponseSchema` name this
-    // used to read. That name is the LIVE line's alias: identical to v5.0
-    // today, but it is redefined onto each new major as the previous one is
-    // frozen, so it only tracks canonical by coincidence of timing. Naming the
-    // version pins the contract and lets `parseCanonicalHostResponse` prove it.
+    // The explicit v6.0 schema, not the base `...ResponseSchema` name this
+    // used to read. That name is a structurally identical but DISTINCT object
+    // that is canonical for nothing, so naming the version pins the contract
+    // and lets `parseCanonicalHostResponse` prove it.
+    //
+    // This was `...V5` until `cli-v1.3.0` shipped the v5.0 line and froze it
+    // (traycerai/traycer#1808). The CLI negotiates the HEAD contract at
+    // handshake, so it has to parse against the head: pinned at the frozen
+    // v5.0 it would have strict-decoded a v6.0 response and silently dropped
+    // `antigravity` from a rate-limit read. `assertCanonicalResponseSchema` is
+    // what turned that into a red CI job instead of a wrong answer. Move this
+    // to `...V7` the same day a tag ships v6.0.
     const response = parseCanonicalHostResponse(
       "agent.getProviderProfileRateLimits",
-      agentGetProviderProfileRateLimitsResponseSchemaV5,
+      agentGetProviderProfileRateLimitsResponseSchemaV6,
       result,
     );
     return {

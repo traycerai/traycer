@@ -32,6 +32,7 @@ import {
   listAgentsResponseSchemaV50,
   listAgentsResponseSchemaV60,
   listAgentsResponseSchemaV70,
+  listAgentsResponseSchemaV80,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
@@ -39,6 +40,7 @@ import {
   agentSummarySchemaV50,
   agentSummarySchemaV60,
   agentSummarySchemaV70,
+  agentSummarySchemaV80,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
@@ -855,7 +857,10 @@ export const agentListV80 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 8, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  responseSchema: listAgentsResponseSchema,
+  // Frozen: `cli-v1.3.0` / `host-v1.3.0` shipped this line without Antigravity
+  // (the release branch was cut before the id landed), so it must serve the
+  // twenty-id row those peers negotiate. v9.0 is the head line.
+  responseSchema: listAgentsResponseSchemaV80,
 });
 
 export const agentListUpgradeV7ToV8 = defineUpgradePath<
@@ -994,6 +999,172 @@ export const agentListDowngradeV8ToV1 = defineDowngradePath<
   typeof agentListV10
 >({
   from: { major: 8, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV10.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV10.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+// ── Major 9: the head line, where Antigravity agents ride ──────────────────
+export const agentListV90 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 9, minor: 0 } as const,
+  requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchema,
+});
+
+export const agentListUpgradeV8ToV9 = defineUpgradePath<
+  typeof agentListV80,
+  typeof agentListV90
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 9, minor: 0 },
+  // The request shape is identical, and a v8.0 response without Antigravity
+  // agents is a valid v9.0 response (purely additive) - both are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListDowngradeV9ToV8 = defineDowngradePath<
+  typeof agentListV90,
+  typeof agentListV80
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 8, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Antigravity agents so an already-shipped v8.0 client's strict decode
+  // never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV80.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV80.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV9ToV7 = defineDowngradePath<
+  typeof agentListV90,
+  typeof agentListV70
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 7, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV70.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV70.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV9ToV6 = defineDowngradePath<
+  typeof agentListV90,
+  typeof agentListV60
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV60.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV60.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV9ToV5 = defineDowngradePath<
+  typeof agentListV90,
+  typeof agentListV50
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV50.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV50.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV9ToV4 = defineDowngradePath<
+  typeof agentListV90,
+  typeof agentListV40
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV40.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV40.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV9ToV3 = defineDowngradePath<
+  typeof agentListV90,
+  typeof agentListV30
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV30.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV30.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV9ToV2 = defineDowngradePath<
+  typeof agentListV90,
+  typeof agentListV20
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV20.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV20.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV9ToV1 = defineDowngradePath<
+  typeof agentListV90,
+  typeof agentListV10
+>({
+  from: { major: 9, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({

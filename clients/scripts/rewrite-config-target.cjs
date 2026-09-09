@@ -17,7 +17,7 @@
  *
  * Per-module scripts call `runConfigTargetCli({ sourcePath, stringFields,
  * nullableStringFields, arrayFields })`:
- *   - stringFields: { field: { dev, production } } - string literals.
+ *   - stringFields: { field: { dev, staging, production } } - string literals.
  *   - nullableStringFields: same shape, but values may be null and source
  *     fields must be declared as `value: null as string | null` or
  *     `value: "..." as string | null`.
@@ -30,7 +30,7 @@
 
 const fs = require("node:fs");
 
-const VALID_TARGETS = ["dev", "production"];
+const VALID_TARGETS = ["dev", "staging", "production"];
 const PREFIX = "[set-deploy-target]";
 // The source default + the value `--restore` writes back. Must match the
 // `version` literal committed in each module's `config.ts` so a build's
@@ -41,7 +41,7 @@ const PREFIX = "[set-deploy-target]";
 const DEV_VERSION_SENTINEL = "0.0.0-dev";
 
 function rewriteEnvironment(source, target, sourcePath) {
-  const re = /(\benvironment:\s*")(?:dev|production)(")/;
+  const re = /(\benvironment:\s*")(?:dev|staging|production)(")/;
   if (!re.test(source)) {
     console.error(
       `${PREFIX} could not find 'environment' literal in ${sourcePath}`,

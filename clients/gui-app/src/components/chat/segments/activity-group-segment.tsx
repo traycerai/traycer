@@ -1,3 +1,4 @@
+import { AutonomousResumeSegment } from "./autonomous-resume-segment";
 import { Box, ChevronRight } from "lucide-react";
 import {
   useCallback,
@@ -384,6 +385,10 @@ function ActivityChildRow(props: ActivityChildRowProps) {
     segment.id,
   );
   switch (segment.kind) {
+    case "autonomous_resume":
+      return (
+        <AutonomousResumeSegment triggers={segment.triggers} variant="row" />
+      );
     case "tool":
       return (
         <ToolSegment

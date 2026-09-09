@@ -52,6 +52,14 @@ import {
   agentListDowngradeV8ToV5,
   agentListDowngradeV8ToV6,
   agentListDowngradeV8ToV7,
+  agentListDowngradeV9ToV1,
+  agentListDowngradeV9ToV2,
+  agentListDowngradeV9ToV3,
+  agentListDowngradeV9ToV4,
+  agentListDowngradeV9ToV5,
+  agentListDowngradeV9ToV6,
+  agentListDowngradeV9ToV7,
+  agentListDowngradeV9ToV8,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
   agentListUpgradeV3ToV4,
@@ -59,6 +67,7 @@ import {
   agentListUpgradeV5ToV6,
   agentListUpgradeV6ToV7,
   agentListUpgradeV7ToV8,
+  agentListUpgradeV8ToV9,
   agentListV10,
   agentListV20,
   agentListV30,
@@ -67,6 +76,7 @@ import {
   agentListV60,
   agentListV70,
   agentListV80,
+  agentListV90,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -87,15 +97,22 @@ import {
   agentConfigureDowngradeV50ToV20,
   agentConfigureDowngradeV50ToV30,
   agentConfigureDowngradeV50ToV40,
+  agentConfigureDowngradeV60ToV10,
+  agentConfigureDowngradeV60ToV20,
+  agentConfigureDowngradeV60ToV30,
+  agentConfigureDowngradeV60ToV40,
+  agentConfigureDowngradeV60ToV50,
   agentConfigureV10,
   agentConfigureV20,
   agentConfigureV30,
   agentConfigureV40,
   agentConfigureV50,
+  agentConfigureV60,
   agentConfigureUpgradeV10ToV20,
   agentConfigureUpgradeV20ToV30,
   agentConfigureUpgradeV30ToV40,
   agentConfigureUpgradeV40ToV50,
+  agentConfigureUpgradeV50ToV60,
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV20,
@@ -106,15 +123,22 @@ import {
   agentGetProviderProfileRateLimitsDowngradeV50ToV20,
   agentGetProviderProfileRateLimitsDowngradeV50ToV30,
   agentGetProviderProfileRateLimitsDowngradeV50ToV40,
+  agentGetProviderProfileRateLimitsDowngradeV60ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV60ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV60ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV60ToV40,
+  agentGetProviderProfileRateLimitsDowngradeV60ToV50,
   agentGetProviderProfileRateLimitsV10,
   agentGetProviderProfileRateLimitsV20,
   agentGetProviderProfileRateLimitsV30,
   agentGetProviderProfileRateLimitsV40,
   agentGetProviderProfileRateLimitsV50,
+  agentGetProviderProfileRateLimitsV60,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsUpgradeV30ToV40,
   agentGetProviderProfileRateLimitsUpgradeV40ToV50,
+  agentGetProviderProfileRateLimitsUpgradeV50ToV60,
   agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesDowngradeV30ToV10,
   agentListProviderProfilesDowngradeV30ToV20,
@@ -125,15 +149,22 @@ import {
   agentListProviderProfilesDowngradeV50ToV20,
   agentListProviderProfilesDowngradeV50ToV30,
   agentListProviderProfilesDowngradeV50ToV40,
+  agentListProviderProfilesDowngradeV60ToV10,
+  agentListProviderProfilesDowngradeV60ToV20,
+  agentListProviderProfilesDowngradeV60ToV30,
+  agentListProviderProfilesDowngradeV60ToV40,
+  agentListProviderProfilesDowngradeV60ToV50,
   agentListProviderProfilesV10,
   agentListProviderProfilesV20,
   agentListProviderProfilesV30,
   agentListProviderProfilesV40,
   agentListProviderProfilesV50,
+  agentListProviderProfilesV60,
   agentListProviderProfilesUpgradeV10ToV20,
   agentListProviderProfilesUpgradeV20ToV30,
   agentListProviderProfilesUpgradeV30ToV40,
   agentListProviderProfilesUpgradeV40ToV50,
+  agentListProviderProfilesUpgradeV50ToV60,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxAckV10,
@@ -190,6 +221,14 @@ import {
   agentGuiListHarnessesDowngradeV8ToV5,
   agentGuiListHarnessesDowngradeV8ToV6,
   agentGuiListHarnessesDowngradeV8ToV7,
+  agentGuiListHarnessesDowngradeV9ToV1,
+  agentGuiListHarnessesDowngradeV9ToV2,
+  agentGuiListHarnessesDowngradeV9ToV3,
+  agentGuiListHarnessesDowngradeV9ToV4,
+  agentGuiListHarnessesDowngradeV9ToV5,
+  agentGuiListHarnessesDowngradeV9ToV6,
+  agentGuiListHarnessesDowngradeV9ToV7,
+  agentGuiListHarnessesDowngradeV9ToV8,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
@@ -199,6 +238,7 @@ import {
   agentGuiListHarnessesUpgradeV6ToV7,
   agentGuiListHarnessesUpgradeV70ToV71,
   agentGuiListHarnessesUpgradeV71ToV80,
+  agentGuiListHarnessesUpgradeV80ToV90,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
@@ -209,6 +249,7 @@ import {
   agentGuiListHarnessesV70,
   agentGuiListHarnessesV71,
   agentGuiListHarnessesV80,
+  agentGuiListHarnessesV90,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -219,6 +260,7 @@ import {
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeV18,
+  chatSubscribeV19,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -360,6 +402,9 @@ import {
   hostGetRateLimitUsageDowngradeV4ToV3,
   providersConsumeRateLimitResetCreditV10,
   providersRefreshProfileStatusV10,
+  providersRefreshProfileStatusV20,
+  providersRefreshProfileStatusUpgradeV10ToV20,
+  providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
   epicBatchDeleteV10,
@@ -389,12 +434,18 @@ import {
   epicChatReplicaReadV10,
   epicFetchArtifactAttachmentV10,
   epicListChatRecordsUpgradeV10ToV11,
+  epicListChatRecordsUpgradeV11ToV12,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
+  epicListChatRecordsV12,
   epicGetChatRunSettingsDowngradeV20ToV10,
+  epicGetChatRunSettingsDowngradeV30ToV10,
+  epicGetChatRunSettingsDowngradeV30ToV20,
   epicGetChatRunSettingsUpgradeV10ToV20,
+  epicGetChatRunSettingsUpgradeV20ToV30,
   epicGetChatRunSettingsV10,
   epicGetChatRunSettingsV20,
+  epicGetChatRunSettingsV30,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -611,8 +662,12 @@ import {
 import {
   sessionImportScanV10,
   sessionImportScanV11,
+  sessionImportScanV12,
 } from "@traycer/protocol/host/session-import/scan";
-import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
+import {
+  sessionImportRunV10,
+  sessionImportRunV11,
+} from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import {
   worktreeDeleteBatchByPathStreamV10,
@@ -624,7 +679,10 @@ import {
   worktreeDeleteByPathStreamV12,
 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
-import { providersChangedV10 } from "@traycer/protocol/host/providers-changed-stream";
+import {
+  providersChangedV10,
+  providersChangedV11,
+} from "@traycer/protocol/host/providers-changed-stream";
 import {
   epicCommunicationGraphSubscribeV10,
   hostCommunicationGraphCloudFeedSubscribeV10,
@@ -633,6 +691,7 @@ import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
   hostChatRecordsSubscribeV12,
+  hostChatRecordsSubscribeV13,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   editorOpenPathsUpgradeV10ToV11,
@@ -792,6 +851,7 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV80,
   isProfileEnabled,
   providersListModelProvidersRequestSchema,
   providersListModelProvidersResponseSchema,
@@ -809,6 +869,7 @@ import {
   downgradeProviderCliStateListToV50,
   downgradeProviderCliStateListToV60,
   downgradeProviderCliStateListToV70,
+  downgradeProviderCliStateListToV80,
   providersInstallPackVersionRequestSchema,
   providersInstallPackVersionResponseSchema,
   providersRemovePackVersionRequestSchema,
@@ -1945,7 +2006,31 @@ export const providersListV80 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 8, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen: `cli-v1.3.0` / `host-v1.3.0` shipped this line. It bound the live
+  // schema while it was the unreleased head, which is how `antigravity` and
+  // `profiles[].apiKey` both reached a wire already in the field. v9.0 is the
+  // head line now.
+  responseSchema: providersListResponseSchemaV80,
+});
+
+export const providersListV90 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 9, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV80ToV90 = defineUpgradePath<
+  typeof providersListV80,
+  typeof providersListV90
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 9, minor: 0 },
+  // Request shape is identical. `apiKey` is deliberately NOT filled: it is
+  // `.optional()` precisely so "this host has no per-profile key method" stays
+  // distinguishable from a concrete state, and a v8.0 host IS such a host.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const providersListUpgradeV70ToV80 = defineUpgradePath<
@@ -2312,6 +2397,168 @@ function enabledProviderProfilesOnly(
     profiles: provider.profiles.filter(isProfileEnabled),
   }));
 }
+
+export const providersListDowngradeV9ToV8 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV80
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 8, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchema.parse(request),
+  }),
+  // Drops Antigravity rows and strips `profiles[].apiKey` - see the helper.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV80.parse({
+      ...response,
+      providers: downgradeProviderCliStateListToV80(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV7 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV70
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 7, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchema.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV70.parse({
+      ...response,
+      providers: downgradeProviderCliStateListToV70(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV6 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV60
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV60.parse({
+      providers: downgradeProviderCliStateListToV60(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV5 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV50
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV50.parse({
+      providers: downgradeProviderCliStateListToV50(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV4 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV40
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV3 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV30
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV2 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV20
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(
+        enabledProviderProfilesOnly(response.providers),
+      ),
+    }),
+  }),
+});
+
+export const providersListDowngradeV9ToV1 = defineDowngradePath<
+  typeof providersListV90,
+  typeof providersListV10
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse(request),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: enabledProviderProfilesOnly(response.providers).flatMap(
+        (provider) => {
+          const downgraded = downgradeProviderCliStateToV10(provider);
+          return downgraded === null ? [] : [downgraded];
+        },
+      ),
+    }),
+  }),
+});
 
 export const providersListDowngradeV8ToV7 = defineDowngradePath<
   typeof providersListV80,
@@ -4805,6 +5052,9 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "providers.refreshProfileStatus": {
     degrade: { kind: "unsupported" },
+    // v1.0 is frozen at the twenty provider ids `1.3.0` shipped; v2.0 carries
+    // the live union, and its v2->v1 bridge fails closed for an id v1.0 cannot
+    // represent (one provider per response, so there is nothing to filter).
     1: {
       latestMinor: 0,
       versions: {
@@ -4814,6 +5064,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshProfileStatusV20,
+          upgradeFromPreviousVersion:
+            providersRefreshProfileStatusUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersRefreshProfileStatusDowngradeV20ToV10,
+      },
     },
   },
   "host.notifications.list": {
@@ -5290,6 +5553,25 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         7: agentGuiListHarnessesDowngradeV8ToV7,
       },
     },
+    9: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV90,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV80ToV90,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV9ToV1,
+        2: agentGuiListHarnessesDowngradeV9ToV2,
+        3: agentGuiListHarnessesDowngradeV9ToV3,
+        4: agentGuiListHarnessesDowngradeV9ToV4,
+        5: agentGuiListHarnessesDowngradeV9ToV5,
+        6: agentGuiListHarnessesDowngradeV9ToV6,
+        7: agentGuiListHarnessesDowngradeV9ToV7,
+        8: agentGuiListHarnessesDowngradeV9ToV8,
+      },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -5672,6 +5954,25 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         5: agentListDowngradeV8ToV5,
         6: agentListDowngradeV8ToV6,
         7: agentListDowngradeV8ToV7,
+      },
+    },
+    9: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV90,
+          upgradeFromPreviousVersion: agentListUpgradeV8ToV9,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV9ToV1,
+        2: agentListDowngradeV9ToV2,
+        3: agentListDowngradeV9ToV3,
+        4: agentListDowngradeV9ToV4,
+        5: agentListDowngradeV9ToV5,
+        6: agentListDowngradeV9ToV6,
+        7: agentListDowngradeV9ToV7,
+        8: agentListDowngradeV9ToV8,
       },
     },
   },
@@ -6852,9 +7153,14 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // client talking to a host without it runs doc-only - the record table it
   // already had before the single-write pivot - so the degrade arm needs no
   // surface of its own, only the absence of the union.
+  // @1.2 adds the cloud publication head to each row - the freshness fact the
+  // published-copy tile keys its re-read on. One optional nested key under
+  // `chats[]`, which an older peer's schema strips, so the additivity check
+  // admits it as a MINOR; @1.1 stays installed on the pre-`head` response and
+  // its rows upgrade with the key absent.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
@@ -6887,6 +7193,14 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // rejects an annotation it cannot justify, and it runs at MODULE
           // IMPORT, so the registry would throw for every consumer - the app,
           // not just a test - while `bun run compile` passed clean through it.
+        },
+        2: {
+          contract: epicListChatRecordsV12,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV11ToV12,
+          // No `responseGrowthProjectionGated` here either, and for the plain
+          // reason rather than 1.1's subtle one: `head` is an OPTIONAL added
+          // key, which an older peer's schema strips unconditionally. Nothing
+          // about the response can be refused by a 1.1 validator.
         },
       },
       downgradePathsFromLatest: {},
@@ -7009,6 +7323,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
       downgradePathsFromLatest: {
         1: epicGetChatRunSettingsDowngradeV20ToV10,
+      },
+    },
+    // Major 3 carries the post-1.3.0 harness ids. v2.0 is frozen at the set
+    // those tags shipped: it was opened to carry what v1.0 froze off and then
+    // bound the live PERSISTED enum, so the next id reached it the same way.
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatRunSettingsV30,
+          upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: epicGetChatRunSettingsDowngradeV30ToV10,
+        2: epicGetChatRunSettingsDowngradeV30ToV20,
       },
     },
     degrade: { kind: "unsupported" },
@@ -7881,6 +8211,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         4: agentListProviderProfilesDowngradeV50ToV40,
       },
     },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV60,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV50ToV60,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV60ToV10,
+        2: agentListProviderProfilesDowngradeV60ToV20,
+        3: agentListProviderProfilesDowngradeV60ToV30,
+        4: agentListProviderProfilesDowngradeV60ToV40,
+        5: agentListProviderProfilesDowngradeV60ToV50,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -7952,6 +8298,23 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         4: agentGetProviderProfileRateLimitsDowngradeV50ToV40,
       },
     },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV60,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV50ToV60,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV60ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV60ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV60ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV60ToV40,
+        5: agentGetProviderProfileRateLimitsDowngradeV60ToV50,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -8015,6 +8378,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         2: agentConfigureDowngradeV50ToV20,
         3: agentConfigureDowngradeV50ToV30,
         4: agentConfigureDowngradeV50ToV40,
+      },
+    },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV60,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV50ToV60,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentConfigureDowngradeV60ToV10,
+        2: agentConfigureDowngradeV60ToV20,
+        3: agentConfigureDowngradeV60ToV30,
+        4: agentConfigureDowngradeV60ToV40,
+        5: agentConfigureDowngradeV60ToV50,
       },
     },
   },
@@ -8231,6 +8610,25 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         5: providersListDowngradeV8ToV5,
         6: providersListDowngradeV8ToV6,
         7: providersListDowngradeV8ToV7,
+      },
+    },
+    9: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV90,
+          upgradeFromPreviousVersion: providersListUpgradeV80ToV90,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV9ToV1,
+        2: providersListDowngradeV9ToV2,
+        3: providersListDowngradeV9ToV3,
+        4: providersListDowngradeV9ToV4,
+        5: providersListDowngradeV9ToV5,
+        6: providersListDowngradeV9ToV6,
+        7: providersListDowngradeV9ToV7,
+        8: providersListDowngradeV9ToV8,
       },
     },
   },
@@ -9440,9 +9838,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // owned by ANOTHER of the viewer's hosts can be pushed. @1.1 stays installed
   // and FROZEN on its registry-shaped row; the host gates the narrow `cloud`
   // arm on the negotiated version exactly as it gates the @1.1 kinds.
+  // @1.3 keeps all five frame kinds and grows the row the chat `upsert`
+  // carries by the chat's cloud publication head - the live-sync half of the
+  // published-copy tile. @1.0-@1.2 stay installed and FROZEN on the
+  // pre-`head` row; the host gates emission on the negotiated version.
   "host.chatRecords.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
@@ -9452,6 +9854,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: hostChatRecordsSubscribeV12,
+        },
+        3: {
+          contract: hostChatRecordsSubscribeV13,
         },
       },
     },
@@ -9477,9 +9882,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // The reasoning lives with the contract (`./session-import/scan.ts`) and the
   // row (`./session-import/candidate.ts`); this note only keeps a reader who
   // arrives at the registry first from concluding the schemas differ.
+  //
+  // @1.2 DOES differ: @1.0/@1.1 are frozen at the twenty harness ids `1.3.0`
+  // shipped, and only @1.2 may carry an Antigravity row. Same capability-by-
+  // minor rule, one more thing to gate on.
   "sessionImport.scan": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: sessionImportScanV10,
@@ -9487,15 +9896,21 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         1: {
           contract: sessionImportScanV11,
         },
+        2: {
+          contract: sessionImportScanV12,
+        },
       },
     },
   },
   "sessionImport.run": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: sessionImportRunV10,
+        },
+        1: {
+          contract: sessionImportRunV11,
         },
       },
     },
@@ -9546,12 +9961,19 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // @1.0 is frozen at the twenty provider ids `1.3.0` shipped; @1.1 is the
+  // first minor whose `changed` frame may name Antigravity. A host must not
+  // emit that id to a @1.0 subscriber - the frame is an invalidation signal,
+  // so withholding it costs a peer nothing it could have acted on.
   "providers.changed": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersChangedV10,
+        },
+        1: {
+          contract: providersChangedV11,
         },
       },
     },
@@ -9592,7 +10014,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 8,
+      latestMinor: 9,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -9620,6 +10042,13 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         8: {
           contract: chatSubscribeV18,
+        },
+        // @1.8 is frozen at the twenty-arm session-anchor union 1.3.0 shipped;
+        // @1.9 is the first minor whose `rowContext` may carry an Antigravity
+        // anchor. The resolver withholds `sessionAnchor` from a <1.9
+        // subscriber rather than sending a frame it cannot decode.
+        9: {
+          contract: chatSubscribeV19,
         },
       },
     },

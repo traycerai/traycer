@@ -105,7 +105,7 @@ describe("profile eligibility protocol compatibility", () => {
     ]);
   });
 
-  it("omits disabled profiles from the v8-to-v7 older-client projection", () => {
+  it("omits disabled profiles from the v9-to-v7 older-client projection", () => {
     const current = providersListResponseSchema.parse({
       providers: [
         providerCliStateSchema.parse({
@@ -124,7 +124,7 @@ describe("profile eligibility protocol compatibility", () => {
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      9,
       7,
       current,
     );

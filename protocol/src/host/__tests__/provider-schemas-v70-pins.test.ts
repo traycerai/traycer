@@ -21,6 +21,7 @@ import {
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
   providersListResponseSchemaV70Preimage,
+  providersListResponseSchemaV80,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -30,7 +31,7 @@ import {
  *
  * `*V70Preimage` backs no contract, but remains part of the v6 -> v7 upgrade.
  * Bare `V70` exports are the released v7 contract; the live exports now back
- * v8.0 and may grow without widening v7.0.
+ * v9.0 and may grow without widening v7.0.
  */
 
 function providerState(providerId: string) {
@@ -155,27 +156,33 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     );
   });
 
-  it("v8.0 is the head and names the canonical response; 7.0 names its freeze", () => {
-    // This assertion has now flipped four times, and the flips ARE the
+  it("v9.0 is the head and names the canonical response; 7.0 and 8.0 name their freezes", () => {
+    // This assertion has now flipped five times, and the flips ARE the
     // judgement the freeze rule exists to force. While an unreleased v8.0 sat
     // above v7.0, v7.0 was pinned; collapsing that major made v7.0 the head and
     // it tracked live again; opening a v7.1 for the auth-aware enablement
     // fields pinned v7.0 to the REAL freeze
-    // (`providersListResponseSchemaV70`); and removing those two fields removed
-    // that minor with them - they were its entire delta - so v7.0 is once again
-    // the only frozen line under a real v8.0.
+    // (`providersListResponseSchemaV70`); removing those two fields removed
+    // that minor with them - they were its entire delta - so v7.0 was once
+    // again the only frozen line under a real v8.0; and now `cli-v1.3.0` /
+    // `host-v1.3.0` shipped that v8.0 from a branch cut before Antigravity
+    // landed on `main`, so v8.0 is frozen too (at
+    // `providersListResponseSchemaV80`) and v9.0 is the new head.
     //
-    // The v7.0 PIN survived all four flips, which is the point: what freezes a
-    // line is another line opening above it, not which one. v8.0 is above it
-    // now, and 7.0 must not drift back onto live just because the line
-    // immediately above it went away.
+    // The v7.0 PIN survived all five flips, which is the point: what freezes a
+    // line is another line opening above it, not which one. v9.0 is above both
+    // 7.0 and 8.0 now, and neither may drift back onto live just because the
+    // line immediately above it went away or was itself frozen in turn.
     //
     // "A line that has STOPPED being the head still points at live" is the
     // defect being guarded, so both halves are asserted: the head names live,
-    // and the line below it does not.
+    // and every line below it does not.
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
     const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
-    expect(v80.responseSchema).toBe(providersListResponseSchema);
+    const v90 = hostRpcRegistry["providers.list"][9].versions[0].contract;
+    expect(v90.responseSchema).toBe(providersListResponseSchema);
+    expect(v80.responseSchema).toBe(providersListResponseSchemaV80);
+    expect(v80.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).toBe(providersListResponseSchemaV70);
     expect(v70.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchemaV70Preimage);
@@ -186,14 +193,21 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     expect(Object.keys(hostRpcRegistry["providers.list"][7].versions)).toEqual([
       "0",
     ]);
+    // Major 8 is newly frozen behind the same shape - exactly one minor, same
+    // reasoning, so a future 8.1 has to come here and say why too.
+    expect(hostRpcRegistry["providers.list"][8].latestMinor).toBe(0);
+    expect(Object.keys(hostRpcRegistry["providers.list"][8].versions)).toEqual([
+      "0",
+    ]);
     // The REQUEST side did not move: the freezes covered only the response, so
-    // both lines still bind the live request and
+    // every line still binds the live request and
     // `providersListRequestSchemaV70` remains the hand-copy held equal to it by
     // the pin above. Request-side enum growth is advisory (a released client
     // never emits a new value), which is why it is allowed to track live here
     // while the response is not.
     expect(v70.requestSchema).toBe(providersListRequestSchema);
     expect(v80.requestSchema).toBe(providersListRequestSchema);
+    expect(v90.requestSchema).toBe(providersListRequestSchema);
     expect(v70.requestSchema).not.toBe(providersListRequestSchemaV70);
   });
 
@@ -489,7 +503,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     (target) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        9,
         target,
         providersListResponseSchema.parse({
           providers: [state],
@@ -526,7 +540,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        9,
         target,
         providersListResponseSchema.parse({
           providers: [huggingfaceState],
@@ -537,6 +551,35 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
       if (!downgraded.ok) continue;
       expect(downgraded.value.providers).toHaveLength(0);
     }
+  });
+});
+
+// The new adjacent hop, one level up from the block above: v8.0 is
+// `cli-v1.3.0` / `host-v1.3.0`'s frozen line, bound at the twenty provider ids
+// that predate Antigravity. A v9.0 (head) response carrying an Antigravity
+// row must not reach a v8.0 caller - same frozen-enum-boundary shape as
+// huggingface at v6.0 above, one hop closer to head - and what survives the
+// strip must still be a valid frozen v8.0 wire.
+describe("downgrade bridge v9.0 -> v8.0 works through the real registry", () => {
+  it("antigravity never survives a downgrade past v8.0 (frozen enum boundary)", () => {
+    const antigravityState = providerCliStateSchema.parse(
+      providerState("antigravity"),
+    );
+    const downgraded = downgradeResponseAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      9,
+      8,
+      providersListResponseSchema.parse({
+        providers: [antigravityState],
+        native: null,
+      }),
+    );
+    expect(downgraded.ok).toBe(true);
+    if (!downgraded.ok) return;
+    expect(downgraded.value.providers).toHaveLength(0);
+    expect(
+      providersListResponseSchemaV80.safeParse(downgraded.value).success,
+    ).toBe(true);
   });
 });
 
