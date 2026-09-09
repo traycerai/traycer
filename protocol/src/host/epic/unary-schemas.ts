@@ -829,17 +829,44 @@ export const listTasksResponseSchema = listTasksResponseSchemaPre16.extend({
 });
 export type ListTasksResponse = z.infer<typeof listTasksResponseSchema>;
 
-// ─── Personal history pinning (epic.setPinned@1.0) ──────────────────────────
+// ─── Personal history pinning (epic.setPinned@1.0, @1.1) ────────────────────
 
+// Unchanged across the line: `@1.1` grows only the RESPONSE.
 export const setEpicPinnedRequestSchema = z.object({
   epicId: z.string(),
   pinned: z.boolean(),
 });
 export type SetEpicPinnedRequest = z.infer<typeof setEpicPinnedRequestSchema>;
 
-export const setEpicPinnedResponseSchema = z.object({
+// `epic.setPinned@1.0` response - FROZEN. Written as its own literal object
+// rather than aliasing the live schema below: an alias over a moving target is
+// not a freeze, and this file has already been bitten by one
+// (see `listTaskLightSchemaPre16`'s note). Adding a key here is editing a
+// released line, and should read that way at the call site.
+export const setEpicPinnedResponseSchemaPre11 = z.object({
   pinned: z.boolean(),
 });
+export type SetEpicPinnedResponsePre11 = z.infer<
+  typeof setEpicPinnedResponseSchemaPre11
+>;
+
+// Latest `epic.setPinned` response: `@1.1` adds the durability `home` of the
+// epic whose pin was just written.
+//
+// The pin is a PERSONAL preference, and where it is stored follows the epic's
+// home: a cloud-homed pin is an account fact that every host sees, while a
+// local-homed pin lives on the one machine that holds the epic. A `@1.0`
+// response cannot state which, so a client had to assume "cloud" - which is
+// why the released pin control refuses a local-homed row outright rather than
+// pinning it into a scope it cannot name.
+//
+// Optional, so an older HOST on this line simply omits it. Absence keeps its
+// released reading, "this host cannot say", and must never be read as
+// `"cloud"`: the whole point of the key is that the assumption was the defect.
+export const setEpicPinnedResponseSchema =
+  setEpicPinnedResponseSchemaPre11.extend({
+    home: epicListHomeSchema.optional(),
+  });
 export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
 
 // ─── Personal task view recency (epic.recordViewed@1.0) ─────────────────────

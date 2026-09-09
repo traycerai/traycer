@@ -497,7 +497,9 @@ import {
   epicSetChatSharingDefaultV10,
   epicSetCloudChatVisibilityV10,
   epicSetCommentThreadResolvedV10,
+  epicSetPinnedUpgradeV10ToV11,
   epicSetPinnedV10,
+  epicSetPinnedV11,
   epicSubscribeV10,
   epicSubscribeV11,
   epicSubscribeV12,
@@ -6136,11 +6138,20 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.setPinned": {
     1: {
-      latestMinor: 0,
+      // `@1.1`'s `home` is an ADDED OPTIONAL KEY, not value growth over a
+      // released enum, so a `@1.0` peer's frozen response schema strips it at
+      // parse time and the minor needs no `responseGrowthProjectionGated`.
+      // The host still gates emission on the negotiated minor rather than
+      // trusting the strip - same discipline as `epic.listTasks@1.5`.
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicSetPinnedV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicSetPinnedV11,
+          upgradeFromPreviousVersion: epicSetPinnedUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

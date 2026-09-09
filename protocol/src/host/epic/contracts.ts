@@ -95,6 +95,7 @@ import {
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
   setEpicPinnedResponseSchema,
+  setEpicPinnedResponseSchemaPre11,
   updateArtifactStatusRequestSchema,
   updateArtifactStatusResponseSchema,
   updateChatProfileRequestSchema,
@@ -338,7 +339,39 @@ export const epicSetPinnedV10 = defineRpcContract({
   method: "epic.setPinned",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setEpicPinnedRequestSchema,
+  responseSchema: setEpicPinnedResponseSchemaPre11,
+});
+
+// `epic.setPinned@1.1` states the durability `home` of the epic it just
+// pinned. Request is unchanged from 1.0.
+//
+// The released line is cloud-only by CONSTRUCTION, not by declaration: the
+// host's only arm writes to the cloud, so a local-homed epic 404s. A host that
+// grows a local arm therefore changes what a success MEANS, and a `@1.0`
+// response has no room to say so. The client gating its pin control on this
+// minor is what keeps the two facts - "this host can pin a local-homed epic"
+// and "this response tells me which store took it" - from being negotiated
+// separately and disagreeing.
+export const epicSetPinnedV11 = defineRpcContract({
+  method: "epic.setPinned",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: setEpicPinnedRequestSchema,
   responseSchema: setEpicPinnedResponseSchema,
+});
+
+export const epicSetPinnedUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicSetPinnedV10,
+  typeof epicSetPinnedV11
+>({
+  from: epicSetPinnedV10.schemaVersion,
+  to: epicSetPinnedV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // `home` stays ABSENT rather than becoming `"cloud"`. A `@1.0` host's
+  // success does happen to be a cloud write today, but synthesizing the marker
+  // here would hand a client the same unearned certainty the minor exists to
+  // remove, and it would survive a host that later serves the pin locally on a
+  // still-`@1.0`-negotiated connection.
+  upgradeResponse: (response) => response,
 });
 
 // Personal cloud recency. Optional/non-floor so older hosts remain compatible;
