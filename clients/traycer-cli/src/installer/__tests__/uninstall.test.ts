@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { updateAttemptRecordPath } from "@traycer-clients/shared/host-update";
 import { noopLogger } from "../../logger";
 import { hostPidMetadataPath } from "../../store/paths";
 import {
@@ -178,6 +179,46 @@ describe("uninstallHost", () => {
 
     expect(result.removedStagedDir).toBe(true);
     expect(existsSync(stagedDir)).toBe(false);
+  });
+
+  it("removes the schema-v2 update attempt record beside install/ - a park must not outlive the install it describes", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    // The record lives in the host home, NOT under install/, so removing the
+    // install tree alone leaves it standing - which is exactly the shape that
+    // refused every later maintenance admission for a host that was gone.
+    const recordPath = updateAttemptRecordPath(hostHomeFor(ENV));
+    writeFileSync(
+      recordPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 1,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: null,
+        error: null,
+      }),
+    );
+    // The caller's live lock handle is not evidence and must survive.
+    const lockPath = join(hostHomeFor(ENV), "update-attempt.lock");
+    writeFileSync(lockPath, '{"pid":1,"reason":"test","startedAt":"now"}');
+
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+    });
+
+    expect(existsSync(recordPath)).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
   });
 
   it("reports removedStagedDir: true even when staged/ never existed", async () => {

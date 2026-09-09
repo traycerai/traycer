@@ -24,7 +24,10 @@ import type {
   HostUpdateAttemptClaimBaseline,
   HostUpdateAttemptRecord,
 } from "../record";
-import { __setBeforeRecordRenameHookForTest } from "../store";
+import {
+  __setBeforeRecordRenameHookForTest,
+  readUpdateAttemptRecord,
+} from "../store";
 import {
   commitExecutorAttemptMutation,
   commitExecutorRecoveryMutation,
@@ -910,7 +913,10 @@ describe("withUpdateContender - active attempt admissions", () => {
 
   it.each([
     ["legacy-update-shadow", "yield"],
-    ["uninstall-maintenance", "refuse"],
+    ["service-maintenance", "refuse"],
+    ["desktop-activation-maintenance", "refuse"],
+    ["uninstall-maintenance", "allow"],
+    ["desktop-install-maintenance", "allow"],
     ["recovery-maintenance", "allow"],
   ] as const)(
     "returns the exact %s disposition for a nonterminal record",
@@ -927,7 +933,7 @@ describe("withUpdateContender - active attempt admissions", () => {
         },
       );
 
-      if (admission === "recovery-maintenance") {
+      if (disposition === "allow") {
         expect(outcome).toEqual({ kind: "ran", result: "must-not-run" });
         expect(callbackCalls).toBe(1);
         return;
@@ -1525,7 +1531,11 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
         ["runtime-repair-maintenance", "refuse"],
         ["service-maintenance", "refuse"],
         ["desktop-activation-maintenance", "refuse"],
-        ["uninstall-maintenance", "refuse"],
+        // `uninstall-maintenance` and `desktop-install-maintenance` are
+        // absent on purpose: they admit every unheld nonterminal record,
+        // parks included, and have their own describe below.
+        // `recovery-maintenance` is absent for the same reason (`allow` by
+        // base disposition).
         ["legacy-update-shadow", "yield"],
       ] as const) {
         let callbackCalls = 0;
@@ -1572,6 +1582,190 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
     forced.admission = "recovery-maintenance";
     expect(forced.reason).toBe("contender-test");
   });
+});
+
+describe("withUpdateContender - the whole-product admissions admit every unheld nonterminal record", () => {
+  // The two operations that replace or remove the product itself: an
+  // uninstall removes the install the record describes (and, in
+  // `traycer-cli`'s `installer/uninstall.ts`, the record itself), and the
+  // cloud-install script swaps the app bundle without writing `install/`,
+  // promoting staged bytes, or stamping an install generation. Neither can
+  // corrupt what a park protects, so no standing record may refuse them.
+  // The lock is what rules out a LIVE segment: a running executor holds the
+  // attempt lock for its whole span and answers `busy` before any
+  // disposition is consulted, which the last pin below demonstrates
+  // directly.
+  //
+  // `desktop-activation-maintenance` is the deliberate NEGATIVE throughout -
+  // the Desktop app's own activation cycle applies bytes and stamps the
+  // generation, so it must keep refusing every record admitted here. Each
+  // case below asserts both directions against the SAME record, so a future
+  // widening of the Desktop admission cannot pass unnoticed.
+  const WHOLE_PRODUCT_ADMISSIONS = [
+    "uninstall-maintenance",
+    "desktop-install-maintenance",
+  ] as const;
+  // Both consent flags `false`: the routine park these admissions exist for is
+  // one nobody authorized anything special on. They are written EXPLICITLY
+  // rather than left out, because the decode side reconstructs an absent key
+  // as `false` - so an omitted flag would make the readback differ from this
+  // literal and redden the round-trip pins below for a reason that has
+  // nothing to do with admission policy.
+  const claimBaseline: HostUpdateAttemptClaimBaseline = {
+    installedVersion: "1.2.3",
+    installGeneration: "install-7|2026-01-01T00:00:00.000Z|abc123|1.2.3",
+    stageFingerprint: null,
+    allowDowngrade: false,
+    acceptStoreFormatLoss: false,
+  };
+
+  it.each([
+    [
+      "waiting-for-work park (the routine busy-host park)",
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        claim: claimBaseline,
+      }),
+    ],
+    [
+      "waiting-to-activate park with placed bytes",
+      record({
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: claimBaseline,
+      }),
+    ],
+    [
+      "claim-less waiting-for-work park",
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+      }),
+    ],
+    [
+      "interrupted applying record (active, holder gone)",
+      record({
+        phase: "applying",
+        execution: "active",
+        updatedAt: "2020-01-01T00:00:00.000Z",
+      }),
+    ],
+    [
+      "fresh active record with no holder",
+      record({ updatedAt: "2026-08-25T00:00:00.000Z" }),
+    ],
+  ] as const)(
+    "runs the callback over a %s for both, while desktop-activation-maintenance still refuses the same record",
+    async (_label, standing) => {
+      for (const admission of WHOLE_PRODUCT_ADMISSIONS) {
+        const hostHomeDir = await freshHome();
+        await writeRecord(hostHomeDir, standing);
+        let callbackCalls = 0;
+        let seenAttempt: HostUpdateAttemptRecord | null | undefined;
+
+        const outcome = await withUpdateContender(
+          options(hostHomeDir, admission),
+          async (_capability, context) => {
+            callbackCalls += 1;
+            seenAttempt = context.activeAttempt;
+            return "ran-the-operation";
+          },
+        );
+
+        expect(outcome).toEqual({ kind: "ran", result: "ran-the-operation" });
+        expect(callbackCalls).toBe(1);
+        expect(seenAttempt).toEqual(standing);
+
+        // The paired negative, against the very same record: the Desktop
+        // app's activation admission is untouched by this widening.
+        let activationCalls = 0;
+        const refused = await withUpdateContender(
+          options(hostHomeDir, "desktop-activation-maintenance"),
+          async () => {
+            activationCalls += 1;
+            return "must-not-run";
+          },
+        );
+        expect(refused.kind).toBe("nonterminal-attempt");
+        if (refused.kind !== "nonterminal-attempt") return;
+        expect(refused.disposition).toBe("refuse");
+        expect(activationCalls).toBe(0);
+      }
+    },
+  );
+
+  it("does not itself touch the record - deleting it (uninstall) or leaving it for the next executor (install) is the caller's job", async () => {
+    for (const admission of WHOLE_PRODUCT_ADMISSIONS) {
+      const hostHomeDir = await freshHome();
+      const standing = record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        claim: claimBaseline,
+      });
+      await writeRecord(hostHomeDir, standing);
+
+      // Reading the record back proves the VALUE survived, which a contender
+      // that atomically rewrote byte-identical JSON would also satisfy. Every
+      // record write lands through a rename, so counting renames is what
+      // separates "unchanged" from "never written" - the claim this test
+      // actually makes, and the one the uninstall's own deletion depends on.
+      let recordRenames = 0;
+      __setBeforeRecordRenameHookForTest(async () => {
+        recordRenames += 1;
+      });
+      try {
+        await withUpdateContender(
+          options(hostHomeDir, admission),
+          async () => "ran-the-operation",
+        );
+      } finally {
+        __setBeforeRecordRenameHookForTest(null);
+      }
+      expect(recordRenames).toBe(0);
+
+      const after = await readUpdateAttemptRecord(hostHomeDir);
+      expect(after.kind).toBe("valid");
+      if (after.kind !== "valid") return;
+      expect(after.value).toEqual(standing);
+    }
+  });
+
+  it.each(WHOLE_PRODUCT_ADMISSIONS)(
+    "%s still answers busy to a LIVE holder - the lock, not the disposition, is what excludes a running update",
+    async (admission) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, record({ phase: "applying" }));
+      let nestedCalls = 0;
+
+      const executorOutcome = await withUpdateContender(
+        options(hostHomeDir, "attempt-executor"),
+        async () => {
+          // The executor's segment is live and holding the lock; a
+          // whole-product operation contending now must not be admitted
+          // past it.
+          const nested = await withUpdateContender(
+            options(hostHomeDir, admission),
+            async () => {
+              nestedCalls += 1;
+              return "must-not-run";
+            },
+          );
+          return nested.kind;
+        },
+      );
+
+      expect(executorOutcome).toEqual({
+        kind: "ran",
+        result: "held-in-process",
+      });
+      expect(nestedCalls).toBe(0);
+    },
+  );
 });
 
 describe("withUpdateContender - fail closed record reads", () => {
@@ -1633,6 +1827,7 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
     "uninstall-maintenance",
     "service-maintenance",
     "desktop-activation-maintenance",
+    "desktop-install-maintenance",
     "runtime-repair-maintenance",
     "recovery-maintenance",
   ] as const)(
@@ -1774,6 +1969,7 @@ describe("commitExecutorRecoveryMutation - the internal recovery-only writer, no
     "uninstall-maintenance",
     "service-maintenance",
     "desktop-activation-maintenance",
+    "desktop-install-maintenance",
     "runtime-repair-maintenance",
     "recovery-maintenance",
   ] as const)(

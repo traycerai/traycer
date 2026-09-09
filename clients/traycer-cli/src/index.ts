@@ -1148,6 +1148,7 @@ function registerHostCommands(program: Command): void {
       // that cannot outlive the stop should get.
       const admission =
         opts.admission === "desktop-activation-maintenance" ||
+        opts.admission === "desktop-install-maintenance" ||
         opts.admission === "uninstall-maintenance"
           ? (opts.admission as HostMaintenanceLeaseAdmission)
           : null;

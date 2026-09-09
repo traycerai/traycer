@@ -47,6 +47,7 @@ export const HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION = 1;
 
 export type HostMaintenanceLeaseAdmission =
   | "desktop-activation-maintenance"
+  | "desktop-install-maintenance"
   | "uninstall-maintenance";
 
 type HostMaintenanceLeaseAction = "host-stop" | "host-uninstall-all";

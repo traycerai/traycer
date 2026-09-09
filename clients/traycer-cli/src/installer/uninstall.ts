@@ -1,4 +1,5 @@
 import { rm } from "node:fs/promises";
+import { updateAttemptRecordPath } from "@traycer-clients/shared/host-update";
 import {
   deleteHostInstallRecord,
   readHostInstallRecord,
@@ -8,6 +9,7 @@ import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { rotateHostLogForPurgeWithVerifier } from "../host/host-log-rotation";
 import {
+  hostHomeDir,
   hostInstallDir,
   hostPidMetadataPath,
   hostStagedDir,
@@ -150,6 +152,29 @@ export async function uninstallHost(
     logger,
     verify,
   );
+
+  // The schema-v2 attempt record (`update-attempt.json`) describes an update
+  // OF the install just removed, and it is the one piece of install-scoped
+  // state that lives beside `install/` rather than inside it. Left behind,
+  // a parked or interrupted attempt outlives everything it could resume
+  // against and keeps refusing the maintenance admissions that follow: the
+  // next `host install` / desktop activation met a park for a host that no
+  // longer existed and failed closed on it. The uninstall runs under the
+  // attempt lock (its capability is verified at every edge), so no writer
+  // can be racing this removal. The lock file itself is untouched - it is
+  // the caller's live handle, not evidence.
+  await verify();
+  try {
+    await rm(updateAttemptRecordPath(hostHomeDir(opts.environment)), {
+      force: true,
+    });
+  } catch (err) {
+    logger.warn("Host uninstall failed to remove the update attempt record", {
+      environment: opts.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+  }
 
   // The version hold names a deliberate downgrade of the install we just
   // removed; drop it so a later fresh install of that same version does not

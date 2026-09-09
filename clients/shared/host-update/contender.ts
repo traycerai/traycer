@@ -38,6 +38,40 @@ export type UpdateMaintenanceExemption =
   | "uninstall-maintenance"
   | "service-maintenance"
   | "desktop-activation-maintenance"
+  /**
+   * The internal cloud-install script REPLACING the whole desktop .app
+   * bundle - `scripts/desktop-install-cloud.js`, the operation behind
+   * `make install-desktop{,-staging,-production}`.
+   *
+   * Deliberately its own name rather than a widening of
+   * `desktop-activation-maintenance`, which it used to share, and the split
+   * is not cosmetic: that name is ALSO
+   * `runLockedMacActivationCycle`'s, which backs `applyStaged` and
+   * `activateInstalled`. Those two APPLY BYTES, so admitting them beside a
+   * park would put a second actor on the work the park itself is waiting to
+   * do. It is also `runPendingLoginItemRevisionCycle`'s, which stamps the
+   * install generation inside the lock - the very field a park's `claim` is
+   * validated against, the same hazard `supervisor-relaunch-maintenance`
+   * documents for `host stamp-runtime`. Both must keep refusing.
+   *
+   * This operation does neither. It quits the app, stops an IDLE host
+   * (`shouldBootoutHostForInstall` independently declines to touch a busy
+   * one), boots out its LaunchAgent, writes a `{pending, writtenAt}` marker,
+   * and swaps the bundle in `/Applications`. It never writes `install/`,
+   * never promotes staged bytes, and never stamps an install identity - so
+   * the record it steps over stays exactly as it was, and the next
+   * `host ensure` reconciles it under `attempt-executor` with the full
+   * recovery path.
+   *
+   * **With a durable nonterminal attempt it therefore ALLOWS**, on the same
+   * reasoning as `uninstall-maintenance`: a live executor segment holds this
+   * lock for its whole span and is refused `busy` before any disposition is
+   * consulted, so a record that reaches here is parked or interrupted and
+   * has no work in flight. Refusing it instead meant one parked update - the
+   * ROUTINE outcome of updating a busy host - made a developer machine
+   * un-reinstallable as well as un-uninstallable.
+   */
+  | "desktop-install-maintenance"
   | "runtime-repair-maintenance"
   /**
    * The supervisor's own relaunch: an OS service manager (or a crash
@@ -1117,7 +1151,6 @@ function dispositionFor(
     case "legacy-update-shadow":
     case "stage-maintenance":
       return "yield";
-    case "uninstall-maintenance":
     case "service-maintenance":
     case "desktop-activation-maintenance":
     case "runtime-repair-maintenance":
@@ -1129,6 +1162,25 @@ function dispositionFor(
     // which is exactly what must keep refusing.
     case "supervisor-relaunch-maintenance":
       return "refuse";
+    // An uninstall REMOVES the install tree the record describes, and
+    // `installer/uninstall.ts` deletes the attempt record along with it, so
+    // there is nothing a standing record could protect from the removal the
+    // user asked for. Refusing here used to leave a machine that could not be
+    // uninstalled - or reinstalled, since the surviving park refused the next
+    // `desktop-activation-maintenance` too - for as long as ONE update was
+    // parked, and a park is the ROUTINE outcome of updating a busy host
+    // (`parkForWork` in `traycer-cli`'s `host/update-run.ts`).
+    //
+    // Concurrency is not what this arm was guarding: a live executor segment
+    // holds this same attempt lock for its whole span, so a running update
+    // answers `busy` from `withUpdateContenderInternal` before any disposition
+    // is consulted. A record that reaches this function under the lock is
+    // parked (no holder by definition) or interrupted (its holder is gone),
+    // and neither has work in flight that a removal could corrupt.
+    case "uninstall-maintenance":
+    // The install counterpart, for the same two reasons and no others - see
+    // the type above for why it is NOT `desktop-activation-maintenance`.
+    case "desktop-install-maintenance":
     case "recovery-maintenance":
     case "attempt-executor":
       return "allow";
