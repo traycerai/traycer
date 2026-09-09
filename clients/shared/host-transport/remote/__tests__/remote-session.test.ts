@@ -4863,8 +4863,6 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
       session.subscribeAvailabilityRecovered(() => {
         recoveredEvents += 1;
       });
-      const established = (): RecordedEvidenceCall[] =>
-        evidence.calls.filter((call) => call.method === "sessionEstablished");
       try {
         // Freeze the attach with the `open` on the wire and no ack yet.
         relay.stallOpens = true;
@@ -4872,26 +4870,33 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
         expect(session.isReady()).toBe(false);
 
-        // A parked request is the milestone that proves the ack was PROCESSED:
-        // it settles either way once the session leaves its opening phase, so
-        // the negative assertions below cannot pass merely by running early.
-        const parked = session
+        // A parked request is the milestone that proves the ack was PROCESSED,
+        // so the negative assertions below cannot pass merely by running
+        // early - and its verdict is itself the point: the ack unparked it
+        // onto a connection whose host leg is gone, which is retryable, not a
+        // dispatch. Anything that RESOLVED here would mean the session had
+        // dispatched work at a host that cannot receive it.
+        const parked: unknown = session
           .sendUnary("host.status", {}, null, null, undefined, false)
           .then(
-            () => "settled",
-            () => "settled",
+            () => null,
+            (reason: unknown) => reason,
           );
 
         // The host's leg goes while the ack is still in flight.
         relay.sendHostAttachment("host_detached");
         await relay.releaseStalledOpens();
-        expect(await parked).toBe("settled");
+        const parkedError = await parked;
+        expect(parkedError).toBeInstanceOf(RetryableTransportError);
+        expect(String(parkedError)).toContain(
+          "Remote host is detached from the relay",
+        );
 
         // The ack landed and the phase reached ready, but the session is not
         // announced, no recovery is published, and readiness stays false.
         expect(session.isReady()).toBe(false);
         expect(recoveredEvents).toBe(0);
-        expect(established()).toEqual([]);
+        expect(evidence.callsNamed("sessionEstablished")).toEqual([]);
 
         // The host coming back is a FULL re-attach (it discarded its Noise
         // state), and THAT crossing announces - exactly once.
@@ -4899,7 +4904,7 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
         relay.sendHostAttachment("host_attached");
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(recoveredEvents).toBe(1);
-        expect(established()).toHaveLength(1);
+        expect(evidence.callsNamed("sessionEstablished")).toHaveLength(1);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();

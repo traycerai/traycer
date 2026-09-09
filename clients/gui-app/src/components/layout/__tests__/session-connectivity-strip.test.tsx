@@ -78,6 +78,12 @@ describe("<SessionConnectivityStrip />", () => {
     render(<SessionConnectivityStrip />);
     const strip = screen.getByTestId("session-connectivity-strip");
     expect(strip.textContent).toContain("Still reconnecting. Retrying…");
+    // The accessible name escalates with the visible line: a static label
+    // would keep announcing the first rung to a screen reader after the row
+    // had moved on.
+    expect(strip.getAttribute("aria-label")).toBe(
+      "Connection interrupted - still reconnecting",
+    );
     expect(strip.className).toContain("bg-background");
     expect(strip.className).toContain("text-muted-foreground");
   });
