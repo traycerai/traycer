@@ -102,7 +102,12 @@ afterEach(() => {
 });
 
 describe("useEpicCreateForClient's dispatch-time version floor", () => {
-  it("attaches the `epic.listTasks@1.6` floor to the create request when the session is unverified", async () => {
+  it("floors an unverified create on `epic.create@1.1` - the method it is actually dispatching", async () => {
+    // The floor's subject was `epic.listTasks@1.6` until `epic.create` gained
+    // a second minor to negotiate. That proxy rested on "a host on the
+    // local-first list line is the host on the local-first create line" -
+    // true, but it tied two methods' release histories together with a claim
+    // nothing enforced, and it asked about a method this request never calls.
     useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
     const fixture = createFixture();
 
@@ -114,9 +119,16 @@ describe("useEpicCreateForClient's dispatch-time version floor", () => {
     expect(fixture.messenger.calls).toHaveLength(1);
     expect(fixture.messenger.calls[0]?.method).toBe("epic.create");
     expect(fixture.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
-      method: "epic.listTasks",
-      version: { major: 1, minor: 6 },
+      method: "epic.create",
+      version: { major: 1, minor: 1 },
     });
+    // The property the rename exists for, asserted as itself rather than left
+    // implied by two literals that happen to match: the floor is about the
+    // very method being dispatched, so no future edit can drift the two apart
+    // without reddening here.
+    expect(fixture.messenger.calls[0]?.requiredHostMethodVersion?.method).toBe(
+      fixture.messenger.calls[0]?.method,
+    );
   });
 
   it("sends NO floor for a signed-in session, which may create on any host", async () => {

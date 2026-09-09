@@ -877,17 +877,18 @@ export function useLandingComposerActions(
   // on a host the chip never showed" is unreachable rather than unlikely.
   // The second submit-time gate, on the host the first one named: a session
   // without a cloud verdict may only create on a host that serves creates
-  // locally, and `epic.create@1.0` cannot say - its `epic.listTasks` line can.
-  // See `refuseCreateWithoutCloudVerdict`.
+  // locally, which `epic.create@1.1` now states directly (it used to be read
+  // off the `epic.listTasks` line, because `epic.create` had only `@1.0` and
+  // could not answer for itself). See `refuseCreateWithoutCloudVerdict`.
   const resolveAdmittedPlacement = useCallback((): LandingPlacement => {
     const placement = resolveLandingPlacement(target);
     if (placement.kind === "refused") return placement;
     return (
       refuseCreateWithoutCloudVerdict({
         status: useAuthStore.getState().status,
-        negotiatedListTasks: getNegotiatedHostMethodVersion(
+        negotiatedCreate: getNegotiatedHostMethodVersion(
           placement.hostId,
-          "epic.listTasks",
+          "epic.create",
         ),
         hostLabel: target.hostLabel,
       }) ?? placement

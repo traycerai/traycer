@@ -426,6 +426,8 @@ import {
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
   epicCreateV10,
+  epicCreateV11,
+  epicCreateUpgradeV10ToV11,
   epicDeleteArtifactV10,
   epicDeleteChatV10,
   epicDeleteCommentThreadV10,
@@ -6261,13 +6263,23 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // `@1.1` carries the local-store create refusal as DATA (`refusal`: kind +
+  // message + remedy) instead of throwing it as an `RPC_ERROR` string the
+  // client cannot branch on. Added optional KEY, so a `@1.0` peer's frozen
+  // response schema strips it - and because a stripped refusal would read as
+  // a successful create with a null room, the host gates EMISSION on the
+  // negotiated minor and still throws below `@1.1`.
   "epic.create": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCreateV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicCreateV11,
+          upgradeFromPreviousVersion: epicCreateUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

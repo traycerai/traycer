@@ -266,14 +266,14 @@ describe("refuseCreateWithoutCloudVerdict", () => {
     expect(
       refuseCreateWithoutCloudVerdict({
         status: "signed-in",
-        negotiatedListTasks: null,
+        negotiatedCreate: null,
         hostLabel: "Laptop",
       }),
     ).toBeNull();
     expect(
       refuseCreateWithoutCloudVerdict({
         status: "signed-in",
-        negotiatedListTasks: { major: 1, minor: 5 },
+        negotiatedCreate: { major: 1, minor: 0 },
         hostLabel: "Laptop",
       }),
     ).toBeNull();
@@ -283,19 +283,19 @@ describe("refuseCreateWithoutCloudVerdict", () => {
     expect(
       refuseCreateWithoutCloudVerdict({
         status: "unverified",
-        negotiatedListTasks: { major: 1, minor: 6 },
+        negotiatedCreate: { major: 1, minor: 1 },
         hostLabel: "Laptop",
       }),
     ).toBeNull();
   });
 
-  it("refuses an unverified session on a pre-1.6 host, naming the device", () => {
+  it("refuses an unverified session on a pre-1.1 host, naming the device", () => {
     // `epic.create@1.0` would send this create to the cloud on the retained
-    // credential; the host's `listTasks` line is the only negotiated fact
-    // that tells the two hosts apart.
+    // credential. `@1.1` is the minor that tells the two hosts apart; it used
+    // to be read off `epic.listTasks@1.6`, a proxy for the same release.
     const refusal = refuseCreateWithoutCloudVerdict({
       status: "unverified",
-      negotiatedListTasks: { major: 1, minor: 5 },
+      negotiatedCreate: { major: 1, minor: 0 },
       hostLabel: "Laptop",
     });
     expect(refusal?.kind).toBe("refused");
@@ -310,7 +310,7 @@ describe("refuseCreateWithoutCloudVerdict", () => {
     expect(
       refuseCreateWithoutCloudVerdict({
         status: "unverified",
-        negotiatedListTasks: null,
+        negotiatedCreate: null,
         hostLabel: "Laptop",
       })?.kind,
     ).toBe("refused");
