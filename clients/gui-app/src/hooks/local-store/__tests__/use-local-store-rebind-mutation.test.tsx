@@ -29,10 +29,6 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
-  useEpicSessionHostId: () => SESSION_HOST_ID,
-}));
-
 afterEach(() => {
   cleanup();
   mocks.request.mockReset();
@@ -80,9 +76,10 @@ describe("useLocalStoreRebindMutation", () => {
     });
     expect(activeFetch).toHaveBeenCalledTimes(1);
 
-    const { result } = renderHook(() => useLocalStoreRebindMutation(), {
-      wrapper,
-    });
+    const { result } = renderHook(
+      () => useLocalStoreRebindMutation(SESSION_HOST_ID),
+      { wrapper },
+    );
     await act(async () => {
       await result.current.mutateAsync({ confirmOldHostStopped: true });
     });
@@ -111,9 +108,10 @@ describe("useLocalStoreRebindMutation", () => {
     const inactiveKey = [...hostQueryKeys.scope(SESSION_HOST_ID), "history"];
     queryClient.setQueryData(inactiveKey, { page: "still this window's" });
 
-    const { result } = renderHook(() => useLocalStoreRebindMutation(), {
-      wrapper: makeWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLocalStoreRebindMutation(SESSION_HOST_ID),
+      { wrapper: makeWrapper(queryClient) },
+    );
     await act(async () => {
       await result.current.mutateAsync({ confirmOldHostStopped: true });
     });

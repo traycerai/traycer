@@ -914,7 +914,14 @@ describe("useCloudEpicTasksQuery", () => {
     });
 
     act(() => {
-      result.current.recordViewed.mutate({ epicId: "view-local" });
+      // `isLocalHome: true` matches this fixture's own framing - the row is
+      // served from the LOCAL page - and keeps the dispatch admissible
+      // whatever the session verdict is, so this stays a test about cache
+      // invalidation rather than one that also depends on the cloud gate.
+      result.current.recordViewed.mutate({
+        epicId: "view-local",
+        isLocalHome: true,
+      });
     });
     await waitFor(() => {
       expect(initialCalls).toBe(2);
