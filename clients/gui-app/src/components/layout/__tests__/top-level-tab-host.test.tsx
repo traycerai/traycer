@@ -1,7 +1,15 @@
 import { use, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import type { InterviewQuestion } from "@traycer/protocol/persistence/epic/schemas";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -430,6 +438,24 @@ function setSingle(ref: TabRef, refs: ReadonlyArray<TabRef>) {
 }
 
 describe("<TopLevelTabHost />", () => {
+  // The draft tab kind renders through TWO chained `React.lazy()` boundaries
+  // (`draft-surface-provider` wrapping `landing-draft-surface`), each a real
+  // dynamic `import()` that must transform and evaluate before its Suspense
+  // fallback (`null`) is replaced by content - so a test that queries a draft
+  // pane's content is racing that resolution. Awaiting the SAME module
+  // specifiers here, once, up front, is the deterministic fact this suite
+  // needs: ESM caches by specifier, so by the time `render()` runs inside any
+  // `it`, `lazy()`'s own `import()` call resolves against an already-loaded
+  // module instead of paying transform+eval under whatever load the runner is
+  // under. This is not a longer wait - it moves the real async work earlier,
+  // to a point this file can already `await`.
+  beforeAll(async () => {
+    await Promise.all([
+      import("@/components/home/landing-draft-surface"),
+      import("@/providers/draft-surface-provider"),
+    ]);
+  });
+
   beforeEach(() => {
     window.localStorage.clear();
     useTabsStore.setState(useTabsStore.getInitialState(), true);

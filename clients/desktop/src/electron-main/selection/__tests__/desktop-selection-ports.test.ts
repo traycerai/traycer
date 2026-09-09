@@ -580,24 +580,22 @@ describe("DesktopHostFleetSource", () => {
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
 
-    const callDeferreds: Array<Deferred<HostListFetchResult>> = [];
+    const registry = recordingRegistryFetch();
     const fleet = buildFleetSource({
       identity,
       authSession,
       host,
-      listRegisteredHosts: async () => {
-        const call = deferred<HostListFetchResult>();
-        callDeferreds.push(call);
-        return call.promise;
-      },
+      listRegisteredHosts: registry.fetch,
     });
 
     const snapshots: HostFleetSnapshot[] = [];
     fleet.onChanged((snapshot) => snapshots.push(snapshot));
 
     const inFlightA = fleet.refresh(); // call #1, captured generation 0.
-    await flushIo();
-    expect(callDeferreds).toHaveLength(1);
+    // Wait for the FACT this case depends on - refresh #1 is past its
+    // filesystem read and inside the fetch - so it cannot be mistaken for a
+    // call that has not been made yet under a loaded runner.
+    await registry.started(0);
 
     // Switch to account B WHILE A's fetch is still in flight.
     identity.set("user-b", 1);
@@ -608,11 +606,10 @@ describe("DesktopHostFleetSource", () => {
     });
 
     // B's own auto-triggered refresh (call #2) reaches listRegisteredHosts too.
-    await flushIo();
-    expect(callDeferreds).toHaveLength(2);
+    await registry.started(1);
 
     // Resolve A's STALE fetch first.
-    callDeferreds[0].resolve({
+    registry.calls[0]?.resolve({
       kind: "ok",
       response: { hosts: [buildHostListItem("host-a")] },
     });
@@ -620,11 +617,11 @@ describe("DesktopHostFleetSource", () => {
     expect(snapshots.at(-1)).toMatchObject({ identityGeneration: 0 });
 
     // THEN complete B's own refresh with B's rows.
-    callDeferreds[1].resolve({
+    registry.calls[1]?.resolve({
       kind: "ok",
       response: { hosts: [buildHostListItem("host-b")] },
     });
-    await flushIo();
+    await Promise.resolve();
 
     // A local-host republish afterwards - a DIFFERENT durable local id.
     await writeFile(
@@ -657,37 +654,34 @@ describe("DesktopHostFleetSource", () => {
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
 
-    const callDeferreds: Array<Deferred<HostListFetchResult>> = [];
+    const registry = recordingRegistryFetch();
     const fleet = buildFleetSource({
       identity,
       authSession,
       host,
-      listRegisteredHosts: async () => {
-        const call = deferred<HostListFetchResult>();
-        callDeferreds.push(call);
-        return call.promise;
-      },
+      listRegisteredHosts: registry.fetch,
     });
 
     const snapshots: HostFleetSnapshot[] = [];
     fleet.onChanged((snapshot) => snapshots.push(snapshot));
 
     const inFlightA = fleet.refresh(); // call #1, captured generation 0.
-    await flushIo();
-    expect(callDeferreds).toHaveLength(1);
+    // Wait for the FACT this case depends on - refresh #1 is past its
+    // filesystem read and inside the fetch - rather than a fixed sleep that
+    // is long enough today and too short on a busier runner.
+    await registry.started(0);
 
     // Switch to account B WHILE A's fetch is still in flight - triggers B's
     // own auto-refresh (call #2).
     identity.set("user-b", 1);
-    await flushIo();
-    expect(callDeferreds).toHaveLength(2);
+    await registry.started(1);
 
     // Resolve B's fetch FIRST...
-    callDeferreds[1].resolve({
+    registry.calls[1]?.resolve({
       kind: "ok",
       response: { hosts: [buildHostListItem("host-b")] },
     });
-    await flushIo();
+    await Promise.resolve();
     // B's own refresh reads the local id BEFORE the enrollment file is
     // rewritten below, so it still synthesizes "local-a" as local here - the
     // point of this assertion is only that host-b's row landed.
@@ -698,7 +692,7 @@ describe("DesktopHostFleetSource", () => {
     });
 
     // ...THEN resolve A's now-doubly-stale fetch LAST.
-    callDeferreds[0].resolve({
+    registry.calls[0]?.resolve({
       kind: "ok",
       response: { hosts: [buildHostListItem("host-a")] },
     });
