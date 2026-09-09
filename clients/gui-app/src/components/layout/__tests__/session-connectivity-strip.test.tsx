@@ -1,12 +1,21 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { HostSessionConnectivity } from "@/lib/host/session-connectivity";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import {
   SURFACE_SYNC_RANK,
   useSurfaceSyncStore,
 } from "@/stores/sync/surface-sync-store";
+import { setMobileApp } from "@/lib/mobile-app";
 
 interface StripMocks {
   readonly wake: Mock;
@@ -36,7 +45,16 @@ function bar(): HTMLElement | null {
 }
 
 describe("<SessionConnectivityStrip />", () => {
+  // The surfaces' reports are shown only in the installed mobile app. Their
+  // publishers mount on the VIEWPORT breakpoint, which a narrow desktop window
+  // also satisfies, so the presentation carries the product gate instead - and
+  // a suite exercising those rows has to be inside that product.
+  beforeEach(() => {
+    setMobileApp(true);
+  });
+
   afterEach(() => {
+    setMobileApp(false);
     cleanup();
     mocks.wake.mockReset();
     useSurfaceSyncStore.setState({ entries: {} });
@@ -51,7 +69,8 @@ describe("<SessionConnectivityStrip />", () => {
     readonly wake: (() => void) | null;
   }): void {
     act(() => {
-      useSurfaceSyncStore.getState().publish(input.key, {
+      useSurfaceSyncStore.getState().publish(`token:${input.key}`, {
+        key: input.key,
         rank: input.rank,
         label: input.label,
         spell: { syncing: input.syncing, escalated: input.escalated },
@@ -71,15 +90,24 @@ describe("<SessionConnectivityStrip />", () => {
     });
   }
 
-  it("says the ordinary interruption with a bar and no words at all", () => {
+  it("says the ordinary interruption with a bar and no VISIBLE words", () => {
     // Most of what this reports heals in a second or two. A row of words that
     // appears and vanishes in that time reads as an alarm and teaches people to
     // distrust the row; the bar says "something is happening" without making a
     // sentence of it.
     renderStrip("interrupted");
     expect(bar()).not.toBeNull();
-    expect(strip().textContent).toBe("");
+    expect(screen.queryByTestId("session-connectivity-strip-text")).toBeNull();
     expect(screen.queryByTestId("session-connectivity-strip-retry")).toBeNull();
+  });
+
+  it("puts the sentence in the live region even with nothing on screen", () => {
+    // `aria-label` names the region; a live region announces what changes
+    // INSIDE it. A row carrying only a label announced nothing when it
+    // appeared and nothing when it escalated, which is the one update here
+    // worth hearing.
+    renderStrip("interrupted");
+    expect(strip().textContent).toContain("Connection interrupted");
   });
 
   it("keeps announcing the interruption even with no words on screen", () => {
@@ -273,7 +301,12 @@ describe("<SessionConnectivityStrip />", () => {
         wake: null,
       });
       render(<SessionConnectivityStrip connectivity="ready" />);
-      expect(strip().textContent).toBe("");
+      // No VISIBLE words - but the sentence is live content, so a reader is
+      // told what is happening rather than being handed a silent bar.
+      expect(
+        screen.queryByTestId("session-connectivity-strip-text"),
+      ).toBeNull();
+      expect(strip().textContent).toBe("Task: Syncing…");
       expect(strip().getAttribute("aria-label")).toBe("Task: Syncing…");
       expect(bar()).not.toBeNull();
     });

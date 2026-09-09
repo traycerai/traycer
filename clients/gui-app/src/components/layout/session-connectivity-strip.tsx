@@ -6,6 +6,7 @@ import {
   useHostSessionWake,
   type HostSessionConnectivity,
 } from "@/lib/host/session-connectivity";
+import { isMobileApp } from "@/lib/mobile-app";
 import { streamSyncingLabel } from "@/lib/sync/stream-syncing-state";
 import {
   resolveSurfaceSync,
@@ -105,6 +106,13 @@ export function SessionConnectivityStrip(props: {
         sessionAnnounced,
         wakeSession,
         surfaceEntries,
+        // The surfaces publish from components mounted on the VIEWPORT
+        // breakpoint, which a narrow desktop window also satisfies - so
+        // without this a desktop user could be shown a row this app has never
+        // put in front of them. The session leg above is already installed-app
+        // only (`useHostSessionConnectivity` answers `unknown` elsewhere), and
+        // this is the same product question, so it takes the same answer.
+        surfacesEligible: isMobileApp(),
       }),
     [props.connectivity, sessionAnnounced, wakeSession, surfaceEntries],
   );
@@ -126,9 +134,23 @@ export function SessionConnectivityStrip(props: {
         resolved.escalated ? "gap-1.5 px-3 py-1.5" : null,
       )}
     >
+      {/* The sentence, always, as LIVE CONTENT. `aria-label` names the region
+          but a live region announces what changes INSIDE it, so a row that
+          carried only a label announced nothing when it appeared and nothing
+          when it escalated. Kept `sr-only` in both states so what is heard
+          does not depend on whether words are on screen. */}
+      <span className="sr-only">{resolved.ariaLabel}</span>
       {resolved.escalated ? (
         <div className="flex w-full items-center gap-2">
-          <span className="min-w-0 flex-1">{resolved.escalatedText}</span>
+          <span
+            // `aria-hidden`: the line above already says it, and without this
+            // the escalated state is announced twice.
+            aria-hidden
+            data-testid="session-connectivity-strip-text"
+            className="min-w-0 flex-1"
+          >
+            {resolved.escalatedText}
+          </span>
           {resolved.wake === null ? null : (
             <Button
               type="button"
@@ -175,6 +197,8 @@ function resolveIndicator(input: {
   readonly sessionAnnounced: boolean;
   readonly wakeSession: () => void;
   readonly surfaceEntries: Readonly<Record<string, SurfaceSyncEntry>>;
+  /** Whether the surfaces' reports may be shown at all - see the call site. */
+  readonly surfacesEligible: boolean;
 }): ResolvedIndicator | null {
   if (input.sessionAnnounced) {
     const prolonged = input.connectivity === "interrupted-prolonged";
@@ -192,6 +216,7 @@ function resolveIndicator(input: {
       wake: input.wakeSession,
     };
   }
+  if (!input.surfacesEligible) return null;
   const surface = resolveSurfaceSync(input.surfaceEntries);
   if (surface === null) return null;
   return {

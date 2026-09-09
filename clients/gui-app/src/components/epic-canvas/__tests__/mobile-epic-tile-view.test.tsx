@@ -94,6 +94,17 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
 }));
 
+// A bound Epic session, so the published wake has something real to reach.
+const epicHandleMock = vi.hoisted(() => ({
+  hostId: "host-A",
+  wakeTransport: vi.fn(),
+}));
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => epicHandleMock,
+  useOpenEpicHandle: () => epicHandleMock,
+}));
+
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({
     data: undefined,
@@ -243,14 +254,16 @@ describe("<MobileEpicTileView />", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     epicSession.value = { transportStatus: "open", snapshotLoaded: true };
     useSurfaceSyncStore.setState({ entries: {} });
+    epicHandleMock.wakeTransport.mockClear();
   });
 
   describe("stream-syncing report", () => {
+    // Entries are keyed by PUBLISHER token, not by surface, so a lookup finds
+    // the one whose `key` names this surface.
     function published(): SurfaceSyncEntry | undefined {
-      const { entries } = useSurfaceSyncStore.getState();
-      return Object.hasOwn(entries, "epic:epic-1")
-        ? entries["epic:epic-1"]
-        : undefined;
+      return Object.values(useSurfaceSyncStore.getState().entries).find(
+        (entry) => entry.key === "epic:host-A:epic-1",
+      );
     }
 
     it("reports nothing running while the Epic's own stream is open", () => {
@@ -272,6 +285,23 @@ describe("<MobileEpicTileView />", () => {
       // The tile it describes is still on screen underneath, not replaced by a
       // skeleton - that is the whole state the report exists to narrate.
       expect(screen.queryByTestId("tile-spec-1")).not.toBeNull();
+    });
+
+    it("carries the Epic session's OWN wake, so Retry reaches this Epic's socket", () => {
+      // A null handle publishes a null wake, which renders no Retry at all -
+      // so the wired path needs a bound session to be worth anything.
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(published()?.wake).not.toBeNull();
+      published()?.wake?.();
+      expect(epicHandleMock.wakeTransport).toHaveBeenCalledTimes(1);
+      // The key is host-scoped: an epic id is host-minted, so the bare id
+      // names a different Epic on another machine.
+      expect(published()?.key).toBe("epic:host-A:epic-1");
     });
 
     it("renders no bar of its own", () => {

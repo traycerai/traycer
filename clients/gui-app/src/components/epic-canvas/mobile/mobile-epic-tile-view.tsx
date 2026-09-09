@@ -82,7 +82,10 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // REPORTED, not rendered. The one indicator lives in the app shell so it
   // neither moves nor restarts its animation when the surface speaking for it
   // changes; ordering against the session and chat legs is the store's rank.
-  usePublishSurfaceSync(`epic:${epicId}`, {
+  usePublishSurfaceSync({
+    // Host-scoped: an epic id is host-minted, so the bare id names a different
+    // Epic on another machine.
+    key: `epic:${epicHandle?.hostId ?? "unresolved"}:${epicId}`,
     rank: SURFACE_SYNC_RANK.epic,
     label: "Task",
     spell: epicSpell,
@@ -129,14 +132,11 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           the only one, so a hand-off between surfaces changes what it says
           rather than which element is saying it.
 
-          Phone-only by PLACEMENT, with no viewport check of its own. This view
-          is mounted from `TileCanvasLive`'s `useIsMobileViewport()` branch, so
-          reaching this line already answers the question - and a second reader
-          of the same media query is a second decider that can drift from the
-          first. It is deliberately not `isMobileApp()`: that names the
-          installed Capacitor build as a PRODUCT (see `lib/mobile-app.ts`),
-          which would drop the report in a mobile browser, where the relay
-          drops the socket exactly the same way. */}
+          This view is mounted from `TileCanvasLive`'s `useIsMobileViewport()`
+          branch, which a narrow DESKTOP window also satisfies - so publishing
+          is not by itself a decision to show anything. Whether a report is
+          ever presented is the strip's call, and it gates on `isMobileApp()`
+          so the row stays absent on desktop exactly as it always has been. */}
       <MobileCurrentTileBar epicId={epicId} tile={selection.ref} />
       <div className="relative min-h-0 flex-1">
         <TabBodySelectedContext.Provider value>

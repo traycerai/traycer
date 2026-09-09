@@ -344,10 +344,16 @@ describe("<MobileCurrentTileBar />", () => {
       render(<MobileCurrentTileBar epicId="epic-1" tile={input.tile} />);
     }
 
+    // Entries are keyed by PUBLISHER token, not by surface, so a lookup finds
+    // the one whose `key` names this surface.
+    function publishedFor(surfaceKey: string): SurfaceSyncEntry | undefined {
+      return Object.values(useSurfaceSyncStore.getState().entries).find(
+        (entry) => entry.key === surfaceKey,
+      );
+    }
+
     function published(): SurfaceSyncEntry | undefined {
-      const { entries } = useSurfaceSyncStore.getState();
-      const key = `chat:${CHAT_TILE.id}`;
-      return Object.hasOwn(entries, key) ? entries[key] : undefined;
+      return publishedFor(`chat:host-A:${CHAT_TILE.id}`);
     }
 
     it("renders no bar of its own - it reports instead", () => {
@@ -403,8 +409,9 @@ describe("<MobileCurrentTileBar />", () => {
         tile: SPEC_TILE,
         chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
       });
-      const { entries } = useSurfaceSyncStore.getState();
-      expect(entries[`chat:${SPEC_TILE.id}`].spell.syncing).toBe(false);
+      expect(publishedFor(`chat:host-A:${SPEC_TILE.id}`)?.spell.syncing).toBe(
+        false,
+      );
       expect(chatSyncMock.calls.every((call) => call[2] === null)).toBe(true);
     });
 

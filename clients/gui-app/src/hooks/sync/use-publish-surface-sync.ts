@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 import {
   useSurfaceSyncStore,
   type SurfaceSyncEntry,
@@ -15,29 +15,32 @@ import {
  * The withdrawal on unmount is what keeps a closed surface from holding the
  * indicator open: a chat tile swiped away is no longer a claim about anything.
  *
- * `key` must identify the SURFACE, not the component - an epic id, a chat id.
- * Two components describing one stream would otherwise each hold a slot, and
- * whichever unmounted last would decide when the report ended.
+ * `entry.key` names the SURFACE and must be host-scoped, because every id that
+ * goes into it is host-minted. The slot this writes to is separate from it -
+ * see the token below - so two components describing one surface coexist
+ * instead of deleting each other.
  */
-export function usePublishSurfaceSync(
-  key: string,
-  entry: SurfaceSyncEntry,
-): void {
+export function usePublishSurfaceSync(entry: SurfaceSyncEntry): void {
   const publish = useSurfaceSyncStore((state) => state.publish);
   const withdraw = useSurfaceSyncStore((state) => state.withdraw);
-  const { rank, label, wake } = entry;
+  // This publisher's own slot. Two components may describe the SAME surface -
+  // one Epic open in two tabs, a keep-alive pane beside the visible one - and
+  // a slot keyed by the surface let whichever unmounted first delete the
+  // other's entry, taking the indicator down while a stream was still away.
+  const token = useId();
+  const { key, rank, label, wake } = entry;
   const { syncing, escalated } = entry.spell;
 
   useEffect(() => {
-    publish(key, { rank, label, wake, spell: { syncing, escalated } });
+    publish(token, { key, rank, label, wake, spell: { syncing, escalated } });
     // Deliberately spread across the primitive fields rather than keyed on
     // `entry`: callers build that object inline every render, so an identity
     // dependency would re-publish on every render of every surface.
-  }, [publish, key, rank, label, wake, syncing, escalated]);
+  }, [publish, token, key, rank, label, wake, syncing, escalated]);
 
   useEffect(() => {
     return () => {
-      withdraw(key);
+      withdraw(token);
     };
-  }, [withdraw, key]);
+  }, [withdraw, token]);
 }

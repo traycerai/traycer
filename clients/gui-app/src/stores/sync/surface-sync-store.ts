@@ -22,6 +22,13 @@ export const SURFACE_SYNC_RANK = {
 } as const;
 
 export interface SurfaceSyncEntry {
+  /**
+   * Which surface this describes, for attribution and for a stable ordering
+   * tie-break. Host-scoped, because every id in it is host-minted: the same
+   * chat id names a different conversation on another machine, and reusing one
+   * bare id across hosts would let two surfaces claim to be the same one.
+   */
+  readonly key: string;
   /** See {@link SURFACE_SYNC_RANK}. */
   readonly rank: number;
   /** Names what is re-syncing for a screen reader ("Task", "Chat"). */
@@ -32,9 +39,18 @@ export interface SurfaceSyncEntry {
 }
 
 interface SurfaceSyncState {
+  /**
+   * Keyed by the PUBLISHER, not by the surface it describes.
+   *
+   * Two mounted components can legitimately describe the same surface - the
+   * same Epic open in two tabs, a keep-alive pane beside a visible one - and
+   * keying by surface let whichever unmounted first delete the other's entry,
+   * so the indicator vanished while a stream was still away. A token per
+   * publisher makes a withdrawal touch only what that publisher wrote.
+   */
   readonly entries: Readonly<Record<string, SurfaceSyncEntry>>;
-  readonly publish: (key: string, entry: SurfaceSyncEntry) => void;
-  readonly withdraw: (key: string) => void;
+  readonly publish: (token: string, entry: SurfaceSyncEntry) => void;
+  readonly withdraw: (token: string) => void;
 }
 
 /**
@@ -54,13 +70,14 @@ interface SurfaceSyncState {
  */
 export const useSurfaceSyncStore = create<SurfaceSyncState>()((set) => ({
   entries: {},
-  publish: (key, entry) => {
+  publish: (token, entry) => {
     set((state) => {
-      const current = Object.hasOwn(state.entries, key)
-        ? state.entries[key]
+      const current = Object.hasOwn(state.entries, token)
+        ? state.entries[token]
         : null;
       if (
         current !== null &&
+        current.key === entry.key &&
         current.rank === entry.rank &&
         current.label === entry.label &&
         current.wake === entry.wake &&
@@ -71,14 +88,14 @@ export const useSurfaceSyncStore = create<SurfaceSyncState>()((set) => ({
         // re-rendering on every publish, which surfaces do on every render.
         return state;
       }
-      return { entries: { ...state.entries, [key]: entry } };
+      return { entries: { ...state.entries, [token]: entry } };
     });
   },
-  withdraw: (key) => {
+  withdraw: (token) => {
     set((state) => {
-      if (!Object.hasOwn(state.entries, key)) return state;
+      if (!Object.hasOwn(state.entries, token)) return state;
       const next = { ...state.entries };
-      delete next[key];
+      delete next[token];
       return { entries: next };
     });
   },
@@ -95,14 +112,14 @@ export function resolveSurfaceSync(
   entries: Readonly<Record<string, SurfaceSyncEntry>>,
 ): { readonly key: string; readonly entry: SurfaceSyncEntry } | null {
   let best: { key: string; entry: SurfaceSyncEntry } | null = null;
-  for (const [key, entry] of Object.entries(entries)) {
+  for (const entry of Object.values(entries)) {
     if (!entry.spell.syncing) continue;
     if (
       best === null ||
       entry.rank < best.entry.rank ||
-      (entry.rank === best.entry.rank && key < best.key)
+      (entry.rank === best.entry.rank && entry.key < best.key)
     ) {
-      best = { key, entry };
+      best = { key: entry.key, entry };
     }
   }
   return best;

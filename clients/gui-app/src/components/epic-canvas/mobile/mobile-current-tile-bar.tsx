@@ -151,7 +151,10 @@ function MobileCurrentTileBarBody(
   // A non-chat tile publishes a spell that never runs. Its stream is either
   // covered by the Epic's report (every artifact kind), or already narrated by
   // the tile itself (a terminal's overlay, a shell window's banner).
-  usePublishSurfaceSync(`chat:${tile.id}`, {
+  usePublishSurfaceSync({
+    // Host-scoped: a chat id is host-minted, so the same id names a different
+    // conversation on another machine.
+    key: `chat:${"hostId" in tile ? tile.hostId : "unresolved"}:${tile.id}`,
     rank: SURFACE_SYNC_RANK.chat,
     label: "Chat",
     spell: isChat ? chatSpell : NO_STREAM_SYNCING_SPELL,
