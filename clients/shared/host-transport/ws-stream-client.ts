@@ -3243,6 +3243,7 @@ class StreamSession<
       | ClientStreamSubscribeFrame
       | ClientStreamFatalErrorFrame
       | ClientStreamCredentialUpdateFrame
+      | ClientStreamCloudVerdictUpdateFrame
       | ClientStreamHostCredentialProvisionFrame,
   ): boolean {
     try {
