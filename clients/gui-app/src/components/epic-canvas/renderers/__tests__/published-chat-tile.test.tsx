@@ -683,6 +683,53 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
     expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
   });
 
+  // The canvas no longer draws a banner over this tile for an unreachable
+  // owner, so the tile's own has to be there on every branch - a reader
+  // stuck on the load state or a refused read still needs the host sentence
+  // and the Clone way out (PR #1818 review). Neither branch has a copy on
+  // screen, so neither may claim one.
+  it("keeps the banner above the load state before the first copy", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId(`published-chat-tile-load-${NODE.id}`),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(deadTileBannerContainerProps).toHaveLength(1);
+    expect(deadTileBannerContainerProps[0]?.showsPublishedCopy).toBe(false);
+  });
+
+  it("keeps the banner above the notice when no copy could be read", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaAbsent());
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.queryByTestId("published-chat-notice")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(deadTileBannerContainerProps).toHaveLength(1);
+    expect(deadTileBannerContainerProps[0]?.showsPublishedCopy).toBe(false);
+  });
+
   it("names the plan restriction, not an outage, when that is why the owner is unreachable", () => {
     mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
     mockUseChatReplicaRead.mockReturnValue(replicaOk());

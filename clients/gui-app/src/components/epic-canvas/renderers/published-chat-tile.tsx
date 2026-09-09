@@ -230,7 +230,14 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // The same Clone offer the LIVE tile's dead-tile banner makes, on the copy.
   // Gated (inside the child) on the SAME reachability the lock sentence below
   // reads, so the banner and the sentence can never describe one host two ways.
-  const deadTileBanner = (
+  //
+  // Mounted on EVERY branch below, not only the ones with a transcript: this
+  // tile owns the unreachable-owner banner (the canvas no longer draws one
+  // over it), and a reader stuck on the load state or a refused read still
+  // needs the host sentence and the way out. `showsPublishedCopy` is what
+  // differs per branch - only the transcript branches have a copy on screen
+  // for the foreign-owner sentence to point at.
+  const deadTileBanner = (showsPublishedCopy: boolean): ReactNode => (
     <PublishedChatDeadTileBanner
       node={node}
       epicId={props.epicId}
@@ -238,6 +245,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       ownerStatus={ownerReachability.status}
       ownerUnavailability={ownerReachability.unavailability}
       ownerLabel={ownerLabel}
+      showsPublishedCopy={showsPublishedCopy}
     />
   );
 
@@ -357,6 +365,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (boundedLoad.kind !== "ready") {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+        {deadTileBanner(false)}
         <TileHostLoadState
           load={boundedLoad}
           subject="agent"
@@ -370,7 +379,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (replicaHandle !== null && replicaConversion !== null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-        {deadTileBanner}
+        {deadTileBanner(true)}
         <ChatTileSessionView
           isLiveSession={false}
           handle={replicaHandle}
@@ -404,6 +413,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (applied === null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+        {deadTileBanner(false)}
         <PublishedChatNotice
           state={
             replicaFailure === null
@@ -423,7 +433,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-      {deadTileBanner}
+      {deadTileBanner(true)}
       {/* The heavy content this transcript NAMES - file diffs, full plans -
           is not in the published document; it is content-addressed in the
           cloud. The blocks that expand it decide their own fetch several
@@ -608,6 +618,8 @@ function PublishedChatDeadTileBanner(props: {
   readonly ownerStatus: HostReachabilityStatus;
   readonly ownerUnavailability: HostUnavailability | null;
   readonly ownerLabel: string;
+  /** See `ChatDeadTileBannerProps.showsPublishedCopy`. */
+  readonly showsPublishedCopy: boolean;
 }): ReactNode {
   if (props.ownerStatus !== "unreachable") {
     return null;
@@ -620,7 +632,7 @@ function PublishedChatDeadTileBanner(props: {
       sourceHostId={props.node.ownerHostId}
       hostLabel={props.ownerLabel}
       reason={unreachableHostBannerReason(props.ownerUnavailability)}
-      showsPublishedCopy
+      showsPublishedCopy={props.showsPublishedCopy}
       testId={`published-chat-dead-tile-${props.node.chatId}`}
       sourceOwnerUserId={props.node.ownerUserId}
     />
