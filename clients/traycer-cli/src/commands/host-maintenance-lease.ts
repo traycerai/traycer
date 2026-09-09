@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import {
   rebindUpdateMutationCapabilityLiveness,
+  type AttemptLockLivenessPublication,
   type UpdateContenderAdmission,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
@@ -457,6 +458,7 @@ async function superviseRootMaintenanceExecutor(
           (groupId) => {
             actuatorGroupId = groupId;
           },
+          () => actuatorGroupId,
         ).catch((err) =>
           refuse(err instanceof Error ? err.message : String(err)),
         ),
@@ -603,6 +605,7 @@ async function handleRootExecutorRequest(
   refuse: (message: string) => void,
   supervisorPid: number,
   setActuatorGroup: (groupId: number) => void,
+  readActuatorGroup: () => number | null,
 ): Promise<void> {
   if (
     request === null ||
@@ -662,7 +665,54 @@ async function handleRootExecutorRequest(
       );
       return;
     }
-    await executeAction(value.action, capability, contenderOptions);
+    // `executeAction` runs the action IN THIS PROCESS (B) - it calls
+    // `stopHostServiceWithAttempt` / `uninstallHost` inline, never in C or D.
+    // The published liveness, though, names C (and after `bind-actuator` D's
+    // group), so for the whole of B's in-process work the lock is attributed
+    // to an identity that is not the one doing the work. A contender that
+    // finds C dead with no surviving D group has POSITIVELY PROVED the holder
+    // dead on the evidence it is required to have: it breaks the lock, claims
+    // it, and writes its own record while B is still mid-teardown. B then
+    // finishes removing the tree and unlinks the SUCCESSOR's fresh record.
+    //
+    // The window is not new here - `main` runs the same in-process
+    // `host-uninstall-all` under the same rebind-to-C, so the install dir, the
+    // install record and `staged/` already race a broken lock today. What is
+    // new is the attempt-record discard, which destroys a successor's LIVE
+    // state instead of leaving litter behind, so the window gets closed rather
+    // than inherited.
+    //
+    // Publishing B for the duration only ever ADDS coverage. The actuator
+    // group stays bound with `retainOnPublisherDeath`, so a hard B death is
+    // still held by D exactly as before; what changes is that B can no longer
+    // be proved dead while it is awaiting its own call.
+    const supervisionPublication = (): AttemptLockLivenessPublication => {
+      const groupId = readActuatorGroup();
+      if (groupId === null) return {};
+      return {
+        supervisedProcessGroupId: groupId,
+        retainOnPublisherDeath: true,
+      };
+    };
+    await rebindUpdateMutationCapabilityLiveness(
+      capability,
+      process.pid,
+      supervisionPublication(),
+    );
+    try {
+      await executeAction(value.action, capability, contenderOptions);
+    } finally {
+      // Hand publication back to C. A throw here replaces the action's error,
+      // and that precedence is deliberate: a failed rebind leaves the liveness
+      // token in a state neither identity can be trusted to describe, which is
+      // the more urgent failure. Every route into this dispatch refuses and
+      // terminates the child either way.
+      await rebindUpdateMutationCapabilityLiveness(
+        capability,
+        supervisorPid,
+        supervisionPublication(),
+      );
+    }
     stdin.write(`${JSON.stringify({ kind: "executed" })}\n`);
     return;
   }

@@ -1237,10 +1237,20 @@ export interface DiscardAttemptRecordForUninstallOptions {
  * banner at the top of this module is the whole reason: a caller that unlinks
  * the record itself performs no check AT THE POINT OF THE WRITE, and the gap
  * is real rather than theoretical - a handle can outlive its lock without
- * anyone releasing it, because a contender that positively proved this process
- * dead breaks the lock and takes it, and nothing notifies the original holder
- * (see `lock.ts`). An uninstall that lost its lock that way and then unlinked
- * would delete the NEW owner's live attempt.
+ * anyone releasing it, because a contender that positively proved the
+ * PUBLISHED holder dead breaks the lock and takes it, and nothing notifies the
+ * original holder (see `lock.ts`). An uninstall that lost its lock that way and
+ * then unlinked would delete the NEW owner's live attempt.
+ *
+ * "Published holder" rather than "this process" is the load-bearing
+ * distinction, and it is what made the race reachable rather than academic:
+ * under the root maintenance lease the published identity is the supervisor
+ * CHILD (and its actuator group), while the uninstall itself runs inline in the
+ * CLI. Death of that child is therefore proof about an identity that is not the
+ * one doing the work, so the lock could be broken while this process was very
+ * much alive and mid-uninstall. The lease now publishes the executing process
+ * for the duration of an in-process action, which is what closes it; see
+ * `handleRootExecutorRequest` in the CLI's `host-maintenance-lease.ts`.
  *
  * So it takes the mutation lease and re-verifies ownership immediately before
  * the unlink, exactly like every other mutation here. What it deliberately
@@ -1252,18 +1262,22 @@ export interface DiscardAttemptRecordForUninstallOptions {
  *
  * ## What this does NOT close
  *
- * The ownership check and the unlink are not one atomic step:
+ * The ownership check and the unlink are still not one atomic step:
  * `removeRecordFile` awaits `classifyPath` (and the removal barrier) before
- * `rm`. A contender that positively proves this process dead inside that
- * window can break the lock, claim, and write a fresh record which this call
- * then deletes. `pruneTerminalAttemptRecord` has the identical shape, so the
- * window is a property of this module rather than of this function - but note
- * that prune is guarded by an expected-identity, terminal and retention check
- * where this is not, so the CONSEQUENCE of losing that race is worse here.
- * Closing it needs an atomic compare-and-unlink primitive this module does not
- * have, and that work is tracked separately; what this function does buy over
- * the raw `rm` it replaces is the lease plus a check at the point of the
- * write, where there was previously no check at all.
+ * `rm`, so a takeover landing inside those awaits would still have its fresh
+ * record deleted. What has changed is that no caller can now REACH that
+ * window: a break requires positive proof the published holder is dead, and
+ * every route into this function publishes the process running it. The
+ * residual is a shape, not a reachable path, and it is a property of this
+ * module rather than of this function - `pruneTerminalAttemptRecord` has the
+ * identical check-then-unlink structure.
+ *
+ * Two consequences worth keeping in view. Prune is guarded by an
+ * expected-identity, terminal and retention check where this is not, so if a
+ * future caller did reopen the window, losing the race costs more here.
+ * And the guarantee is upheld by the CALLER's publication discipline, not by
+ * this module - an atomic compare-and-unlink primitive would make it local,
+ * and that work is tracked separately.
  *
  * An unreadable or already-absent record is `discarded`, not a rejection:
  * removal is the goal, and a record that cannot be parsed is exactly what an

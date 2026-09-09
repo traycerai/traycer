@@ -172,14 +172,15 @@ export async function uninstallHost(
   // Dropped through the caller's handle-bound discard, NOT an `rm` here.
   // `store.ts` forbids a raw delete on purpose: an unlink checks nothing at
   // the point of the write, and a handle can outlive its lock without anyone
-  // releasing it (a contender that proved this process dead breaks the lock
-  // and takes it, notifying nobody), so an uninstall that lost its lock would
-  // unlink the NEW owner's live attempt. The discard takes the mutation lease
-  // and checks ownership immediately before the unlink instead. It NARROWS
-  // that window rather than closing it - see the note on
-  // `discardAttemptRecordForUninstall` - but the raw `rm` this replaces had no
-  // check at all. The lock FILE stays: it is the caller's live handle, not
-  // evidence.
+  // releasing it (a contender that proved the PUBLISHED holder dead breaks the
+  // lock and takes it, notifying nobody), so an uninstall that lost its lock
+  // would unlink the NEW owner's live attempt. Under the root maintenance
+  // lease the published holder is the supervisor child, not this process, so
+  // that was reachable while this uninstall ran perfectly healthy; the lease
+  // now publishes the executing process across an in-process action. The
+  // discard additionally takes the mutation lease and checks ownership
+  // immediately before the unlink. The lock FILE stays: it is the caller's
+  // live handle, not evidence.
   // A failure here PROPAGATES, unlike the best-effort removals above. Those
   // leave litter; this one leaves the exact defect this seam exists to
   // prevent - a valid nonterminal record standing in a host home whose

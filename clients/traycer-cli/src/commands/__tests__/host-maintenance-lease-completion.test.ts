@@ -425,3 +425,69 @@ describe("lease admission bounds the action", () => {
     ).toBe(false);
   });
 });
+
+// A SOURCE-ORDER suite, on the same terms as the completion one above: the
+// property is an ordering between two awaits inside a module-private frame
+// handler, and observing it for real needs a spawned supervisor plus a
+// detached actuator group. It would not catch a regression that arrives by
+// another route, and is not offered as though it would.
+describe("an in-process lease action publishes the process that runs it", () => {
+  const handler = LEASE_SOURCE.slice(
+    LEASE_SOURCE.indexOf("async function handleRootExecutorRequest("),
+    LEASE_SOURCE.indexOf("const PROCESS_GROUP_EXIT_DEADLINE_MS"),
+  );
+  const executeArm = handler.slice(handler.indexOf('value.kind === "execute"'));
+
+  it("slices a non-empty execute arm (guards all three indexOf anchors)", () => {
+    expect(handler.length).toBeGreaterThan(500);
+    expect(executeArm.length).toBeGreaterThan(300);
+    expect(executeArm).toContain("await executeAction(");
+  });
+
+  it("publishes this process BEFORE running the action, and hands back after", () => {
+    // `executeAction` runs `uninstallHost` inline in THIS process while the
+    // published liveness names the supervisor child. A contender that finds
+    // that child dead has the positive death proof a lock break requires, so
+    // it can claim mid-uninstall and have its fresh record unlinked by the
+    // teardown still running here. Codex reproduced exactly that, two-process.
+    const publishSelf = executeArm.indexOf(
+      "await rebindUpdateMutationCapabilityLiveness(\n      capability,\n      process.pid,",
+    );
+    const action = executeArm.indexOf("await executeAction(");
+    const handBack = executeArm.indexOf(
+      "await rebindUpdateMutationCapabilityLiveness(\n        capability,\n        supervisorPid,",
+    );
+    expect(publishSelf).toBeGreaterThan(-1);
+    expect(action).toBeGreaterThan(publishSelf);
+    expect(handBack).toBeGreaterThan(action);
+  });
+
+  it("hands publication back from a `finally`, not only on the success path", () => {
+    // An action that throws must not leave this process published: the lease
+    // continues, and the supervisor is the identity the rest of the session's
+    // teardown reasons about.
+    const action = executeArm.indexOf("await executeAction(");
+    const between = executeArm.slice(
+      action + "await executeAction(".length,
+      executeArm.indexOf(
+        "await rebindUpdateMutationCapabilityLiveness(\n        capability,\n        supervisorPid,",
+      ),
+    );
+    expect(between).toContain("} finally {");
+  });
+
+  it("keeps the actuator group bound across the swap - coverage is added, never traded", () => {
+    // The whole safety argument is that publishing this process only ADDS
+    // liveness. Publishing `{}` would drop D's group and make a hard death of
+    // THIS process release a lock while a detached actuator was still running
+    // - strictly worse than the bug being fixed.
+    expect(executeArm).toContain("supervisedProcessGroupId: groupId");
+    expect(executeArm).toContain("retainOnPublisherDeath: true");
+    expect(executeArm).toContain("const groupId = readActuatorGroup();");
+    // Both rebinds go through the same helper, so neither can drift to `{}`.
+    const emptyPublications = executeArm.match(
+      /rebindUpdateMutationCapabilityLiveness\([^)]*\{\}\s*\)/g,
+    );
+    expect(emptyPublications).toBeNull();
+  });
+});

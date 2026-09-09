@@ -489,7 +489,9 @@ export async function commitAttemptMutationWithCapability(
  * forbids a raw delete precisely because an unlink performs no check at the
  * point of the write, and a handle can outlive its lock without anyone
  * releasing it. This facade contributes the live-capability check; the core
- * re-verifies ownership on both sides of its read before unlinking.
+ * checks ownership once, immediately before the unlink. It reads no canonical
+ * bytes and compares no identity - unlike `pruneTerminalAttemptRecord`, which
+ * checks on both sides precisely BECAUSE it reads and compares in between.
  *
  * Restricted to `host-uninstall-maintenance` - the admission whose whole
  * justification is that it removes the product. In particular
