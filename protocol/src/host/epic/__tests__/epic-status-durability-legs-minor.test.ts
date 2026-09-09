@@ -125,6 +125,12 @@ describe("epic.status.subscribe durability legs", () => {
     expect(
       epicStatusSubscribeServerFrameSchemaV10.safeParse(projected).success,
     ).toBe(true);
+    // Narrowed rather than read off the union: `pong` carries no epoch, so
+    // reading one straight off the projection would be asserting on a type
+    // that does not have it.
+    if (projected.kind !== "snapshot" && projected.kind !== "cloudSyncStatus") {
+      throw new Error("projection changed the frame kind");
+    }
     expect(projected.authorityEpoch).toBe("epoch-1");
   });
 

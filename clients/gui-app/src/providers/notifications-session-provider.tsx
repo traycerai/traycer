@@ -482,8 +482,8 @@ function NotificationsSessionBody(
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (servingHostId !== hostId) return;
-      // `partitionSnapshot` is a `snapshot` for every purpose here: `@1.2`
-      // defines it by extending the frozen V11 snapshot, so it carries the
+      // `partitionSnapshot` is a `snapshot` for every purpose here: `@1.3`
+      // defines it by extending the frozen `@1.2` snapshot, so it carries the
       // same `attention` / `recent` pages and only narrows WHICH rows they
       // hold. Omitting it would drop completion receipts for the whole local
       // partition on every mixed-mode session.

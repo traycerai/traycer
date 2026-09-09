@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+
+/** The feed minor this client will ask for, from the registry it is built with. */
+const FEED_LATEST_MINOR =
+  hostStreamRpcRegistry["host.notifications.feed.subscribe"][1].latestMinor;
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
@@ -3413,10 +3417,16 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[0].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      // The newest installed minor of the feed, read off the registry's
-      // `latestMinor`; the mirrored handshake negotiates it. A minor added in
-      // `protocol/src/host/registry.ts` moves this literal with it.
-      schemaVersion: { major: 1, minor: 2, supportedMajors: [1] },
+      // The newest installed minor of the feed, DERIVED from the registry
+      // rather than restated: the comment here used to promise that a minor
+      // added in `protocol/src/host/registry.ts` would move the literal with
+      // it, which a literal cannot do - and the feed has since gained `@1.3`,
+      // which is exactly the edit that promise was written for.
+      schemaVersion: {
+        major: 1,
+        minor: FEED_LATEST_MINOR,
+        supportedMajors: [1],
+      },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,
@@ -3449,10 +3459,16 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      // The newest installed minor of the feed, read off the registry's
-      // `latestMinor`; the mirrored handshake negotiates it. A minor added in
-      // `protocol/src/host/registry.ts` moves this literal with it.
-      schemaVersion: { major: 1, minor: 2, supportedMajors: [1] },
+      // The newest installed minor of the feed, DERIVED from the registry
+      // rather than restated: the comment here used to promise that a minor
+      // added in `protocol/src/host/registry.ts` would move the literal with
+      // it, which a literal cannot do - and the feed has since gained `@1.3`,
+      // which is exactly the edit that promise was written for.
+      schemaVersion: {
+        major: 1,
+        minor: FEED_LATEST_MINOR,
+        supportedMajors: [1],
+      },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,

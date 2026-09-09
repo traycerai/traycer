@@ -21,6 +21,10 @@ import {
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
+  hostNotificationsFeedSubscribeV13,
+  hostNotificationsSubscribeServerFrameSchemaV12,
+  hostNotificationsSubscribeServerFrameSchemaV13,
+  HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR,
   hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
@@ -261,12 +265,39 @@ describe("registry wiring", () => {
     );
   });
 
-  it("advertises feed @1.2 with @1.0/@1.1 still installed for older peers", () => {
+  it("advertises feed @1.3 with @1.0-@1.2 still installed for older peers", () => {
     const line = hostStreamRpcRegistry["host.notifications.feed.subscribe"][1];
-    expect(line.latestMinor).toBe(2);
+    expect(line.latestMinor).toBe(3);
     expect(line.versions[0].contract).toBe(hostNotificationsFeedSubscribeV10);
     expect(line.versions[1].contract).toBe(hostNotificationsFeedSubscribeV11);
     expect(line.versions[2].contract).toBe(hostNotificationsFeedSubscribeV12);
+    expect(line.versions[3].contract).toBe(hostNotificationsFeedSubscribeV13);
+    // The emission gate and the union are one fact: a floor pointing at a
+    // minor this line does not install would refuse `partitionSnapshot` to
+    // every peer, silently and forever.
+    expect(line.latestMinor).toBe(
+      HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR,
+    );
+  });
+
+  /**
+   * `@1.2` shipped in cli-v1.3.0, so it is frozen at the shape that release
+   * published - which does NOT include `partitionSnapshot`. The variant sat
+   * there while `@1.2` was still unreleased and moved up when it shipped; this
+   * is what stops it moving back.
+   */
+  it("keeps partitionSnapshot off the shipped @1.2 union and on @1.3", () => {
+    const kindsOf = (union: {
+      readonly options: ReadonlyArray<{
+        readonly shape: { readonly kind: { readonly value: string } };
+      }>;
+    }): string[] => union.options.map((option) => option.shape.kind.value);
+    expect(
+      kindsOf(hostNotificationsSubscribeServerFrameSchemaV12),
+    ).not.toContain("partitionSnapshot");
+    expect(kindsOf(hostNotificationsSubscribeServerFrameSchemaV13)).toContain(
+      "partitionSnapshot",
+    );
   });
 
   it("keeps the legacy subscribe stream frozen at @1.0", () => {

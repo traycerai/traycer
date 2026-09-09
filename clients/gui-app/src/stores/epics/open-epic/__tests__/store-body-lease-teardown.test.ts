@@ -33,7 +33,7 @@ import type {
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { ArtifactBodyUnavailableError } from "@/lib/epic-replica-reads";
 import {
@@ -65,7 +65,7 @@ function raceAgainstHang(promise: Promise<unknown>): Promise<unknown> {
 }
 
 function statusSnapshot(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
@@ -149,7 +149,7 @@ function createLaneRig(epicId: string): LaneRig {
     handle,
     async open(): Promise<void> {
       if (statusCallbacks === null) throw new Error("no status client");
-      statusCallbacks.onSnapshot(statusSnapshot());
+      statusCallbacks.onSnapshot(statusSnapshot(), true);
       handle.store.getState().acquireArtifactBodyLease(ARTIFACT);
       await handle.flush();
     },

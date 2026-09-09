@@ -51,7 +51,7 @@ import type {
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import {} from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -247,7 +247,7 @@ function createLegacyArm(): AvailabilityArm {
 // ── The lane driver ─────────────────────────────────────────────────────────
 
 function statusSnapshot(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
@@ -360,7 +360,7 @@ function createLaneArm(): AvailabilityArm {
       if (statusCallbacks === null) throw new Error("no status client");
       // Installs the lanes off the probe's outcome, and names the epoch a body
       // lane attaches under.
-      statusCallbacks.onSnapshot(statusSnapshot());
+      statusCallbacks.onSnapshot(statusSnapshot(), true);
       // The tile mounting is what opens the body lane on this arm.
       releaseLease = handle.store.getState().acquireArtifactBodyLease(ARTIFACT);
     },
