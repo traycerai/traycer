@@ -577,6 +577,7 @@ describe("HostRequestCoordinator", () => {
       connectionId: undefined,
       operationId: undefined,
       externalAbortSignal: undefined,
+      cloudAuthorized: true,
     });
     spine.setRequestContext(context);
     const client = spine.createRequester(mockLocalHostEntry);

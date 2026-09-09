@@ -249,6 +249,9 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       // A caller's FIRST attempt. The replay requirement is raised by the
       // `createRetryingMessenger` wrapper above, per failure, not here.
       replayMustBeKeyed: false,
+      // The CLI names no version floor: it dispatches whatever the handshake
+      // negotiates, as it always has.
+      requiredHostMethodVersion: null,
     });
     logger.debug("Host RPC completed", {
       environment: config.environment,

@@ -1,3 +1,4 @@
+import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import * as m from "motion/react-m";
@@ -60,7 +61,7 @@ export interface SplitTabItemProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -372,7 +373,7 @@ interface SplitMemberProps {
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   readonly showDropIndicatorBefore: boolean;
   readonly showDropIndicatorAfter: boolean;
-  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -422,7 +423,7 @@ function SplitMember(props: SplitMemberProps): ReactNode {
         onOpenInNewWindow={props.onOpenInNewWindow}
         canOpenInNewWindow={props.canOpenInNewWindow}
         onSplitCommand={props.onSplitCommand}
-        taskPinned={
+        taskPinnedState={
           props.member.tab.kind === "epic"
             ? (props.taskPinnedStates.get(props.member.tab.epicId) ?? null)
             : null

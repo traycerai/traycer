@@ -73,6 +73,7 @@ function testActuators(deps: RunHostUninstallDeps): HostUninstallActuators {
     uninstall: (controller, options) => controller.uninstall(options),
     stop: (controller, label, options) => controller.stop(label, options),
     verifyMutationCapability: async (): Promise<void> => undefined,
+    discardAttemptRecord: null,
   };
 }
 

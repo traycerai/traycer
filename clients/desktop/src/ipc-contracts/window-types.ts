@@ -131,6 +131,14 @@ export type DesktopAuthSessionRefusalReason =
 
 export type DesktopAuthSessionSetResult =
   | { readonly outcome: "accepted" }
+  /**
+   * Verified, but not installed: a set begun after this one had already
+   * committed by the time this one's verification came back, so this one is
+   * the older intent (`DesktopAuthSession.setVerified`). Nothing to retry -
+   * the newer session has already fanned out to every window, this one's
+   * sender included.
+   */
+  | { readonly outcome: "superseded" }
   | {
       readonly outcome: "refused";
       readonly reason: DesktopAuthSessionRefusalReason;

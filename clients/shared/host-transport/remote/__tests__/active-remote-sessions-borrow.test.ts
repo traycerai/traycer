@@ -64,6 +64,12 @@ function fakeSession(): FakeSession {
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
+    // Borrow/linger is pure timer-and-map logic; it never negotiates a method,
+    // so these answer the inert defaults rather than modelling support changes
+    // (`active-remote-sessions.test.ts` is where that behaviour is pinned).
+    getMethodSupport: () => "supported",
+    getMethodSchemaVersion: () => ({ major: 1, minor: 0 }),
+    subscribeMethodSupport: () => () => undefined,
     terminalFatal: () => null,
     close: () => {
       closeCalls += 1;
@@ -193,24 +199,55 @@ describe("tryAcquireReadyRemoteSession", () => {
 
     // The sign-out path, firing while the borrow is still outstanding.
     retireAllRemoteSessions();
-    // Still held (owner has not released), so the sweep only marked it -
-    // exactly the "still held" branch `closeSupersededIdentities` documents.
-    expect(session.closeCalls).toBe(0);
+    // The AUTH BOUNDARY's sweep force-closes even a held entry, and drops it
+    // from the map in the same pass. This is deliberately NOT the "mark it and
+    // wait for the release" rule `closeSupersededIdentities` follows: a holder
+    // there is a render on its way out, whereas a holder here is an open tab
+    // that keeps holding - and what it can still SEND over an already-attached
+    // socket is the whole point of the boundary. See `retireAllRemoteSessions`.
+    expect(session.closeCalls).toBe(1);
+    expect(session.isClosed()).toBe(true);
+    // Dropped from the map entirely - so this 0 is a cache MISS, not a reading
+    // of the retired entry. `remoteSessionBorrowCountForTest` resolves by KEY
+    // and answers `?? 0`, which is why every balance assertion below is made
+    // against a live successor instead of against this absence.
+    expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
 
-    // BEFORE the give-back, and this is the window the balance assertions
-    // below cannot see. The entry is marked but deliberately still OPEN,
-    // because the owner holds it - so nothing had closed the session and the
-    // borrow's only guard, `released`, was still false. It kept polling over
-    // an identity the sign-out retired, under the retired credential, for as
-    // long as the owner held on. The handle must refuse on its own.
+    // The handle must still refuse on its own rather than leaning on the close:
+    // it captured THIS entry, and `superseded` is the guard that answers even
+    // for a holder that has not noticed the close yet.
     await expect(
       borrow.sendUnary("host.status" as never, {} as never, null, undefined),
     ).rejects.toThrow(/superseded/);
     expect(session.sendUnary).not.toHaveBeenCalled();
-    // Refusing does not disturb the accounting the rest of this test asserts.
+
+    // The successor is built BEFORE the stale give-backs, which is the whole
+    // point: against an ABSENT entry a release that had stopped decrementing
+    // altogether reads identically to one that balances, so the assertion
+    // would hold either way and prove neither. With a live same-key entry in
+    // place, a stale handle that resolved its target by KEY rather than by its
+    // captured reference underflows this successor to -1 and is caught.
+    const successorSession = fakeSession();
+    successorSession.ready = true;
+    const successor = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => successorSession,
+    );
+
+    // Positive control for the instrument itself, on this exact key: witness
+    // the counter move 0 -> 1 -> 0 before relying on it to stay at 0. Without
+    // it, a helper that answered 0 for this identity under all conditions
+    // would satisfy every assertion below.
+    expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
+    const successorBorrow = tryAcquireReadyRemoteSession(identity.hostId);
+    if (successorBorrow === null) throw new Error("expected a borrow");
     expect(remoteSessionBorrowCountForTest(identity)).toBe(1);
+    successorBorrow.release();
+    expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
 
     expect(() => borrow.release()).not.toThrow();
+    expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
     expect(() => borrow.release()).not.toThrow(); // idempotent give-back
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
 
@@ -219,20 +256,17 @@ describe("tryAcquireReadyRemoteSession", () => {
       borrow.sendUnary("host.status" as never, {} as never, null, undefined),
     ).rejects.toThrow();
 
-    // The owner's release finds the entry superseded and closes it on the
-    // spot (never lingers a retired identity).
-    owner.close();
-    expect(session.closeCalls).toBe(1);
+    // The owner's release finds an entry the sweep already closed and
+    // displaced; it must not throw, and it cannot revive anything.
+    expect(() => owner.close()).not.toThrow();
+    expect(session.isClosed()).toBe(true);
 
-    // No underflow leaked onto a successor entry for the SAME identity: a
-    // fresh acquire starts its own borrow count at zero.
-    const successorSession = fakeSession();
-    const successor = acquireRemoteSession(
-      identity,
-      BORROW_TEST_POLICY,
-      () => successorSession,
-    );
-    expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
+    // Same class as the stale release, and the reason the successor is alive
+    // for it: a stale OWNER handle must also resolve its captured entry rather
+    // than the key, or signing out would tear down the session the next
+    // sign-in just opened.
+    expect(successorSession.closeCalls).toBe(0);
+    expect(hasBorrowableRemoteSession(identity.hostId)).toBe(true);
     successor.close();
   });
 

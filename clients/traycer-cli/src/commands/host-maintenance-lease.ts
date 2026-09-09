@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import {
   rebindUpdateMutationCapabilityLiveness,
+  type AttemptLockLivenessPublication,
+  type UpdateContenderAdmission,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
 import { createCliLogger } from "../logger";
@@ -47,9 +49,48 @@ export const HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION = 1;
 
 export type HostMaintenanceLeaseAdmission =
   | "desktop-activation-maintenance"
-  | "uninstall-maintenance";
+  | "desktop-install-maintenance"
+  | "host-uninstall-maintenance";
 
 type HostMaintenanceLeaseAction = "host-stop" | "host-uninstall-all";
+
+/**
+ * Which actions each admission may ask for.
+ *
+ * The admissions do not cost the same. `host-uninstall-maintenance` is
+ * admitted over a durable nonterminal attempt BECAUSE it removes the whole
+ * install; `desktop-install-maintenance` is admitted over one because it
+ * removes nothing at all - it swaps an .app bundle and stops an idle host.
+ * Leaving the wire free to pair either admission with either action would let
+ * an install-shaped lease, admitted on the strength of removing nothing, ask
+ * for the full teardown. The table makes the justification true by
+ * construction instead of by convention in a script in another repository.
+ */
+const LEASE_ACTIONS_BY_ADMISSION: Readonly<
+  Record<HostMaintenanceLeaseAdmission, readonly HostMaintenanceLeaseAction[]>
+> = {
+  "desktop-activation-maintenance": ["host-stop"],
+  "desktop-install-maintenance": ["host-stop"],
+  "host-uninstall-maintenance": ["host-stop", "host-uninstall-all"],
+};
+
+/**
+ * Fail-closed on purpose: this takes the WIDE contender union, not the lease
+ * union, so an admission that never belonged on a lease at all answers `false`
+ * here rather than being cast into the table and indexing to `undefined`.
+ */
+export function leaseAdmissionPermitsAction(
+  admission: UpdateContenderAdmission,
+  action: HostMaintenanceLeaseAction,
+): boolean {
+  const permitted = Object.prototype.hasOwnProperty.call(
+    LEASE_ACTIONS_BY_ADMISSION,
+    admission,
+  )
+    ? LEASE_ACTIONS_BY_ADMISSION[admission as HostMaintenanceLeaseAdmission]
+    : null;
+  return permitted !== null && permitted.includes(action);
+}
 
 type RootMaintenanceOperation =
   | "cloud-macos-install"
@@ -417,6 +458,7 @@ async function superviseRootMaintenanceExecutor(
           (groupId) => {
             actuatorGroupId = groupId;
           },
+          () => actuatorGroupId,
         ).catch((err) =>
           refuse(err instanceof Error ? err.message : String(err)),
         ),
@@ -563,6 +605,7 @@ async function handleRootExecutorRequest(
   refuse: (message: string) => void,
   supervisorPid: number,
   setActuatorGroup: (groupId: number) => void,
+  readActuatorGroup: () => number | null,
 ): Promise<void> {
   if (
     request === null ||
@@ -610,7 +653,66 @@ async function handleRootExecutorRequest(
     value.kind === "execute" &&
     (value.action === "host-stop" || value.action === "host-uninstall-all")
   ) {
-    await executeAction(value.action, capability, contenderOptions);
+    // The admission bounds the action, not just the lease. See
+    // `LEASE_ACTIONS_BY_ADMISSION`: an install-shaped admission is admitted
+    // over a park precisely because it removes nothing, so it must not be
+    // able to ask for the teardown.
+    if (
+      !leaseAdmissionPermitsAction(contenderOptions.admission, value.action)
+    ) {
+      refuse(
+        `maintenance admission does not permit the requested action: ${value.action}`,
+      );
+      return;
+    }
+    // `executeAction` runs the action IN THIS PROCESS (B) - it calls
+    // `stopHostServiceWithAttempt` / `uninstallHost` inline, never in C or D.
+    // The published liveness, though, names C (and after `bind-actuator` D's
+    // group), so for the whole of B's in-process work the lock is attributed
+    // to an identity that is not the one doing the work. A contender that
+    // finds C dead with no surviving D group has POSITIVELY PROVED the holder
+    // dead on the evidence it is required to have: it breaks the lock, claims
+    // it, and writes its own record while B is still mid-teardown. B then
+    // finishes removing the tree and unlinks the SUCCESSOR's fresh record.
+    //
+    // The window is not new here - `main` runs the same in-process
+    // `host-uninstall-all` under the same rebind-to-C, so the install dir, the
+    // install record and `staged/` already race a broken lock today. What is
+    // new is the attempt-record discard, which destroys a successor's LIVE
+    // state instead of leaving litter behind, so the window gets closed rather
+    // than inherited.
+    //
+    // Publishing B for the duration only ever ADDS coverage. The actuator
+    // group stays bound with `retainOnPublisherDeath`, so a hard B death is
+    // still held by D exactly as before; what changes is that B can no longer
+    // be proved dead while it is awaiting its own call.
+    const supervisionPublication = (): AttemptLockLivenessPublication => {
+      const groupId = readActuatorGroup();
+      if (groupId === null) return {};
+      return {
+        supervisedProcessGroupId: groupId,
+        retainOnPublisherDeath: true,
+      };
+    };
+    await rebindUpdateMutationCapabilityLiveness(
+      capability,
+      process.pid,
+      supervisionPublication(),
+    );
+    try {
+      await executeAction(value.action, capability, contenderOptions);
+    } finally {
+      // Hand publication back to C. A throw here replaces the action's error,
+      // and that precedence is deliberate: a failed rebind leaves the liveness
+      // token in a state neither identity can be trusted to describe, which is
+      // the more urgent failure. Every route into this dispatch refuses and
+      // terminates the child either way.
+      await rebindUpdateMutationCapabilityLiveness(
+        capability,
+        supervisorPid,
+        supervisionPublication(),
+      );
+    }
     stdin.write(`${JSON.stringify({ kind: "executed" })}\n`);
     return;
   }
@@ -709,6 +811,17 @@ async function executeAction(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
 ): Promise<void> {
+  // Enforced HERE, at the single boundary every dispatch route funnels
+  // through, rather than at the call sites: there are two of them (the direct
+  // `execute` frame in `serveMaintenanceLease` and the root executor's
+  // `execute` request), and guarding one leaves the other open - which is
+  // exactly the hole a first pass at this left. `requireCliUpdateMutationCapability`
+  // upstream checks lock ownership and the target home, never the admission.
+  if (!leaseAdmissionPermitsAction(contenderOptions.admission, action)) {
+    throw new Error(
+      `maintenance admission ${contenderOptions.admission} does not permit the action ${action}`,
+    );
+  }
   await withCliAttemptMutation(capability, contenderOptions, async () => {
     const environment = contenderOptions.environment;
     if (action === "host-stop") {
