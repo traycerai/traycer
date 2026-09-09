@@ -48,13 +48,18 @@ import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions
 import { useHostBinding } from "@/lib/host";
 import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostDiscoverySettled } from "@/hooks/host/use-host-discovery-settled";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
+import { windowNarrationAwaitsDiscovery } from "@/lib/host/window-narration";
 import {
   useHostCompatibility,
   type HostCompatibility,
 } from "@/lib/host/compatibility-state";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import {
+  useRunnerHost,
+  useRunnerHostOrNull,
+} from "@/providers/use-runner-host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
@@ -574,12 +579,32 @@ export function DefaultHostReadyGate(props: {
  * be running yet; this is the window finding its authority, and claiming
  * "Starting local Traycer Host…" here would name a machine nothing has
  * resolved.
+ *
+ * TWO WAYS THE NARRATOR CANNOT SPEAK, and the second is why this card reads
+ * more than `attached`. On a shell with no local host, an ∅ derived before
+ * discovery has answered is a vacuum rather than a verdict, and the narrator
+ * holds its tongue through it (`windowNarrationAwaitsDiscovery`, whose
+ * definition this shares rather than restates - a second copy is how a frame
+ * ends up with two cards or with none). Reading only `attached` would leave
+ * that window as a header over an empty page.
  */
 function AttachPendingCard(props: {
   readonly presentation: DefaultHostReadinessPresentation;
 }): ReactNode {
   const attached = useSelectionAuthorityAttached();
-  if (attached) return null;
+  const effectiveHostId = useEffectiveHostId();
+  // The NULL-TOLERANT read, for the same reason `useWindowNarration` gives:
+  // outside a provider there is no local host to expect, which is also the
+  // correct answer.
+  const localHostExpected = useRunnerHostOrNull()?.hasLocalHost ?? false;
+  const discoverySettled = useHostDiscoverySettled();
+  const awaitingDiscovery = windowNarrationAwaitsDiscovery({
+    attached,
+    effectiveHostId,
+    localHostExpected,
+    discoverySettled,
+  });
+  if (attached && !awaitingDiscovery) return null;
   return (
     <div className="flex flex-1 items-center justify-center p-6">
       {/* The shared boot SURFACE, not a card of its own: this sits between the

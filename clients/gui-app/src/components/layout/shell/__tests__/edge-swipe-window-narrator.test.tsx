@@ -48,6 +48,17 @@ vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
   useHostProvisioningProgress: () => null,
 }));
 
+// DISCOVERY HAS ANSWERED throughout this file, and saying so is what keeps
+// these cases about the gesture. The narrator holds its tongue on an ∅ no
+// listing has answered for (`windowNarrationAwaitsDiscovery`), so a fixture
+// that left this unstated would render no narrator at all on this shell - and
+// every assertion below would pass against a document that simply never had a
+// barrier to raise. The ∅ these cases describe is the post-latch one: the fleet
+// is known and unreachable.
+vi.mock("@/hooks/host/use-host-discovery-settled", () => ({
+  useHostDiscoverySettled: () => true,
+}));
+
 const REMOTE_HOST_ID = "remote-host";
 
 const EMPTY_PRESENTATION: DefaultHostReadinessPresentation = {

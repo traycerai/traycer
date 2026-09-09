@@ -10,6 +10,7 @@ import {
   hostUpdateActionApplies,
   hostUpdateSkew,
   isServingLease,
+  windowNarrationAwaitsDiscovery,
   type WindowNarrationInput,
 } from "@/lib/host/window-narration";
 
@@ -54,6 +55,11 @@ function baseInput(
     // a shell that can actually boot a local host, and every case below that
     // does not say otherwise is describing a desktop launch.
     localHostExpected: true,
+    // Discovery has ANSWERED unless a case says otherwise: every ∅ below is
+    // therefore a verdict rather than a vacuum, which is what the pre-serve
+    // grace and the ∅ arm are both written against. The pre-discovery arm has
+    // its own block.
+    discoverySettled: true,
     // This machine is `host-local` throughout, so a case whose target is
     // `host-local` is a LOCAL target and one that names anything else is
     // remote - the distinction the restarting-target arm turns on, and one no
@@ -364,8 +370,9 @@ describe("deriveWindowNarration", () => {
 
     it("does not apply on a shell that cannot boot a local host", () => {
       // Web/mobile: there is no local lifecycle to be "starting", so an empty
-      // concluded-nothing fleet really is "no host is available". Softening it
-      // would promise a boot that cannot happen.
+      // fleet DISCOVERY HAS ANSWERED FOR really is "no host is available".
+      // Softening it would promise a boot that cannot happen. (The unanswered
+      // case is the pre-discovery arm's, below.)
       const state = deriveWindowNarration(
         baseInput({
           attached: true,
@@ -380,6 +387,179 @@ describe("deriveWindowNarration", () => {
         cause: "no-usable-host",
         variant: { kind: "offline" },
       });
+    });
+  });
+
+  describe("the pre-discovery ∅ arm", () => {
+    /**
+     * ∅ BEFORE ANYTHING HAS ANSWERED is a vacuum, not a verdict.
+     *
+     * The authority derives its leases from the fleet it has been given, so on
+     * a launch the empty list it publishes before the first listing lands is
+     * byte-identical to the one an account with no hosts produces. On a shell
+     * with no local host the pre-serve grace above does not apply, so the
+     * second reading reached the screen: "No host is available", with Retry
+     * and Report issue, for the beat between the kernel attaching and
+     * discovery answering - on every launch of the phone app.
+     *
+     * These cases are what a build that IGNORED `discoverySettled` fails: the
+     * first two differ in nothing else.
+     */
+    it("is silent on ∅ while discovery has not answered", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: false,
+          discoverySettled: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("narrates the unchanged ∅ verdict once discovery has answered", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: false,
+          discoverySettled: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("is silent after a re-attach withdraws the answer, whatever this window has already served", () => {
+      // NOT a launch latch. `hasBeenServed` is deliberately true here: the
+      // flag the arm reads is withdrawn on the identity edge that also wipes
+      // the authority's fleet, and a wait spent once per process would narrate
+      // that second vacuum as a verdict.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          hasBeenServed: true,
+          localHostExpected: false,
+          discoverySettled: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("is silent for a fleet that has answered with a connecting remote, by the ∅ arm never being reached", () => {
+      // The settled half of the same launch: the listing landed, the authority
+      // published a lease, and the window is on a host that has not answered
+      // yet. `isUsableForSelection` counts `connecting`, so this is a cold
+      // start on a remote - and the modal draws nothing post-latch.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: "host-a",
+          leases: [
+            lease({ hostId: "host-a", status: "connecting", dead: null }),
+          ],
+          localHostExpected: false,
+          discoverySettled: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("does not silence a shell that can boot a local host", () => {
+      // Desktop's `cold-start` arm is untouched: something really is starting
+      // there, and "Starting Traycer…" is the truer sentence than silence.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: true,
+          discoverySettled: false,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("does not silence a window that already has an effective host", () => {
+      // The arm is a statement about ∅ alone. A window that has been given a
+      // host is not waiting for discovery, whatever the directory has said.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: "host-a",
+          leases: [lease({ hostId: "host-a", status: "ready", dead: null })],
+          localHostExpected: false,
+          discoverySettled: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: true,
+          effectiveHostId: "host-a",
+          localHostExpected: false,
+          discoverySettled: false,
+        }),
+      ).toBe(false);
+    });
+  });
+
+  describe("windowNarrationAwaitsDiscovery", () => {
+    // The predicate the gate's attach-pending cover shares with the narrator,
+    // pinned directly: the cover holds the boot surface over exactly the
+    // window the narrator is silent for, and a disagreement between the two is
+    // a frame with two cards or with none.
+    it("is false while unattached - the attach cover already owns that window", () => {
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: false,
+          effectiveHostId: null,
+          localHostExpected: false,
+          discoverySettled: false,
+        }),
+      ).toBe(false);
+    });
+
+    it("is true only for an attached ∅ on a no-local-host shell with no answer", () => {
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: true,
+          effectiveHostId: null,
+          localHostExpected: false,
+          discoverySettled: false,
+        }),
+      ).toBe(true);
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: true,
+          effectiveHostId: null,
+          localHostExpected: true,
+          discoverySettled: false,
+        }),
+      ).toBe(false);
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: true,
+          effectiveHostId: null,
+          localHostExpected: false,
+          discoverySettled: true,
+        }),
+      ).toBe(false);
     });
   });
 
