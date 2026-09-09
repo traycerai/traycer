@@ -265,16 +265,38 @@ export function usePendingSetPinnedEpicIds(): ReadonlySet<string> {
   );
 }
 
+/**
+ * The part of {@link SetEpicPinnedVariables} this identification needs.
+ *
+ * Narrower than the variables type on purpose - see the guard below.
+ */
+type PendingSetPinnedIdentity = {
+  readonly epicId: string;
+  readonly pinned: boolean;
+};
+
+/**
+ * Identifies a pending pin dispatch well enough to read its `epicId`.
+ *
+ * It deliberately does NOT require `isLocalHome`, even though every real
+ * dispatch carries it. This runs over variables the mutation cache has ALREADY
+ * scoped by `epicMutationKeys.setPinned()`, so it discriminates nothing that
+ * the key has not - it only decides whether the shape is readable. Adding the
+ * new field to it made a widening of the variables type silently shrink the
+ * PENDING set instead: an entry that fails this guard is dropped, each row
+ * reads its own write as settled, and the control un-disables mid-flight. That
+ * fails OPEN - the row looks idle while its write is in the air - which is the
+ * direction a guard must never fail in, and no type error can catch it because
+ * the input is `unknown` by construction.
+ */
 function isSetEpicPinnedVariables(
   value: unknown,
-): value is SetEpicPinnedVariables {
+): value is PendingSetPinnedIdentity {
   if (value === null || typeof value !== "object") return false;
   return (
     "epicId" in value &&
     typeof value.epicId === "string" &&
     "pinned" in value &&
-    typeof value.pinned === "boolean" &&
-    "isLocalHome" in value &&
-    typeof value.isLocalHome === "boolean"
+    typeof value.pinned === "boolean"
   );
 }
