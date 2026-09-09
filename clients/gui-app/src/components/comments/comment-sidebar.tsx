@@ -10,6 +10,8 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import { useEpicCommentRoomAvailability } from "@/lib/epic-selectors";
+import type { EpicCommentRoomAvailability } from "@/lib/epic-selectors";
 import { resolveArtifactCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
 import {
   useActiveThreadId,
@@ -86,6 +88,13 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const activeThreadId = useActiveThreadId(epicId);
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
+  // Covers promotion and preserved-orphan states - see
+  // `commentsHaveNoUsableCommentRoom`. Local rooms have their own durable
+  // thread provider. The sticky hook holds an unavailable answer across a
+  // stream reconnect, which clears the store's durability slots and would
+  // otherwise re-open the panel against the same absent room.
+  const commentRoomAvailability = useEpicCommentRoomAvailability();
+  const commentsUnavailable = commentRoomAvailability.kind !== "available";
 
   // The poll is NOT disabled when the lane has rows. It is on the released
   // floor, so it is the one source every host serves, and it is what keeps
@@ -95,7 +104,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
     epicId,
     artifactType: artifactType,
     artifactId: artifactId,
-    options: { enabled: true, laneDroppedAt },
+    options: { enabled: !commentsUnavailable, laneDroppedAt },
   });
 
   const resolved = useMemo(
@@ -134,7 +143,8 @@ export function CommentSidebar(props: CommentSidebarProps) {
   // client is ready is unknown for the same reason: it has never produced a
   // snapshot.
   const isUnavailable =
-    resolved.threads === null && query.fetchStatus !== "fetching";
+    commentsUnavailable ||
+    (resolved.threads === null && query.fetchStatus !== "fetching");
 
   // Gated on having nothing to show: a lane-served list must not be replaced
   // by a spinner while the poll runs its first load beside it.
@@ -179,6 +189,8 @@ export function CommentSidebar(props: CommentSidebarProps) {
         <SidebarBody
           isLoading={isLoading}
           isUnavailable={isUnavailable}
+          commentsUnavailable={commentsUnavailable}
+          commentRoomAvailability={commentRoomAvailability}
           sorted={sorted}
           filter={filter}
           epicId={epicId}
@@ -203,6 +215,8 @@ interface SidebarBodyProps {
    *  is unknown rather than empty. See where it is derived in
    *  {@link CommentSidebar}. */
   readonly isUnavailable: boolean;
+  readonly commentsUnavailable: boolean;
+  readonly commentRoomAvailability: EpicCommentRoomAvailability;
   readonly sorted: ReadonlyArray<SortedThread>;
   readonly filter: CommentThreadStatusFilter;
   readonly epicId: string;
@@ -235,7 +249,12 @@ function SidebarBody(props: SidebarBodyProps) {
   // Ordered ahead of the empty state on purpose: both render zero threads, and
   // only one of them knows that to be true.
   if (props.isUnavailable) {
-    return <UnavailableState />;
+    return (
+      <UnavailableState
+        commentsUnavailable={props.commentsUnavailable}
+        commentRoomAvailability={props.commentRoomAvailability}
+      />
+    );
   }
   if (props.sorted.length === 0) {
     return (
@@ -302,7 +321,14 @@ function EmptyState({ filter, onPromptDraft }: EmptyStateProps) {
  * emits a `<warning>` for an unavailable artifact instead of an empty list
  * (`protocol/src/comments/comments-xml-formatting.ts`).
  */
-function UnavailableState() {
+function UnavailableState(props: {
+  readonly commentsUnavailable: boolean;
+  readonly commentRoomAvailability: EpicCommentRoomAvailability;
+}) {
+  const copy =
+    props.commentRoomAvailability.kind === "available"
+      ? null
+      : commentRoomUnavailableCopy(props.commentRoomAvailability);
   return (
     <div
       data-slot="comment-sidebar-unavailable"
@@ -317,14 +343,55 @@ function UnavailableState() {
       <MessageSquareWarning className="size-6 text-muted-foreground" />
       <div className="flex flex-col gap-1">
         <p className="text-ui-sm text-muted-foreground">
-          Comments couldn't be loaded.
+          {props.commentsUnavailable
+            ? copy?.headline
+            : "Comments couldn't be loaded."}
         </p>
         <p className="text-ui-xs text-muted-foreground/80">
-          This doesn't mean there are none.
+          {props.commentsUnavailable
+            ? copy?.detail
+            : "This doesn't mean there are none."}
         </p>
       </div>
     </div>
   );
+}
+
+/**
+ * Closed mapping from the gate's availability reason to copy. This is an
+ * exhaustive union, so a newly gated status cannot silently inherit copy that
+ * makes a stronger recovery claim than its protocol state supports.
+ */
+function commentRoomUnavailableCopy(
+  availability: Exclude<
+    EpicCommentRoomAvailability,
+    { readonly kind: "available" }
+  >,
+): { readonly headline: string; readonly detail: string } {
+  switch (availability.kind) {
+    case "checking":
+      return {
+        headline: "Comments are unavailable.",
+        detail: "This epic's comment room is still being checked.",
+      };
+    case "promoting":
+      return {
+        headline: "Comments are temporarily unavailable.",
+        detail: "This epic is still uploading to the cloud.",
+      };
+    case "orphaned":
+      return {
+        headline: "Comments are unavailable.",
+        detail:
+          "This epic's cloud room was deleted. Export or recover the preserved local edits manually.",
+      };
+    case "unauthorized":
+      return {
+        headline: "Comments need a verified sign-in.",
+        detail:
+          "Traycer couldn't confirm your session with the account service. This epic's comments live in the cloud, so they stay hidden until you're signed in again.",
+      };
+  }
 }
 
 function emptyMessageFor(filter: CommentThreadStatusFilter): string {

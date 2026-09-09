@@ -48,16 +48,26 @@ import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions
 import { useHostBinding } from "@/lib/host";
 import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostDiscoveryConcluded } from "@/hooks/host/use-host-discovery-concluded";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
+import { windowNarrationAwaitsDiscovery } from "@/lib/host/window-narration";
 import {
   useHostCompatibility,
   type HostCompatibility,
 } from "@/lib/host/compatibility-state";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import {
+  useRunnerHost,
+  useRunnerHostOrNull,
+} from "@/providers/use-runner-host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
+import {
+  admitsLocalPlane,
+  useAuthStore,
+  type AuthStatus,
+} from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
 export function HostReadinessControllerProvider(props: {
@@ -136,7 +146,21 @@ export function HostReadinessControllerProvider(props: {
   // removal-state read, and burns the one-shot attempt latch on an episode
   // belonging to a machine the user is not pointed at. `hasLocalHost` is
   // folded into the intent - a shell with no local host is never booting one.
-  const canProvision = authStatus === "signed-in" && localBootIntent;
+  // SURFACE, not capability - and worth stating what this still drives, because
+  // its name outlived its old job. The automatic launch-time `convergeReady`
+  // was retired (D14/C5), so this no longer arms any process: what `enabled`
+  // reaches now is the removal-sentinel read in `useHostProvisioning`
+  // (`useRunnerHostRemovalStateQuery`), which asks this machine's own disk
+  // whether the user removed Traycer's background components. Every other
+  // lifecycle fact and gesture there is gated on `hasManagement` instead.
+  //
+  // That read is a purely local question, so it is admitted for `unverified`
+  // like the rest of the local plane - the same predicate this file already
+  // applies in `DefaultHostReadyGate` and `resolveSurfaceReadiness`. Left on
+  // the verdict, an offline user whose host had been removed got the generic
+  // "couldn't reach the host" narration with a Retry that could never succeed,
+  // instead of the removed card that tells them what actually happened.
+  const canProvision = admitsLocalPlane(authStatus) && localBootIntent;
   const directory = binding === null ? null : binding.directory;
   // Stable identities: the presentation is memoized on its inputs, and a
   // fresh closure each render would re-run every readiness consumer in the
@@ -531,7 +555,11 @@ export function DefaultHostReadyGate(props: {
   const predicateInput = {
     readiness,
     hasBeenReady: hasBeenDefaultHostReady,
-    signedIn: authStatus === "signed-in",
+    // Admission, not validation: an `unverified` session DOES have a local
+    // host that can be ready, so the gate must be allowed to narrate its
+    // startup rather than short-circuit to "not signed in" and mount the app
+    // over a host that cannot serve it yet.
+    signedIn: admitsLocalPlane(authStatus),
     bypassed: pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   };
   if (!gateBlocksApp(predicateInput)) return props.children;
@@ -562,24 +590,51 @@ export function DefaultHostReadyGate(props: {
 }
 
 /**
- * The narrator-owned slot's cover for the ATTACH gap. The window narrator is
- * structurally silent until the selection kernel attaches
- * (`deriveWindowNarration` returns silent on `attached: false`), and this
- * frame used to render nothing there - a blank page with only the header for
- * the whole attach latency, under a data attribute claiming a narrator that
- * was provably not rendering yet. One speaker at every moment: this card
- * shows only while the narrator cannot speak, and yields the instant it can.
+ * The narrator-owned slot's cover for the window in which the narrator cannot
+ * speak. One speaker at every moment: this card shows only then, and yields the
+ * instant the narrator can.
  *
  * The line is deliberately NOT from the F19 lane table - no lane is known to
  * be running yet; this is the window finding its authority, and claiming
  * "Starting local Traycer Host…" here would name a machine nothing has
  * resolved.
+ *
+ * TWO WAYS THE NARRATOR CANNOT SPEAK, which is why this reads more than
+ * `attached`. It is structurally silent before the selection kernel attaches
+ * (`deriveWindowNarration` returns silent on `attached: false`); and on a shell
+ * with no local host it holds its tongue over an ∅ that no discovery attempt
+ * has concluded for, which is a vacuum rather than a verdict. The second
+ * condition is SHARED rather than restated (`windowNarrationAwaitsDiscovery`) -
+ * a second copy of "is the narrator able to speak" is how a frame ends up with
+ * two cards or with none.
  */
 function AttachPendingCard(props: {
   readonly presentation: DefaultHostReadinessPresentation;
 }): ReactNode {
   const attached = useSelectionAuthorityAttached();
-  if (attached) return null;
+  const effectiveHostId = useEffectiveHostId();
+  // The NULL-TOLERANT read, for the same reason `useWindowNarration` gives:
+  // outside a provider there is no local host to expect, which is also the
+  // correct answer.
+  const localHostExpected = useRunnerHostOrNull()?.hasLocalHost ?? false;
+  const discoveryConcluded = useHostDiscoveryConcluded();
+  // The fleet, because the predicate refuses to wait over an ACTIONABLE ∅ - an
+  // incompatible or plan-restricted lease the user could act on now. Read here
+  // rather than passed down: this card is the predicate's second reader, and
+  // the two must be answering it from the same inputs.
+  const leases = useHostLeases();
+  const targetHostId = useSelectionAuthorityStore(
+    (state) => state.targetHostId,
+  );
+  const awaitingDiscovery = windowNarrationAwaitsDiscovery({
+    attached,
+    effectiveHostId,
+    localHostExpected,
+    discoveryConcluded,
+    leases,
+    targetHostId,
+  });
+  if (attached && !awaitingDiscovery) return null;
   return (
     <div className="flex flex-1 items-center justify-center p-6">
       {/* The shared boot SURFACE, not a card of its own: this sits between the

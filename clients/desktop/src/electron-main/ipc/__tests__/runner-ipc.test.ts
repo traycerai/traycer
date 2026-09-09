@@ -624,6 +624,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.perWindowStateClear,
           RunnerHostInvoke.authSessionGet,
           RunnerHostInvoke.authSessionSet,
+          RunnerHostInvoke.authSessionRevoke,
           RunnerHostInvoke.supportSaveDiagnosticBundle,
           RunnerHostInvoke.supportDiscardFrozenEvidence,
           RunnerHostInvoke.supportFreezeEvidence,

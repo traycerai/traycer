@@ -29,7 +29,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { EpicStatusSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type {
@@ -105,7 +105,7 @@ interface LaneRig {
 }
 
 function statusSnapshot(authorityEpoch: string): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch,
@@ -206,7 +206,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (statusCallbacks === null) {
       throw new Error("the status lane factory was not invoked");
     }
-    statusCallbacks.onSnapshot(statusSnapshot(authorityEpoch));
+    statusCallbacks.onSnapshot(statusSnapshot(authorityEpoch), true);
   }
 
   function deliverStateSnapshot(

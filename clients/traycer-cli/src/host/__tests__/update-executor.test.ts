@@ -3072,6 +3072,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
         installGeneration: "id:install-0",
         stageFingerprint: null,
         allowDowngrade: false,
+        acceptStoreFormatLoss: false,
       });
 
       const outcome = await runLocalAttemptExecutorSegment(

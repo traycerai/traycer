@@ -1,7 +1,15 @@
+import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { useLocalStoreRebindMutation } from "@/hooks/local-store/use-local-store-rebind-mutation";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { useEpicRequestFreshSnapshot } from "@/lib/epic-selectors";
+import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { getClientAppVersion } from "@/lib/app-version";
 import { describeVersionSkew } from "@/lib/host/version-skew-copy";
 import { useServerClockSkew } from "@/lib/clock/use-server-clock-skew";
@@ -11,6 +19,7 @@ import {
 } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import type { SnapshotFetchError } from "@/stores/epics/open-epic/store";
 
 interface SnapshotErrorBannerProps {
@@ -69,7 +78,13 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
             ? `This computer's clock is ${describeClockOffset(clockOffsetMs)}, so Traycer's sign-in tokens are rejected. Correct the clock and this reconnects on its own.`
             : props.error.message}
         </p>
+        {props.error.code === "LOCAL_STORE_UNAVAILABLE" ? (
+          <LocalStoreRepair error={props.error} />
+        ) : null}
         <div className="flex flex-wrap justify-center gap-2">
+          {props.error.code === "ENTITLEMENT_REQUIRED" ? (
+            <UpgradeButton />
+          ) : null}
           <Button
             type="button"
             size="sm"
@@ -92,6 +107,131 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
+  const requestFreshSnapshot = useEpicRequestFreshSnapshot();
+  const rebindLocalStore = useLocalStoreRebindMutation();
+  // `host.rebindLocalStore` is an OPTIONAL unary, negotiated independently of
+  // the stream that produced this error: a host can emit
+  // `LOCAL_STORE_UNAVAILABLE` through `epic.subscribe` and still not carry the
+  // repair RPC. The registry's own note on the method says the button is to
+  // be absent for such a host, so the affordance is gated on the negotiated
+  // manifest rather than inferred from the error - offering it there only
+  // ended in an unsupported-RPC toast with no recovery behind it. Fails
+  // closed (`null` reads as absent) and self-corrects: the directory poll
+  // keeps talking to the session host, so a handshake that has not landed
+  // yet fills in on its own.
+  const sessionHostId = useEpicSessionHostId();
+  const rebindSupported = useHostSupportsMethod(
+    sessionHostId,
+    "host.rebindLocalStore",
+  );
+  const [confirmRepairOpen, setConfirmRepairOpen] = useState(false);
+  const [repairRefusal, setRepairRefusal] = useState<{
+    readonly message: string;
+    readonly remedy: string;
+  } | null>(null);
+  const remedy = repairRefusal?.remedy ?? props.error.localStoreRemedy;
+  return (
+    <>
+      {remedy === undefined || remedy.trim().length === 0 ? null : (
+        <p
+          className="text-ui-xs text-muted-foreground"
+          data-testid="local-store-refusal-remedy"
+        >
+          {remedy}
+        </p>
+      )}
+      {repairRefusal === null ? null : (
+        <p className="text-ui-xs text-muted-foreground">
+          {repairRefusal.message}
+        </p>
+      )}
+      {rebindSupported ? (
+        <Button
+          type="button"
+          size="sm"
+          data-testid="local-store-rebind"
+          onClick={() => setConfirmRepairOpen(true)}
+        >
+          Rebind local store
+        </Button>
+      ) : null}
+      <ConfirmDestructiveDialog
+        open={confirmRepairOpen}
+        onOpenChange={setConfirmRepairOpen}
+        title="Rebind this local store?"
+        description="Confirm that no other Traycer host is using this data directory. Rebinding while another host is writing could put your local data at risk."
+        cascadeSummary={null}
+        blockedReason={null}
+        actionLabel="I’ve stopped the other host"
+        isPending={
+          rebindLocalStore.isPending || rebindLocalStore.isHostEntryPending
+        }
+        onConfirm={() => {
+          rebindLocalStore.mutate(
+            { confirmOldHostStopped: true },
+            {
+              onSuccess: (response) => {
+                // `not-needed` is a SUCCESS: a healthy process-held store the
+                // stale panel asked to tear down. Treat it exactly like a
+                // completed repair - leaving the destructive confirmation
+                // open over an error that no longer exists is the one
+                // outcome the honest no-op was added to avoid.
+                if (
+                  response.status === "rebound" ||
+                  response.status === "not-needed"
+                ) {
+                  setConfirmRepairOpen(false);
+                  setRepairRefusal(null);
+                  requestFreshSnapshot();
+                  return;
+                }
+                // Close FIRST: the remedy renders in the banner behind this
+                // dialog, so leaving it open returns the user to an enabled
+                // destructive button with no visible reason for the refusal.
+                setConfirmRepairOpen(false);
+                setRepairRefusal({
+                  message: response.message,
+                  remedy: response.remedy,
+                });
+              },
+            },
+          );
+        }}
+      />
+    </>
+  );
+}
+
+function UpgradeButton() {
+  const runnerHost = useRunnerHost();
+  const { isPending, openLink } = useOpenLinkWithPending();
+  return (
+    <Button
+      type="button"
+      size="sm"
+      data-testid="snapshot-error-upgrade"
+      disabled={isPending}
+      onClick={() => {
+        void openLink(
+          resolvePlatformBaseUrl(runnerHost.signInUrl),
+          "auth",
+          null,
+        );
+      }}
+    >
+      Upgrade
+      {isPending ? (
+        <AgentSpinningDots
+          className="size-3"
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+    </Button>
   );
 }
 

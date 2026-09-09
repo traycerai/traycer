@@ -137,6 +137,14 @@ export type DesktopAuthSessionRefusalReason =
 
 export type DesktopAuthSessionSetResult =
   | { readonly outcome: "accepted" }
+  /**
+   * Verified, but not installed: a set begun after this one had already
+   * committed by the time this one's verification came back, so this one is
+   * the older intent (`DesktopAuthSession.setVerified`). Nothing to retry -
+   * the newer session has already fanned out to every window, this one's
+   * sender included.
+   */
+  | { readonly outcome: "superseded" }
   | {
       readonly outcome: "refused";
       readonly reason: DesktopAuthSessionRefusalReason;
@@ -436,10 +444,7 @@ export interface SupportSubmitReportRequest {
   // default - the untouched pre-filled value must never reach the wire, so
   // there is no separate "changed" flag to get out of sync with this.
   readonly location: string | null;
-  // G1: identity (email/name) is attached to the private report only when
-  // this is true. The checkbox itself only renders when a signed-in email
-  // exists, but the flag is always sent explicitly rather than inferred from
-  // email presence on the main-process side.
+  // Retained for older clients. Signed-in email always accompanies private reports.
   readonly allowContact: boolean;
   // Consent panel's two log toggles (default on): whether each frozen tail
   // is attached to the private submission / included in the diagnostic
@@ -519,6 +524,7 @@ export interface SupportFreezeEvidenceResult {
   // Minted once per draft, at freeze time - not per submit call. Every retry
   // (T2) and the GitHub fallback prefill reuse this same id.
   readonly reportId: string;
+  readonly contactEmail: string | null;
 }
 
 /**

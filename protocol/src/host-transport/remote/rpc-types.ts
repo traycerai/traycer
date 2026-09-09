@@ -8,6 +8,7 @@ import {
   type ResponseOf,
   type RpcErrorCode,
   type RpcErrorDetails,
+  type SchemaVersion,
   type VersionedRpcRegistry,
   type WorktreeBusyHolder,
 } from "../../framework/index";
@@ -26,6 +27,44 @@ export type ResponseOfMethod<
 > = Registry[Method] extends MethodVersionRegistry
   ? ResponseOf<LatestContract<Registry[Method]>>
   : never;
+
+/**
+ * "Method `method` must be advertised at `version` or higher, in the same
+ * major." Attached to a request as `HostRequestOptions.requiredHostMethodVersion`
+ * (clients/shared) and checked by both transports between `openAck` and the
+ * request frame; below the floor the dispatch is refused pre-send with
+ * {@link HostMethodVersionUnsatisfiedError}.
+ */
+export interface RequiredHostMethodVersion {
+  readonly method: string;
+  readonly version: SchemaVersion;
+}
+
+/**
+ * Whether a connection's advertised version for the required method clears the
+ * floor. `undefined` - the host does not advertise the method at all - does
+ * not, and neither does a different major: a major is a break, so "higher"
+ * across one is not the same capability.
+ *
+ * A host whose canonical entry sits on a HIGHER major also fails, and that is
+ * fail-closed rather than a gap. Such a peer may still serve the caller's
+ * major through the same-major downgrade, but its manifest entry carries only
+ * the canonical `{ major, minor }` - the minor it would serve on the older
+ * major is not in it - so there is no evidence here that the floor is met, and
+ * a floor exists precisely because guessing is what went wrong.
+ *
+ * Shared by both transports so the local and remote answers cannot drift.
+ */
+export function negotiatedVersionMeetsRequirement(
+  negotiated: SchemaVersion | undefined,
+  requirement: RequiredHostMethodVersion,
+): boolean {
+  if (negotiated === undefined) return false;
+  return (
+    negotiated.major === requirement.version.major &&
+    negotiated.minor >= requirement.version.minor
+  );
+}
 
 export class HostRpcError extends Error {
   readonly code: RpcErrorCode;
@@ -108,6 +147,46 @@ export class HostRpcError extends Error {
         error.holdersRevision,
       ),
     });
+  }
+}
+
+/**
+ * A pre-send refusal: this connection's handshake does not meet the floor the
+ * caller attached to the request.
+ *
+ * Extends `HostRpcError` so it is non-retryable by construction - the retrying
+ * messenger only retries `RetryableTransportError`, and retrying is exactly
+ * wrong here, since a redial reaches the same downgraded host. Callers that
+ * have their own copy for this condition (`epic.listTasks`' withdrawn-verdict
+ * error, the composer's inline create refusal) catch this specific type rather
+ * than matching on `code`, which several unrelated paths also produce.
+ */
+export class HostMethodVersionUnsatisfiedError extends HostRpcError {
+  readonly requirement: RequiredHostMethodVersion;
+  /** What the connection advertised, or `null` when it advertised nothing. */
+  readonly negotiated: SchemaVersion | null;
+
+  constructor(details: {
+    requirement: RequiredHostMethodVersion;
+    negotiated: SchemaVersion | undefined;
+    requestId: string;
+    method: string;
+    hostId: string;
+  }) {
+    const advertised =
+      details.negotiated === undefined
+        ? "not advertised"
+        : `${String(details.negotiated.major)}.${String(details.negotiated.minor)}`;
+    super({
+      code: "DOWNGRADE_UNSUPPORTED",
+      message: `Host '${details.hostId}' negotiated '${details.requirement.method}' at ${advertised}, below the ${String(details.requirement.version.major)}.${String(details.requirement.version.minor)} this '${details.method}' call requires`,
+      requestId: details.requestId,
+      method: details.method,
+      fatalDetails: null,
+    });
+    this.name = "HostMethodVersionUnsatisfiedError";
+    this.requirement = details.requirement;
+    this.negotiated = details.negotiated ?? null;
   }
 }
 

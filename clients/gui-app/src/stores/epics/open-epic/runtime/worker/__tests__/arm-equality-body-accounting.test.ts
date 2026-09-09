@@ -81,7 +81,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
 import type { EpicRuntimeCorePorts } from "../epic-runtime-core";
 import { buildEpicRuntimeCorePorts } from "../epic-runtime-core-ports";
@@ -104,7 +104,7 @@ const EPOCH = "epoch-1";
 const DOC_GUID = "guid-equality";
 
 function statusSnapshot(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
@@ -174,7 +174,7 @@ function createLaneRig(epicId: string): LaneRig {
     handle,
     installLanes(): void {
       if (statusCallbacks === null) throw new Error("no status client");
-      statusCallbacks.onSnapshot(statusSnapshot());
+      statusCallbacks.onSnapshot(statusSnapshot(), true);
     },
     async seed(): Promise<void> {
       if (bodyCallbacks === null) {

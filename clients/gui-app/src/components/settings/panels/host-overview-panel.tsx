@@ -955,6 +955,7 @@ export function HostOverviewPanel(props: {
     hostId: scope.hostId,
     runningVersion: view.hostVersion,
     storeFormats: statusQuery.data?.storeFormats ?? null,
+    install: statusQuery.data?.install ?? null,
     // From the facts as READ, qualified by the record leg's liveness - see
     // `legacyFactsRead`.
     activationDebt:

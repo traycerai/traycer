@@ -258,7 +258,22 @@ export interface AuthSessionBridgeSurface {
   set(
     snapshot: DesktopAuthSessionSnapshot,
   ): Promise<DesktopAuthSessionSetResult>;
+  /**
+   * Withdraws main's verification of the held session without replacing it -
+   * the renderer's terminal verdict loss, which `set` cannot carry: the
+   * nearest status it flattens to would sign sibling windows out.
+   */
+  revoke(rejectedToken: string): Promise<void>;
   onChange(handler: Listener<DesktopAuthSessionSnapshot>): Disposable;
+  /**
+   * The verdict-loss edge, fanned to every window - including the one that
+   * raised it. Separate from `onChange` because main answers a revoke by
+   * republishing the SAME snapshot, which every window's latch reads as an
+   * echo; a sibling that only listens to `onChange` therefore never learns
+   * its bearer was refused. Carries that bearer so each window fences the
+   * demotion to the session it actually holds.
+   */
+  onVerificationRevoked(handler: Listener<string>): Disposable;
 }
 
 export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
@@ -272,10 +287,17 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         RunnerHostInvoke.authSessionSet,
         snapshot,
       ) as Promise<DesktopAuthSessionSetResult>,
+    revoke: (rejectedToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authSessionRevoke,
+        rejectedToken,
+      ) as Promise<void>,
     onChange: (handler) =>
       subscribe<DesktopAuthSessionSnapshot>(
         RunnerHostEvent.authSessionChange,
         handler,
       ),
+    onVerificationRevoked: (handler) =>
+      subscribe<string>(RunnerHostEvent.authVerificationRevoked, handler),
   };
 }

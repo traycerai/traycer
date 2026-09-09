@@ -3,6 +3,10 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { webCryptoSha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
 import type { HostRpcRegistry } from "@/lib/host";
 import { createHostCloudChatReadPort } from "@/lib/chats/cloud-chat-read-port";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { readCloudDraft } from "@/lib/drafts/cloud-draft-reader";
 import { draftDocumentFromCloudHead } from "@/lib/drafts/cloud-draft-apply";
 import { ingestCloudDraftSummary } from "@/lib/drafts/draft-mirror-coordinator";
@@ -24,7 +28,12 @@ export function useCloudDraftsIngest(
   }, [directory.scopeId]);
   useEffect(() => {
     if (!directory.visible || client === null || hostId === null) return;
-    const port = createHostCloudChatReadPort(client);
+    // The verdict is re-read by the port before every head and part request,
+    // as `use-cloud-chat-queries` does: a session demoted mid-ingest stops the
+    // next read rather than the reads already in flight.
+    const port = createHostCloudChatReadPort(client, () =>
+      authorizesCloudCapability(useAuthStore.getState().status),
+    );
     // The reads below are detached, so a host or scope change while one is in
     // flight would otherwise let it hand a stale record to the global draft
     // stores. `ingestCloudDraftSummary` validates neither.

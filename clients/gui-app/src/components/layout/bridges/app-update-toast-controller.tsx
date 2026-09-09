@@ -24,7 +24,7 @@ import {
   useSurfaceReadiness,
   windowNarratorOwns,
 } from "@/components/layout/host-readiness-controller-context";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
 const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
@@ -96,7 +96,14 @@ export function AppUpdateToastController(): null {
     !gateBlocksApp({
       readiness,
       hasBeenReady: hasBeenDefaultHostReady,
-      signedIn: authStatus === "signed-in",
+      // `admitsLocalPlane`, matching `HostReadyGate` and
+      // `NarratingWindowHostModal` exactly. The comment above promises these
+      // cannot disagree about whether a dialog exists for this toast to be
+      // dead behind, and a private `status === "signed-in"` copy here would
+      // break that promise the moment an `unverified` session renders the app:
+      // the gate would be narrating a host while this controller believed
+      // nobody was signed in.
+      signedIn: admitsLocalPlane(authStatus),
       bypassed: false,
     });
   const handledSequenceRef = useRef(0);

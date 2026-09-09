@@ -260,7 +260,7 @@ describe("chat-head minReaderVersion coherence", () => {
     // The change that forces a higher minimum is the change that cuts the
     // record's own minor, so a minimum can never run ahead of its payload.
     expect(() =>
-      parse({ ...wireHead, minReaderVersion: { major: 1, minor: 4 } }),
+      parse({ ...wireHead, minReaderVersion: { major: 1, minor: 5 } }),
     ).toThrow();
   });
 });

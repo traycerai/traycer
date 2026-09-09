@@ -433,6 +433,13 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           kind: "transport-status",
           status: status.connection,
           reason: status.closeReason,
+          // The status lane carries the durability legs on every status
+          // frame (`epic.status.subscribe`'s durability section), so this
+          // arm can report durability and its pre-status silence is a
+          // pending answer, not legacy reassurance. Stated on the records
+          // lane's transition too because the replica reads the flag off
+          // whichever transition opens the cycle.
+          durabilityStatusNegotiated: true,
           // The records lane rides ALONGSIDE the control snapshot; it never
           // carries one. So its transitions must not open or close the control
           // cycle - the same "one reconnect is one fact, and it is the control
@@ -593,6 +600,9 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           kind: "transport-status",
           status: status.connection,
           reason: status.closeReason,
+          // Same answer as the records lane's, for the same reason: the
+          // legs ride on this very lane's `snapshot` and `cloudSyncStatus`.
+          durabilityStatusNegotiated: true,
           // This lane serves `control-snapshot`, so its open/close IS the
           // control cycle's boundary - the third consumer of the same
           // one-reconnect-is-one-fact rule the two calls above apply.

@@ -22,8 +22,14 @@ import {
   epicMigrationStatusSchema,
   epicStatusSubscribeClientFrameSchemaV10,
   epicStatusSubscribeServerFrameSchemaV10,
+  epicStatusSubscribeServerFrameSchemaV11,
+  EPIC_STATUS_DURABILITY_LEGS_MINOR,
 } from "@traycer/protocol/host/epic/status-subscribe";
-import { epicCloudSyncStatusSchema } from "@traycer/protocol/host/epic/subscribe";
+import {
+  epicCloudSyncStatusSchema,
+  epicSubscribeV13,
+  epicSubscribeV16,
+} from "@traycer/protocol/host/epic/subscribe";
 import {
   artifactSubscribeClientFrameSchemaV10,
   artifactSubscribeOpenRequestSchemaV10,
@@ -67,11 +73,12 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 describe("registry shape: the epic lane surface installs at the versions the split promised", () => {
   it("installs epic.state.subscribe / epic.status.subscribe / artifact.subscribe at major 1, each with a @1.0 line", () => {
     // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata)
-    // after `@1.0` shipped in 1.3.0; the other two lanes are still at their
-    // first minor. All three keep `@1.0` installed for released peers.
+    // and `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0;
+    // the artifact lane is still at its first minor. All three keep `@1.0`
+    // installed for released peers.
     for (const [method, latestMinor] of [
       ["epic.state.subscribe", 1],
-      ["epic.status.subscribe", 0],
+      ["epic.status.subscribe", 1],
       ["artifact.subscribe", 0],
     ] as const) {
       const majorLine = hostStreamRpcRegistry[method][1];
@@ -81,12 +88,30 @@ describe("registry shape: the epic lane surface installs at the versions the spl
         minor: 0,
       });
     }
+    // `@1.0` staying INSTALLED is the durable half of what the split promised;
+    // the top of each line is not. cli-v1.3.0 shipped all three at `@1.0`;
+    // `epic.status.subscribe` has since grown `@1.1` for the durability legs
+    // and `epic.state.subscribe` `@1.1` for tombstone metadata - which is the
+    // correct way for a shipped lane to grow, so the table above pins each
+    // line's top rather than a flat `latestMinor: 0`.
+    expect(hostStreamRpcRegistry["epic.status.subscribe"][1].latestMinor).toBe(
+      EPIC_STATUS_DURABILITY_LEGS_MINOR,
+    );
   });
 
-  it("keeps epic.subscribe pinned to exactly major 1, with @2.0 gone and @1 intact at latestMinor 3", () => {
+  it("keeps epic.subscribe pinned to exactly major 1, with @2.0 gone and @1 intact at latestMinor 6", () => {
     const epicSubscribeMajors = hostStreamRpcRegistry["epic.subscribe"];
     expect(Object.keys(epicSubscribeMajors)).toEqual(["1"]);
-    expect(epicSubscribeMajors[1].latestMinor).toBe(3);
+    // The `@1` line is six minors tall here: the local-room branch mints
+    // @1.4-@1.6 (durability, promotion, the s5 status pass) above mainline's
+    // released @1.3. What this assertion is about is that the line SURVIVES
+    // the lane split rather than being replaced by it - both its mainline
+    // floor and its current top are pinned so a regression either way is
+    // visible. (This carries the registry coverage of the deleted
+    // `epic-subscribe-v2.test.ts` forward.)
+    expect(epicSubscribeMajors[1].latestMinor).toBe(6);
+    expect(epicSubscribeMajors[1].versions[3]?.contract).toBe(epicSubscribeV13);
+    expect(epicSubscribeMajors[1].versions[6]?.contract).toBe(epicSubscribeV16);
   });
 
   it("installs the two lane unaries at 1.0, degrade: unsupported, and off the released floor", () => {
@@ -134,7 +159,7 @@ describe("the released epic.subscribe@1 line and epic.listChatRecords@1.0 did no
     "../../__tests__/__fixtures__/released-baseline-surface.json",
   );
 
-  it("stream['epic.subscribe'] is byte-for-byte the released baseline surface", () => {
+  it("stream['epic.subscribe']'s released minors are byte-for-byte the baseline; only @1.4-@1.6 were added", () => {
     const baseline: unknown = JSON.parse(readFileSync(fixturePath, "utf8"));
     const mine = buildProtocolSurface({
       unary: hostRpcRegistry,
@@ -142,11 +167,32 @@ describe("the released epic.subscribe@1 line and epic.listChatRecords@1.0 did no
       stream: hostStreamRpcRegistry,
     });
 
-    expect(mine.stream["epic.subscribe"]).toEqual(
-      (baseline as { stream: Record<string, unknown> }).stream[
-        "epic.subscribe"
-      ],
-    );
+    // Not byte-for-byte over the WHOLE entry: this branch adds the unreleased
+    // @1.4-@1.6 minors, so the frozen claim is scoped to the released schemas
+    // and the addition set is pinned exactly - a seventh minor or a missing
+    // one fails here rather than sliding through.
+    const baselineEntry = (
+      baseline as {
+        stream: Record<
+          string,
+          { schemas: Record<string, unknown>; majors: unknown }
+        >;
+      }
+    ).stream["epic.subscribe"];
+    for (const released of Object.keys(baselineEntry.schemas)) {
+      expect(mine.stream["epic.subscribe"].schemas[released]).toEqual(
+        baselineEntry.schemas[released],
+      );
+    }
+    expect(Object.keys(mine.stream["epic.subscribe"].schemas).sort()).toEqual([
+      "1.0",
+      "1.1",
+      "1.2",
+      "1.3",
+      "1.4",
+      "1.5",
+      "1.6",
+    ]);
   });
 
   it("optionalUnary['epic.listChatRecords'].schemas['1.0'] is unchanged; only 1.1 was added", () => {
@@ -758,6 +804,54 @@ describe("epic.status.subscribe@1.0", () => {
     expect(result.success).toBe(true);
   });
 
+  /**
+   * At `@1.1`, not `@1.0`: cli-v1.3.0 shipped `@1.0` without the legs, so
+   * they were re-minted above it. Parsing these through `@1.0` would not fail
+   * loudly - zod STRIPS unknown keys, so the "refuses an invalid member" case
+   * below would pass while validating nothing at all.
+   */
+  describe("the durability legs ride on the @1.1 snapshot and cloudSyncStatus, every key optional", () => {
+    const legs = {
+      durability: "promoting",
+      promotionState: "active",
+      localProtection: "armed",
+      freshness: { kind: "freshnessUnknown", state: "local-copy" },
+    };
+
+    it("parses a snapshot carrying the legs", () => {
+      const result = epicStatusSubscribeServerFrameSchemaV11.safeParse({
+        kind: "snapshot",
+        ...snapshotBase,
+        ...legs,
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("parses a cloudSyncStatus transition carrying the legs", () => {
+      const result = epicStatusSubscribeServerFrameSchemaV11.safeParse({
+        kind: "cloudSyncStatus",
+        authorityEpoch: "epoch-1",
+        status: "connected",
+        ...legs,
+        pauseReason: undefined,
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("refuses a durability member the @1.6 enum does not have - the lane shares that closed union", () => {
+      const result = epicStatusSubscribeServerFrameSchemaV11.safeParse({
+        kind: "cloudSyncStatus",
+        authorityEpoch: "epoch-1",
+        status: "connected",
+        durability: "a-member-a-newer-host-invented",
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe("dirty is a tri-state on the snapshot: null | true | false, never omitted", () => {
     it.each([null, true, false])("parses dirty: %s", (dirty) => {
       const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
@@ -837,22 +931,49 @@ describe("epic.status.subscribe@1.0", () => {
     expect(withoutEpoch.success).toBe(false);
   });
 
-  it("the server frame kind set is exactly the ten documented kinds", () => {
-    const kinds = epicStatusSubscribeServerFrameSchemaV10.options.map(
-      (option) => option.shape.kind.value,
-    );
-    expect(kinds).toEqual([
-      "snapshot",
-      "permissionChanged",
+  it("the server frame kind set is exactly the ten documented kinds, on both minors", () => {
+    const kindsOf = (
+      union:
+        | typeof epicStatusSubscribeServerFrameSchemaV10
+        | typeof epicStatusSubscribeServerFrameSchemaV11,
+    ): string[] =>
+      union.options.map((option) => option.shape.kind.value).sort();
+    const documented = [
       "cloudSyncStatus",
       "dirtyChanged",
       "epicDeleted",
-      "migrationStarted",
-      "migrationProgress",
       "migrationFailed",
       "migrationNotAllowed",
+      "migrationProgress",
+      "migrationStarted",
+      "permissionChanged",
       "pong",
-    ]);
+      "snapshot",
+    ];
+    expect(kindsOf(epicStatusSubscribeServerFrameSchemaV10)).toEqual(
+      documented,
+    );
+    // The SAME set at `@1.1`: that minor adds fields to two variants, and a
+    // new frame KIND would be a different kind of change entirely - one a
+    // released peer cannot absorb at all.
+    expect(kindsOf(epicStatusSubscribeServerFrameSchemaV11)).toEqual(
+      documented,
+    );
+  });
+
+  /**
+   * `@1.1` is composed as "the two leg-carrying variants, then the rest of
+   * `@1.0`'s tuple", so their position in `@1.0` is load-bearing rather than
+   * cosmetic. Reordering `@1.0` without reading that composition would silently
+   * hand `@1.1` two unextended variants and drop the legs from the wire while
+   * every kind-set assertion above stayed green.
+   */
+  it("keeps the leg-carrying variants at the head of the @1.0 tuple", () => {
+    expect(
+      epicStatusSubscribeServerFrameSchemaV10.options
+        .slice(0, 2)
+        .map((option) => option.shape.kind.value),
+    ).toEqual(["snapshot", "cloudSyncStatus"]);
   });
 
   describe("every frame is text-only", () => {

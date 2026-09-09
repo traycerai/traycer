@@ -72,6 +72,7 @@ function status(
         ? null
         : { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
+    install: null,
   };
 }
 
@@ -208,6 +209,11 @@ function readySession(): FakeSession {
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
+    // The gate under test never negotiates a method; these answer inert
+    // defaults so the fake satisfies the session interface.
+    getMethodSupport: () => "supported",
+    getMethodSchemaVersion: () => ({ major: 1, minor: 0 }),
+    subscribeMethodSupport: () => () => undefined,
     terminalFatal: () => null,
     close: () => undefined,
   };

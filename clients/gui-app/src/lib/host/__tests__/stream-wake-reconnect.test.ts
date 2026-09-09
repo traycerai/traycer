@@ -45,6 +45,12 @@ function makeClient() {
     userId: "user-a",
     endpoint: () => null,
     bearer: () => null,
+    // Never consulted: `cloudAuthorized` gates the attach-grant mint, which
+    // only the `target.kind === "remote"` branch reaches, and this target is
+    // local. Fail-closed rather than `true` so that if a future edit makes the
+    // target remote, the mint refuses loudly instead of silently minting under
+    // a fixture nobody revisited.
+    cloudAuthorized: () => false,
     authnBaseUrl: "http://localhost:5005",
     auth: null,
     // Local (plain-WS) target: sweep eligibility only gates the remote-session

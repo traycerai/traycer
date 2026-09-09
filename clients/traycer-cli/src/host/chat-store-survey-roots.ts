@@ -118,7 +118,8 @@ export async function resolveChatStoreSurveyRoots(
     // Absent is the ordinary answer and the honest one: no pool means no host
     // here can have an overridden identity home. Anything else is a source
     // this resolver could not read, which the caller must surface.
-    if (isNotFound(error)) return { roots, enumerationFailed: false };
+    if (isChatStoreRootNotFound(error))
+      return { roots, enumerationFailed: false };
     return { roots, enumerationFailed: true };
   }
   let enumerationFailed = false;
@@ -131,7 +132,7 @@ export async function resolveChatStoreSurveyRoots(
       // Vanished between the readdir and this lstat - a pool entry being
       // reclaimed while we walk. Nothing is there, so there is nothing to be
       // blind to.
-      if (isNotFound(error)) continue;
+      if (isChatStoreRootNotFound(error)) continue;
       enumerationFailed = true;
       continue;
     }
@@ -168,7 +169,11 @@ export function singleChatStoreSurveyRoot(path: string): ChatStoreSurveyRoots {
   };
 }
 
-function isNotFound(error: unknown): boolean {
+/**
+ * ENOENT, the one errno both this resolver and the swap-quiescence walk next
+ * door read as "the ordinary absence", not as a failure to enumerate.
+ */
+export function isChatStoreRootNotFound(error: unknown): boolean {
   if (typeof error !== "object" || error === null || !("code" in error)) {
     return false;
   }

@@ -87,8 +87,11 @@ import {
   markEpicCreateSeedPending,
 } from "@/lib/worktree/pending-epic-create-seeds";
 import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
+  refuseCreateWithoutCloudVerdict,
   resolveLandingPlacement,
+  type LandingPlacement,
   type LandingPlacementTarget,
 } from "@/lib/composer/landing-placement";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -877,9 +880,28 @@ export function useLandingComposerActions(
   // workspace-context read, the tab binding and the handoff registration - and
   // `placement.client` is the only client the requests go out on, so "created
   // on a host the chip never showed" is unreachable rather than unlikely.
+  // The second submit-time gate, on the host the first one named: a session
+  // without a cloud verdict may only create on a host that serves creates
+  // locally, and `epic.create@1.0` cannot say - its `epic.listTasks` line can.
+  // See `refuseCreateWithoutCloudVerdict`.
+  const resolveAdmittedPlacement = useCallback((): LandingPlacement => {
+    const placement = resolveLandingPlacement(target);
+    if (placement.kind === "refused") return placement;
+    return (
+      refuseCreateWithoutCloudVerdict({
+        status: useAuthStore.getState().status,
+        negotiatedListTasks: getNegotiatedHostMethodVersion(
+          placement.hostId,
+          "epic.listTasks",
+        ),
+        hostLabel: target.hostLabel,
+      }) ?? placement
+    );
+  }, [target]);
+
   const submit = useCallback(
     (args: LandingComposerSubmitArgs): LandingPlacementRefusal | null => {
-      const placement = resolveLandingPlacement(target);
+      const placement = resolveAdmittedPlacement();
       if (placement.kind === "refused") {
         return { message: placement.message };
       }
@@ -892,7 +914,7 @@ export function useLandingComposerActions(
       dispatchSubmission(args, workspaceContext, placement.hostId);
       return null;
     },
-    [dispatchSubmission, queryClient, target],
+    [dispatchSubmission, queryClient, resolveAdmittedPlacement],
   );
 
   const selectTerminalAgent = useCallback(
@@ -900,7 +922,7 @@ export function useLandingComposerActions(
       launch: TerminalAgentLaunch,
       draftId: string | null,
     ): LandingPlacementRefusal | null => {
-      const placement = resolveLandingPlacement(target);
+      const placement = resolveAdmittedPlacement();
       if (placement.kind === "refused") {
         return { message: placement.message };
       }
@@ -913,7 +935,7 @@ export function useLandingComposerActions(
       dispatchTerminalAgent(launch, workspaceContext, placement.hostId);
       return null;
     },
-    [dispatchTerminalAgent, queryClient, target],
+    [dispatchTerminalAgent, queryClient, resolveAdmittedPlacement],
   );
 
   return useMemo(

@@ -55,6 +55,7 @@ export class RemoteHostMessenger<
       // `UNARY_RESPONSE_TIMEOUT_MS` applies, as it always has.
       undefined,
       options.replayMustBeKeyed,
+      options.requiredHostMethodVersion,
     );
   }
 
@@ -85,6 +86,7 @@ export class RemoteHostMessenger<
       null,
       responseTimeoutMs,
       options.replayMustBeKeyed,
+      options.requiredHostMethodVersion,
     );
   }
 }

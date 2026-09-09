@@ -4,7 +4,13 @@ import type { AttachGrant } from "./grant";
 export type RemoteSessionAuthRecoveryOutcome =
   | "rotated"
   | "rejected"
-  | "network-error";
+  | "network-error"
+  /**
+   * The bearer was not rotated because the local plane retained its identity
+   * on its own terms; treated as terminal for this session like `rejected`.
+   * Mirrors the client's `RevalidateOutcome`.
+   */
+  | "local-plane-retained";
 
 /** Authentication fields placed inside the encrypted session-open frame. */
 export interface RemoteSessionOpenAuth {

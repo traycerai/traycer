@@ -6,7 +6,10 @@ import {
   type HostStoreFormats,
   type HostStoreFormatsKnowledge,
 } from "@traycer/protocol/host/store-formats";
-import type { HostStatusStoreFormats } from "@traycer/protocol/host/status/index";
+import type {
+  HostStatusInstall,
+  HostStatusStoreFormats,
+} from "@traycer/protocol/host/status/index";
 import type { HostUpdateStoreFloorRefusal } from "@traycer/protocol/host/maintenance/index";
 
 /**
@@ -19,6 +22,23 @@ export interface HostStoreFormatOffer {
   readonly publishedFormats: HostStoreFormats | null;
   readonly runningVersion: string | null;
   readonly storeFormats: HostStatusStoreFormats | null;
+  /**
+   * The install record's provenance and the installed tree's own declaration
+   * (`host.status@1.5`), or `null` for a peer that reported none: an older
+   * host, or one with no install record at all.
+   *
+   * This is what lets the pre-check judge a row the way the CLI's commit tail
+   * will. The CLI decides from BOTH install records' provenance whether a move
+   * takes the version shortcut (`StoreFloorTargetIdentity`), and a desktop
+   * provisions from its bundled archive - a `local-file` record under the
+   * CLI's own version - so its first registry upgrade EVALUATES there. A
+   * pre-check that only saw `runningVersion` called that upgrade unrestricted
+   * and then met the CLI's refusal; with the record's provenance and the
+   * sidecar's declaration it reaches the same verdict up front. `null` is
+   * judged as a registry install, which is what every row was judged as
+   * before the field existed.
+   */
+  readonly install: HostStatusInstall | null;
   /**
    * Whether the NEGOTIATED `host.update.install` carries the store-format
    * floor - the `@1.3` contract that added per-dispatch loss consent and the
@@ -50,31 +70,7 @@ export function hostStoreFormatRestriction(
 ): HostStoreFormatRestriction | null {
   // Read BEFORE the `storeFormats === null` return below, because whether the
   // floor APPLIES does not depend on what the host reported about its stores.
-  //
-  // `null` for the declaration, deliberately. A present declaration makes
-  // `storeFloorApplicability` evaluate unconditionally - no identical-string
-  // shortcut, no strictly-newer shortcut - because it is an ARCHIVE's own
-  // `version.json`, the word of a tree that named itself (`host install
-  // --from`, a bundled desktop build). A catalog row is not that: it is a
-  // signed registry artifact whose version IS its identity, and the manifest's
-  // published formats describe it rather than override it. Passing them here
-  // would make EVERY row evaluate, the running version's own included -
-  // withheld on a pre-floor peer, "Checking chat stores…" while a survey is
-  // pending. The published formats still resolve the target's format below,
-  // where they belong.
-  //
-  // This is the REGISTRY-side estimate, and it is an estimate: the CLI judges
-  // the same move from both records' provenance (`StoreFloorTargetIdentity`),
-  // and over a bundled desktop install it may survey an upgrade this pre-check
-  // calls unrestricted, and refuse it on an unreadable store. That refusal
-  // arrives as the typed RPC restriction (`hostStoreFormatRestrictionFromRpc`)
-  // and is offered Install anyway from there; the GUI cannot see provenance
-  // and does not pretend to.
-  const downgrade = storeFloorApplicability(
-    input.version,
-    input.runningVersion,
-    null,
-  ).applies;
+  const { applies, versionDowngrade } = storeFloorReach(input);
   // A peer that cannot be told about store-format loss must not be offered a
   // downgrade at all - not even behind Install anyway, because there is no
   // way for it to honour the consent that button collects. It predates the
@@ -82,7 +78,17 @@ export function hostStoreFormatRestriction(
   // before it arrives. Withholding is the only honest answer, and it is
   // deliberately independent of `storeFormats`: a host that cannot honour
   // consent stays withheld whether or not it happens to report its formats.
-  if (downgrade && !input.installSupportsStoreFloor) {
+  //
+  // Gated on the VERSION relation, not on `applies`, and the difference is
+  // the whole of this row's copy. Provenance widens what the floor EVALUATES
+  // (a local-file install evaluates its upgrades too); it must not widen what
+  // this branch WITHHOLDS, whose sentence is about being unable to downgrade.
+  // The combination is nearly unreachable anyway - a host that reports its
+  // install record speaks `host.status@1.5`, hence `host.update.install@1.3` -
+  // but it is reachable transiently while the negotiated version reads null,
+  // and there it would disable every row, upgrades included, under
+  // downgrade-only copy.
+  if (versionDowngrade && !input.installSupportsStoreFloor) {
     return unsupportedFloorRestriction(input.version);
   }
   // Nothing reported, and the peer CAN honour the floor: leave the row alone
@@ -91,22 +97,30 @@ export function hostStoreFormatRestriction(
   const target = resolveHostStoreFormats(input.version, input.publishedFormats);
   const chatDb = input.storeFormats.chatDb;
   // Formats FIRST, before either uncertain survey state. A target that reads
-  // at least this build's format cannot make any store newly unreadable, so
-  // nothing a survey could find - pending, failed or complete - changes the
-  // answer. An rc.4 → rc.1 move inside one chat-store format is the everyday
-  // case: both stamp 9, and holding it on "Checking chat stores…" would wait
-  // for a walk whose result cannot matter.
+  // at least the installed side's format cannot make any store newly
+  // unreadable, so nothing a survey could find - pending, failed or complete
+  // - changes the answer. An rc.4 → rc.1 move inside one chat-store format is
+  // the everyday case: both stamp 9, and holding it on "Checking chat stores…"
+  // would wait for a walk whose result cannot matter.
   //
   // `storeFloorClearedByFormats` rather than a local `>=` because this is the
   // same predicate the CLI clears a move with before it walks the disk and
   // the host clears a refusal with before it sends one. Three ends, one rule;
-  // a fourth spelling here is how they drift.
-  if (downgrade && targetReadsCurrentFormat(target, chatDb.current)) {
+  // a fourth spelling here is how they drift. The installed operand is the one
+  // the CLI will hold, not always this build's own stamp - see
+  // `installedSideKnowledge`.
+  if (
+    applies &&
+    storeFloorClearedByFormats(
+      target,
+      installedSideKnowledge(input.install, chatDb.current),
+    )
+  ) {
     return null;
   }
   // Boot uncertainty is transient. Do not offer loss consent until the
   // first survey has answered, even if this target's metadata is unknown.
-  if (downgrade && chatDb.survey === "pending") {
+  if (applies && chatDb.survey === "pending") {
     return {
       kind: "pending",
       reason: "Checking chat stores…",
@@ -119,13 +133,13 @@ export function hostStoreFormatRestriction(
   // cached observation if a store appeared after the status poll.
   if (surveyCompleteAndEmpty(chatDb)) return null;
   if (target.kind === "unknown") {
-    return downgrade ? unknownTargetRestriction(input.version) : null;
+    return applies ? unknownTargetRestriction(input.version) : null;
   }
   // A failed survey read no file, so on its own it can only ever produce
   // uncertainty; the formats-first clearance above has already excused every
-  // target that reads this build's files anyway, so what reaches here is a
-  // target that reads an OLDER format over stores nobody could inspect.
-  if (downgrade && chatDb.survey === "failed") {
+  // target that reads the installed side's files anyway, so what reaches here
+  // is a target the formats could not clear over stores nobody could inspect.
+  if (applies && chatDb.survey === "failed") {
     return unreadableStoresRestriction(input.version);
   }
   if (chatDb.onDiskMax === null || chatDb.onDiskMax <= target.formats.chatDb) {
@@ -143,20 +157,84 @@ export function hostStoreFormatRestriction(
 }
 
 /**
- * Whether a target whose format is known reads at least this build's format,
- * by the shared predicate. An unknown target cannot be excused this way.
+ * How far the floor reaches for this row, decided the way the CLI's commit
+ * tail decides it (`StoreFloorTargetIdentity`).
+ *
+ * `versionDowngrade` is the relation between two VERSIONS, which is what the
+ * catalog row's copy is about. Between two registry artifacts it is also the
+ * whole answer, because there the version IS the identity and the string
+ * shortcuts apply. `null` for the declaration there, deliberately: a
+ * declaration makes `storeFloorApplicability` evaluate unconditionally
+ * because it is an ARCHIVE's own `version.json`, the word of a tree that named
+ * itself. A catalog row is a signed registry artifact, and the manifest's
+ * published formats describe it rather than override it; they still resolve
+ * the target's format in the caller, where they belong.
+ *
+ * `applies` is the wider question: does the floor evaluate at all. With a
+ * local archive on the INSTALLED end the recorded version is not the tree's
+ * identity (`host ensure --from` records a bundled archive under the CLI's
+ * OWN version), so the CLI withholds it from applicability and every move
+ * evaluates - a forward move included. It is then cleared from formats when
+ * the installed side can be placed, and walked when it cannot; the caller
+ * mirrors both.
  */
-function targetReadsCurrentFormat(
-  target: HostStoreFormatsKnowledge,
+function storeFloorReach(input: HostStoreFormatOffer): {
+  readonly applies: boolean;
+  readonly versionDowngrade: boolean;
+} {
+  const versionDowngrade = storeFloorApplicability(
+    input.version,
+    installedVersionOperand(input),
+    null,
+  ).applies;
+  const localArchiveInstall =
+    input.install !== null && input.install.source === "local-file";
+  return { applies: versionDowngrade || localArchiveInstall, versionDowngrade };
+}
+
+/**
+ * The version the floor compares the target against: the INSTALL RECORD's,
+ * which is the operand the CLI passes (`readInstalledFloorOperands` reads
+ * `install.json`'s version, and `applicabilityOperands` hands it straight to
+ * `storeFloorApplicability` for a registry artifact).
+ *
+ * Not the running process's, and activation debt is where the two part: the
+ * bytes on disk are ahead of the host still serving, so with 1.4.0 installed
+ * over a running 1.2.0 a 1.3.0 row is an UPGRADE from the process and a
+ * DOWNGRADE from the record. The CLI lands over the record, so the record
+ * decides - otherwise this pre-check calls that row unrestricted and the CLI
+ * surveys it, which is the disagreement the install report exists to end. The
+ * panel already takes the same baseline for its catalog comparisons
+ * (`comparisonBaseline`).
+ *
+ * `runningVersion` remains the fallback for a peer too old to report an
+ * install, which is what every row was judged by before the field existed.
+ */
+function installedVersionOperand(input: HostStoreFormatOffer): string | null {
+  return input.install === null ? input.runningVersion : input.install.version;
+}
+
+/**
+ * The installed side as the CLI will place it: the RECORD's version and the
+ * declaration the installed tree carries, through the same resolver the CLI
+ * uses (`readInstalledFloorOperands` → `resolveHostStoreFormats`).
+ *
+ * Deliberately the record rather than this build's own `chatDb.current`, for
+ * both provenances. The two disagree in exactly the states where the record is
+ * right and `current` is not: under activation debt the install is ahead of
+ * the running process, and an unreadable sidecar above the table's ceiling is
+ * an installed side nobody can place - which the CLI answers by surveying, so
+ * clearing here on a number the CLI never reads would be the permissive
+ * disagreement this field exists to end. Only a peer too old to report an
+ * install (`null`) falls back to `current`, which is what every row was
+ * judged by before the field existed.
+ */
+function installedSideKnowledge(
+  install: HostStatusInstall | null,
   current: number,
-): boolean {
-  return (
-    target.kind === "known" &&
-    storeFloorClearedByFormats(target, {
-      kind: "known",
-      formats: { chatDb: current },
-    })
-  );
+): HostStoreFormatsKnowledge {
+  if (install === null) return { kind: "known", formats: { chatDb: current } };
+  return resolveHostStoreFormats(install.version, install.declaredFormats);
 }
 
 /** A completed survey that found no chat store at all. */
@@ -242,6 +320,8 @@ function unreadableStoresRestriction(
   return {
     kind: "failed",
     reason: "Chat stores couldn't be read",
+    // Already direction-neutral, and it has to stay that way: an install whose
+    // own formats nobody can place sends upgrades down this branch too.
     detail:
       "This device's chat stores couldn't be read, so installing this version may lose access to those chats.",
     confirmation: `This device's chat stores couldn't be read, so Traycer can't verify v${version} can open them.`,
@@ -282,13 +362,27 @@ function newerStoresRestriction(
     unreadable === null || unreadable.count === 0
       ? ""
       : ` ${describeEpicGroup(unreadable.count, unreadable.epicIds)} couldn't be read, so Traycer can't verify v${version} can open them.`;
+  // The remedy names the FORMAT rather than a direction. This restriction is
+  // no longer downgrade-only: over an install whose own formats nobody can
+  // place, the floor evaluates an upgrade too, and "update forward" is
+  // nonsense on the newest row - there may be nothing forward of it. What is
+  // true in both directions is that access returns under a build that reads
+  // what is on disk, and the picker this sentence appears in is where one is
+  // chosen.
+  const remedy = restoringBuild(onDiskMax);
   return {
     kind: "blocked",
     reason: newerStoresReason(targetFormat, onDiskMax),
-    detail:
-      "Can't open chat stores written by this host; installing anyway loses access to those chats until you update forward.",
-    confirmation: `This device has chat stores ${formatDescription}. ${targetDescription}, so it can't open those chats, and it may fail to start until you update the host again.${unreadableSentence} Nothing is deleted; updating forward restores access.`,
+    detail: `Can't open chat stores written by a newer host; installing anyway loses access to those chats until ${remedy} is installed.`,
+    confirmation: `This device has chat stores ${formatDescription}. ${targetDescription}, so it can't open those chats, and it may fail to start until ${remedy} is installed.${unreadableSentence} Nothing is deleted; ${remedy} opens them again.`,
   };
+}
+
+/** "a host that reads format 10", or the vaguer form when the stamp is unknown. */
+function restoringBuild(onDiskMax: number | null): string {
+  return onDiskMax === null
+    ? "a host that can read them"
+    : `a host that reads format ${onDiskMax}`;
 }
 
 function newerStoresReason(
@@ -376,5 +470,8 @@ function targetFormatDescription(
 }
 
 function overrideGuidance(version: string): string {
-  return `Update forward instead, or choose Install anyway for v${version} to proceed and lose access to affected chats until the host is updated again.`;
+  // Direction-neutral for the same reason the restriction copy above is: the
+  // refusal this renders can now arrive on an upgrade, where "update forward"
+  // names nothing.
+  return `Install a version that can open them instead, or choose Install anyway for v${version} to proceed and lose access to affected chats until one is installed.`;
 }

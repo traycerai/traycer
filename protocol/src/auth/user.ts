@@ -110,4 +110,16 @@ export interface AuthenticatedUserBase {
   user: User;
   userSubscription: TraycerUserSubscription;
   payAsYouGoUsage: PayAsYouGoUsage;
+  /**
+   * Whether the caller may use cloud collab sync right now. Computed by
+   * traycer-server and embedded by authn-v3; optional so payloads without the
+   * field (old authn, or evaluate fail-soft) stay valid.
+   */
+  cloudSyncAllowed?: boolean;
+  /**
+   * ISO instant when free/pending tiers flip from allowed to denied — same
+   * wall clock `cloudSyncAllowed` compares against. Optional for the same
+   * fail-soft / old-host reasons as `cloudSyncAllowed`.
+   */
+  graceExpiresAt?: string;
 }

@@ -3,16 +3,20 @@ import {
   HostRpcError,
   HostTransportFailureError,
   type RequestOfMethod,
+  type RequiredHostMethodVersion,
   type ResponseOfMethod,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { OpenFrameBearerSource } from "../auth/bearer-source";
 
 export {
+  HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  negotiatedVersionMeetsRequirement,
   type RequestOfMethod,
+  type RequiredHostMethodVersion,
   type ResponseOfMethod,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 
@@ -69,6 +73,35 @@ export interface HostRequestOptions {
    * transports must refuse and answer ambiguously instead of dispatching.
    */
   readonly replayMustBeKeyed: boolean;
+  /**
+   * A floor this dispatch's OWN handshake must clear, or the request must not
+   * go out at all.
+   *
+   * The problem it solves is that a version read and the call it authorizes
+   * are two different connections. Every local unary dials a fresh socket and
+   * handshakes again, so a caller that asks `readNegotiatedMethodVersion` -
+   * or that forces a handshake with a probe RPC and reads what it recorded -
+   * has learned about a host process that may be gone by the time the real
+   * frame is written. A host restarted or rolled back under the same id in
+   * that window answers the request on its older resolver, and an additive
+   * request field the caller was relying on is silently stripped by the
+   * frozen schema of the version actually negotiated. The caller sees a
+   * normal response and cannot tell.
+   *
+   * So the requirement travels WITH the request and is checked against the
+   * manifest of the connection carrying it, between `openAck` and the request
+   * frame. Below the floor, both transports refuse pre-send with
+   * `HostMethodVersionUnsatisfiedError`; nothing was dispatched, so the
+   * refusal is unambiguous.
+   *
+   * `method` is not necessarily the method being sent. A caller may condition
+   * one call on the version of another - `epic.create` advertises no version
+   * of its own, and what decides whether this host serves creates locally is
+   * the `epic.listTasks` line it is on - so the requirement names its own
+   * subject. `null` is the ordinary case: no floor, dispatch whatever the
+   * handshake negotiates.
+   */
+  readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
 }
 
 /**

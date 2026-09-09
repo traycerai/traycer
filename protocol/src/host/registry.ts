@@ -1,9 +1,9 @@
 import {
   defineDowngradePath,
   defineFloorAwareVersionedRpcRegistry,
-  type VersionedRpcRegistry,
   defineUpgradePath,
   type DowngradeResult,
+  type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
   defineVersionedStreamRpcRegistry,
@@ -292,6 +292,8 @@ import {
   hostStatusUpgradeV11ToV12,
   hostStatusUpgradeV12ToV13,
   hostStatusUpgradeV13ToV14,
+  hostStatusUpgradeV14ToV15,
+  hostStatusV15,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -390,6 +392,7 @@ import {
   hostResolveRepoPathsV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
+import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
   draftsClaimV10,
@@ -452,8 +455,10 @@ import {
   epicGetTaskContextsV10,
   epicGetTaskContextsV11,
   epicGetTaskContextsV12,
+  epicGetTaskContextsV13,
   epicGetTaskContextsUpgradeV10ToV11,
   epicGetTaskContextsUpgradeV11ToV12,
+  epicGetTaskContextsUpgradeV12ToV13,
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
@@ -484,9 +489,15 @@ import {
   epicListTasksV11,
   epicListTasksV12,
   epicListTasksV13,
+  epicListTasksV14,
+  epicListTasksV15,
+  epicListTasksV16,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
   epicListTasksUpgradeV12ToV13,
+  epicListTasksUpgradeV13ToV14,
+  epicListTasksUpgradeV14ToV15,
+  epicListTasksUpgradeV15ToV16,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -518,6 +529,9 @@ import {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV14,
+  epicSubscribeV15,
+  epicSubscribeV16,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
   epicArtifactVersionsListV10,
@@ -541,7 +555,10 @@ import {
   epicStateSubscribeV10,
   epicStateSubscribeV11,
 } from "@traycer/protocol/host/epic/state-subscribe";
-import { epicStatusSubscribeV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import {
+  epicStatusSubscribeV10,
+  epicStatusSubscribeV11,
+} from "@traycer/protocol/host/epic/status-subscribe";
 import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
   epicGetWorkspaceContextV10,
@@ -647,9 +664,9 @@ import {
   hostNotificationHooksTest,
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
-  hostNotificationsIndicatorState,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateV10,
+  hostNotificationsIndicatorStateV11,
   hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
@@ -659,14 +676,18 @@ import {
   hostNotificationsListV21,
   hostNotificationsListV22,
   hostNotificationsMarkAllRead,
+  hostNotificationsMarkAllReadUpgradeV10ToV11,
+  hostNotificationsMarkAllReadV11,
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
+  hostNotificationsFeedSubscribeV13,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
+  hostNotificationsCloudFeedSubscribeV12,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -981,6 +1002,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
+export { hostRebindLocalStoreV10 };
 export { hostGetRateLimitUsageV10 };
 export { hostUsageSummaryV10 };
 
@@ -4733,7 +4755,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -4754,6 +4776,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         4: {
           contract: hostStatusV14,
           upgradeFromPreviousVersion: hostStatusUpgradeV13ToV14,
+        },
+        5: {
+          contract: hostStatusV15,
+          upgradeFromPreviousVersion: hostStatusUpgradeV14ToV15,
         },
       },
       downgradePathsFromLatest: {},
@@ -5101,6 +5127,21 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "host.rebindLocalStore": {
+    // A pre-durability host cannot repair a refused local WAL safely, so this
+    // button is simply absent when its optional protocol method is unsupported.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostRebindLocalStoreV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.getRateLimitUsage": {
     1: {
       latestMinor: 2,
@@ -5204,49 +5245,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
     },
   },
-  "host.notifications.list": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsListV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    2: {
-      latestMinor: 2,
-      versions: {
-        0: {
-          contract: hostNotificationsListV20,
-          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
-        },
-        1: {
-          contract: hostNotificationsListV21,
-          upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
-          // The `host.operation.finished` arm added in 2.1 is emission-gated
-          // by design: the resolver derives arm inclusion from the version
-          // the caller negotiated, and the entry union's own contract
-          // (host-notifications.ts) mandates "a host-side projection that
-          // keeps the arm out of every older version's rows ... never a
-          // post-query filter". See host-notifications-resolvers.ts.
-          responseGrowthProjectionGated: true,
-        },
-        // 2.2 adds `browser.human.needed` under the same projection gate. It is
-        // a new minor rather than a widening of 2.1 because 2.1 has shipped.
-        2: {
-          contract: hostNotificationsListV22,
-          upgradeFromPreviousVersion: hostNotificationsListUpgradeV21ToV22,
-          responseGrowthProjectionGated: true,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV22ToV10,
-      },
-    },
-  },
   "host.notificationHooks.status": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5338,19 +5336,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  "host.notifications.markAllRead": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsMarkAllRead,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "host.notifications.clearAll": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5429,24 +5414,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  "host.notifications.indicatorState": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: hostNotificationsIndicatorStateV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: hostNotificationsIndicatorState,
-          upgradeFromPreviousVersion:
-            hostNotificationsIndicatorStateUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
+
   "comments.listThreads": {
     1: {
       latestMinor: 0,
@@ -6272,7 +6240,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 3,
+      latestMinor: 6,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -6289,6 +6257,22 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         3: {
           contract: epicListTasksV13,
           upgradeFromPreviousVersion: epicListTasksUpgradeV12ToV13,
+        },
+        4: {
+          contract: epicListTasksV14,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV13ToV14,
+        },
+        5: {
+          contract: epicListTasksV15,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV14ToV15,
+        },
+        6: {
+          contract: epicListTasksV16,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV15ToV16,
+          // `pending` is emitted only when this negotiated 1.6 request carries
+          // `localFirstPhase: "initial"`; lower-minor contracts strip that
+          // directive and therefore retain their released response values.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -6327,7 +6311,9 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     1: {
       // @1.1's new row-union values are projection-gated in host dispatch:
       // a v1.0 caller receives its released nullable rows, never a union arm.
-      latestMinor: 2,
+      // @1.3's `localHomedTaskIds` sibling needs no gate of its own - an
+      // older peer's frozen schema strips the optional key at parse time.
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicGetTaskContextsV10,
@@ -6341,6 +6327,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: epicGetTaskContextsV12,
           upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV11ToV12,
+        },
+        3: {
+          contract: epicGetTaskContextsV13,
+          upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -8997,6 +8987,96 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
 } as const;
 
+// These three post-v1 notification minors carry the large protocol Zod unions
+// that tip declaration emit over TS7056's serialization ceiling. Keep the
+// authoring literal separate so the exported registry can widen only their
+// storage slots while `defineFloorAwareVersionedRpcRegistry` still validates
+// every precise version and bridge at this call site.
+const HOST_RPC_NOTIFICATION_METHODS = {
+  "host.notifications.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 2,
+      versions: {
+        0: {
+          contract: hostNotificationsListV20,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
+        },
+        1: {
+          contract: hostNotificationsListV21,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
+          // The `host.operation.finished` arm added in 2.1 is emission-gated
+          // by design: the resolver derives arm inclusion from the version
+          // the caller negotiated, and the entry union's own contract
+          // (host-notifications.ts) mandates "a host-side projection that
+          // keeps the arm out of every older version's rows ... never a
+          // post-query filter". See host-notifications-resolvers.ts.
+          responseGrowthProjectionGated: true,
+        },
+        // 2.2 carries two independent bumps merged onto one minor (see the
+        // contract's note): the local durable-home request variants, and
+        // `browser.human.needed` joining the entry union under the same
+        // projection gate as 2.1. It is a new minor rather than a widening of
+        // 2.1 because 2.1 has shipped.
+        2: {
+          contract: hostNotificationsListV22,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV21ToV22,
+          responseGrowthProjectionGated: true,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationsListDowngradeV22ToV10,
+      },
+    },
+  },
+  "host.notifications.markAllRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: hostNotificationsMarkAllRead,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsMarkAllReadV11,
+          upgradeFromPreviousVersion:
+            hostNotificationsMarkAllReadUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.indicatorState": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: hostNotificationsIndicatorStateV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsIndicatorStateV11,
+          upgradeFromPreviousVersion:
+            hostNotificationsIndicatorStateUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
 /**
  * The `providers.*` family, split out of the base definition purely to keep
  * declaration emit under `tsc`'s serialization ceiling (TS7056) - the same
@@ -9004,7 +9084,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
  * alone carries seven majors and their bridges, and the inferred type of one
  * object literal holding every method crossed the limit as this family grew.
  *
- * Purely a compile-time seam: the four definitions are intersected into one
+ * Purely a compile-time seam: the five definitions are intersected into one
  * `HostRpcRegistryDefinition` below, so nothing about registration, ordering
  * or negotiation changes.
  */
@@ -9876,7 +9956,79 @@ const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
   },
 } as const;
 
-// The five literals must not declare the same method. Nothing about the merge
+type HostRpcNotificationMethodMap = {
+  readonly "host.notifications.list": {
+    readonly degrade: { readonly kind: "unsupported" };
+    readonly 1: {
+      readonly latestMinor: 0;
+      readonly versions: {
+        readonly 0: {
+          readonly contract: typeof hostNotificationsListV10;
+          readonly upgradeFromPreviousVersion: null;
+        };
+      };
+      readonly downgradePathsFromLatest: Record<never, never>;
+    };
+    readonly 2: {
+      readonly latestMinor: 2;
+      readonly versions: {
+        readonly 0: {
+          readonly contract: typeof hostNotificationsListV20;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV10ToV20;
+        };
+        readonly 1: {
+          readonly contract: typeof hostNotificationsListV21;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV20ToV21;
+          /** See `VersionEntry.responseGrowthProjectionGated`. */
+          readonly responseGrowthProjectionGated: true;
+        };
+        readonly 2: {
+          readonly contract: typeof hostNotificationsListV22;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV21ToV22;
+        };
+      };
+      readonly downgradePathsFromLatest: {
+        readonly 1: typeof hostNotificationsListDowngradeV22ToV10;
+      };
+    };
+  };
+  readonly "host.notifications.markAllRead": {
+    readonly degrade: { readonly kind: "unsupported" };
+    readonly 1: {
+      readonly latestMinor: 1;
+      readonly versions: {
+        readonly 0: {
+          readonly contract: typeof hostNotificationsMarkAllRead;
+          readonly upgradeFromPreviousVersion: null;
+        };
+        readonly 1: {
+          readonly contract: typeof hostNotificationsMarkAllReadV11;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsMarkAllReadUpgradeV10ToV11;
+        };
+      };
+      readonly downgradePathsFromLatest: Record<never, never>;
+    };
+  };
+  readonly "host.notifications.indicatorState": {
+    readonly degrade: { readonly kind: "unsupported" };
+    readonly 1: {
+      readonly latestMinor: 1;
+      readonly versions: {
+        readonly 0: {
+          readonly contract: typeof hostNotificationsIndicatorStateV10;
+          readonly upgradeFromPreviousVersion: null;
+        };
+        readonly 1: {
+          readonly contract: typeof hostNotificationsIndicatorStateV11;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsIndicatorStateUpgradeV10ToV11;
+        };
+      };
+      readonly downgradePathsFromLatest: Record<never, never>;
+    };
+  };
+};
+
+// The six literals must not declare the same method. Nothing about the merge
 // below would tell you if they did: the spread silently keeps the LAST
 // occurrence, while the intersection claims a method that has two
 // contradictory version lines - so a duplicate would compile, type-check, and
@@ -9899,6 +10051,10 @@ type DuplicateHostRpcMethodNames =
     >
   | Extract<
       keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION,
+      keyof typeof HOST_RPC_NOTIFICATION_METHODS
+    >
+  | Extract<
+      keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION,
       keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
     >
   | Extract<
@@ -9912,6 +10068,10 @@ type DuplicateHostRpcMethodNames =
   | Extract<
       keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
       keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
+      keyof typeof HOST_RPC_NOTIFICATION_METHODS
     >
   | Extract<
       keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
@@ -9928,15 +10088,42 @@ type DuplicateHostRpcMethodNames =
   | Extract<
       keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION,
       keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
+      keyof typeof HOST_RPC_NOTIFICATION_METHODS
+    >
+  | Extract<
+      keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION,
+      keyof typeof HOST_RPC_NOTIFICATION_METHODS
+    >
+  | Extract<
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION,
+      keyof typeof HOST_RPC_NOTIFICATION_METHODS
     >;
 
-// `Record<never, never>` is `{}` while the key sets stay disjoint, so this
-// intersection is a no-op in the healthy case.
+/**
+ * The definition every consumer sees.
+ *
+ * Five of the six literals contribute their own precise `typeof`. The
+ * notification literal contributes `HostRpcNotificationMethodMap` instead:
+ * its post-v1 minors carry the large protocol Zod unions that tip declaration
+ * emit over TS7056's serialization ceiling, so those slots are manually named
+ * at the declaration-emission boundary only. Each slot retains its exact
+ * contracts and bridges, so callers keep resolver/query checking against the
+ * latest request and response shapes - and the precise literal is still
+ * statically checked against this annotation and dynamically validated by
+ * `defineFloorAwareVersionedRpcRegistry` below.
+ *
+ * `Record<never, never>` is `{}` while the key sets stay disjoint, so the
+ * duplicate intersection is a no-op in the healthy case.
+ */
 type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
   typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION &
   typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION &
   typeof HOST_RPC_EDITING_REGISTRY_DEFINITION &
   typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION &
+  HostRpcNotificationMethodMap &
   Record<AssertNever<DuplicateHostRpcMethodNames>, never>;
 
 const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
@@ -9945,6 +10132,7 @@ const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
   ...HOST_RPC_EDITING_REGISTRY_DEFINITION,
   ...HOST_RPC_DRAFTS_REGISTRY_DEFINITION,
+  ...HOST_RPC_NOTIFICATION_METHODS,
 };
 
 export const hostRpcRegistry: VersionedRpcRegistry<HostRpcRegistryDefinition> =
@@ -10007,10 +10195,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "epic.subscribe": {
     1: {
       // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and
-      // `rootDirty`. @1.0 stays installed and FROZEN: a renderer that
+      // `rootDirty`; @1.4 adds optional durability keys to cloudSyncStatus;
+      // @1.5 adds the optional live-vs-pending promotion state; @1.6 is the s5
+      // status pass - a widened `pauseReason` (s5-orphaned-epic-recovery), the
+      // `localProtection` datum plus a `durability: "unknown"` member
+      // (s5-unarmed-session), and the conservative `freshness` datum
+      // (s5-mirror-first-serving), all on that same cloudSyncStatus frame.
+      // @1.0 stays installed and FROZEN: a renderer that
       // negotiated it never receives the new kinds, and the resolver gates
       // emission on the negotiated version rather than assuming the peer will
-      // tolerate an unknown frame.
+      // tolerate an unknown frame. The same gating applies to @1.6's two
+      // widened enums, whose new VALUES an older minor's schema refuses.
+      //
+      // The durability ladder sits at @1.4-@1.6 rather than @1.2-@1.4 because
+      // `main` landed the roomInfo (@1.2) and delta-seed (@1.3) minors first;
+      // it was re-minted above them, and its frames build on @1.3's snapshot
+      // frame so a peer above @1.3 keeps receiving `seededFromOffer`.
       //
       // @1.2 adds `roomId` to the snapshot frame's `meta`. Unlike the @1.1
       // frame KINDS, this one needs no emission gate - a peer on an older
@@ -10026,7 +10226,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       // validates params against the NEGOTIATED contract and passes the parsed
       // value on, so a sub-@1.3 peer's offer is stripped before any resolver
       // runs.
-      latestMinor: 3,
+      latestMinor: 6,
       versions: {
         0: {
           contract: epicSubscribeV10,
@@ -10039,6 +10239,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         3: {
           contract: epicSubscribeV13,
+        },
+        4: {
+          contract: epicSubscribeV14,
+        },
+        5: {
+          contract: epicSubscribeV15,
+        },
+        6: {
+          contract: epicSubscribeV16,
         },
       },
     },
@@ -10087,12 +10296,19 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // `@1.0` shipped in cli-v1.3.0 and is frozen there. The durability legs this
+  // branch carries on `snapshot` / `cloudSyncStatus` therefore live at `@1.1`;
+  // the host gates them on the negotiated minor
+  // (`EPIC_STATUS_DURABILITY_LEGS_MINOR`).
   "epic.status.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicStatusSubscribeV10,
+        },
+        1: {
+          contract: epicStatusSubscribeV11,
         },
       },
     },
@@ -10139,9 +10355,14 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // `@1.2` shipped in cli-v1.3.0 and is frozen there. The `partitionSnapshot`
+  // frame this branch adds therefore lives at `@1.3`: a frame KIND is the one
+  // growth a released peer cannot absorb, since it strict-decodes the server
+  // union and fails closed on a kind it does not know. The host gates emission
+  // on the negotiated minor rather than assuming tolerance.
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
@@ -10152,18 +10373,24 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         2: {
           contract: hostNotificationsFeedSubscribeV12,
         },
+        3: {
+          contract: hostNotificationsFeedSubscribeV13,
+        },
       },
     },
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
         },
         1: {
           contract: hostNotificationsCloudFeedSubscribeV11,
+        },
+        2: {
+          contract: hostNotificationsCloudFeedSubscribeV12,
         },
       },
     },
