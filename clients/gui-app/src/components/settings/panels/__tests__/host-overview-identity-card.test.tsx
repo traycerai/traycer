@@ -283,6 +283,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           };
         },
       },
@@ -337,6 +338,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           };
         },
       },
