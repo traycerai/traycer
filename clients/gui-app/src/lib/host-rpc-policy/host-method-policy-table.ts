@@ -451,8 +451,13 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
-  // Explicit, state-changing local-store repair: rapid confirmation clicks
-  // must stay ordered and must never be coalesced into one implicit claim.
+  // Explicit, state-changing local-store repair. Unusually for this table the
+  // cross-queue caveat does not apply: the request is
+  // `{ confirmOldHostStopped: true }` and nothing else (`local-store/schemas.ts`),
+  // so every confirmation click on one host shares all four key components and
+  // they really are one queue. `fifo` is what that queue needs — under `latest`
+  // a second click arriving while the first is still QUEUED folds into it, and
+  // two deliberate confirmations of a destructive repair reach the host as one.
   "host.rebindLocalStore": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
