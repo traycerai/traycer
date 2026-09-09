@@ -9,8 +9,8 @@ import type {
 import {
   InterviewOptionDetailsButton,
   InterviewOptionDetailsRegion,
-  useInterviewOptionDetailsDisclosure,
 } from "@/components/chat/segments/interview-visuals";
+import { useInterviewOptionDetailsDisclosure } from "@/components/chat/segments/use-interview-option-details-disclosure";
 import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";

@@ -5,12 +5,16 @@ import {
   CircleHelp,
   Pencil,
 } from "lucide-react";
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type {
   InterviewQuestion,
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
+import {
+  useInterviewOptionDetailsDisclosure,
+  type InterviewOptionDetailsDisclosure,
+} from "@/components/chat/segments/use-interview-option-details-disclosure";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
@@ -121,36 +125,6 @@ export function InterviewQuestionPager(props: {
       </Button>
     </div>
   );
-}
-
-export interface InterviewOptionDetailsDisclosure {
-  readonly regionId: string;
-  readonly expanded: boolean;
-  readonly toggle: () => void;
-}
-
-/**
- * Per-option disclosure state for the `?` affordance, owned by whichever row
- * component renders it.
- *
- * A Radix tooltip is hover/focus-only BY CONSTRUCTION, so a finger could never
- * reach these strings: the trigger's `pointerMove` returns early on
- * `pointerType === "touch"` - the only open-from-pointer path there is - and
- * the tap's own `pointerdown` sets the flag that suppresses the focus
- * fallback. The `?` had no `onClick` either, so on a phone it was a dead hole
- * in the row that swallowed the tap without selecting the option (it sits at
- * `z-20` over the row's own `absolute inset-0` toggle).
- *
- * So the `?` doubles as a disclosure. This is deliberately NOT gated on
- * `useCoarsePointer()`: hover still previews on a fine pointer, and a click
- * pins the same text inline under the row where it survives a scroll - which
- * is an improvement on a mouse too, and one branch less to keep true.
- */
-export function useInterviewOptionDetailsDisclosure(): InterviewOptionDetailsDisclosure {
-  const regionId = useId();
-  const [expanded, setExpanded] = useState(false);
-  const toggle = useCallback(() => setExpanded((open) => !open), []);
-  return { regionId, expanded, toggle };
 }
 
 // Hit-slop only - the `?` stays visually 20px while its tap target grows to

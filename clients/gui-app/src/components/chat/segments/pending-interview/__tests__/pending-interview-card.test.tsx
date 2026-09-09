@@ -2549,76 +2549,65 @@ describe("PendingInterviewCard keyboard navigation", () => {
     expect(document.activeElement).not.toBe(cardEl);
   });
 
+  // Deliberately NOT the shape of the `?`'s accessible name (`Beta details`):
+  // the disclosure assertions must prove they found the REVEALED text, and a
+  // description that reads the same as the trigger's label cannot distinguish
+  // the two if a query ever starts matching accessible names.
+  const BETA_DESCRIPTION = "Beta explains the scope";
+
+  function renderDetailsCard() {
+    renderCard(
+      [
+        {
+          questionId: "q1",
+          question: "Pick one",
+          header: null,
+          options: [
+            { label: "Alpha", description: null, preview: null },
+            { label: "Beta", description: BETA_DESCRIPTION, preview: null },
+          ],
+          multiSelect: false,
+          allowsCustomAnswer: null,
+        },
+      ],
+      vi.fn(),
+      null,
+    );
+    return screen.getByRole("button", { name: "Beta details" });
+  }
+
+  // Drives the exact sequence Radix's own trigger sees from a finger, so the
+  // assertion fails against the pre-fix trigger and passes only because
+  // `onClick` now toggles the disclosure independently of the tooltip.
+  function tapWithFinger(element: HTMLElement) {
+    fireEvent.pointerMove(element, { pointerType: "touch" });
+    fireEvent.pointerDown(element, { pointerType: "touch" });
+    fireEvent.pointerUp(element, { pointerType: "touch" });
+    fireEvent.click(element);
+  }
+
   // Radix Tooltip is hover/focus-only by construction: the trigger's
   // `onPointerMove` returns early for `pointerType === "touch"`, and the
   // tap's own `pointerdown` sets the flag that suppresses the focus
   // fallback. Before the fix the `?` had no `onClick`, so a finger could
-  // never reach these strings at all - this drives the exact touch sequence
-  // Radix's own trigger sees (`pointerMove` touch, `pointerDown`,
-  // `pointerUp`, then the browser's synthesized `click`) so the assertion
-  // fails against the pre-fix trigger and passes only because `onClick` now
-  // toggles the disclosure independently of the tooltip's own open state.
+  // never reach these strings at all.
   it("reveals an option's description on a touch tap of its details button", () => {
-    renderCard(
-      [
-        {
-          questionId: "q1",
-          question: "Pick one",
-          header: null,
-          options: [
-            { label: "Alpha", description: null, preview: null },
-            { label: "Beta", description: "Beta details", preview: null },
-          ],
-          multiSelect: false,
-          allowsCustomAnswer: null,
-        },
-      ],
-      vi.fn(),
-      null,
-    );
+    const detailsButton = renderDetailsCard();
+    expect(screen.queryByText(BETA_DESCRIPTION)).toBeNull();
 
-    expect(screen.queryByText("Beta details")).toBeNull();
-    const detailsButton = screen.getByRole("button", { name: "Beta details" });
+    tapWithFinger(detailsButton);
 
-    fireEvent.pointerMove(detailsButton, { pointerType: "touch" });
-    fireEvent.pointerDown(detailsButton, { pointerType: "touch" });
-    fireEvent.pointerUp(detailsButton, { pointerType: "touch" });
-    fireEvent.click(detailsButton);
-
-    expect(screen.getByText("Beta details")).toBeTruthy();
+    expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();
   });
 
   it("collapses the revealed description on a second touch tap", () => {
-    renderCard(
-      [
-        {
-          questionId: "q1",
-          question: "Pick one",
-          header: null,
-          options: [
-            { label: "Alpha", description: null, preview: null },
-            { label: "Beta", description: "Beta details", preview: null },
-          ],
-          multiSelect: false,
-          allowsCustomAnswer: null,
-        },
-      ],
-      vi.fn(),
-      null,
-    );
+    const detailsButton = renderDetailsCard();
 
-    const detailsButton = screen.getByRole("button", { name: "Beta details" });
-    fireEvent.pointerMove(detailsButton, { pointerType: "touch" });
-    fireEvent.pointerDown(detailsButton, { pointerType: "touch" });
-    fireEvent.pointerUp(detailsButton, { pointerType: "touch" });
-    fireEvent.click(detailsButton);
-    expect(screen.getByText("Beta details")).toBeTruthy();
+    tapWithFinger(detailsButton);
+    expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();
 
-    fireEvent.pointerMove(detailsButton, { pointerType: "touch" });
-    fireEvent.pointerDown(detailsButton, { pointerType: "touch" });
-    fireEvent.pointerUp(detailsButton, { pointerType: "touch" });
-    fireEvent.click(detailsButton);
-    expect(screen.queryByText("Beta details")).toBeNull();
+    tapWithFinger(detailsButton);
+    expect(screen.queryByText(BETA_DESCRIPTION)).toBeNull();
   });
 
   // The `?` sits at `z-20` over the row's own `absolute inset-0` toggle
@@ -2627,31 +2616,11 @@ describe("PendingInterviewCard keyboard navigation", () => {
   // so the disclosure is additive rather than a replacement for the row's
   // existing tap target.
   it("does not select the option when tapping its details button, but does when tapping the row", () => {
-    renderCard(
-      [
-        {
-          questionId: "q1",
-          question: "Pick one",
-          header: null,
-          options: [
-            { label: "Alpha", description: null, preview: null },
-            { label: "Beta", description: "Beta details", preview: null },
-          ],
-          multiSelect: false,
-          allowsCustomAnswer: null,
-        },
-      ],
-      vi.fn(),
-      null,
-    );
+    const detailsButton = renderDetailsCard();
 
-    const detailsButton = screen.getByRole("button", { name: "Beta details" });
-    fireEvent.pointerMove(detailsButton, { pointerType: "touch" });
-    fireEvent.pointerDown(detailsButton, { pointerType: "touch" });
-    fireEvent.pointerUp(detailsButton, { pointerType: "touch" });
-    fireEvent.click(detailsButton);
+    tapWithFinger(detailsButton);
 
-    expect(screen.getByText("Beta details")).toBeTruthy();
+    expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "2. Beta", pressed: false }),
     ).toBeTruthy();
@@ -2663,25 +2632,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
   });
 
   it("flips aria-expanded and points aria-controls at the revealed region", () => {
-    renderCard(
-      [
-        {
-          questionId: "q1",
-          question: "Pick one",
-          header: null,
-          options: [
-            { label: "Alpha", description: null, preview: null },
-            { label: "Beta", description: "Beta details", preview: null },
-          ],
-          multiSelect: false,
-          allowsCustomAnswer: null,
-        },
-      ],
-      vi.fn(),
-      null,
-    );
-
-    const detailsButton = screen.getByRole("button", { name: "Beta details" });
+    const detailsButton = renderDetailsCard();
     expect(detailsButton.getAttribute("aria-expanded")).toBe("false");
     expect(detailsButton.getAttribute("aria-controls")).toBeNull();
 
@@ -2691,7 +2642,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
     const controlsId = detailsButton.getAttribute("aria-controls");
     expect(controlsId).not.toBeNull();
     expect(document.getElementById(controlsId ?? "")).toBe(
-      screen.getByText("Beta details").closest("[role='note']"),
+      screen.getByText(BETA_DESCRIPTION).closest("[role='note']"),
     );
 
     fireEvent.click(detailsButton);
