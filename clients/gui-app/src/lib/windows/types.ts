@@ -271,6 +271,7 @@ export interface DesktopSupportFreezeEvidenceInput {
 
 export interface DesktopSupportFreezeEvidenceResult {
   readonly reportId: string;
+  readonly contactEmail: string | null;
 }
 
 /**
@@ -655,7 +656,7 @@ export interface DesktopReportIssueForm {
   // D7: only non-null when the user actively changed the pre-filled
   // "Where did this happen?" selector away from its default.
   readonly location: string | null;
-  // G1: identity is attached to the private report only when this is true.
+  // Retained for older clients. Signed-in email always accompanies private reports.
   readonly allowContact: boolean;
   // Consent panel's two log toggles (default on): withholds the tail from
   // the private submission / diagnostic bundle when false.

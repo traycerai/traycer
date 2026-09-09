@@ -6,6 +6,8 @@ import {
   contentBlockSchemaPreSettlement,
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
+  autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaV18,
   providerNoticeMetadataSchema,
   providerNoticeNormalizedMetadataSchema,
   interviewQuestionSchema,
@@ -22,6 +24,10 @@ import {
   type ToolCallManagedCommandRestarted,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  chatSubscribeV18,
+  chatSubscribeV19,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 
 describe("fileChangeBlockSchema backward-compat", () => {
   it("parses a pre-compaction file_change block (no hashes/counts) via defaults", () => {
@@ -495,6 +501,44 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     timestamp: 1,
   };
 
+  it("freezes delivery placement out of chat.subscribe 1.8 and includes it in 1.9", () => {
+    const frozen = z.toJSONSchema(chatSubscribeV18.serverFrameSchema);
+    const current = z.toJSONSchema(chatSubscribeV19.serverFrameSchema);
+    expect(JSON.stringify(frozen)).not.toContain("deliveryPlacement");
+    expect(JSON.stringify(current)).toContain("deliveryPlacement");
+  });
+
+  it("normalizes a missing delivery placement to null on schema and raw decode", () => {
+    const raw = {
+      ...baseFields,
+      triggers: [],
+      wakeTriggers: undefined,
+    };
+    expect(decodeAutonomousResumeBlock(raw).deliveryPlacement).toBeNull();
+    expect(contentBlockSchema.parse(raw)).toMatchObject({
+      type: "autonomous_resume",
+      deliveryPlacement: null,
+    });
+  });
+
+  it("round-trips both delivery placements and omits them from the frozen codec", () => {
+    for (const deliveryPlacement of ["in_turn", "turn_start"] as const) {
+      const domain = autonomousResumeBlockSchema.parse({
+        ...baseFields,
+        deliveryPlacement,
+        triggers: [],
+      });
+      expect(autonomousResumeBlockSchema.encode(domain).deliveryPlacement).toBe(
+        deliveryPlacement,
+      );
+      const frozen = autonomousResumeBlockSchemaV18.encode(domain);
+      expect("deliveryPlacement" in frozen).toBe(false);
+      expect(autonomousResumeBlockSchemaV18.decode(frozen)).not.toHaveProperty(
+        "deliveryPlacement",
+      );
+    }
+  });
+
   it("decodes a raw pre-wakeTriggers stored block (v1.1.3 data, NO schema parse) without throwing", () => {
     // The host's storage hot path (`decodeStoredBlock` in
     // `chat-message-collections.ts`) calls this function on raw Yjs JSON
@@ -668,6 +712,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
 
     const domain: AutonomousResumeBlock = {
       ...baseFields,
+      deliveryPlacement: null,
       triggers: [
         {
           kind: "wakeup",
@@ -694,6 +739,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   it("round-trips encode -> decode for a mixed trigger set (canonical order: task triggers, then wakeup)", () => {
     const domain: AutonomousResumeBlock = {
       ...baseFields,
+      deliveryPlacement: null,
       triggers: [
         {
           kind: "subagent",
@@ -740,6 +786,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   it("decode is idempotent - re-decoding an already-domain-shaped block is a no-op", () => {
     const domain: AutonomousResumeBlock = {
       ...baseFields,
+      deliveryPlacement: null,
       triggers: [
         {
           kind: "wakeup",
@@ -761,6 +808,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   it("z.encode on the full contentBlockSchema union splits wakeup triggers into wakeTriggers", () => {
     const domain: AutonomousResumeBlock = {
       ...baseFields,
+      deliveryPlacement: null,
       triggers: [
         {
           kind: "wakeup",
