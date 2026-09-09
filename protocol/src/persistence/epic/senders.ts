@@ -598,3 +598,30 @@ export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
     huggingFaceChatSessionAnchorSchema,
   ],
 );
+
+/**
+ * Wire-freeze copy of the LIVE anchor union minus the Antigravity variant,
+ * bound to `chat.subscribe@1.7` and `@1.8` - the two lines `cli-v1.3.0` /
+ * `host-v1.3.0` shipped that follow the live anchor rather than the
+ * pre-Reasonix freeze above.
+ *
+ * `@1.7`'s own comment says it "admits the ids added since (`reasonix`,
+ * `antigravity`)". That was written while `@1.7`/`@1.8` were unreleased; the
+ * 1.3.0 tag was cut from a branch without Antigravity, so both lines shipped
+ * with a twenty-arm union and a released peer's `discriminatedUnion` rejects
+ * the twenty-first outright. `@1.9` is where Antigravity actually rides.
+ *
+ * Derived from the pre-Reasonix freeze plus Reasonix rather than re-listing
+ * twenty arms: the two freezes then cannot drift, and a variant added above is
+ * excluded from BOTH by construction instead of by a reviewer noticing.
+ */
+export const chatSessionAnchorSchemaPreAntigravity = z.discriminatedUnion(
+  "harnessId",
+  [
+    ...chatSessionAnchorSchemaPreReasonix.options,
+    reasonixChatSessionAnchorSchema,
+  ],
+);
+export type ChatSessionAnchorPreAntigravity = z.infer<
+  typeof chatSessionAnchorSchemaPreAntigravity
+>;
