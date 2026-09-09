@@ -55,10 +55,15 @@ export type HistoryPinUnavailableReason =
  *
  * `local-home` is therefore no longer PERMANENT: a row that reads unavailable
  * against an old host becomes pinnable when that host updates, with no change
- * to the row. The ordering below is unchanged and still correct - a
- * local-homed row on a `@1.1` host now falls through to the session check,
- * which is right, because the pin still leaves this client as a cloud-backed
- * personal preference until someone establishes otherwise.
+ * to the row.
+ *
+ * It also does not require a cloud verdict. A local-homed pin on a `@1.1`
+ * host is served entirely from that host's disk (`epic-set-pinned-resolver`
+ * admits on the local `epicHomeVerdict` and returns before any cloud header is
+ * built), so the row returns from its own branch and never reaches the session
+ * check. `useEpicSetPinned` carries the same carve-out at DISPATCH, and the
+ * two must move together: a control this function enables and that mutation
+ * refuses is a button that does nothing.
  *
  * The row-intrinsic reasons are checked first on purpose: `phase` and
  * `preserved-orphan` are permanent facts about the row, while a withdrawn
@@ -79,7 +84,17 @@ export function historyPinUnavailableReason(
 ): HistoryPinUnavailableReason | null {
   if (item.taskType === "phase") return "phase";
   if (item.isPreservedOrphan === true) return "preserved-orphan";
-  if (item.isLocalHome === true && !localHomePinSupported) return "local-home";
+  // A local-homed row RETURNS from here either way and never reaches the
+  // session check below. That is the carve-out, not an ordering accident: on
+  // `@1.1` the host's pin resolver admits this epic on its local
+  // `epicHomeVerdict` and returns before building any cloud header, so the
+  // write spends no cloud capability and a withdrawn verdict is not a reason
+  // to refuse it. Requiring one would deny an offline or free-tier user a
+  // write their own machine can serve - which is the whole population this
+  // lane exists for.
+  if (item.isLocalHome === true) {
+    return localHomePinSupported ? null : "local-home";
+  }
   if (!cloudAuthorized) return "unverified-session";
   return null;
 }

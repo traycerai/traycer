@@ -415,9 +415,17 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const handleSetPinned = useCallback(
     (epicId: string, pinned: boolean) => {
-      setPinned({ epicId, pinned });
+      // Resolved HERE rather than widened into `onSetPinned`, which is
+      // declared in seven places across the desktop rows, the mobile row and
+      // both list shells. The row that rendered the control came out of this
+      // same array, so this is the reading it decided availability from, not a
+      // second derivation - and a row missing from it (an id from a stale
+      // control) reads cloud-homed, which lands on the verdict gate.
+      const isLocalHome =
+        items.find((item) => item.epicId === epicId)?.isLocalHome === true;
+      setPinned({ epicId, pinned, isLocalHome });
     },
-    [setPinned],
+    [items, setPinned],
   );
 
   const {

@@ -59,10 +59,11 @@ interface TabContextMenuContentProps {
  * Why the tab's History pin is unavailable, or `null` when it is not.
  *
  * The row reasons win over the session one: `local-home` / preserved-orphan are
- * permanent facts about the epic, while a withdrawn cloud verdict is a
- * condition the user can recover from - and naming the recoverable one for a
- * row that could never be pinned would point them at the wrong problem. Same
- * ordering, and the same reasoning, as `historyPinUnavailableReason`.
+ * facts about the epic, while a withdrawn cloud verdict is a condition the user
+ * can recover from - and naming the recoverable one for a row that could never
+ * be pinned would point them at the wrong problem. Same ordering, same
+ * carve-out, and the same reasoning as `historyPinUnavailableReason`; the two
+ * are the desktop-History and tab-strip halves of one rule and must not drift.
  */
 function tabPinUnavailableReason(input: {
   readonly localOnly: boolean;
@@ -78,7 +79,15 @@ function tabPinUnavailableReason(input: {
   // have stopped coinciding - and the surviving one, preserved-orphan, is the
   // one whose epic is NOT merely local ("its cloud copy was deleted").
   if (input.preservedOrphan) return "preserved-orphan";
-  if (input.localOnly && !input.localHomePinSupported) return "local-home";
+  // A local-homed tab RETURNS from here either way and never reaches the
+  // session check. The `@1.1` host serves this pin off its own disk - its
+  // resolver admits on the local `epicHomeVerdict` and returns before any
+  // cloud header is built - so no cloud capability is spent and a withdrawn
+  // verdict is not a reason to refuse. `useEpicSetPinned` carries the same
+  // exemption at dispatch.
+  if (input.localOnly) {
+    return input.localHomePinSupported ? null : "local-home";
+  }
   if (!input.cloudAuthorized) return "unverified-session";
   return null;
 }

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useEpicRecordViewed } from "@/hooks/epic/use-epic-record-viewed-mutation";
+import { useLocalHomedOpenEpicIds } from "@/lib/registries/epic-session-registry";
 import {
   useNavigate,
   useParams,
@@ -60,6 +61,12 @@ function EpicRouteTabSync(props: {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  // The epic's own live session is the only source for this under
+  // `unverified`: `epic.getTaskContexts`, which carries `localHomedTaskIds`
+  // for the History surfaces, is itself gated on the cloud verdict and so
+  // answers nothing in exactly the state this exemption is for.
+  const recencyEpicIds = useMemo(() => [epicId], [epicId]);
+  const isLocalHome = useLocalHomedOpenEpicIds(recencyEpicIds).has(epicId);
   // The epic this route has already made its one recency decision for. The
   // effect below re-runs when the verdict changes, and without this marker a
   // route that mounted unverified would fire `recordViewed` the moment the
@@ -73,6 +80,15 @@ function EpicRouteTabSync(props: {
     // merely restoring a tab while authn is unreachable, or after the credential
     // was rejected, would otherwise fire a cloud mutation on a bearer the cloud
     // has stopped vouching for.
+    //
+    // A LOCAL-HOMED epic is the exception, and it is not a cloud write at all:
+    // the host's resolver admits it on the local `epicHomeVerdict` and returns
+    // before building any cloud header, so recency for an epic living on the
+    // connected device's disk is recorded with no verdict at all. Without this
+    // an offline or free-tier user's own machine forgets what they just opened.
+    // The exemption only reaches epics whose live session has already answered
+    // - see `isLocalHome` above - so a first open whose durability statement is
+    // still in flight keeps today's drop.
     //
     // A background effect rather than a click, which is why no UI gate covers
     // it: nothing in this tree is disabled, so the spend happens on mount with
@@ -89,12 +105,15 @@ function EpicRouteTabSync(props: {
     // before rendering the store update that withdrew the verdict, so the
     // mutation re-reads the live verdict at dispatch
     // (`EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE`) and refuses what this
-    // captured `true` would otherwise let through.
+    // captured `true` would otherwise let through. The local-home exemption is
+    // carried at BOTH layers for the same reason it is on the pin: a gate here
+    // that the mutation does not honour is a write that fires and throws.
+    // `isLocalHome` travels in the variables so the two read one fact, not two.
     if (recencyDecidedForEpicId.current === epicId) return;
     recencyDecidedForEpicId.current = epicId;
-    if (!cloudAuthorized) return;
-    recordViewed({ epicId });
-  }, [cloudAuthorized, epicId, recordViewed]);
+    if (!cloudAuthorized && !isLocalHome) return;
+    recordViewed({ epicId, isLocalHome });
+  }, [cloudAuthorized, epicId, isLocalHome, recordViewed]);
 
   if (resolutionFailed) return <RootLandingPage />;
 

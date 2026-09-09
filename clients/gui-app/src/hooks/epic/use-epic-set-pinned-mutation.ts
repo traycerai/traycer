@@ -5,7 +5,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   cloudEpicTasksQueryKeyMatchesScope,
@@ -17,6 +17,8 @@ import {
   setCloudEpicTasksPagePinned,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import { historyPinUnavailableTooltip } from "@/components/epics/history-pin-availability";
+import { negotiatedSetPinnedServesLocalHome } from "@/lib/epic-pin-admission";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -24,11 +26,10 @@ import {
 import { toast } from "sonner";
 
 /**
- * Thrown from `onMutate` when the session holds no cloud verdict at dispatch.
+ * Thrown from `onMutate` when the session holds no cloud verdict at dispatch
+ * AND the write is not the local-home one carved out below.
  *
- * `epic.setPinned` is cloud-only - `historyPinUnavailableReason` already
- * refuses a local-home row, so there is no local exemption to carry here -
- * and every surface that dispatches it (the desktop History row, the mobile
+ * Every surface that dispatches this (the desktop History row, the mobile
  * action tray, the tab strip and its Undo toast) admits the control from a
  * RENDER-time verdict. A control rendered while verified and activated after
  * a demotion, or an Undo toast outliving the click, would otherwise spend a
@@ -36,6 +37,16 @@ import { toast } from "sonner";
  * connection carries no renderer verdict of its own. Gated in the one
  * mutation every consumer shares, so no consumer can omit it. Same shape as
  * the comment writes' `COMMENT_WRITE_UNAUTHORIZED_MESSAGE`.
+ *
+ * THIS USED TO SAY `epic.setPinned` IS CLOUD-ONLY. It no longer is. On
+ * `@1.1` the host's pin resolver admits a local-homed epic on the local
+ * `epicHomeVerdict` alone and returns before it builds any cloud header, so a
+ * pin on such an epic spends NO cloud capability and refusing it without a
+ * verdict would deny an offline or free-tier user a write their own machine
+ * can serve. {@link isLocalHomePinExempt} is that carve-out, and it is
+ * deliberately narrow: it needs BOTH the caller's local-home fact and a `@1.1`
+ * negotiation re-read at dispatch, so a cloud-homed row, or a host that rolled
+ * back to `@1.0` since the control rendered, still meets the gate.
  */
 export const EPIC_PIN_UNAUTHORIZED_MESSAGE =
   "pin refused: the session holds no cloud verdict";
@@ -45,9 +56,22 @@ interface SetEpicPinnedMutationContext {
   readonly userId: string | null;
 }
 
-interface SetEpicPinnedVariables {
+export interface SetEpicPinnedVariables {
   readonly epicId: string;
   readonly pinned: boolean;
+  /**
+   * Whether this epic is durable on the serving host's disk rather than in the
+   * cloud - the caller's own reading, from the same `HistoryItem` /
+   * `TaskPinnedState` the control rendered from.
+   *
+   * Taken from the caller rather than re-derived here on purpose: the render
+   * decided availability from this fact, and a second derivation at dispatch
+   * is how the two come to disagree. It is stripped by `mapVariables` and
+   * never reaches the wire - the host reads durability from its own
+   * `epicHomeVerdict`, and a client-asserted home would be a claim it has no
+   * business trusting.
+   */
+  readonly isLocalHome: boolean;
 }
 
 /**
@@ -71,21 +95,33 @@ interface SetEpicPinnedVariables {
 export function useEpicSetPinned() {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  return useHostMutation({
+  // Generics spelled out because `SetEpicPinnedVariables` is WIDER than the
+  // request schema - `isLocalHome` is a dispatch-side fact `mapVariables`
+  // strips. `TVariables` otherwise defaults to the request shape, and the
+  // widening would only surface as an error on `onMutate`'s annotation. Same
+  // shape as `useProvidersCancelModelProviderAuth`.
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.setPinned",
+    SetEpicPinnedMutationContext,
+    SetEpicPinnedVariables
+  >({
     client,
     method: "epic.setPinned",
-    mapVariables: (variables) => variables,
+    // `isLocalHome` is a DISPATCH-side fact, not a request field: the wire
+    // shape stays `{ epicId, pinned }` exactly as the schema declares it.
+    mapVariables: ({ epicId, pinned }) => ({ epicId, pinned }),
     options: {
       mutationKey: epicMutationKeys.setPinned(),
       onMutate: (
         variables: SetEpicPinnedVariables,
       ): SetEpicPinnedMutationContext => {
+        const hostId = client.getActiveHostId();
         // Before the optimistic patch: a refused dispatch reaches `onError`
         // with no context, and the inverse patch must have nothing to undo.
-        if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+        if (!epicPinDispatchAdmitted(variables, hostId)) {
           throw new Error(EPIC_PIN_UNAUTHORIZED_MESSAGE);
         }
-        const hostId = client.getActiveHostId();
         const userId = client.getRequestContextUserId();
         if (hostId !== null && userId !== null) {
           applyPinnedPatch(
@@ -139,6 +175,58 @@ export function useEpicSetPinned() {
   });
 }
 
+/**
+ * Whether this pin dispatch may proceed, read against the LIVE session verdict
+ * and the LIVE negotiation rather than anything captured at render.
+ *
+ * Exported because the tab strip guards its own two entry points with it - the
+ * menu select and the Undo toast action, which silently no-op rather than
+ * dispatching a write `onMutate` would only throw back. That edge and
+ * `onMutate` are the same decision, so they call the same function: two doors
+ * making one decision in two places is how they come to disagree, and the
+ * disagreement here is silent (a control that fires and does nothing, or a
+ * refusal for a write the host would have served).
+ *
+ * `hostId` is the ACTIVE host of the client the mutation dispatches on
+ * (`useHostClient()` in both places). A caller reading a different host's
+ * negotiation would be answering about a machine that is not going to serve
+ * the write.
+ */
+export function epicPinDispatchAdmitted(
+  variables: SetEpicPinnedVariables,
+  hostId: string | null,
+): boolean {
+  if (isLocalHomePinExempt(variables, hostId)) return true;
+  return authorizesCloudCapability(useAuthStore.getState().status);
+}
+
+/**
+ * Whether this dispatch is the cloud-free local-home write, and therefore not
+ * subject to {@link EPIC_PIN_UNAUTHORIZED_MESSAGE}.
+ *
+ * BOTH conjuncts are required and neither is redundant. `isLocalHome` alone
+ * would exempt a local-homed epic on a `@1.0` host, whose only arm is the
+ * cloud one - the exemption would hand it an unverified bearer for exactly the
+ * write it cannot serve. The negotiation alone would exempt every pin on a
+ * `@1.1` host, including cloud-homed rows that do spend the capability.
+ *
+ * The version is re-read HERE rather than closed over at render, matching the
+ * verdict read beside it and for the same reason: the tab strip's Undo toast
+ * outlives its click, and a host can restart or roll back under the same id in
+ * between. A `null` host id or an unknown manifest fails closed through
+ * `negotiatedSetPinnedServesLocalHome`, which lands the caller back on the
+ * cloud gate - the strictly safer of the two answers.
+ */
+function isLocalHomePinExempt(
+  variables: SetEpicPinnedVariables,
+  hostId: string | null,
+): boolean {
+  if (!variables.isLocalHome || hostId === null) return false;
+  return negotiatedSetPinnedServesLocalHome(
+    readNegotiatedMethodVersion(hostId, "epic.setPinned"),
+  );
+}
+
 function applyPinnedPatch(
   queryClient: QueryClient,
   scope: { readonly hostId: string; readonly userId: string },
@@ -185,6 +273,8 @@ function isSetEpicPinnedVariables(
     "epicId" in value &&
     typeof value.epicId === "string" &&
     "pinned" in value &&
-    typeof value.pinned === "boolean"
+    typeof value.pinned === "boolean" &&
+    "isLocalHome" in value &&
+    typeof value.isLocalHome === "boolean"
   );
 }
