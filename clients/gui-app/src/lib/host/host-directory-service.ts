@@ -189,6 +189,27 @@ export class HostDirectoryService implements IHostDirectoryService {
    * listing delivered are cleared by the same outcome.
    */
   private hasObservedRemoteListing = false;
+  /**
+   * True once an ATTEMPT to read the registry has finished under the current
+   * identity - whatever it said. The strictly weaker sibling of
+   * `hasObservedRemoteListing`, and the difference is the `failed` outcome:
+   * that arm commits nothing and leaves the listing flag false, correctly,
+   * because the registry's contents really are still unknown.
+   *
+   * The two answer different questions, and a caller that wants "has anyone
+   * finished asking" must not use the listing flag for it. A registry that
+   * cannot be reached at all - an offline phone - never delivers, so
+   * `hasSettledFleet()` stays false for as long as the outage lasts; a
+   * surface that WAITS on it would then wait forever, hiding the very failure
+   * it exists to report. Waiting on this instead ends the wait at the first
+   * conclusion and lets the failure be narrated.
+   *
+   * `signed-out` clears it with the listing flag, for that flag's own reason:
+   * the fetcher is reporting it had no bearer to ask WITH, so nothing was
+   * asked and no attempt concluded. A `failed` fetch is the opposite - the
+   * question was put and did not come back - which is why it sets this.
+   */
+  private hasConcludedRemoteAttempt = false;
   private readonly listeners = new Set<HostDirectoryListener>();
   /**
    * Refresh-liveness subscribers, kept OFF the main `listeners` fan-out on
@@ -347,6 +368,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
     this.started = true;
     this.hasObservedRemoteListing = false;
+    this.hasConcludedRemoteAttempt = false;
     // BEFORE the first refresh: the very first launch after the upgrade that
     // introduced the persisted key has nothing stored, and that launch is
     // exactly the reinstall this guard exists for - the host is down, so no
@@ -658,6 +680,27 @@ export class HostDirectoryService implements IHostDirectoryService {
     return this.hasObservedRemoteListing;
   }
 
+  /**
+   * Whether an attempt to read the registry has FINISHED under the current
+   * identity, whatever it said - see {@link hasConcludedRemoteAttempt}.
+   *
+   * The question a surface asks before it stands aside for a start in
+   * progress, and deliberately NOT {@link hasSettledFleet}. That one is about
+   * the fleet's CONTENTS, so it stays false for the whole of an outage the
+   * registry is never reached in - and a surface that waited on it would hold
+   * its silence for that entire outage, hiding the failure it exists to
+   * report. This ends the wait at the first conclusion; what happens after is
+   * the caller's own verdict to narrate.
+   *
+   * Like its sibling, this is for decisions a stale answer merely DELAYS. It
+   * is a weaker claim than `hasSettledFleet()` in every state (a delivered
+   * listing is also a concluded attempt), never a stronger one, so no caller
+   * can read membership out of it.
+   */
+  hasConcludedDiscovery(): boolean {
+    return this.hasConcludedRemoteAttempt;
+  }
+
   onChange(listener: HostDirectoryListener): Disposable {
     this.listeners.add(listener);
     return {
@@ -933,6 +976,11 @@ export class HostDirectoryService implements IHostDirectoryService {
     // reached from the other side.
     const observedBefore = this.hasObservedRemoteListing;
     this.hasObservedRemoteListing = outcome.kind === "hosts";
+    // Tracked with the listing flag and cleared by the same outcome: a
+    // `signed-out` is the fetcher saying it had no bearer to ask WITH, so
+    // nothing was asked and nothing concluded. Only the `failed` arm below
+    // makes the two disagree.
+    this.hasConcludedRemoteAttempt = outcome.kind === "hosts";
     const observedChanged = observedBefore !== this.hasObservedRemoteListing;
     // A host registered late - from the CLI, or from another machine - reaches
     // this directory through its own poll, while the selection authority's
@@ -1007,6 +1055,16 @@ export class HostDirectoryService implements IHostDirectoryService {
     // empty listing, so there is nothing to drop and the branch never ran,
     // and its observation went on answering `zero` for the next account. The
     // condition is therefore identity plus EITHER residue.
+    // A FAILED FETCH IS STILL A CONCLUSION, and this is the one place the two
+    // flags part company. The era fence above has already proven `era.identity`
+    // is the current identity, so the attempt that just failed was made under
+    // it: the question was put and did not come back. The registry's CONTENTS
+    // stay unknown (`hasObservedRemoteListing` is untouched below, in both
+    // branches), but "has anyone finished asking" is now yes - which is what
+    // lets a surface stop waiting and narrate the failure instead of holding a
+    // start-in-progress over an outage that may never end.
+    const concludedBefore = this.hasConcludedRemoteAttempt;
+    this.hasConcludedRemoteAttempt = true;
     const foreignIdentity = this.lastCommitIdentity !== era.identity;
     const foreignObservedListing =
       foreignIdentity && this.hasObservedRemoteListing;
@@ -1041,6 +1099,15 @@ export class HostDirectoryService implements IHostDirectoryService {
       "[host-directory] refresh failed, retaining last-known remote entries",
       { remoteCount: this.remoteEntries.length },
     );
+    // The retain path changes no row by construction, so the compared emit
+    // would swallow the one crossing that matters: a first attempt concluding
+    // in failure. Same reasoning as the commit path's unconditional emit on the
+    // observed flip - and gated on the FLIP, never on the outcome, because
+    // every later poll tick lands here too and an unconditional emit would fan
+    // a failed 60s poll out to every consumer of the snapshot.
+    if (!concludedBefore) {
+      this.emit();
+    }
     return this.snapshot();
   }
 

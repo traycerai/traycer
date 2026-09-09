@@ -2,15 +2,22 @@ import { useCallback, useSyncExternalStore } from "react";
 import { useHostBinding } from "@/lib/host";
 
 /**
- * Whether host discovery has produced an ANSWER for this window yet.
+ * Whether host discovery has FINISHED ASKING for this window yet.
  *
- * `HostDirectoryService.hasSettledFleet()` is the whole signal: true once a
- * fetch has actually delivered a registry listing - empty or not - and false
- * again whenever that observation is withdrawn (a `signed-out` outcome, whose
- * own doc calls it "the fetcher reporting it had no bearer to ask WITH", and
- * the foreign-identity drop). So it is not a launch latch: it re-arms on every
- * identity transition, which is exactly the edge the authority answers with
- * `reattachRequired` and a wiped fleet.
+ * `HostDirectoryService.hasConcludedDiscovery()` is the whole signal: true once
+ * an attempt to read the registry has finished under the current identity,
+ * whatever it said, and false again when a `signed-out` outcome withdraws it -
+ * the fetcher reporting it had no bearer to ask WITH, which on a shell whose
+ * auth is still settling is a race rather than an answer. So it is not a launch
+ * latch: it re-arms wherever the observation does.
+ *
+ * ⚠ NOT `hasSettledFleet()`, and the difference is a lockout. That flag is
+ * about the fleet's CONTENTS, so a registry that cannot be reached at all - an
+ * offline phone - never sets it: waiting on it would hold a start-in-progress
+ * over the whole outage, withholding the offline narration's Retry and Report
+ * issue for as long as it lasted, with only the 60s poll to end it. A wait must
+ * end at the first CONCLUSION; what that conclusion means is the caller's
+ * verdict to narrate, not this hook's.
  *
  * WHY A SURFACE NEEDS IT. The authority derives its leases from the fleet it
  * has been given (`fleet.hosts.map(...)`), so before anything has answered, an
@@ -35,6 +42,14 @@ import { useHostBinding } from "@/lib/host";
  * `false` before the runtime has resolved a binding: an absent directory has
  * not answered anything, which is also the correct reading for the runtime
  * being rebuilt under this window (browser/dev).
+ *
+ * That arm cannot strand a caller that waits on this, and the reason is
+ * structural rather than defensive. `HostRuntimeProvider` renders its fallback
+ * instead of its children while `binding === null`, so nothing below it exists
+ * yet - including `mountSelectionAuthorityBridge`, the one writer of the
+ * authority store's `attached`. A window therefore cannot be attached and
+ * binding-less at the same time, which is the pairing a caller gating on both
+ * would need in order to wait forever.
  */
 export function useHostDiscoverySettled(): boolean {
   const binding = useHostBinding();
@@ -54,7 +69,7 @@ export function useHostDiscoverySettled(): boolean {
     [directory],
   );
   const getSnapshot = useCallback(
-    () => (directory === null ? false : directory.hasSettledFleet()),
+    () => (directory === null ? false : directory.hasConcludedDiscovery()),
     [directory],
   );
 

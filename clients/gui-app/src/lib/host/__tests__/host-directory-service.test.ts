@@ -598,6 +598,95 @@ describe("HostDirectoryService", () => {
     ]);
   });
 
+  it("counts a FAILED fetch as a concluded attempt while the fleet stays unsettled, and emits the crossing", async () => {
+    // The two flags part company here, and only here. A registry that cannot
+    // be reached never DELIVERS, so `hasSettledFleet()` is false for the whole
+    // outage - correctly, since the contents really are unknown. But the
+    // attempt finished, and a surface that waits for discovery has to be able
+    // to stop waiting and narrate the failure; gating that wait on the
+    // settled-fleet flag instead would hold a start-in-progress over an
+    // offline shell until the outage ended.
+    //
+    // The EMIT is half the fix. This path changes no row by construction, so
+    // the compared emit swallows it, exactly as an empty-either-way listing
+    // crossing does on the commit path - and a flag nobody is told about is a
+    // flag no subscriber can act on.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([{ kind: "failed" }, { kind: "failed" }]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    const emits: number[] = [];
+    await directory.start();
+
+    expect(directory.hasSettledFleet()).toBe(false);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+
+    directory.onChange((entries) => {
+      emits.push(entries.length);
+    });
+    await directory.refresh();
+
+    // Still concluded, still unsettled - and SILENT. Gating the emit on the
+    // flip rather than on the outcome is what keeps a failing 60s poll from
+    // fanning out to every consumer of the snapshot on every tick.
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(directory.hasSettledFleet()).toBe(false);
+    expect(emits).toEqual([]);
+  });
+
+  it("keeps a delivered listing a concluded attempt too - the weaker claim never disagrees", async () => {
+    // The control for the case above: `hasConcludedDiscovery()` is weaker than
+    // `hasSettledFleet()` in every state, never stronger, so no caller can
+    // read fleet membership out of it by accident.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "hosts", entries: [mockRemoteHostEntry] },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    expect(directory.hasSettledFleet()).toBe(true);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("un-concludes with the settled fleet when a fetch comes back signed-out", async () => {
+    // `signed-out` is the fetcher reporting it had no bearer to ask WITH, so
+    // nothing was asked and nothing concluded. Both flags withdraw together;
+    // treating it as a conclusion would narrate a failure over auth that is
+    // merely still settling - the same lie from the other direction.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "hosts", entries: [mockRemoteHostEntry] },
+      { kind: "signed-out" },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+
+    await directory.refresh();
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+    expect(directory.hasSettledFleet()).toBe(false);
+  });
+
   it("withdraws the settled fleet when a later fetch comes back signed-out", async () => {
     // Same rule as the cardinality arm below: a bearer rotating out is not the
     // registry saying those hosts are gone, so the fleet re-closes rather than

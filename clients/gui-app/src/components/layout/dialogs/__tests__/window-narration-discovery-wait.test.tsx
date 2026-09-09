@@ -49,7 +49,7 @@ vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
  */
 const mocks = vi.hoisted(() => ({
   directory: null as {
-    hasSettledFleet(): boolean;
+    hasConcludedDiscovery(): boolean;
     getLocalHostId(): string | null;
     onChange(listener: () => void): { dispose: () => void };
   } | null,
@@ -67,22 +67,24 @@ vi.mock("@/lib/host", async (importOriginal) => {
 const REMOTE_HOST_ID = "remote-host";
 
 /**
- * The directory as this hook uses it: a settled answer, and the change stream
- * that announces one.
+ * The directory as this hook uses it: a concluded attempt, and the change
+ * stream that announces one.
  *
  * Deliberately NOT the real `HostDirectoryService`. Standing one up needs a
  * fetcher, an auth era and a poll timer, none of which this hook can see - it
  * reads one predicate and one subscription - so a full service would test the
  * service's own commit rules a second time while telling us nothing new about
- * the hook. What the fake must keep honest is the ORDER: `hasSettledFleet()` is
- * re-read on every emit, never cached from the first read.
+ * the hook. What the fake must keep honest is the ORDER: `hasConcludedDiscovery()`
+ * is re-read on every emit, never cached from the first read. That a FAILED
+ * fetch also counts as a conclusion is the service's own rule, pinned against
+ * the real service in `host-directory-service.test.ts`.
  */
 class FakeDirectory {
-  private settled = false;
+  private concluded = false;
   private readonly listeners = new Set<() => void>();
 
-  hasSettledFleet(): boolean {
-    return this.settled;
+  hasConcludedDiscovery(): boolean {
+    return this.concluded;
   }
 
   /**
@@ -103,15 +105,18 @@ class FakeDirectory {
     };
   }
 
-  /** A committed listing, EMPTY OR NOT - the flag's own definition. */
+  /**
+   * An attempt FINISHED - a committed listing empty or not, or a failed fetch.
+   * Both are conclusions, which is the flag's own definition.
+   */
   settle(): void {
-    this.settled = true;
+    this.concluded = true;
     this.emit();
   }
 
   /** A `signed-out` outcome, or the foreign-identity drop: the answer is withdrawn. */
   withdraw(): void {
-    this.settled = false;
+    this.concluded = false;
     this.emit();
   }
 
