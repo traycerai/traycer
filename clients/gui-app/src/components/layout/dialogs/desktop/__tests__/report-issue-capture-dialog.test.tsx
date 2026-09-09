@@ -322,7 +322,11 @@ function createRunnerHost(
           truncated: false,
         });
       },
-      freezeEvidence: () => Promise.resolve({ reportId: "rpt_frozen" }),
+      freezeEvidence: () =>
+        Promise.resolve({
+          reportId: "rpt_frozen",
+          contactEmail: harness.snapshot.user.email,
+        }),
       discardFrozenEvidence: () => Promise.resolve(),
       readFrozenLogTail: (input: {
         readonly draftId: number;
@@ -792,7 +796,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
   });
 
   describe("consent toggles", () => {
-    it("starts expanded for error-triggered opens and collapsed for manual opens", async () => {
+    it("shows consent details immediately for error-triggered and manual opens", async () => {
       const errorHarness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: undefined,
@@ -824,16 +828,13 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(manualHarness));
       await flushDialogEffects();
 
-      expect(screen.getByRole("button", { name: "details" })).not.toBeNull();
-      expect(
-        screen.queryByRole("switch", { name: "Include App log tail" }),
-      ).toBeNull();
-      // "partially": the two log tails default on, browser diagnostics does
-      // not (root cause H - it is opt-in per report).
-      expect(screen.getByText(/log tails partially on/)).not.toBeNull();
+      expect(switchState("Include App log tail")).toBe("checked");
+      expect(switchState("Include Host log tail")).toBe("checked");
+      expect(switchState("Include browser diagnostics")).toBe("checked");
+      expect(screen.queryByRole("button", { name: "details" })).toBeNull();
     });
 
-    it("defaults log toggles OFF for idea/other and back ON for bug unless the user already touched them (D8)", async () => {
+    it("defaults app and host logs OFF for idea/other and back ON for bug unless touched", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: undefined,
@@ -846,20 +847,17 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(harness));
       await flushDialogEffects();
 
-      fireEvent.click(screen.getByRole("button", { name: "details" }));
       expect(switchState("Include App log tail")).toBe("checked");
 
       fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
       expect(switchState("Include App log tail")).toBe("unchecked");
       expect(switchState("Include Host log tail")).toBe("unchecked");
-      expect(switchState("Include browser diagnostics")).toBe("unchecked");
+      expect(switchState("Include browser diagnostics")).toBe("checked");
 
       fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
       expect(switchState("Include App log tail")).toBe("checked");
       expect(switchState("Include Host log tail")).toBe("checked");
-      // NOT re-armed by the type switch: browser diagnostics is opt-in on
-      // every report type, so only the user's own toggle turns it on.
-      expect(switchState("Include browser diagnostics")).toBe("unchecked");
+      expect(switchState("Include browser diagnostics")).toBe("checked");
 
       // User-touched toggle must not be clobbered by a later type switch.
       fireEvent.click(
@@ -872,7 +870,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(switchState("Include App log tail")).toBe("unchecked");
     });
 
-    it("shows 'log tails off' in the collapsed summary once Idea clears the two log tails", async () => {
+    it("keeps a browser diagnostics opt-out across a type switch", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: undefined,
@@ -885,44 +883,17 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(harness));
       await flushDialogEffects();
 
-      // Collapsed, still "Bug": the two log tails default on, browser
-      // diagnostics does not.
-      expect(screen.getByText(/log tails partially on/)).not.toBeNull();
+      expect(switchState("Include browser diagnostics")).toBe("checked");
 
-      fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
-      expect(screen.getByText(/log tails off/)).not.toBeNull();
-      expect(screen.queryByText(/log tails partially on/)).toBeNull();
-    });
-
-    it("keeps a browser diagnostics toggle the user turned ON across a type switch", async () => {
-      const harness = createSupportBridgeHarness({
-        snapshot: undefined,
-        submitReport: undefined,
-        buildPublicDraft: undefined,
-        openExternalLink: undefined,
-        frozenDesktopLines: undefined,
-        frozenHostLines: undefined,
-      });
-      openManualReport();
-      renderReportIssueDialog(createRunnerHost(harness));
-      await flushDialogEffects();
-
-      fireEvent.click(screen.getByRole("button", { name: "details" }));
-      expect(switchState("Include browser diagnostics")).toBe("unchecked");
-
-      // Touch ONLY the browser diagnostics toggle - not desktop/host.
       fireEvent.click(
         screen.getByRole("switch", { name: "Include browser diagnostics" }),
       );
-      expect(switchState("Include browser diagnostics")).toBe("checked");
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
 
-      // A later type switch must not clobber the user's own opt-in: the
-      // type defaults speak for the desktop/host logs only, and browser
-      // diagnostics is opt-in on every report.
       fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
-      expect(switchState("Include browser diagnostics")).toBe("checked");
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
       fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
-      expect(switchState("Include browser diagnostics")).toBe("checked");
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
     });
 
     it("submits includeDesktopLog/includeHostLog:false when the user toggles logs off", async () => {
@@ -938,7 +909,6 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(harness));
       await flushDialogEffects();
 
-      fireEvent.click(screen.getByRole("button", { name: "details" }));
       fireEvent.click(
         screen.getByRole("switch", { name: "Include App log tail" }),
       );
@@ -956,12 +926,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(form.includeHostLog).toBe(false);
     });
 
-    // Ticket 03 / plan D3: one switch covers both browser diagnostic files.
-    // Unlike the other two log toggles it starts OFF on every report type
-    // (root cause H): `browser-trace.jsonl` records the agent's cell source
-    // and every page it drove, so it is opt-in per report rather than
-    // opted-out - and the toggle-on has to reach the wire.
-    it("defaults includeBrowserDiagnostics off and submits true only when the user turns it on", async () => {
+    it("defaults includeBrowserDiagnostics on and submits false when the user opts out", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: undefined,
@@ -974,22 +939,21 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(harness));
       await flushDialogEffects();
 
-      fireEvent.click(screen.getByRole("button", { name: "details" }));
-      expect(switchState("Include browser diagnostics")).toBe("unchecked");
+      expect(switchState("Include browser diagnostics")).toBe("checked");
       fireEvent.click(
         screen.getByRole("switch", { name: "Include browser diagnostics" }),
       );
       fireEvent.change(bugIntentField(), {
-        target: { value: "Browser diagnostics were opted in" },
+        target: { value: "Browser diagnostics were opted out" },
       });
       fireEvent.click(screen.getByRole("button", { name: "Send report" }));
 
       await screen.findByRole("heading", { name: "Report sent" });
       const form = lastSubmittedForm(harness);
-      expect(form.includeBrowserDiagnostics).toBe(true);
+      expect(form.includeBrowserDiagnostics).toBe(false);
     });
 
-    it("wires the diagnostics toggle and G1 contact checkbox into the submitted request", async () => {
+    it("shows the private follow-up email and retains allowContact:true on the wire", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: undefined,
@@ -1003,13 +967,9 @@ describe("Report issue capture dialog (deep interactions)", () => {
       await flushDialogEffects();
 
       expect(
-        screen.getByText("You may contact me at test@example.com"),
+        screen.getByText(/Your email \(test@example.com\) is included/),
       ).not.toBeNull();
-      fireEvent.click(
-        screen.getByRole("checkbox", {
-          name: /You may contact me at test@example.com/,
-        }),
-      );
+      expect(screen.queryByRole("checkbox")).toBeNull();
       // Diagnostics default on; toggle off so includeDiagnostics is false.
       // main is the sole authority on what that gates - the request still
       // carries privateDiagnostics regardless of the toggle.
@@ -1023,11 +983,46 @@ describe("Report issue capture dialog (deep interactions)", () => {
       await screen.findByRole("heading", { name: "Report sent" });
       const form = lastSubmittedForm(harness);
       expect(form.allowContact).toBe(true);
+      expect(form.includeBrowserDiagnostics).toBe(true);
       expect(form.includeDiagnostics).toBe(false);
       expect(form.privateDiagnostics).toBeDefined();
     });
 
-    it("hides the contact checkbox when the snapshot has no signed-in email (G1)", async () => {
+    it("shows the frozen draft email when the later snapshot differs", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: {
+          ...baseSnapshot,
+          user: { ...baseSnapshot.user, email: "snapshot@traycer.ai" },
+        },
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      const runnerHost = createRunnerHost(harness);
+      const support = runnerHost.support;
+      openManualReport();
+      renderReportIssueDialog(
+        Object.assign(runnerHost, {
+          support: {
+            ...support,
+            freezeEvidence: () =>
+              Promise.resolve({
+                reportId: "rpt_frozen",
+                contactEmail: "frozen@traycer.ai",
+              }),
+          },
+        }),
+      );
+
+      expect(
+        await screen.findByText(/Your email \(frozen@traycer.ai\) is included/),
+      ).not.toBeNull();
+      expect(screen.queryByText(/snapshot@traycer.ai/)).toBeNull();
+    });
+
+    it("shows no follow-up email copy when signed out", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: {
           ...baseSnapshot,
@@ -1047,8 +1042,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(harness));
       await flushDialogEffects();
 
-      fireEvent.click(screen.getByRole("button", { name: "details" }));
-      expect(screen.queryByText(/You may contact me at/)).toBeNull();
+      expect(screen.queryByText(/Your email \(/)).toBeNull();
       expect(screen.queryByRole("checkbox")).toBeNull();
     });
 
@@ -1445,6 +1439,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(
         screen.getByRole("button", { name: "Open a GitHub issue" }),
       ).not.toBeNull();
+      expect(screen.queryByText(/Your email \(/)).toBeNull();
+      expect(screen.queryByRole("checkbox")).toBeNull();
       expect(harness.submittedForms).toEqual([]);
     });
 
