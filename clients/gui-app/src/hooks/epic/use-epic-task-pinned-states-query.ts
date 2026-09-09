@@ -37,6 +37,22 @@ import {
 export type TaskPinnedState = {
   readonly pinned: boolean;
   readonly home: "local" | undefined;
+  /**
+   * Whether {@link pinned} is a READING from a host that resolved this epic,
+   * rather than the `false` {@link overlayLocalHomedPinnedStates} fills in for
+   * an epic only a live session knows is local-homed.
+   *
+   * This field exists because that filler stopped being inert.
+   * `epic.setPinned@1.1` makes a local-homed row pinnable, so the tab menu no
+   * longer short-circuits on `home === "local"` - and the moment it stops, an
+   * unresolved epic's filler `false` becomes the thing the menu renders
+   * ("Pin", for an epic that may already be pinned) and the thing a click
+   * inverts. The old comment here predicted exactly that ("If a future
+   * consumer reads `pinned` without consulting `home`, this value becomes
+   * load-bearing and is wrong"); this is the flag that keeps it honest instead
+   * of leaving the warning in prose.
+   */
+  readonly pinnedKnown: boolean;
 };
 
 const EMPTY_TASK_PINNED_STATES: ReadonlyMap<string, TaskPinnedState> =
@@ -118,13 +134,13 @@ export function useEpicTaskPinnedStates(
  * cloud's, which is the only thing that can answer it.
  *
  * `pinned: false` for an epic the host never resolved is FILLER, not a
- * reading, and it is never rendered: `TabContextMenuContent` computes
- * `pinUnavailable` from `home === "local"`, and that flag short-circuits both
- * the label (`pinActionLabel` ignores `taskPinned` when unavailable) and the
- * spinner (`!pinUnavailable && ...`), while `disabled` is already true. If a
- * future consumer reads `pinned` without consulting `home`, this value becomes
- * load-bearing and is wrong - such a consumer must treat `home === "local"` as
- * "there is no pin state" rather than as "not pinned".
+ * reading, and `pinnedKnown: false` is what says so. It used to be safe by
+ * accident: `TabContextMenuContent` computed `pinUnavailable` from
+ * `home === "local"`, which short-circuited both the label and the spinner, so
+ * nothing ever read the value. `epic.setPinned@1.1` removed that
+ * short-circuit - a local-homed row is now pinnable - so the guard is the flag
+ * rather than the coincidence. A consumer that reads `pinned` while
+ * `pinnedKnown` is false is reading "not pinned" out of "nobody answered".
  *
  * ONLY covers epics with a live session. An open tab whose session was never
  * mounted since reload, or was pruned past the five-live MRU cap, is absent
@@ -140,9 +156,15 @@ export function overlayLocalHomedPinnedStates(
   if (localHomedEpicIds.size === 0) return queried;
   const overlaid = new Map(queried);
   for (const epicId of localHomedEpicIds) {
+    const resolved = overlaid.get(epicId);
     overlaid.set(epicId, {
-      pinned: overlaid.get(epicId)?.pinned ?? false,
+      pinned: resolved?.pinned ?? false,
       home: "local",
+      // The overlay's whole population is "a live session says this epic is
+      // local-homed". Whether the QUERIED host also resolved it is a separate
+      // fact, and it is exactly the one that says if `pinned` above is a
+      // reading or the fallback beside it.
+      pinnedKnown: resolved !== undefined,
     });
   }
   return overlaid;
@@ -173,6 +195,11 @@ export function combineTaskPinnedStateResults(
       pinnedStates.set(epicId, {
         pinned: task.pinned ?? false,
         home: localHomedSet?.has(epicId) === true ? "local" : undefined,
+        // The host RESOLVED this epic, so `pinned` is its answer. (`?? false`
+        // above is the wire's absent-means-not-pinned, not a stand-in for a
+        // missing host - a resolved task that omits the field is a real "not
+        // pinned".)
+        pinnedKnown: true,
       });
     }
   }

@@ -31,6 +31,7 @@ import {
 } from "@/components/epics/mobile/use-row-swipe-tray";
 import { useLongPress } from "@/hooks/ui/use-long-press";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
   useInlineRename,
   type InlineRenameInputProps,
@@ -114,9 +115,11 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   // rule or the class survives at whichever of them was left out.
   const canDelete = canDeleteHistoryItem(item, cloudAuthorized);
   const canRename = canEditHistoryItemTitle(item, cloudAuthorized);
+  const localHomePinSupported = useEpicPinLocalHomeSupported();
   const pinUnavailableReason = historyPinUnavailableReason(
     item,
     cloudAuthorized,
+    localHomePinSupported,
   );
   const isPhase = item.taskType === "phase";
   const linkTabId = useEpicCanvasStore(

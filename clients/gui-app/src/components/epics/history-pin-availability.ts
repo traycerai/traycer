@@ -39,15 +39,32 @@ export type HistoryPinUnavailableReason =
  * of the desktop/mobile row implementations so each responsive surface, plus
  * other task affordances, makes the same decision.
  *
- * `cloudAuthorized` is `authorizesCloudCapability(status)` - a required
- * argument rather than a store read, so this stays a pure function every
- * surface can call and test, and so the SESSION half of the rule cannot be
- * silently omitted by a new caller.
+ * `cloudAuthorized` is `authorizesCloudCapability(status)` and
+ * `localHomePinSupported` is `useEpicPinLocalHomeSupported()` - both required
+ * arguments rather than store/registry reads, so this stays a pure function
+ * every surface can call and test, and so neither the SESSION half nor the
+ * NEGOTIATION half of the rule can be silently omitted by a new caller.
  *
- * The row-intrinsic reasons are checked first on purpose: they are permanent
- * facts about the row, while a withdrawn verdict is a condition the user can
- * recover from, and reporting the recoverable one for a row that could never
- * be pinned anyway would send them to fix the wrong thing.
+ * `localHomePinSupported` is what makes `local-home` a statement about the
+ * HOST rather than about the row. The released `epic.setPinned@1.0` line has
+ * only a cloud arm, so pinning an epic that exists only on disk 404s; `@1.1`
+ * carries the local arm and the refusal becomes false. It is deliberately not
+ * derived from anything else on the wire - see `lib/epic-pin-admission.ts`,
+ * which owns the version predicate and the fail-closed rule for a host that
+ * has not handshaken.
+ *
+ * `local-home` is therefore no longer PERMANENT: a row that reads unavailable
+ * against an old host becomes pinnable when that host updates, with no change
+ * to the row. The ordering below is unchanged and still correct - a
+ * local-homed row on a `@1.1` host now falls through to the session check,
+ * which is right, because the pin still leaves this client as a cloud-backed
+ * personal preference until someone establishes otherwise.
+ *
+ * The row-intrinsic reasons are checked first on purpose: `phase` and
+ * `preserved-orphan` are permanent facts about the row, while a withdrawn
+ * verdict is a condition the user can recover from, and reporting the
+ * recoverable one for a row that could never be pinned anyway would send them
+ * to fix the wrong thing.
  *
  * Why the session belongs in this rule at all: History stays readable under
  * `unverified` by design - `resolveCloudTasksUserId` admits it and the first
@@ -58,10 +75,11 @@ export type HistoryPinUnavailableReason =
 export function historyPinUnavailableReason(
   item: HistoryItem,
   cloudAuthorized: boolean,
+  localHomePinSupported: boolean,
 ): HistoryPinUnavailableReason | null {
   if (item.taskType === "phase") return "phase";
   if (item.isPreservedOrphan === true) return "preserved-orphan";
-  if (item.isLocalHome === true) return "local-home";
+  if (item.isLocalHome === true && !localHomePinSupported) return "local-home";
   if (!cloudAuthorized) return "unverified-session";
   return null;
 }

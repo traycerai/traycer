@@ -51,6 +51,7 @@ import {
 import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
@@ -1952,11 +1953,14 @@ function HistoryPinControl(props: {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  // Also ahead of the early return, and for the same reason.
+  const localHomePinSupported = useEpicPinLocalHomeSupported();
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
   const unavailableReason = historyPinUnavailableReason(
     props.item,
     cloudAuthorized,
+    localHomePinSupported,
   );
   const pinUnavailable = unavailableReason !== null;
   // "…is available after cloud sync" promised a sync that, for a free-tier
