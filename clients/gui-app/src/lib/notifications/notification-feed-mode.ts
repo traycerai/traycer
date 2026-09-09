@@ -313,7 +313,12 @@ export function useNotificationFeedModeFor(
     cloudFeedVersion?.major === 1 && cloudFeedVersion.minor >= 2;
   const hasLocalProjection =
     localFeedVersion?.major === 1 && localFeedVersion.minor >= 2;
-  const hasPartitionedList = meetsHostFloor(listVersions, hostId, 2, 2);
+  const hasPartitionedList = meetsHostFloor(
+    listVersions,
+    hostId,
+    NOTIFICATIONS_PARTITIONED_LIST_MAJOR,
+    NOTIFICATIONS_PARTITIONED_LIST_MINOR,
+  );
   const hasPartitionedMarkAllRead = meetsHostFloor(
     markAllReadVersions,
     hostId,

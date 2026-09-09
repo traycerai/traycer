@@ -580,12 +580,16 @@ export type WorktreeListByWorkspacePathsRequestV14 =
 //   worktree.listAllForHost       - released through 1.4, so `presence` could
 //     not widen that line and had to open a 1.5.
 //
-// Both presence-bearing lines are therefore UNRELEASED and still mutable; the
-// `V15` name records which minor the fact landed on for the OTHER method, not a
-// freeze. A further field belongs in these same two minors - widen the mutable
-// head rather than freezing 1.5 or opening a 1.6. Check the floors against
-// `__tests__/__fixtures__/released-baseline-surface.json` before assuming
-// otherwise; that fixture, not this comment, is the authority.
+// Both presence-bearing lines were UNRELEASED and still mutable WHEN THIS WAS
+// WRITTEN; the `V15` name records which minor the fact landed on for the OTHER
+// method, not a freeze. That window has closed, and this comment's own closing
+// instruction is how to see it: the fixture, not this comment, is the
+// authority, and `released-baseline-surface.json` now carries
+// `worktree.listAllForHost` at canonical 1.6 and
+// `worktree.listByWorkspacePaths` at 1.4. Both presence lines are therefore
+// RELEASED and frozen - a further field opens a new minor rather than widening
+// these, and the advice below to "widen the mutable head" no longer applies.
+// Re-check the fixture rather than trusting this paragraph either.
 export const worktreeListByWorkspacePathsResponseSchemaV14 = z.object({
   workspaces: z.array(worktreeWorkspaceSummarySchemaV15),
   scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),

@@ -505,8 +505,21 @@ export type CreateEpicResponsePre11 = z.infer<
  *
  * The additivity that makes this line safe is therefore about the KEY, not
  * about this enum's future values: a peer below `@1.1` strips `refusal`
- * entirely and keeps its released behaviour, which is the compat this minor
- * was designed for. Adding a refusal KIND is a separate question and costs
+ * entirely, which is the compat this minor was designed for.
+ *
+ * BUT THE STRIP IS ONLY SAFE BECAUSE THE EMITTER GATES. Read on its own,
+ * "an old peer strips `refusal`" sounds like graceful degradation; it is the
+ * opposite. Strip the key from a refusal response and what is left is
+ * `{ roomInfo: null }` - which is not a refusal at all, it is a SUCCESS shape
+ * carrying no room, and a legacy client reads it as one. So the host must
+ * emit `refusal` only when the negotiated minor can carry it
+ * (`ctx.schemaVersion.minor >= EPIC_CREATE_REFUSAL_MINOR` in
+ * `epic-create-resolver.ts`) and THROW for every older peer, which is the
+ * honest error that peer already knows how to show. That gate is load-bearing,
+ * not defensive: removing it converts a refusal into a silent success on
+ * exactly the clients that cannot understand it.
+ *
+ * Adding a refusal KIND is a separate question and costs
  * its own minor, since every client already on `@1.1` rejects the new value.
  * If that becomes the wrong trade, the deliberate fix is to parse `kind` as a
  * bounded string and expose a `isKnownEpicCreateRefusalKind` guard so an
