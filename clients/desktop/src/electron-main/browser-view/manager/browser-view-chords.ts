@@ -210,7 +210,22 @@ export class BrowserViewChords {
   private readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   private readonly hostPlatform: HostPlatform;
   private readonly send: BrowserViewSend;
-  private chords: readonly MatchedReservedChord[] = [];
+  /**
+   * PER WINDOW, because the table is not a property of the app.
+   *
+   * Each renderer derives its own set from its own surface state - a window
+   * showing a Start Page browser reserves the panel's three extra chords, one
+   * showing a canvas does not - and there is one manager for every window. Held
+   * as a single array, the last window to register decided the policy for all
+   * of them, and nothing re-registered on OS focus: focusing a Start Page
+   * window whose tab state had not changed left it matching the canvas
+   * window's table, so ⌘J and the digit shortcuts fell through to the guest,
+   * while the canvas window swallowed landing-only keys into nothing.
+   */
+  private readonly chordsByWindow = new Map<
+    string,
+    readonly MatchedReservedChord[]
+  >();
 
   constructor(options: BrowserViewChordsOptions) {
     this.getWindow = options.getWindow;
@@ -218,8 +233,18 @@ export class BrowserViewChords {
     this.send = options.send;
   }
 
-  /** BT-303 wire-in: replace the registered policy table at runtime. */
-  setReservedChords(reserved: readonly BrowserViewReservedChord[]): void {
+  /**
+   * BT-303 wire-in: replace the registered policy table for ONE window.
+   *
+   * Tables for windows that have since gone are dropped here rather than
+   * through a teardown hook: a closed window never registers again, so a
+   * registration from any surviving window is the last moment this map can be
+   * pruned without inventing a lifecycle it does not have.
+   */
+  setReservedChords(
+    windowId: string,
+    reserved: readonly BrowserViewReservedChord[],
+  ): void {
     const parsed: MatchedReservedChord[] = [];
     for (const { token, command } of reserved) {
       if (!isValidChordString(token)) continue;
@@ -238,9 +263,16 @@ export class BrowserViewChords {
         command,
       });
     }
-    this.chords = parsed;
+    this.chordsByWindow.set(windowId, parsed);
+    for (const known of [...this.chordsByWindow.keys()]) {
+      if (known !== windowId && this.getWindow(known) === null) {
+        this.chordsByWindow.delete(known);
+      }
+    }
     log.info("[browser-view] reserved chords updated", {
+      window: windowId,
       count: parsed.length,
+      windows: this.chordsByWindow.size,
       tokens: reserved.map((entry) => entry.token),
     });
   }
@@ -254,11 +286,21 @@ export class BrowserViewChords {
    * `handleBeforeInputEvent`, which suppresses it because every reserved
    * chord is one-shot.
    */
-  match(input: BrowserViewKeyInput): MatchedReservedChord | null {
-    if (this.chords.length === 0) return null;
+  match(
+    windowId: string | null,
+    input: BrowserViewKeyInput,
+  ): MatchedReservedChord | null {
+    // A guest with no window of its own claims nothing. Falling back to some
+    // other window's table is exactly the defect this signature exists to
+    // prevent, and letting the key reach the page is the safe direction: an
+    // unclaimed chord is a shortcut that did not fire, a wrongly claimed one is
+    // a keystroke the reader typed that vanished.
+    if (windowId === null) return null;
+    const chords = this.chordsByWindow.get(windowId) ?? [];
+    if (chords.length === 0) return null;
     const event = chordFromKeyEvent(input, this.hostPlatform);
     if (event === null) return null;
-    return this.chords.find((chord) => chordsEqual(chord, event)) ?? null;
+    return chords.find((chord) => chordsEqual(chord, event)) ?? null;
   }
 
   /**

@@ -4689,3 +4689,68 @@ describe("BrowserViewManager cross-window tab move (re-homed by replacement)", (
     ).toBe(true);
   });
 });
+
+/**
+ * The seam that decides which window's policy a guest is measured against.
+ *
+ * `BrowserViewChords` keys its tables by window, but only because this seam
+ * hands it the guest's OWN window id - and that wiring is invisible to the
+ * chords suite, which calls `match` directly. A seam that named a fixed window,
+ * or read some other entry's, would leave every chord-table unit test green and
+ * still send one window's shortcuts to another window's page.
+ *
+ * TWO guests, in two windows, against ONE registered table, because that is
+ * what makes a fixed window id detectable at all: a test whose only guest sits
+ * in the window a mutation happens to hardcode cannot tell the two apart. Every
+ * constant fails one of these two assertions.
+ */
+describe("reserved chords are matched against the guest's own window", () => {
+  // Every modifier stated, as the guest seam receives them - an input missing
+  // them is not the shape `chordFromKeyEvent` reads, and a test built on one
+  // asserts nothing about matching.
+  const CHORD = {
+    type: "keyDown",
+    key: "j",
+    code: "KeyJ",
+    meta: true,
+    control: false,
+    shift: false,
+    alt: false,
+    isAutoRepeat: false,
+  } as const;
+
+  it("claims only for the window whose table names the chord", async () => {
+    const harness = createHarness();
+    const inWindow1 = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://one.example/",
+    );
+    const inWindow2 = await attachNativeTab(
+      harness,
+      "window-2",
+      { ...BASE_KEY, tileInstanceId: "tile-2", pageSessionId: "page-2" },
+      "https://two.example/",
+    );
+
+    // Registered by ONE window only.
+    harness.manager.chords.setReservedChords("window-2", [
+      { token: "mod+j", command: null },
+    ]);
+
+    const first = vi.fn();
+    inWindow1.view.emit("before-input-event", { preventDefault: first }, CHORD);
+    const second = vi.fn();
+    inWindow2.view.emit(
+      "before-input-event",
+      { preventDefault: second },
+      CHORD,
+    );
+
+    // Redden: one shared table claims both; a seam naming a fixed window claims
+    // the wrong one of them.
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+});

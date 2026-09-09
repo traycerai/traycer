@@ -1279,13 +1279,23 @@ export function LandingTerminalPanel(): ReactNode {
         clearIfPending();
         return;
       }
-      if (state.tabs.length === 0) {
+      if (state.tabs.length === 0 && deferredCreate === null) {
         // An empty panel shows the CHOOSER, opened by whatever opened the panel
         // - it no longer auto-spawns a terminal here. That decision belonged to
         // a world with one kind of tab; with two, spawning one of them is
         // deciding for the user, which is exactly what the placeholder exists
         // to stop. The gesture is still consumed so a later one projects live
         // focus rather than this stale snapshot.
+        //
+        // A DEFERRED CREATE is the one thing this may not swallow, and the
+        // exception is about who decided. `app.terminal.new` already asked for
+        // a terminal and was refused only because the host had not reconciled
+        // a launch directory yet; it claimed its row and is waiting on exactly
+        // this settlement. Clearing here consumed that record and returned
+        // before `settleTerminalReveal` could honour it, so on the one path
+        // that reaches it - no tabs, panel closed, no workspace folder, home
+        // still pending - the requested terminal never opened and the chooser
+        // stayed. Nothing else would ever finish it: the record is consumed.
         clearIfPending();
         return;
       }

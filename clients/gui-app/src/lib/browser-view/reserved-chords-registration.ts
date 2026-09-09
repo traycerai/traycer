@@ -123,6 +123,12 @@ const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
  * Main's table is per window, not per tile: with an epic canvas on screen the
  * replayed key would reach a renderer with no handler for it, so the chord
  * would be taken from the page - a canvas guest's ⌘J, say - for nothing.
+ *
+ * That was a claim about this file's INPUT before it was true of the storage.
+ * Main kept one array for the whole app, so the last window to register set
+ * the policy for every window: the sentence above read as a description of the
+ * system and was really a requirement on it. Main now keys the table by the
+ * sender window (`browser-view-chords.ts`), which is what makes it true.
  */
 const LANDING_FORWARDED_ACTIONS: readonly ActionId[] = [
   "app.browser.new",

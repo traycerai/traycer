@@ -356,6 +356,105 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     expect(keyboardFramesFor(stream, "w", "KeyW")).toEqual([]);
   });
 
+  /**
+   * The same row, on a layout where the physical key does not produce a `w`.
+   *
+   * AZERTY reports `key: "z"` for `code: "KeyW"`. The streamed matcher was the
+   * third of the three that decide this chord - after the renderer's and the
+   * native guest's, both moved onto `code` earlier - and the only one still
+   * comparing the CHARACTER, so an armed screencast typed the reader's close
+   * chord at the remote page and closed the row on whichever key produced a
+   * `w` instead. Nothing else could catch it: an armed tile suppresses the
+   * browser-scoped app registry.
+   */
+  it("closes the landing row on the physical close key on a non-US layout", async () => {
+    const onRequestCloseTab = vi.fn<() => void>();
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "independent" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={onRequestCloseTab}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    firePlatformModKey(imeInput(), "keydown", "z", "KeyW");
+    firePlatformModKey(imeInput(), "keyup", "z", "KeyW");
+
+    expect(onRequestCloseTab).toHaveBeenCalledOnce();
+    expect(keyboardFramesFor(stream, "z", "KeyW")).toEqual([]);
+  });
+
+  /**
+   * And the other half of the same layout: the key that PRODUCES a `w` is
+   * physically `KeyZ`, which is not this chord and must reach the page.
+   *
+   * Without it a matcher that merely swapped one character comparison for
+   * another would pass the case above.
+   */
+  it("leaves the key that merely produces a w to the page on a non-US layout", async () => {
+    const onRequestCloseTab = vi.fn<() => void>();
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "independent" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={onRequestCloseTab}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    firePlatformModKey(imeInput(), "keydown", "w", "KeyZ");
+    firePlatformModKey(imeInput(), "keyup", "w", "KeyZ");
+
+    expect(onRequestCloseTab).not.toHaveBeenCalled();
+    expect(keyboardFramesFor(stream, "w", "KeyZ")).not.toEqual([]);
+  });
+
+  /**
+   * A keystroke whose `code` names no key we have a token for still matches on
+   * its character.
+   *
+   * `code` is empty for a synthesised or IME-composed event, and the native
+   * guest matcher keeps the same fallback for the same reason: a code we cannot
+   * normalise is better matched loosely than not at all, since the alternative
+   * is a reader whose close chord silently does nothing. Pinned because a
+   * mutation that dropped the fallback passed every other test here.
+   */
+  it("still matches the close chord when the event carries no usable code", async () => {
+    const onRequestCloseTab = vi.fn<() => void>();
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "independent" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={onRequestCloseTab}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    firePlatformModKey(imeInput(), "keydown", "w", "");
+    firePlatformModKey(imeInput(), "keyup", "w", "");
+
+    expect(onRequestCloseTab).toHaveBeenCalledOnce();
+  });
+
   // The canvas viewer owns no row and retires no tile of its own, so it hands
   // the controller nothing to claim with and the page keeps its own Cmd+W.
   it("forwards Cmd+W to the page when the surface has no close answer", async () => {
@@ -626,6 +725,60 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const keydown = firePlatformModKey(imeInput(), "keydown", "v", "KeyV");
     expect(keydown.defaultPrevented).toBe(false);
     expect(keyboardFramesFor(stream, "v", "KeyV")).toEqual([]);
+  });
+
+  it("leaves paste to the browser on a layout that moves V elsewhere", async () => {
+    // The one screencast chord that is deliberately NOT physical. A
+    // Dvorak-style layout puts V on the QWERTY period key, so the paste chord
+    // arrives as key "v" / code "Period". Matching that physically would fail,
+    // fall through to preventDefault, and forward the chord to the page as a
+    // rawKeyDown - suppressing the native paste this handler exists to allow.
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    const keydown = firePlatformModKey(imeInput(), "keydown", "v", "Period");
+
+    expect(keydown.defaultPrevented).toBe(false);
+    expect(keyboardFramesFor(stream, "v", "Period")).toEqual([]);
+  });
+
+  it("does not treat the physical V position as paste when it types another character", async () => {
+    // The other half of the same layout, and the reason this matcher reads the
+    // character rather than merely reading loosely: on that layout code "KeyV"
+    // produces ".", which is not a paste and must be forwarded like any key.
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    const keydown = firePlatformModKey(imeInput(), "keydown", ".", "KeyV");
+
+    expect(keydown.defaultPrevented).toBe(true);
+    expect(keyboardFramesFor(stream, ".", "KeyV")).toEqual([
+      expect.objectContaining({ type: "rawKeyDown", key: ".", code: "KeyV" }),
+    ]);
   });
 
   it("suppresses the V keyup after the modifier is released first", async () => {

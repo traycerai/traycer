@@ -2556,6 +2556,57 @@ describe("<LandingTerminalPanel />", () => {
     );
   });
 
+  /**
+   * The same deferred create, on an EMPTY panel - which is the state the one
+   * broken path is actually in.
+   *
+   * The case above has a browser row and an open chooser, so the settlement
+   * reaches `settleTerminalReveal`. With no tabs at all the empty-panel branch
+   * ran first, and it clears the pending gesture on every outcome - including
+   * the deferred record. So `app.terminal.new` claimed its row, was refused
+   * because the home had not reconciled, and its settlement then consumed the
+   * record and returned before anything could honour it: no terminal, chooser
+   * still there, and nothing left that could ever finish the ask.
+   *
+   * The branch is right for a gesture that merely REVEALED the panel - showing
+   * the chooser rather than picking a tab kind for the reader is the whole
+   * point of it. A deferred create is not that gesture: the reader already
+   * chose.
+   */
+  it("lands a deferred app.terminal.new on an empty panel with no chooser", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    // The precondition the branch turns on, asserted rather than assumed.
+    expect(useLandingPanelStore.getState().tabs).toEqual([]);
+
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+      [],
+    );
+
+    await act(async () => {
+      for (let pass = 0; pass < 5; pass += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+
+    // Redden: the empty-tabs guard consumes the deferred record and returns,
+    // so this is `[]` and the panel is still sitting on its chooser.
+    const terminals = landingTerminalTabs(useLandingPanelStore.getState().tabs);
+    expect(terminals).toHaveLength(1);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      terminals[0]?.instanceId,
+    );
+  });
+
   // A browser stream is a socket, a relay attach, an identity attestation and
   // a contributed-set replay, and the desktop refuses whichever window stream
   // is asked for LAST past its cap - so a strip with tabs on many devices must

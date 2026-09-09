@@ -19,6 +19,7 @@ import {
   buildScreencastPointerFrame,
   inputModifiers,
   isScreencastModChord,
+  isScreencastPasteChord,
   nextPointerClickCount,
   pointerButton,
   type PointerClickCount,
@@ -1068,7 +1069,7 @@ export function createScreencastController(options: {
     if (activeDialog !== null) return;
     if (event.nativeEvent.isComposing || composing) return;
     if (activeArmEpoch === null) return;
-    if (isScreencastModChord(event.nativeEvent, "v")) {
+    if (isScreencastPasteChord(event.nativeEvent)) {
       claimedLocalCodes.add(event.code);
       return;
     }

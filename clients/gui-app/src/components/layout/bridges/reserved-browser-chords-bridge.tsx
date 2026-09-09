@@ -16,9 +16,11 @@ export function ReservedBrowserChordsBridge() {
   // panel's three are forwarded only while a replayed key would find one.
   const landingSurfaceActive = useTabsStore(selectLandingTerminalSurfaceActive);
   useEffect(() => {
-    // BT-303: app chords outrank guest keystrokes; main replaces its whole
-    // set on each call, so this is idempotent across HMR, across rebinds and
-    // across surface changes.
+    // BT-303: app chords outrank guest keystrokes; main replaces THIS window's
+    // whole set on each call, so this is idempotent across HMR, across rebinds
+    // and across surface changes - and a second window's registration no
+    // longer overwrites this one's, which is what made a Start Page window
+    // start matching a canvas window's table.
     if (runnerHost !== null) {
       registerReservedBrowserChords(runnerHost, bindings, {
         landingSurfaceActive,

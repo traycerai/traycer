@@ -784,8 +784,11 @@ export function registerBrowserViewIpc(
   // means. It pushes the whole table at startup.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSetReservedChords,
-    (_event, payload) => {
-      manager.chords.setReservedChords(parseReservedChords(payload));
+    (event, payload) => {
+      manager.chords.setReservedChords(
+        readSenderWindowId(bridge, event),
+        parseReservedChords(payload),
+      );
     },
   );
 
