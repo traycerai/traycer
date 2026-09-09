@@ -84,6 +84,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -186,6 +187,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -222,6 +224,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: "Beta details", preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -232,6 +235,7 @@ describe("InterviewSegment", () => {
                 { label: "Full", description: null, preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -285,6 +289,13 @@ describe("InterviewSegment", () => {
     expect(screen.queryByRole("button", { name: "Beta" })).toBeNull();
     expect(screen.getByRole("button", { name: "Beta details" })).toBeTruthy();
 
+    // The historical/resolved card's `?` (`StaticOptionRow`) is the same
+    // disclosure affordance as the live card's: clicking it reveals the
+    // option's description inline, below the row.
+    expect(screen.queryByText("Beta details")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Beta details" }));
+    expect(screen.getByText("Beta details")).toBeTruthy();
+
     fireEvent.click(screen.getByRole("button", { name: "Next question" }));
 
     expect(screen.getByText("Rollout")).toBeTruthy();
@@ -313,6 +324,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: null, preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -396,6 +408,7 @@ describe("InterviewSegment", () => {
       header: null,
       options: [],
       multiSelect: false,
+      allowsCustomAnswer: null,
     };
     const secondQuestion: InterviewQuestion = {
       questionId: "q2",
@@ -403,6 +416,7 @@ describe("InterviewSegment", () => {
       header: null,
       options: [],
       multiSelect: false,
+      allowsCustomAnswer: null,
     };
     const firstAnswer: InterviewAnswer = {
       questionId: "q1",
@@ -474,6 +488,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -535,6 +550,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -594,6 +610,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -645,6 +662,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -652,6 +670,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -722,6 +741,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -729,6 +749,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -775,6 +796,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: "Beta details", preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -807,6 +829,75 @@ describe("InterviewSegment", () => {
     expect(screen.getAllByText("Beta details")).toHaveLength(1);
   });
 
+  // A detail the user expanded by hand and the one search pins are the same
+  // text rendered by two owners. Pinning must not show it twice, and the
+  // pinned `?` has no toggle to close a duplicate; clearing the pin hands the
+  // row's own expansion back.
+  it("yields a hand-expanded detail to the search pin and restores it when the pin clears", () => {
+    const blockId = "interview-details";
+    const view = (targetUnitId: string | null) => (
+      <InterviewTestProviders>
+        <FindForceController
+          blockId={blockId}
+          forcedOpen
+          targetUnitId={targetUnitId}
+        />
+        <InterviewSegment
+          blockId={blockId}
+          status="completed"
+          questions={[
+            {
+              questionId: "q1",
+              question: "Which scope?",
+              header: null,
+              options: [
+                { label: "Alpha", description: null, preview: null },
+                { label: "Beta", description: "Beta details", preview: null },
+              ],
+              multiSelect: false,
+              allowsCustomAnswer: null,
+            },
+          ]}
+          answers={[]}
+          draftAnswers={[]}
+          outcome="answered"
+          settlement={null}
+          error={null}
+          delivery={null}
+          forkedWithoutAnswer={false}
+          interviewDeliveryRetry={null}
+          forkAction={null}
+        />
+      </InterviewTestProviders>
+    );
+    const { rerender } = render(view(null));
+
+    fireEvent.click(screen.getByRole("button", { name: "Beta details" }));
+    expect(
+      screen.getAllByRole("note", { name: "Option details" }),
+    ).toHaveLength(1);
+
+    rerender(
+      view(`interview:${blockId}:question:0:option-description:option:1`),
+    );
+    const pinned = screen.getAllByRole("note", { name: "Option details" });
+    expect(pinned).toHaveLength(1);
+    const describedBy = screen
+      .getByRole("button", { name: "Beta details" })
+      .getAttribute("aria-describedby");
+    expect(document.getElementById(describedBy ?? "")).toBe(pinned[0]);
+
+    rerender(view(null));
+    expect(
+      screen.getAllByRole("note", { name: "Option details" }),
+    ).toHaveLength(1);
+    expect(
+      screen
+        .getByRole("button", { name: "Beta details" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
   it("scopes pinned option detail ids to each mounted card view", () => {
     const blockId = "interview-details";
     const card = (tileInstanceId: string) => (
@@ -831,6 +922,7 @@ describe("InterviewSegment", () => {
                   { label: "Beta", description: "Beta details", preview: null },
                 ],
                 multiSelect: false,
+                allowsCustomAnswer: null,
               },
             ]}
             answers={[]}
@@ -888,6 +980,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -939,6 +1032,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[

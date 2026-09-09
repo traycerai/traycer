@@ -4454,6 +4454,17 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   },
                                                   "multiSelect": {
                                                     "type": "boolean"
+                                                  },
+                                                  "allowsCustomAnswer": {
+                                                    "default": null,
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "boolean"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
                                                   }
                                                 },
                                                 "required": [
@@ -4461,7 +4472,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "question",
                                                   "header",
                                                   "options",
-                                                  "multiSelect"
+                                                  "multiSelect",
+                                                  "allowsCustomAnswer"
                                                 ],
                                                 "additionalProperties": false
                                               }

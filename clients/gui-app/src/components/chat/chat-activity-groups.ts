@@ -461,9 +461,11 @@ export function activityChildLabel(
 export function latestActivityLabel(segment: ActivitySegment): string {
   switch (segment.kind) {
     case "autonomous_resume":
-      return segment.triggers
-        .map((trigger) => `${trigger.title} · ${trigger.summary}`)
-        .join(", ");
+      return singleLine(
+        segment.triggers
+          .map((trigger) => `${trigger.title} · ${trigger.summary}`)
+          .join(", "),
+      );
     case "command":
       return commandActivityLabel(segment);
     case "file_change":

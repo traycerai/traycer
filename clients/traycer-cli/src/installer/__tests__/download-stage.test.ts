@@ -160,6 +160,7 @@ function buildManifest(opts: FakeClientOptions): HostVersionsManifest {
       deprecationReason: v.yanked ? "test-yanked" : null,
       requiredCliVersion: null,
       minimumEpoch: null,
+      storeFormats: null,
       platforms: { [platformKey]: asset },
     };
   });

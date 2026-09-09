@@ -16,7 +16,8 @@ import type {
   HostServiceDeregisterResponse,
   HostServiceRegisterResponse,
   HostUpdateBoundDispatchExpectedIdentity,
-  HostUpdateInstallResponseV11,
+  HostUpdateInstallResponseV13,
+  HostUpdateInstallRequestV13,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartResponse } from "@traycer/protocol/host/restart/index";
@@ -631,7 +632,7 @@ export function useHostUpdateInstall(
    * mount that asked is still on screen — see {@link settleUpdateDispatch}.
    */
   incarnation: string,
-  // The @1.1 response type, which is what this client's registry negotiates
+  // The @1.3 response type, which is what this client's registry negotiates
   // and therefore what callers actually receive. Annotating the @1.0 type here
   // used to compile only by accident: `attemptId` is an EXTRA property, and an
   // arm with extra properties stays assignable to the arm without them. The
@@ -640,9 +641,9 @@ export function useHostUpdateInstall(
   // being quietly wrong and started being loudly wrong — which is the better
   // failure, and the reason to name the version explicitly now.
 ): UseMutationResult<
-  HostUpdateInstallResponseV11,
+  HostUpdateInstallResponseV13,
   HostRpcError,
-  { readonly version: string; readonly force: boolean },
+  HostUpdateInstallRequestV13,
   HostUpdateDispatchContext
 > {
   const queryClient = useQueryClient();
@@ -650,13 +651,14 @@ export function useHostUpdateInstall(
     HostRpcRegistry,
     "host.update.install",
     HostUpdateDispatchContext,
-    { readonly version: string; readonly force: boolean }
+    HostUpdateInstallRequestV13
   >({
     client,
     method: "host.update.install",
     mapVariables: (variables) => ({
       version: variables.version,
       force: variables.force,
+      acceptStoreFormatLoss: variables.acceptStoreFormatLoss,
     }),
     options: {
       mutationKey: hostMaintenanceMutationKeys.updateInstall(),
@@ -1003,7 +1005,7 @@ type UpdateDispatchSettlement =
   | { readonly kind: "refused" };
 
 function classifyInstallOutcome(
-  response: HostUpdateInstallResponseV11,
+  response: HostUpdateInstallResponseV13,
 ): UpdateDispatchSettlement {
   if (response.outcome === "accepted") {
     return { kind: "accepted", attemptId: response.attemptId };

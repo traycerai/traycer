@@ -56,6 +56,7 @@ import {
   dispatchedWorktreeIntentForDisplay,
   projectQueueWithPendingCancellations,
   type ChatSessionStoreHandle,
+  type PreSnapshotRetryEvidence,
   type SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -929,6 +930,7 @@ function persistedInterviewMessage(
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
@@ -13272,6 +13274,137 @@ describe("the chat's held updates", () => {
     expect(
       harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
     ).toEqual(["cmd-live"]);
+    harness.handle.dispose();
+  });
+});
+
+function preSnapshotRetries(harness: Harness): PreSnapshotRetryEvidence {
+  const retries = harness.handle.store.getState().preSnapshotRetries;
+  if (retries === null) throw new Error("Expected preSnapshotRetries");
+  return retries;
+}
+
+/**
+ * `PreSnapshotRetryEvidence` (see the field's own doc on `ChatSessionState`)
+ * is what lets the chat tile's bounded loading gate tell a stalled load from
+ * an ordinary spinner: it counts every `reconnecting` transition observed
+ * before this session's first snapshot lands. `retry()` deliberately does NOT
+ * clear the streak - the failures are evidence about the host, and dropping
+ * them on a click would put the reader back on the spinner they just escaped.
+ */
+describe("preSnapshotRetries", () => {
+  it("counts consecutive pre-snapshot reconnects with a single stable firstAt", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    const first = preSnapshotRetries(harness);
+    // The `firstAt` below is self-referential - it proves STABILITY across the
+    // two reads, not that a clock was ever read - so pin down that it is a
+    // real instant here. Without this the whole assertion would pass on a
+    // `NaN` or an `Infinity`, and the gate's elapsed arm compares against it.
+    expect(Number.isFinite(first.firstAt)).toBe(true);
+    expect(first).toEqual({
+      count: 1,
+      firstAt: first.firstAt,
+      code: null,
+      reason: null,
+    });
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    const second = preSnapshotRetries(harness);
+    expect(second).toEqual({
+      count: 2,
+      firstAt: first.firstAt,
+      code: null,
+      reason: null,
+    });
+    harness.handle.dispose();
+  });
+
+  it("records the host's code and reason from a retryable fatal", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("reconnecting", {
+      kind: "fatalError",
+      details: {
+        code: "CHAT_OPEN_FAILED",
+        reason: "CHAT_OPEN_FAILED: host refused to open this chat",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    });
+
+    const retries = preSnapshotRetries(harness);
+    expect(retries).toEqual({
+      count: 1,
+      firstAt: retries.firstAt,
+      code: "CHAT_OPEN_FAILED",
+      reason: "CHAT_OPEN_FAILED: host refused to open this chat",
+    });
+    harness.handle.dispose();
+  });
+
+  it("resets to null once a snapshot lands, and a later reconnect is not counted as a stalled load", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(harness.handle.store.getState().preSnapshotRetries).not.toBeNull();
+
+    emitSnapshot(callbacks, "owner");
+    expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
+    harness.handle.dispose();
+  });
+
+  it("does not count a caller-initiated close or a terminal fatal close", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("closed", { kind: "caller" });
+    expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
+
+    callbacks.onConnectionStatus("closed", {
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "CHAT_INVALID: nope",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
+    harness.handle.dispose();
+  });
+
+  it("retry() keeps the streak going instead of restarting it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    callbacks.onConnectionStatus("reconnecting", null);
+    const beforeRetry = preSnapshotRetries(harness);
+    expect(beforeRetry.count).toBe(2);
+
+    harness.handle.store.getState().retry();
+    expect(harness.handle.store.getState().snapshotLoaded).toBe(false);
+    // retry() clears fatalClose/connectionStatus but must not touch the
+    // streak - the whole point of the "deliberately does NOT clear" rule.
+    expect(preSnapshotRetries(harness)).toEqual(beforeRetry);
+
+    const recoveredCallbacks = harness.callbacks();
+    recoveredCallbacks.onConnectionStatus("reconnecting", null);
+    expect(preSnapshotRetries(harness)).toEqual({
+      count: 3,
+      firstAt: beforeRetry.firstAt,
+      code: null,
+      reason: null,
+    });
     harness.handle.dispose();
   });
 });

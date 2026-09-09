@@ -392,6 +392,63 @@ describe("<AutonomousResumeSegment />", () => {
     expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
   });
 
+  it("keeps same-command triggers with distinct blocks across rerenders", () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const triggers = [
+      {
+        kind: "command" as const,
+        title: "same command",
+        status: "completed" as const,
+        summary: "first child",
+        blockId: "block-first",
+        outputFile: {
+          workspacePath: "/tmp/traycer-output",
+          filePath: "first.output",
+        },
+        mcp: null,
+        managedCommand: { commandId: "same-command", monitoring: false },
+        live: false,
+      },
+      {
+        kind: "command" as const,
+        title: "same command",
+        status: "completed" as const,
+        summary: "second child",
+        blockId: "block-second",
+        outputFile: {
+          workspacePath: "/tmp/traycer-output",
+          filePath: "second.output",
+        },
+        mcp: null,
+        managedCommand: { commandId: "same-command", monitoring: false },
+        live: false,
+      },
+    ];
+
+    try {
+      const view = render(<AutonomousResumeSegment triggers={triggers} />);
+
+      expect(screen.getByText("first child")).toBeTruthy();
+      expect(screen.getByText("second child")).toBeTruthy();
+      view.rerender(<AutonomousResumeSegment triggers={[...triggers]} />);
+      expect(screen.getByText("first child")).toBeTruthy();
+      expect(screen.getByText("second child")).toBeTruthy();
+      expect(
+        consoleError.mock.calls.some((call) =>
+          call.some(
+            (value) =>
+              typeof value === "string" &&
+              /same key|unique ["']key/i.test(value),
+          ),
+        ),
+      ).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("renders wakeup triggers as non-expandable cards carrying the prompt", () => {
     render(
       <AutonomousResumeSegment

@@ -117,6 +117,7 @@ import {
   chatTranscriptWindowSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -2528,13 +2529,22 @@ export const chatSubscribeV16 = defineStreamRpcContract({
  * change they cannot observe. So the fast path is retained per-line, not
  * per-"is this the newest line".
  *
- * `1.6` lacks interview settlement and browser payload fields inside
- * `chat.messages`, which this schema does not walk. So this is deliberately
- * paired with `normalizeV16MessagesInShallowSnapshot`: a targeted pass over
- * user-authored payloads and interview blocks. Callers MUST run it before
- * handing the snapshot to consumers, or those consumers read fields typed as
- * present that are genuinely missing — the exact hazard the live schema's doc
- * above describes.
+ * `1.6` lacks interview settlement and browser payload fields, and this schema
+ * walks NEITHER history that can carry them: `chat.messages` holds the
+ * interview blocks, and `chat.events` holds the same settlement facts as
+ * metadata on a durable event. Both are `z.custom(isStructuralRecord)` below,
+ * so nothing here validates or strips what is inside either.
+ *
+ * So this is deliberately paired with `normalizeV16InterviewFieldsInFrame`,
+ * which covers both — it delegates the message history to
+ * `normalizeV16MessagesInShallowSnapshot` and walks the event log beside it.
+ * Callers MUST run it on the whole frame before handing the snapshot to
+ * consumers, and the two omissions fail DIFFERENTLY. Omitting the pass
+ * entirely leaves consumers reading message fields typed as present that are
+ * genuinely missing — the exact hazard the live schema's doc above describes.
+ * Pairing this schema with the message pass ALONE repairs the messages and
+ * still hands the event log to consumers carrying `1.7` metadata this line
+ * cannot express; nothing reads as missing, which is why it went unnoticed.
  *
  * Every bounded envelope field is still validated deeply, against the FROZEN
  * `1.6` shapes, which is what makes this exact rather than merely permissive.
@@ -2680,7 +2690,7 @@ const chatTranscriptWindowSchemaV18 = z.object({
  * lines, and making it required here would fork the one reducer that reads it
  * for no gain.
  */
-// 1.8's envelope is fixed; 1.9 replaces only the transcript's message schema.
+// The pre-placement envelope is fixed; 1.9 uses the current message schema.
 const chatWindowedSnapshotSchemaV18 = z.object({
   /** The chat record WITHOUT `messages` / `events` — see `chatRecordSchema`. */
   chat: chatSchemaV18.omit({ messages: true, events: true }),
@@ -2865,6 +2875,44 @@ export type ChatSubscribeWindowedServerFrame = z.infer<
 >;
 
 /**
+ * Frozen windowed server frame as `cli-v1.3.0` / `host-v1.3.0` shipped `@1.8`.
+ *
+ * The only difference is the anchor union reachable through `rowContext` on
+ * the two arms that carry one: 1.3.0 was cut before Antigravity, so a released
+ * `@1.8` peer's `discriminatedUnion` has twenty arms and rejects a frame
+ * carrying the twenty-first outright - the whole frame, not the one row.
+ *
+ * Built from the pre-placement checkpoint, overriding the two anchor-bearing
+ * arms. The unreleased `@1.9` adds Antigravity anchors and delivery placement.
+ */
+export const chatSubscribeWindowedServerFrameSchemaPreAntigravity =
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV18.extend({
+        tail: chatTranscriptWindowSchemaV18.extend({
+          rowContext: z
+            .record(z.string(), transcriptRowContextSchemaPreAntigravity)
+            .optional(),
+        }),
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema.extend({
+      range: chatRangeResponseSchemaV18.extend({
+        rowContext: z
+          .record(z.string(), transcriptRowContextSchemaPreAntigravity)
+          .default({}),
+      }),
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV18,
+  ]);
+
+/**
  * Ask for a span of bodies.
  *
  * Not an owner action: it carries no `clientActionId` and is never acked,
@@ -2921,31 +2969,33 @@ export const chatSubscribeV18 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 8 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("snapshot"),
-      ...textFrameFields,
-      ...chatReferenceFields,
-      snapshot: chatWindowedSnapshotSchemaV18,
-    }),
-    z.object({
-      kind: z.literal("range"),
-      ...textFrameFields,
-      ...chatReferenceFields,
-      range: chatRangeResponseSchemaV18,
-    }),
-    chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
-    chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
-    chatSubscribeManagedCommandsChangedServerFrameSchema,
-    chatSubscribeHeldUpdatesChangedServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemasV18,
-  ]),
+  serverFrameSchema: chatSubscribeWindowedServerFrameSchemaPreAntigravity,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
 
-/** 1.9 adds recorded placement to notification blocks in tails and ranges. */
+/**
+ * The windowed line, with Antigravity session anchors and delivery placement.
+ *
+ * `@1.8` shipped in 1.3.0 and is frozen at the twenty-arm anchor union; this
+ * is the first minor whose `rowContext` may carry an Antigravity anchor and
+ * whose notification blocks carry recorded delivery placement. The windowing
+ * design, client frames and open request are shared by reference.
+ *
+ * Streams have no downgrade bridge, so the host must GATE on the negotiated
+ * minor: an `@1.8` subscriber gets rows whose `sessionAnchor` is withheld
+ * rather than a frame it cannot decode. That projection is
+ * `projectWindowedFrameForVersion` in the internal repo's
+ * `traycer-host/src/domain/chat/chat-session-manager.ts`, applied at
+ * `emitWindowedFrameToSubscriber` - the same per-minor discipline
+ * `chatSubscribeClientFrameSchemaForVersion` already applies in the client
+ * direction.
+ *
+ * A SECOND, independent gate covers the harness id itself:
+ * `HARNESS_MINIMUM_CHAT_SUBSCRIBE_MINOR` refuses to serve an Antigravity CHAT
+ * below `1.9` at all. The two are not redundant - that one keys on the chat's
+ * harness, this one on an anchor that can appear on a row of a chat the peer
+ * can otherwise render.
+ */
 export const chatSubscribeV19 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 9 } as const,

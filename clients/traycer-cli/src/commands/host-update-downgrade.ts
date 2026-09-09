@@ -19,11 +19,27 @@ import type { UpdateMutationCapability } from "@traycer-clients/shared/host-upda
 import type { Environment } from "../runner/environment";
 import type { ProgressInfo } from "../runner/output";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { createCliLogger } from "../logger";
+import { hostHomeDir } from "../store/paths";
+import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
+import { gateStoreFormatFloor } from "../host/store-format-floor";
+import { readInstalledFloorOperands } from "../host/installed-store-formats";
 
 export interface InstallHostDowngradeInput {
   readonly environment: Environment;
   readonly version: string;
   readonly force: boolean;
+  /**
+   * `--accept-store-format-loss`, for the store-format floor this function
+   * consults BEFORE it stages anything.
+   *
+   * This arm is the one place in the executor that deliberately lands older
+   * bytes, and its verification runs AFTER the swap with no rollback - a
+   * refusal discovered there is a refusal over a machine that is already
+   * running a host it cannot use. So the floor is asked first, while the only
+   * cost of a no is a command that did nothing.
+   */
+  readonly acceptStoreFormatLoss: boolean;
   readonly onProgress: (info: ProgressInfo) => void;
   /**
    * Runs under the mutation lock, AFTER the busy gate and the under-lock
@@ -92,6 +108,23 @@ export async function installHostDowngradeInSegment(
 ): Promise<Extract<ApplyHostOutcome, { outcome: "applied" | "no-op" }>> {
   const verify = (): Promise<void> =>
     requireCliUpdateMutationCapability(capability, contenderOptions);
+  // Before the download. The under-lock recheck below re-reads the install
+  // record for its own no-op test; this read is the floor's, taken here so a
+  // refusal costs no transfer, and re-taken by the commit tail against
+  // whatever record is on disk at the swap.
+  const logger = createCliLogger(input.environment);
+  const installed = await readInstalledFloorOperands(input.environment, logger);
+  const storeFormatFloor = await gateStoreFormatFloor({
+    environment: input.environment,
+    surveyRoots: await resolveChatStoreSurveyRoots(input.environment),
+    targetVersion: input.version,
+    installedVersion: installed.version,
+    installedStoreFormats: installed.storeFormats,
+    consultRegistry: true,
+    acceptStoreFormatLoss: input.acceptStoreFormatLoss,
+    site: "host update",
+    logger,
+  });
   const staged = await stageHostInstallSource({
     environment: input.environment,
     source: { kind: "registry", versionRequest: input.version },
@@ -165,6 +198,7 @@ export async function installHostDowngradeInSegment(
             onProgress: input.onProgress,
             lifecycle: handle.lifecycle,
             onWillSwap: input.onWillDisruptHost,
+            storeFormatFloor,
             onSwapCommitted: holdVersionOnSwapCommitted(input.environment),
           },
         );

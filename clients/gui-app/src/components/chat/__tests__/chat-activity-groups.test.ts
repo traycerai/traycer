@@ -1195,6 +1195,7 @@ describe("chat activity grouping", () => {
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
           {
             questionId: "q2",
@@ -1202,6 +1203,7 @@ describe("chat activity grouping", () => {
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
@@ -1276,6 +1278,7 @@ describe("chat activity grouping", () => {
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
@@ -1391,6 +1394,24 @@ describe("chat activity grouping", () => {
     expect(
       latestActivityLabel(commandSegment("command-1", "pwd", true, null)),
     ).toBe("Ran pwd");
+  });
+
+  it("keeps long autonomous-resume labels single-line and bounded", () => {
+    const segment = monitorDeliverySegment("monitor-long", "unused", "in_turn");
+    const trigger = segment.triggers[0];
+
+    expect(
+      latestActivityLabel({
+        ...segment,
+        triggers: [
+          {
+            ...trigger,
+            title: `${"M".repeat(70)}\n`,
+            summary: `${"S".repeat(70)}\n`,
+          },
+        ],
+      }),
+    ).toBe(`${"M".repeat(70)} · ${"S".repeat(20)}...`);
   });
 });
 
@@ -1702,6 +1723,7 @@ function interviewSegment(
         header: null,
         options: [],
         multiSelect: false,
+        allowsCustomAnswer: null,
       },
     ],
     answers: [

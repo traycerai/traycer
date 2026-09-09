@@ -1154,8 +1154,71 @@ export const interviewQuestionSchema = z.object({
   header: z.string().nullable(),
   options: z.array(interviewQuestionOptionSchema),
   multiSelect: z.boolean(),
+  /**
+   * Whether this question can be answered with free text ("Other"), as opposed
+   * to a listed option only.
+   *
+   * Set by whoever raised the interview, because it is a property of the
+   * ANSWER CHANNEL rather than of the question's wording. An interview that
+   * rides an ACP `session/request_permission` is the case that needs it: that
+   * request's answer carries an option id and nothing else, so free text has
+   * nowhere to travel. Offering "Other" there produces a question the user can
+   * type into and whose answer cannot be delivered - the text is silently
+   * dropped on the way back to the agent.
+   *
+   * Additive + nullable, like `sender` above: questions persisted before this
+   * field parse to `null`, and `null` means "unstated", which every renderer
+   * treats exactly as it did before - free text offered. Only an explicit
+   * `false` withdraws it, so no existing transcript changes shape and a host
+   * that never sets the field keeps today's behaviour.
+   *
+   * INVARIANT for the raiser: do not combine `false` with an empty `options`.
+   * Options are then the only surviving answer channel and there are none, so
+   * the question cannot be answered at all - the renderer offers no input for
+   * that pair, leaving Skip as the only exit.
+   *
+   * It is an invariant for the RAISER, and deliberately not a `.refine()`
+   * here. This schema is both the persistence schema for stored epic content
+   * and the wire schema released streamchat lines project
+   * (`runtimeInterviewQuestionSchema` aliases it), so rejecting the pair would
+   * not withdraw one bad question - it would fail the parse of the whole
+   * content block, and drop a live interview frame from a peer host entitled
+   * to send it. A skippable question is a smaller harm than an unreadable
+   * transcript. The pair is refused where it can actually be decided instead:
+   * every per-harness bridge makes it unreachable by construction, the generic
+   * tool-call normalizer downgrades it to `null` (it reads whatever JSON a
+   * tool emitted, so it is the one producer that can be handed the
+   * contradiction), and the renderer's no-input branch is the fail-safe for
+   * anything that still gets through.
+   */
+  allowsCustomAnswer: z.boolean().nullable().default(null),
 });
 export type InterviewQuestion = z.infer<typeof interviewQuestionSchema>;
+
+// Wire-freeze copy of `interviewQuestionSchema` from before
+// `allowsCustomAnswer`. Bound to every `chat.subscribe` line through `@1.6`,
+// alongside the block-level freezes that carry the same boundary.
+//
+// Hand-frozen field-for-field; NOT derived from the live shape, for the same
+// reason `interviewBlockSchemaPreSettlement` is - a later field added above
+// must not silently leak in here.
+//
+// This is the leaf the freeze has to happen at, and it is easy to miss: the
+// block-level freezes DELEGATED `questions` to the live schema, so they were
+// frozen against block FIELDS and wide open one level down. A field added to a
+// question therefore reached `@1.0` through a schema whose own comment
+// promises the opposite.
+//
+// `@1.7`/`@1.8` deliberately do NOT take this: they follow the live interview
+// shape, which is the same thing they already do for `settlement`, `delivery`
+// and every other additive block field. The freeze boundary is `@1.6`.
+export const interviewQuestionSchemaPreCustomAnswer = z.object({
+  questionId: z.string().nullable(),
+  question: z.string(),
+  header: z.string().nullable(),
+  options: z.array(interviewQuestionOptionSchema),
+  multiSelect: z.boolean(),
+});
 
 /**
  * Where a selected option actually came from, recorded at submission time.
@@ -1402,13 +1465,17 @@ export type InterviewBlock = z.infer<typeof interviewBlockSchema>;
 // observes `outcome`/`draftAnswers`/`settlement`/`diagnostics`/`delivery`, nor
 // the answers' `selection`. Hand-frozen field-for-field; NOT derived from the
 // live shape (a later field added above must not silently leak in here).
+//
+// `questions` takes the frozen QUESTION schema for the same reason: freezing
+// this object's own keys left the leaf delegated to the live shape, so a field
+// added to a question still reached these lines.
 export const interviewBlockSchemaPreSettlement = z.object({
   ...baseBlockFields,
   type: z.literal("interview"),
   toolName: z.string().nullable(),
   title: z.string().nullable(),
   description: z.string().nullable(),
-  questions: z.array(interviewQuestionSchema),
+  questions: z.array(interviewQuestionSchemaPreCustomAnswer),
   answers: z.array(interviewAnswerSchemaPreSettlement),
   error: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()).nullable(),
@@ -1665,7 +1732,6 @@ export type PersistedContentBlock =
 
 /** chat.subscribe 1.8 checkpoint; 1.9 adds notification placement. */
 export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
-  autonomousResumeBlockSchemaV18,
   textBlockSchema,
   reasoningBlockSchema,
   toolCallBlockSchema,
@@ -1677,6 +1743,7 @@ export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
   planBlockSchema,
   errorBlockSchema,
   compactionBlockSchema,
+  autonomousResumeBlockSchemaV18,
   steerBlockSchema,
   interviewBlockSchema,
   artifactOperationBlockSchema,

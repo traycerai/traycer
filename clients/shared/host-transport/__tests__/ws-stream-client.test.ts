@@ -2318,6 +2318,179 @@ describe("WsStreamClient", () => {
     vi.useRealTimers();
   });
 
+  // P2-5: a host that refuses the same subscribe forever (once per backoff)
+  // must cost one warn line, not a flood - but a refusal that recurs AFTER the
+  // stream has genuinely proven itself usable again is news and earns its own
+  // line. `lastRetryableCloseFingerprint` is the dedup key, and it has exactly
+  // two clear sites - a delivered application frame (`emitServerFrame`) and a
+  // sustained healthy-subscription dwell - both proofs the stream is actually
+  // usable. It is deliberately NOT cleared at the subscribe ack: resolver-side
+  // failures land AFTER the ack as fatalError frames, which is exactly this
+  // refusal, so clearing there would restore the flood on every reconnect.
+  describe("retryable-close log dedup (P2-5)", () => {
+    const RETRYABLE_STORE_FATAL = {
+      kind: "fatalError",
+      details: {
+        code: "CHAT_STORE_TOO_NEW",
+        reason: "Chat store was written by a newer build",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    } as const;
+
+    it("logs the same refusal once across repeated reconnects", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: false });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { factory, sockets } = makeFactory();
+      const client = new WsStreamClient({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: hostStreamRpcRegistry,
+        endpoint: () => mockLocalHostEntry,
+        hostId: mockLocalHostEntry.hostId,
+        bearer: () => makeRequestContext("t")?.credentials ?? null,
+        auth: null,
+        clock: null,
+        hostCredentialMint: null,
+        onHostCredentialState: null,
+        evidence: NO_TRANSPORT_EVIDENCE,
+        webSocketFactory: factory,
+        dialTimeoutMs: 10_000,
+        openAckTimeoutMs: 10_000,
+        pingIntervalMs: 60_000,
+        pongTimeoutMs: 120_000,
+        initialBackoffMs: 5,
+        maxBackoffMs: 10,
+      });
+
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
+      completeHandshake(sockets[0].socket);
+      sockets[0].socket.fireText(RETRYABLE_STORE_FATAL);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5);
+      expect(sockets).toHaveLength(2);
+      completeHandshake(sockets[1].socket);
+      sockets[1].socket.fireText(RETRYABLE_STORE_FATAL);
+
+      // Same fingerprint as before - no health proof has landed between the
+      // two episodes, so this is still the same refusal.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      session.close();
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it("logs the same refusal again once a delivered application frame proves the stream usable - well before the healthy dwell would", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: false });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { factory, sockets } = makeFactory();
+      const client = new WsStreamClient({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: hostStreamRpcRegistry,
+        endpoint: () => mockLocalHostEntry,
+        hostId: mockLocalHostEntry.hostId,
+        bearer: () => makeRequestContext("t")?.credentials ?? null,
+        auth: null,
+        clock: null,
+        hostCredentialMint: null,
+        onHostCredentialState: null,
+        evidence: NO_TRANSPORT_EVIDENCE,
+        webSocketFactory: factory,
+        dialTimeoutMs: 10_000,
+        openAckTimeoutMs: 10_000,
+        pingIntervalMs: 60_000,
+        pongTimeoutMs: 120_000,
+        initialBackoffMs: 5,
+        maxBackoffMs: 10,
+      });
+
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
+      completeHandshake(sockets[0].socket);
+      sockets[0].socket.fireText(RETRYABLE_STORE_FATAL);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5);
+      expect(sockets).toHaveLength(2);
+      completeHandshake(sockets[1].socket);
+
+      // Well under HEALTHY_SUBSCRIBED_DWELL_MS (10s) - if this test passed
+      // only because the dwell fired, it would be indistinguishable from the
+      // dwell test below. It is not: no dwell timer has run yet.
+      await vi.advanceTimersByTimeAsync(100);
+
+      // An ordinary application frame for `epic.subscribe` - the delivered-
+      // frame clear site `emitServerFrame` implements, independent of the
+      // dwell.
+      sockets[1].socket.fireText({
+        kind: "permissionChanged",
+        epicId: "epic-42",
+        permissionRole: "editor",
+        hasBinaryPayload: false,
+      });
+
+      sockets[1].socket.fireText(RETRYABLE_STORE_FATAL);
+
+      // The frame proved the stream usable, so this is a new episode of the
+      // same refusal and earns its own line.
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+
+      session.close();
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it("logs the same refusal again once the stream has proven itself usable in between", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: false });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { factory, sockets } = makeFactory();
+      const client = new WsStreamClient({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: hostStreamRpcRegistry,
+        endpoint: () => mockLocalHostEntry,
+        hostId: mockLocalHostEntry.hostId,
+        bearer: () => makeRequestContext("t")?.credentials ?? null,
+        auth: null,
+        clock: null,
+        hostCredentialMint: null,
+        onHostCredentialState: null,
+        evidence: NO_TRANSPORT_EVIDENCE,
+        webSocketFactory: factory,
+        dialTimeoutMs: 10_000,
+        openAckTimeoutMs: 10_000,
+        pingIntervalMs: 60_000,
+        pongTimeoutMs: 120_000,
+        initialBackoffMs: 5,
+        maxBackoffMs: 10,
+      });
+
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
+      completeHandshake(sockets[0].socket);
+      sockets[0].socket.fireText(RETRYABLE_STORE_FATAL);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5);
+      expect(sockets).toHaveLength(2);
+      completeHandshake(sockets[1].socket);
+
+      // Ten seconds of sustained subscription is the dwell's own proof the
+      // stream is usable, and it is what `resetLoopCounters` rides on - the
+      // same reset that clears the dedup fingerprint.
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      sockets[1].socket.fireText(RETRYABLE_STORE_FATAL);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+
+      session.close();
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    });
+  });
+
   it("treats a socket error as a recoverable drop without waiting for close", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 

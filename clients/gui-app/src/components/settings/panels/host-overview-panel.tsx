@@ -953,6 +953,7 @@ export function HostOverviewPanel(props: {
     // across that swap would apply one machine's decision to another.
     hostId: scope.hostId,
     runningVersion: view.hostVersion,
+    storeFormats: statusQuery.data?.storeFormats ?? null,
     // From the facts as READ, qualified by the record leg's liveness - see
     // `legacyFactsRead`.
     activationDebt:
@@ -1004,6 +1005,12 @@ export function HostOverviewPanel(props: {
   const [forceUpdateOffer, setForceUpdateOffer] = useState<{
     readonly stagedVersion: string;
     readonly blockingSessionCount: number | null;
+    // The store-format loss the stage carries, captured when the offer was
+    // made like the count beside it: the dialog renders it as its own
+    // paragraph (`detail`), and confirming is consent to exactly what was
+    // named. `null` for a stage with no such restriction, which dispatches
+    // without loss consent.
+    readonly storeFormatConfirmation: string | null;
   } | null>(null);
   // Same stale-open rule as the restart confirm: close for every arming of
   // the page-wide gate EXCEPT this offer's own dispatch, which keeps the
@@ -1365,6 +1372,7 @@ export function HostOverviewPanel(props: {
             blockingSessionCount:
               operationView?.blockingSessionCount ??
               legacyFacts.stagedWait.blockingSessionCount,
+            storeFormatConfirmation: updates.stagedStoreFormatConfirmation,
           });
         };
   // The BOUND dispatch's control. `attemptControl` already carries the live
@@ -1822,6 +1830,7 @@ export function HostOverviewPanel(props: {
           card is gone; see `host-overview-status-card.tsx`. */}
       <HostBusyForceDeferDialog
         purpose="restart"
+        detail={null}
         open={forceRestartOffer !== null}
         title="Host is busy"
         message={
@@ -1865,6 +1874,7 @@ export function HostOverviewPanel(props: {
           above respawns the host process. */}
       <HostBusyForceDeferDialog
         purpose="update"
+        detail={forceUpdateOffer?.storeFormatConfirmation ?? null}
         open={forceUpdateOffer !== null}
         title="Host is busy"
         message={
@@ -1884,8 +1894,14 @@ export function HostOverviewPanel(props: {
           // reported by the card and the toasts, and a refused one by the
           // inline failure notice - leaving the dialog up over either would
           // re-offer a decision already made.
-          updates.installForce(forceUpdateOffer.stagedVersion, () =>
-            setForceUpdateOffer(null),
+          //
+          // Consent is what the dialog NAMED: a stage carrying a store-format
+          // restriction had that loss in its message, so confirming here is
+          // the same act as the row's Install anyway.
+          updates.installForce(
+            forceUpdateOffer.stagedVersion,
+            forceUpdateOffer.storeFormatConfirmation !== null,
+            () => setForceUpdateOffer(null),
           );
         }}
         onDefer={() => setForceUpdateOffer(null)}
@@ -1904,6 +1920,7 @@ export function HostOverviewPanel(props: {
           force-restart dialog above marks itself as. */}
       <HostBusyForceDeferDialog
         purpose="update"
+        detail={null}
         open={boundOffer !== null}
         title={
           boundOffer === null ? "Host is busy" : boundDispatchTitle(boundOffer)

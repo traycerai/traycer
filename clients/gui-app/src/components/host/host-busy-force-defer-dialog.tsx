@@ -27,6 +27,15 @@ export interface HostBusyForceDeferDialogProps {
    */
   readonly title: string;
   readonly message: string;
+  /**
+   * A second consequence the force carries, rendered as its own paragraph
+   * under `message` - the store-format loss a staged downgrade's Force update
+   * also consents to. `null` for the ordinary busy/force/defer decision.
+   * Kept apart from `message` because the description is one paragraph: a
+   * newline inside it collapses, and a sentence that IS the consent must not
+   * land mid-paragraph after the busy blurb.
+   */
+  readonly detail: string | null;
   readonly isForcing: boolean;
   readonly forceLabel: string;
   readonly onForce: () => void;
@@ -69,6 +78,14 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
             {props.message}
           </DialogDescription>
+          {props.detail === null ? null : (
+            <p
+              className="text-ui-sm leading-relaxed text-foreground"
+              data-testid="host-busy-force-defer-detail"
+            >
+              {props.detail}
+            </p>
+          )}
         </div>
         <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button

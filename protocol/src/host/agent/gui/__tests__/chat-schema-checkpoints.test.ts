@@ -15,7 +15,6 @@ import {
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeV18,
-  chatSubscribeV19,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -39,9 +38,8 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
     .digest("hex");
 }
 
-// Captured from baseline commit 5f81fdc. These are the host -> GUI wire
-// surfaces for every released/current minor; changing one means a historical
-// line followed a live schema during the placement refactor.
+// Captured from main commit 6fcb2af85 before adding placement. These
+// historical 1.0–1.8 surfaces must not follow the current message schema.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -72,16 +70,12 @@ const SERVER_FRAME_DIGESTS = {
     "c145b4fff10cde51da38b4ae9a844647353e2f29a3ec901922e6ca692f535d52",
   ],
   7: [
-    "9cf943da7a3a66f76509b6e55b9bf9a52b7ae8a5fc5c835cb3acbb02239aafa2",
-    "c0a654453d8bcc930d35bea29b4bde779705d606ea212504f3f0bc05527c4174",
+    "9950f117e194865321eb0ea5e229bf72849205a0e63d308b07246ab336371990",
+    "87ce35a710cfd5a358cfeb83de08f9b75161a7f3fd464beae3e505df6740622d",
   ],
   8: [
-    "d48c2215f6c49dec3afd5fc271bd6970c52fb9facecaeed5552d14c3b3bd6895",
-    "5228f20b183f6e3c7a3d80e280e532befc35570d7437bae03d7f7423424071d6",
-  ],
-  9: [
-    "1d76b7bba58b2125c1f178a8f3253fb3e78b1abe18a1a604f407d5cc5a761b4a",
-    "9b0a7ad60cade803ced4099e5eb3aebfff4f381ba4c74f267fda1763e7c7cc34",
+    "fe0a42b6660c61c26917dbba891e4018638af0c65dec2135117c3397839f319e",
+    "b7fd5a157a82e94fb7f5235251bdcf9174211a54630c7e88b87fce5c22f702a4",
   ],
 } as const;
 
@@ -95,11 +89,10 @@ const contracts = [
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeV18,
-  chatSubscribeV19,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.9 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.8 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

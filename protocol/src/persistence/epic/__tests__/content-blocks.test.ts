@@ -10,6 +10,7 @@ import {
   autonomousResumeBlockSchemaV18,
   providerNoticeMetadataSchema,
   providerNoticeNormalizedMetadataSchema,
+  interviewQuestionSchema,
   subAgentBlockSchema,
   textBlockSchema,
   toolCallBlockSchema,
@@ -1102,5 +1103,84 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("interviewQuestionSchema allowsCustomAnswer (additive, reader-permissive)", () => {
+  const baseQuestion = {
+    questionId: null,
+    question: "Choose",
+    header: null,
+    options: [{ label: "Alpha", description: null, preview: null }],
+    multiSelect: false,
+  };
+
+  it("parses a question persisted before the field existed as `null`", () => {
+    // The legacy path the field's `.default(null)` exists for: every question
+    // written before this change omits the key, and `null` means "unstated",
+    // which every renderer treats exactly as it did before - free text offered.
+    const question = interviewQuestionSchema.parse(baseQuestion);
+    expect(question.allowsCustomAnswer).toBeNull();
+  });
+
+  it("carries an explicit value through unchanged in both directions", () => {
+    expect(
+      interviewQuestionSchema.parse({
+        ...baseQuestion,
+        allowsCustomAnswer: false,
+      }).allowsCustomAnswer,
+    ).toBe(false);
+    expect(
+      interviewQuestionSchema.parse({
+        ...baseQuestion,
+        allowsCustomAnswer: true,
+      }).allowsCustomAnswer,
+    ).toBe(true);
+  });
+
+  it("ACCEPTS `false` with no options, deliberately, rather than rejecting the document", () => {
+    // The schema's doc calls this pair a raiser invariant, and it is not
+    // enforced here ON PURPOSE. This schema is BOTH the persistence schema for
+    // stored epic content and the wire schema released streamchat lines
+    // project (`runtimeInterviewQuestionSchema` aliases it), so a `.refine()`
+    // rejecting the pair would not withdraw a bad question - it would fail the
+    // parse of the whole content block, exactly the failure the file's first
+    // test names ("a hard ZodError here would break agent.getTranscript for
+    // the whole chat"), and drop a live interview frame from a peer host that
+    // is entitled to send it.
+    //
+    // The pair is refused where it can actually be decided: producers. Every
+    // per-harness bridge makes it unreachable by construction, the generic
+    // normalizer (`interview-detection.ts`) downgrades it to `null`, and the
+    // renderer treats it as a fail-safe - no input, Skip still available -
+    // which `pending-interview-card.test.tsx` pins with a CONTROL.
+    //
+    // Falsification: add that `.refine()` and this reddens, pointing whoever
+    // did it at the two consumers that would start failing.
+    const parsed = interviewQuestionSchema.parse({
+      ...baseQuestion,
+      options: [],
+      allowsCustomAnswer: false,
+    });
+    expect(parsed.options).toEqual([]);
+    expect(parsed.allowsCustomAnswer).toBe(false);
+  });
+
+  it("keeps a whole interview block parseable when a question carries the pair", () => {
+    // The consumer that matters: one bad question must not cost the block.
+    const block = contentBlockSchema.parse({
+      type: "interview",
+      blockId: "iv-degenerate",
+      status: "streaming",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: null,
+      description: null,
+      questions: [{ ...baseQuestion, options: [], allowsCustomAnswer: false }],
+      answers: [],
+      error: null,
+      metadata: null,
+    }) as InterviewBlock;
+    expect(block.questions).toHaveLength(1);
   });
 });

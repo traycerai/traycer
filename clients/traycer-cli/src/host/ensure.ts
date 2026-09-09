@@ -77,6 +77,8 @@ export interface EnsureHostOptions {
   // Skip the busy probe and restart a running host unconditionally (the
   // desktop "Force restart"). Threaded into `provisionHost`.
   readonly force: boolean;
+  /** See `ProvisionHostOptions.acceptStoreFormatLoss`. Forwarded verbatim. */
+  readonly acceptStoreFormatLoss: boolean;
   // Liveness-only convergence: keep ANY installed, non-yanked host whatever
   // its version, instead of converging to this build's preferred pin. The
   // desktop passes it for its BACKGROUND intent (the selection authority's
@@ -194,6 +196,7 @@ export async function ensureHost(
     registerService: !opts.noServiceRegister,
     lockReason: "host-ensure",
     force: opts.force,
+    acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     holdExplicitDowngrade,
     onProgress: opts.onProgress,
     beforeMutate: opts.beforeMutate,

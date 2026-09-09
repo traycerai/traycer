@@ -41,7 +41,7 @@ interface AutonomousResumeSegmentProps {
 const RESUME_OUTPUT_FILE_MAX_BYTES = 500_000;
 
 function triggerKey(trigger: AutonomousResumeTrigger): string {
-  return `${trigger.kind}:${trigger.managedCommand?.commandId ?? trigger.blockId}:${trigger.title}:${trigger.status}`;
+  return `${trigger.kind}:${trigger.managedCommand?.commandId ?? "none"}:${trigger.blockId}:${trigger.title}:${trigger.status}`;
 }
 
 export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
